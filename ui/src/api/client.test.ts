@@ -9,6 +9,57 @@ vi.mock("../diagnostics", async (importOriginal) => ({
 }));
 
 describe("ApiClient", () => {
+  it("keeps the observed project revision when saving follow-up settings", async () => {
+    const wire = {suggest_next_steps: false, take_notes: false, backend_kind: "provider", cloud_confirmed: false, revision: 7};
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(wire), {status: 200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({...wire, revision: 8}), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    const current = await client.getPostToolAssistant("project");
+    expect(current.revision).toBe(7);
+    const saved = await client.setPostToolAssistant("project", current);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).expected_revision).toBe(7);
+    expect(saved.revision).toBe(8);
+  });
+  it("creates Butler notes with the browser-owned ID and exact Core link fields", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({id: "note", engagement_id: "project",
+      observation_type: "note", title: "Note", body: "Body", revision: 1}), {status: 201}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    await client.createButlerNote("note", {engagementId: "project", title: "Note", body: "Body", assetIds: ["asset"], evidenceIds: []});
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/observations/butler-drafts");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({note_id: "note", engagement_id: "project",
+      title: "Note", body: "Body", asset_ids: ["asset"], evidence_ids: []});
+  });
+  it("maps opaque MCP credential references on exact profile readback", async () => {
+    const reference = `session:${"a".repeat(32)}`;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "mcp-1", revision: 4, name: "remote", transport: "streamable_http",
+      url: "https://example.test/mcp", auth_mode: "headers", enabled: false,
+      required: false, trusted_stdio: false, default_approval: "risk_based",
+      bearer_secret_ref: null, header_secret_refs: {"X-API-Key": reference},
+      environment_secret_refs: {},
+    }), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    const server = await client.getMcpServer("mcp-1");
+    expect(server).toMatchObject({id: "mcp-1", revision: 4, authMode: "headers",
+      headerSecretRefs: {"X-API-Key": reference}, environmentSecretRefs: {}});
+    expect(server.bearerSecretRef).toBeUndefined();
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/mcp-servers/mcp-1");
+  });
+  it("sends the current storage source revision when rotating and revoking a token", async () => {
+    const source = {id: "source/one", revision: 7} as Parameters<ApiClient["rotateStorageSource"]>[0];
+    const rotated = {...source, revision: 8};
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({source: rotated, token: "one-time-secret"}), {status: 200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({...rotated, enabled: false, revision: 9}), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    await client.rotateStorageSource(source);
+    await client.revokeStorageSource(rotated);
+    expect(fetchMock.mock.calls.map(([url, options]) => [url, options?.method, options?.body])).toEqual([
+      ["http://127.0.0.1:8765/api/v1/storage/sources/source%2Fone/rotate", "POST", JSON.stringify({expected_revision: 7})],
+      ["http://127.0.0.1:8765/api/v1/storage/sources/source%2Fone/revoke", "POST", JSON.stringify({expected_revision: 8})],
+    ]);
+  });
   it("sends the last validator on polled reads and treats 304 as unchanged", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 3 }), { status: 200, headers: { ETag: '"state-3"' } }))
@@ -1481,6 +1532,39 @@ describe("ApiClient", () => {
     });
   });
 
+  it("patches only one provider credential slot at the current revision", async () => {
+    const reference = `session:${"a".repeat(32)}`;
+    const provider = {id: "provider/one", revision: 8, name: "OpenRouter review", provider_type: "openrouter",
+      enabled: true, is_local: false, secret_ref: "env:INFERENCE_KEY",
+      openrouter_management_secret_ref: "env:OLD_MANAGEMENT_KEY", model_allowlist: ["model"],
+      capabilities: {streaming: true}, privacy: {local_only: false, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "model"}, created_at: "2026-07-12T11:00:00Z", updated_at: "2026-07-12T11:00:00Z"};
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => new Response(JSON.stringify(
+      init?.method === "PATCH" ? {...provider, revision: 9, openrouter_management_secret_ref: reference} : provider,
+    ), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    const observed = await client.getProvider("provider/one");
+    expect(observed.openrouterManagementSecretRef).toBe(provider.openrouter_management_secret_ref);
+    const attached = await client.attachProviderCredential("provider/one", observed.revision, reference, "management");
+    expect(attached.openrouterManagementSecretRef).toBe(reference);
+    expect(fetchMock.mock.calls[1][0]).toBe("http://127.0.0.1:8765/api/v1/providers/provider%2Fone");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({expected_revision: 8,
+      changes: {openrouter_management_secret_ref: reference}});
+  });
+
+  it("reads an exact harness profile with its authentication reference and revision", async () => {
+    const reference = `session:${"b".repeat(32)}`;
+    const harness = {id: "harness/one", revision: 6, name: "Codex endpoint", kind: "codex_app_server",
+      connection_mode: "endpoint", transport: "websocket", endpoint: "ws://127.0.0.1:1234",
+      auth_mode: "endpoint_bearer", secret_ref: reference, enabled: false,
+      created_at: "2026-07-12T11:00:00Z", updated_at: "2026-07-12T11:00:00Z"};
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(harness), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    expect(await client.getHarness("harness/one")).toMatchObject({id: "harness/one", revision: 6,
+      connectionMode: "endpoint", authMode: "endpoint_bearer", secretRef: reference});
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8765/api/v1/harnesses/harness%2Fone");
+  });
+
   it("serializes Vertex and Bedrock runtime options into provider metadata", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
       const body = JSON.parse(String(init?.body));
@@ -2329,6 +2413,7 @@ describe("ApiClient", () => {
       if (path.endsWith("/reports/report-1")) return new Response(JSON.stringify({ ...entity, revision: 2, id: "report-1", engagement_id: "engagement-1", title: "Assessment", status: "review", executive_summary: "Updated", finding_ids: ["finding-1"], artifact_ids: [], metadata: {} }), { status: 200 });
       if (path.endsWith("/reports")) return new Response(JSON.stringify({ ...entity, id: "report-1", engagement_id: "engagement-1", title: "Assessment", status: "draft", executive_summary: "", finding_ids: [], artifact_ids: [], metadata: {} }), { status: 201 });
       if (path.endsWith("/evidence/upload")) return new Response(JSON.stringify({ ...entity, id: "evidence-1", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "proof.txt", description: "Proof", artifact_id: "artifact-1", finding_id: null, asset_ids: ["asset-1"], sha256: "a".repeat(64), captured_at: entity.created_at, captured_by: "operator", source_version: null, metadata: { filename: "proof.txt", media_type: "text/plain", size: 5, source: "operator_upload" } }), { status: 201 });
+      if (path.endsWith("/evidence/evidence-1")) return new Response(JSON.stringify({ ...entity, id: "evidence-1", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "proof.txt", description: "Proof", artifact_id: "artifact-1", finding_id: null, asset_ids: ["asset-1"], sha256: "a".repeat(64), captured_at: entity.created_at, captured_by: "operator", source_version: null, metadata: { filename: "proof.txt", media_type: "text/plain", size: 5, source: "operator_upload" } }), { status: 200 });
       if (path.endsWith("/missions")) return new Response(JSON.stringify({ ...entity, id: "run-1", engagement_id: "engagement-1", objective: "Review scope", status: "queued", started_at: null, completed_at: null, metadata: {} }), { status: 202 });
       if (path.endsWith("/runs/run-1/stop")) return new Response(JSON.stringify({ ...entity, id: "run-1", engagement_id: "engagement-1", objective: "Review scope", status: "cancelled", started_at: null, completed_at: entity.updated_at, metadata: {} }), { status: 200 });
       return new Response(JSON.stringify({ detail: `${init?.method} ${path} not mocked` }), { status: 500 });
@@ -2340,6 +2425,7 @@ describe("ApiClient", () => {
     const report = await client.createReport({ engagementId: engagement.id, title: "  Assessment  " });
     const updatedReport = await client.updateReport(report.id, { status: "review", executiveSummary: "Updated", findingIds: ["finding-1"], expectedRevision: 1 });
     const evidence = await client.uploadEvidence({ engagementId: engagement.id, filename: "proof.txt", title: "proof.txt", evidenceType: "operator_upload", contentBase64: "cHJvb2Y=", mediaType: "text/plain", description: "Proof", assetIds: [asset.id] });
+    const savedEvidence = await client.getEvidence(evidence.id);
     const run = await client.createMission({ engagementId: engagement.id, name: "Scope review", objective: "Review scope", providerId: "provider-1", model: "model-1", maxDurationSeconds: 600, maxTokens: 2000, maxCostUsd: 2, maxRetries: 1 });
     const stopped = await client.stopRun(run.id, { reason: "Operator requested" });
 
@@ -2347,6 +2433,7 @@ describe("ApiClient", () => {
     expect(asset).toMatchObject({ hostname: "api.example.test", criticality: "high", exposure: "external", tags: ["api"] });
     expect(updatedReport).toMatchObject({ revision: 2, status: "review", executiveSummary: "Updated" });
     expect(evidence).toMatchObject({ artifactId: "artifact-1", metadata: { filename: "proof.txt", mediaType: "text/plain", size: 5 } });
+    expect(savedEvidence).toMatchObject({ id: evidence.id, revision: 1, sha256: "a".repeat(64) });
     expect(stopped.status).toBe("cancelled");
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/assets"))?.[1]?.body)).name).toBe("api.example.test");
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/reports"))?.[1]?.body)).title).toBe("Assessment");

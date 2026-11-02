@@ -1,5 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import { mapTerminalSessionList, type TerminalSessionList, type WireTerminalSessionList } from "./terminalTypes";
 import type { StorageAction, StorageDashboard, StorageSource } from "./types";
 import type {
   AgentRunSummary,
@@ -178,6 +179,7 @@ import type {
   ToolOutputReadResult,
   ToolOutputSearchResult,
   WorkspaceListing,
+  WorkspaceEntryState,
   WorkspacePreview,
   WorkspaceResetResult,
   WorkspaceResetStatus,
@@ -1639,6 +1641,9 @@ interface WireMcpServerProfile extends WireEntity {
   arguments?: string[];
   url?: string | null;
   auth_mode: McpServerProfile["authMode"];
+  bearer_secret_ref?: string | null;
+  header_secret_refs?: Record<string, string>;
+  environment_secret_refs?: Record<string, string>;
   enabled: boolean;
   required: boolean;
   trusted_stdio: boolean;
@@ -2738,6 +2743,7 @@ function mapEvidence(value: WireEvidence): EvidenceSummary {
   const metadata = value.metadata ?? {};
   return {
     id: value.id,
+    revision: value.revision,
     engagementId: value.engagement_id,
     evidenceType: value.evidence_type,
     title: value.title,
@@ -2959,6 +2965,7 @@ function mapLibraryItem(value: WireLibraryItem): LibraryItem {
   const metadata = value.metadata ?? {};
   return {
     id: value.id,
+    revision: value.revision,
     name: value.name,
     sourceType: value.source_type,
     artifactId: value.artifact_id ?? undefined,
@@ -3324,6 +3331,7 @@ function mapExecutionOrigin(value: WireExecutionOrigin) {
 function mapOperatorExecution(value: WireOperatorExecution): OperatorExecution {
   return {
     id: value.id,
+    revision: value.revision,
     engagementId: value.engagement_id,
     operatorId: value.operator_id,
     origin: mapExecutionOrigin(value.origin),
@@ -4061,6 +4069,9 @@ function mapMcpServer(value: WireMcpServerProfile): McpServerProfile {
     arguments: value.arguments ?? [],
     url: value.url ?? undefined,
     authMode: value.auth_mode,
+    bearerSecretRef: value.bearer_secret_ref ?? undefined,
+    headerSecretRefs: value.header_secret_refs ?? {},
+    environmentSecretRefs: value.environment_secret_refs ?? {},
     enabled: value.enabled,
     required: value.required,
     trustedStdio: value.trusted_stdio,
@@ -5390,12 +5401,16 @@ export class ApiClient {
     });
   }
 
-  rotateStorageSource(id: string): Promise<{ source: StorageSource; token: string }> {
-    return this.request(`storage/sources/${encodeURIComponent(id)}/rotate`, { method: "POST" });
+  rotateStorageSource(source: StorageSource): Promise<{ source: StorageSource; token: string }> {
+    return this.request(`storage/sources/${encodeURIComponent(source.id)}/rotate`, {
+      method: "POST", body: JSON.stringify({ expected_revision: source.revision }),
+    });
   }
 
-  revokeStorageSource(id: string): Promise<StorageSource> {
-    return this.request(`storage/sources/${encodeURIComponent(id)}/revoke`, { method: "POST" });
+  revokeStorageSource(source: StorageSource): Promise<StorageSource> {
+    return this.request(`storage/sources/${encodeURIComponent(source.id)}/revoke`, {
+      method: "POST", body: JSON.stringify({ expected_revision: source.revision }),
+    });
   }
 
   storageAction(id: string, step: "preview" | "approve" | "reconcile", digest?: string): Promise<StorageAction> {
@@ -6142,21 +6157,46 @@ export class ApiClient {
     }).then(mapAssistantDefaults);
   }
 
-  async deleteArchivedEngagement(id: string): Promise<void> {
+  getProjectLifecycle(id: string): Promise<{ id: string; name: string; status: EngagementSummary["status"]; revision: number; workspacePath?: string }> {
+    return this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}`).then(({ id: projectId, name, status, revision, workspace_path }) => ({
+      id: projectId, name, status, revision, workspacePath: workspace_path ?? undefined,
+    }));
+  }
+
+  relinkProjectWorkspace(id: string, path: string, expectedRevision: number): Promise<{ id: string; revision: number; workspacePath?: string }> {
+    return this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}/workspace/relink`, {
+      method: "POST",
+      body: JSON.stringify({ path, expected_revision: expectedRevision }),
+    }).then(({ id: projectId, revision, workspace_path }) => ({
+      id: projectId, revision, workspacePath: workspace_path ?? undefined,
+    }));
+  }
+
+  async renameEngagementAtRevision(id: string, name: string, expectedRevision: number): Promise<EngagementSummary> {
+    const saved = await this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ changes: { name }, expected_revision: expectedRevision }),
+    });
+    return mapEngagement(saved);
+  }
+
+  async deleteArchivedEngagement(id: string, expectedRevision?: number): Promise<void> {
     const path = `engagements/${encodeURIComponent(id)}`;
     try {
       const current = await this.request<WireEngagement>(path);
       if (current.status !== "archived") throw new Error("Archive the project before deleting it.");
+      if (expectedRevision !== undefined && current.revision !== expectedRevision) throw new Error("Project changed. Read it again before deleting.");
       await this.request<void>(path, { method: "DELETE", headers: { "If-Match": String(current.revision) } });
     } catch (error) {
       // Another device, or a saved delete whose response was lost, already removed it.
-      if (!(error instanceof ApiError && error.status === 404)) throw error;
+      if (!(error instanceof ApiError && error.status === 404 && expectedRevision === undefined)) throw error;
     }
   }
 
-  async setEngagementArchived(id: string, archived: boolean): Promise<EngagementSummary> {
+  async setEngagementArchived(id: string, archived: boolean, expectedRevision?: number): Promise<EngagementSummary> {
     const path = `engagements/${encodeURIComponent(id)}`;
     const current = await this.request<WireEngagement>(path);
+    if (expectedRevision !== undefined && current.revision !== expectedRevision) throw new Error("Project changed. Read it again before changing archive state.");
     if (current.status === (archived ? "archived" : "active")) return mapEngagement(current);
     return mapEngagement(await this.request<WireEngagement>(path, {
       method: "PATCH",
@@ -6175,6 +6215,7 @@ export class ApiClient {
         tags: body.tags ?? [],
         workspace_path: body.workspacePath?.trim() || null,
         host_access_acknowledged: body.hostAccessAcknowledged === true,
+        request_id: body.requestId ?? null,
         metadata: {},
       }),
     }).then(mapEngagement);
@@ -6380,6 +6421,10 @@ export class ApiClient {
         .map(mapHarnessProfile)
         .filter((profile) => profile.kind === "codex_app_server" || profile.kind === "grok_acp" || profile.kind === "claude_agent_sdk"),
     );
+  }
+
+  getHarness(id: string, signal?: AbortSignal): Promise<HarnessProfile> {
+    return this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`, {signal}).then(mapHarnessProfile);
   }
 
   createHarness(body: Record<string, unknown>): Promise<HarnessProfile> {
@@ -6942,12 +6987,13 @@ export class ApiClient {
     return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`);
   }
 
-  setNotebookFileIndex(projectId: string, path: string): Promise<import("./types").NotebookFileIndexStatus> {
-    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "PUT", body: JSON.stringify({path})});
+  setNotebookFileIndex(projectId: string, path: string, expectedProjectRevision?: number): Promise<import("./types").NotebookFileIndexStatus> {
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "PUT", body: JSON.stringify({path, expected_project_revision: expectedProjectRevision})});
   }
 
-  removeNotebookFileIndex(projectId: string): Promise<import("./types").NotebookFileIndexStatus> {
-    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index`, {method: "DELETE"});
+  removeNotebookFileIndex(projectId: string, expectedProjectRevision?: number): Promise<import("./types").NotebookFileIndexStatus> {
+    const query = expectedProjectRevision === undefined ? "" : `?expected_project_revision=${encodeURIComponent(expectedProjectRevision)}`;
+    return this.request(`engagements/${encodeURIComponent(projectId)}/notebooks/file-index${query}`, {method: "DELETE"});
   }
 
   createNotebook(projectId: string, path: string): Promise<import("./types").NotebookFile> {
@@ -7086,14 +7132,19 @@ export class ApiClient {
     return this.request<WireSshEnvironment>(`ssh-environments/${encodeURIComponent(alias)}/probe`, { method: "POST" }).then(mapSshEnvironment);
   }
 
-  async forgetSshEnvironment(alias: string): Promise<void> {
-    await this.request<void>(`ssh-environments/${encodeURIComponent(alias)}`, { method: "DELETE" });
+  async forgetSshEnvironment(alias: string, expectedRevision?: number): Promise<void> {
+    const query = expectedRevision === undefined ? "" : `?expected_revision=${expectedRevision}`;
+    await this.request<void>(`ssh-environments/${encodeURIComponent(alias)}${query}`, { method: "DELETE" });
   }
 
   listMcpServers(signal?: AbortSignal): Promise<McpServerProfile[]> {
     return this.listAll<WireMcpServerProfile>("mcp-servers", signal).then(
       (items) => items.map(mapMcpServer),
     );
+  }
+
+  getMcpServer(id: string, signal?: AbortSignal): Promise<McpServerProfile> {
+    return this.request<WireMcpServerProfile>(`mcp-servers/${encodeURIComponent(id)}`, {signal}).then(mapMcpServer);
   }
 
   createMcpServer(body: Record<string, unknown>): Promise<McpServerProfile> {
@@ -7640,6 +7691,10 @@ export class ApiClient {
     );
   }
 
+  getEvidence(id: string, signal?: AbortSignal): Promise<EvidenceSummary> {
+    return this.request<WireEvidence>(`evidence/${encodeURIComponent(id)}`, { signal }).then(mapEvidence);
+  }
+
   uploadEvidence(
     body: EvidenceUploadRequest,
     signal?: AbortSignal,
@@ -7677,7 +7732,24 @@ export class ApiClient {
     );
   }
 
+  getReport(id: string, signal?: AbortSignal): Promise<ReportSummary> {
+    return this.request<WireReport>(`reports/${encodeURIComponent(id)}`, { signal }).then(mapReport);
+  }
+
   createReport(body: ReportCreateRequest): Promise<ReportSummary> {
+    if (body.reportId) {
+      return this.request<WireReport>("reports/butler-drafts", {
+        method: "POST",
+        body: JSON.stringify({
+          report_id: body.reportId,
+          engagement_id: body.engagementId,
+          title: body.title.trim(),
+          executive_summary: body.executiveSummary ?? "",
+          finding_ids: body.findingIds ?? [],
+          observation_ids: body.observationIds ?? [],
+        }),
+      }).then(mapReport);
+    }
     return this.request<WireReport>("reports", {
       method: "POST",
       body: JSON.stringify({
@@ -7734,6 +7806,36 @@ export class ApiClient {
     }).then(mapReport);
   }
 
+  async deleteReportAtRevision(id: string, engagementId: string, expectedRevision: number): Promise<void> {
+    const current = await this.getReport(id);
+    if (current.engagementId !== engagementId || current.revision !== expectedRevision) {
+      throw new Error("Report changed or belongs to another project. Read it again before deleting.");
+    }
+    if (current.status === "final") throw new Error("A signed final report cannot be deleted.");
+    let deleteError: unknown;
+    try {
+      await this.request<void>(`reports/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { "If-Match": String(expectedRevision) },
+      });
+    } catch (caught) {
+      // diagnostic-expected: a lost response may follow a committed deletion; read the exact ID.
+      deleteError = caught;
+    }
+    let observed: ReportSummary;
+    try {
+      observed = await this.getReport(id);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) return;
+      throw new Error("Core could not confirm whether the report was deleted. Inspect Reports before retrying.", {cause: caught});
+    }
+    if (observed.engagementId !== engagementId || observed.revision !== expectedRevision) {
+      throw new Error("Report changed during deletion. Read its current revision before retrying.");
+    }
+    if (deleteError) throw deleteError;
+    throw new Error("Core still has this report. Inspect Reports before retrying.");
+  }
+
   signOffReport(
     id: string,
     expectedRevision: number,
@@ -7762,6 +7864,18 @@ export class ApiClient {
       signal,
       engagementId,
     ).then((items) => page(items.map(mapObservation)));
+  }
+
+  getObservation(id: string, signal?: AbortSignal): Promise<ObservationSummary> {
+    return this.request<WireObservation>(`observations/${encodeURIComponent(id)}`, { signal }).then(mapObservation);
+  }
+
+  createButlerNote(id: string, body: ObservationCreateRequest): Promise<ObservationSummary> {
+    return this.request<WireObservation>("observations/butler-drafts", {
+      method: "POST",
+      body: JSON.stringify({note_id: id, engagement_id: body.engagementId,
+        title: body.title, body: body.body ?? "", asset_ids: body.assetIds ?? [], evidence_ids: body.evidenceIds ?? []}),
+    }).then(mapObservation);
   }
 
   createObservation(
@@ -7911,6 +8025,27 @@ export class ApiClient {
     return this.listAll<WireProvider>("providers", signal).then((items) =>
       page(items.map(mapProvider)),
     );
+  }
+
+  getProvider(id: string, signal?: AbortSignal): Promise<ProviderHealth> {
+    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, { signal }).then(mapProvider);
+  }
+
+  attachProviderCredential(
+    id: string,
+    expectedRevision: number,
+    reference: string,
+    slot: "inference" | "management",
+  ): Promise<ProviderHealth> {
+    return this.request<WireProvider>(`providers/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        expected_revision: expectedRevision,
+        changes: {
+          [slot === "management" ? "openrouter_management_secret_ref" : "secret_ref"]: reference,
+        },
+      }),
+    }).then(mapProvider);
   }
 
   getRuntimeUsage(refresh = false, signal?: AbortSignal): Promise<RuntimeUsageResponse> {
@@ -8276,9 +8411,20 @@ export class ApiClient {
     );
   }
 
+  async deleteStructuredResultAtRevision(projectId: string, resultId: string, expectedRevision: number): Promise<void> {
+    await this.request<void>(
+      `projects/${encodeURIComponent(projectId)}/structured-results/${encodeURIComponent(resultId)}?expected_revision=${expectedRevision}`,
+      {method: "DELETE"},
+    );
+  }
+
   listLibraryItems(signal?: AbortSignal): Promise<Page<LibraryItem>> {
     return this.listAll<WireLibraryItem>("library/items", signal)
       .then((items) => page(items.map(mapLibraryItem)));
+  }
+
+  getLibraryItem(id: string, signal?: AbortSignal): Promise<LibraryItem> {
+    return this.request<WireLibraryItem>(`library/items/${encodeURIComponent(id)}`, { signal }).then(mapLibraryItem);
   }
 
   ingestLibraryItem(
@@ -8303,8 +8449,22 @@ export class ApiClient {
     ).then(mapLibraryItem);
   }
 
+  reindexLibraryItemAtRevision(id: string, expectedRevision: number, signal?: AbortSignal): Promise<LibraryItem> {
+    return this.request<WireLibraryItem>(
+      `library/items/${encodeURIComponent(id)}/reindex?expected_revision=${expectedRevision}`,
+      { method: "POST", signal },
+    ).then(mapLibraryItem);
+  }
+
   async deleteLibraryItem(id: string, signal?: AbortSignal): Promise<void> {
     await this.request<void>(`library/items/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      signal,
+    });
+  }
+
+  async deleteLibraryItemAtRevision(id: string, expectedRevision: number, signal?: AbortSignal): Promise<void> {
+    await this.request<void>(`library/items/${encodeURIComponent(id)}?expected_revision=${expectedRevision}`, {
       method: "DELETE",
       signal,
     });
@@ -8375,6 +8535,23 @@ export class ApiClient {
         signal,
       },
     ).then(mapKnowledgeSource);
+  }
+
+  getKnowledgeSource(id: string): Promise<KnowledgeSource & {revision: number}> {
+    return this.request<WireKnowledgeSource>(`knowledge/${encodeURIComponent(id)}`)
+      .then(value => ({...mapKnowledgeSource(value), revision: value.revision}));
+  }
+
+  reindexKnowledgeSourceAtRevision(id: string, projectId: string, revision: number): Promise<KnowledgeSource> {
+    return this.request<WireKnowledgeSource>(`knowledge/${encodeURIComponent(id)}/reindex?engagement_id=${encodeURIComponent(projectId)}`, {
+      method: "POST", headers: {"If-Match": String(revision)},
+    }).then(mapKnowledgeSource);
+  }
+
+  async deleteKnowledgeSourceAtRevision(id: string, projectId: string, revision: number): Promise<void> {
+    await this.request(`knowledge/${encodeURIComponent(id)}?engagement_id=${encodeURIComponent(projectId)}`, {
+      method: "DELETE", headers: {"If-Match": String(revision)},
+    });
   }
 
   async deleteKnowledgeSource(id: string, signal?: AbortSignal): Promise<void> {
@@ -8747,6 +8924,32 @@ export class ApiClient {
     }));
   }
 
+  listProjectContainerTerminals(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<TerminalSessionList> {
+    return this.request<WireTerminalSessionList>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminals`,
+      { signal },
+    ).then(mapTerminalSessionList);
+  }
+
+  closeProjectContainerTerminal(
+    engagementId: string,
+    sessionId: string,
+    expectedCreatedAt: string,
+    signal?: AbortSignal,
+  ): Promise<TerminalSessionList> {
+    return this.request<WireTerminalSessionList>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminals/${encodeURIComponent(sessionId)}/close`,
+      {
+        method: "POST",
+        signal,
+        body: JSON.stringify({ expected_created_at: expectedCreatedAt }),
+      },
+    ).then(mapTerminalSessionList);
+  }
+
   containerTerminalCapacity(
     signal?: AbortSignal,
   ): Promise<ContainerTerminalCapacity> {
@@ -8906,6 +9109,7 @@ export class ApiClient {
     model: string,
     cloudConfirmed: boolean,
     modes?: PostToolAssistantConfig,
+    automatic = false,
   ): Promise<GeneratedDraft> {
     return this.request<WireGeneratedDraft>(
       `executions/${encodeURIComponent(executionId)}/draft-notes`,
@@ -8919,7 +9123,7 @@ export class ApiClient {
           cloud_confirmed: cloudConfirmed,
           suggest_next_steps: modes?.suggestNextSteps ?? false,
           take_notes: modes?.takeNotes ?? true,
-          automatic: Boolean(modes),
+          automatic,
         }),
       },
     ).then(mapGeneratedDraft);
@@ -8931,6 +9135,7 @@ export class ApiClient {
     model: string,
     cloudConfirmed: boolean,
     modes?: PostToolAssistantConfig,
+    automatic = false,
   ): Promise<GeneratedDraft> {
     return this.request<WireGeneratedDraft>(
       `runs/${encodeURIComponent(runId)}/draft-notes`,
@@ -8944,24 +9149,24 @@ export class ApiClient {
           cloud_confirmed: cloudConfirmed,
           suggest_next_steps: modes?.suggestNextSteps ?? false,
           take_notes: modes?.takeNotes ?? true,
-          automatic: Boolean(modes),
+          automatic,
         }),
       },
     ).then(mapGeneratedDraft);
   }
 
   getPostToolAssistant(engagementId: string): Promise<PostToolAssistantConfig> {
-    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; backend_kind: "provider" | "harness"; provider_id?: string | null; harness_profile_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
+    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; backend_kind: "provider" | "harness"; provider_id?: string | null; harness_profile_id?: string | null; model?: string | null; cloud_confirmed: boolean; revision: number }>(
       `engagements/${encodeURIComponent(engagementId)}/post-tool-assistant`,
-    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, backendKind: value.backend_kind, providerId: value.provider_id ?? undefined, harnessProfileId: value.harness_profile_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
+    ).then((value) => ({ revision: value.revision, suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, backendKind: value.backend_kind, providerId: value.provider_id ?? undefined, harnessProfileId: value.harness_profile_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
   }
 
   setPostToolAssistant(engagementId: string, config: PostToolAssistantConfig): Promise<PostToolAssistantConfig> {
-    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; backend_kind: "provider" | "harness"; provider_id?: string | null; harness_profile_id?: string | null; model?: string | null; cloud_confirmed: boolean }>(
+    return this.request<{ suggest_next_steps: boolean; take_notes: boolean; backend_kind: "provider" | "harness"; provider_id?: string | null; harness_profile_id?: string | null; model?: string | null; cloud_confirmed: boolean; revision: number }>(
       `engagements/${encodeURIComponent(engagementId)}/post-tool-assistant`, {
-        method: "PUT", body: JSON.stringify({ suggest_next_steps: config.suggestNextSteps, take_notes: config.takeNotes, backend_kind: config.backendKind, provider_id: config.providerId, harness_profile_id: config.harnessProfileId, model: config.model, cloud_confirmed: config.cloudConfirmed }),
+        method: "PUT", body: JSON.stringify({ suggest_next_steps: config.suggestNextSteps, take_notes: config.takeNotes, backend_kind: config.backendKind, provider_id: config.providerId, harness_profile_id: config.harnessProfileId, model: config.model, cloud_confirmed: config.cloudConfirmed, expected_revision: config.revision }),
       },
-    ).then((value) => ({ suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, backendKind: value.backend_kind, providerId: value.provider_id ?? undefined, harnessProfileId: value.harness_profile_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
+    ).then((value) => ({ revision: value.revision, suggestNextSteps: value.suggest_next_steps, takeNotes: value.take_notes, backendKind: value.backend_kind, providerId: value.provider_id ?? undefined, harnessProfileId: value.harness_profile_id ?? undefined, model: value.model ?? undefined, cloudConfirmed: value.cloud_confirmed }));
   }
 
   listPostToolResults(engagementId: string): Promise<GeneratedDraft[]> {
@@ -9299,10 +9504,14 @@ export class ApiClient {
     overwrite = false,
     signal?: AbortSignal,
     expectedSha256?: string,
+    expectedContentSha256?: string,
+    expectedParentIdentity?: string,
   ): Promise<WorkspaceUploadResult> {
     const headers = new Headers({ "Content-Type": "application/octet-stream" });
     this.authorizeHeaders(headers, "PUT");
     if (expectedSha256) headers.set("If-Match", expectedSha256);
+    if (expectedContentSha256) headers.set("X-Content-SHA256", expectedContentSha256);
+    if (expectedParentIdentity) headers.set("X-Parent-Identity", expectedParentIdentity);
     const parameters = new URLSearchParams({
       path,
       overwrite: String(overwrite),
@@ -9354,20 +9563,44 @@ export class ApiClient {
     engagementId: string,
     path: string,
     newName: string,
+    expectedEntryIdentity?: string,
   ): Promise<{ path: string; previousPath?: string }> {
     return this.request<{ path: string; previous_path?: string | null }>(
       `engagements/${encodeURIComponent(engagementId)}/workspace/entry`,
-      { method: "PATCH", body: JSON.stringify({ path, new_name: newName }) },
+      { method: "PATCH", body: JSON.stringify({ path, new_name: newName,
+        ...(expectedEntryIdentity ? {expected_entry_identity: expectedEntryIdentity} : {}) }) },
     ).then((value) => ({ path: value.path, previousPath: value.previous_path ?? undefined }));
   }
 
   deleteWorkspaceEntry(
     engagementId: string,
     path: string,
+    expectedSha256?: string,
+    expectedEntryIdentity?: string,
   ): Promise<{ path: string }> {
     return this.request<{ path: string }>(
       `engagements/${encodeURIComponent(engagementId)}/workspace/entry?path=${encodeURIComponent(path)}`,
-      { method: "DELETE" },
+      { method: "DELETE", headers: {
+        ...(expectedSha256 ? {"If-Match": expectedSha256} : {}),
+        ...(expectedEntryIdentity ? {"If-Entry-Identity": expectedEntryIdentity} : {}),
+      } },
+    );
+  }
+
+  getWorkspaceEntryState(engagementId: string, path: string): Promise<WorkspaceEntryState> {
+    return this.request<{
+      engagement_id: string; path: string; kind: "file" | "directory";
+      size: number; sha256?: string | null; entry_identity?: string | null;
+    }>(`engagements/${encodeURIComponent(engagementId)}/workspace/entry?path=${encodeURIComponent(path)}`)
+      .then((value) => ({engagementId: value.engagement_id, path: value.path,
+        kind: value.kind, size: value.size, sha256: value.sha256 ?? undefined,
+        entryIdentity: value.entry_identity ?? undefined}));
+  }
+
+  createWorkspaceDirectory(engagementId: string, path: string, expectedParentIdentity: string): Promise<{path: string}> {
+    return this.request<{path: string}>(
+      `engagements/${encodeURIComponent(engagementId)}/workspace/directory`,
+      {method: "POST", body: JSON.stringify({path, expected_parent_identity: expectedParentIdentity})},
     );
   }
 

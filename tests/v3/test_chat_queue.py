@@ -79,6 +79,29 @@ def test_revision_idempotency_order_and_import(tmp_path):
     assert store.count(ChatQueue) == 0
 
 
+def test_enqueue_refuses_project_relink_before_queue_admission(tmp_path):
+    store, service, request = setup_queue(tmp_path)
+    project = store.get(Engagement, "p")
+    new = tmp_path / "relinked"
+    new.mkdir()
+    original_get = store.get
+
+    def read_then_relink(model, entity_id):
+        value = original_get(model, entity_id)
+        if model is Engagement:
+            store.get = original_get
+            store.relink_project_workspace(
+                project.id, str(new), expected_revision=project.revision
+            )
+        return value
+
+    store.get = read_then_relink
+    with pytest.raises(ConflictError, match="Project workspace changed"):
+        enqueue(service, request)
+    assert store.count(ChatQueue) == 0
+    assert store.get(Engagement, project.id).workspace_path == str(new)
+
+
 def test_claim_is_transactional_and_stale_pause_rolls_back(tmp_path):
     store, service, request = setup_queue(tmp_path)
     queue = enqueue(service, request)

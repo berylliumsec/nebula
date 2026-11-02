@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type { HarnessProfile, PostToolAssistantConfig } from "../api/types";
 import { PostToolAssistantSettings } from "./PostToolAssistantSettings";
+import {notifyProjectDataChanged} from "../api/projectDataEvents";
 
 const harnessWithoutDiscoveredModel: HarnessProfile = {
   permissionMode: "managed",
@@ -33,6 +34,27 @@ const harnessWithoutDiscoveredModel: HarnessProfile = {
 };
 
 describe("PostToolAssistantSettings", () => {
+  it("retains a draft and its observed revision until explicit reload after a scoped Core change", async () => {
+    const initial: PostToolAssistantConfig = {suggestNextSteps: false, takeNotes: false,
+      backendKind: "harness", harnessProfileId: "harness-1", model: "Original model", cloudConfirmed: false, revision: 4};
+    const getPostToolAssistant = vi.fn().mockResolvedValue(initial);
+    const api = {getPostToolAssistant, listHarnesses: vi.fn().mockResolvedValue([harnessWithoutDiscoveredModel])} as unknown as ApiClient;
+    const user = userEvent.setup();
+    render(<PostToolAssistantSettings api={api} engagementId="project-1" providers={[]} />);
+    const model = await screen.findByRole("combobox", {name: "Tool follow-up model"});
+    await waitFor(() => expect(model).toHaveValue("Original model"));
+    await user.clear(model);
+    await user.type(model, "Operator draft");
+    act(() => notifyProjectDataChanged({projectId: "other-project", resource: "post-tool-settings"}));
+    expect(screen.queryByText(/Saved follow-up settings changed/)).not.toBeInTheDocument();
+    getPostToolAssistant.mockResolvedValue({...initial, revision: 5, model: "Core saved model"});
+    act(() => notifyProjectDataChanged({projectId: "project-1", resource: "post-tool-settings"}));
+    expect(await screen.findByText(/Saved follow-up settings changed/)).toBeVisible();
+    expect(model).toHaveValue("Operator draft");
+    expect(getPostToolAssistant).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", {name: "Reload tool follow-up"}));
+    await waitFor(() => expect(model).toHaveValue("Core saved model"));
+  });
   it("persists an explicit harness model without enabling either Workbench control", async () => {
     const user = userEvent.setup();
     const initial: PostToolAssistantConfig = {

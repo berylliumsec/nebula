@@ -407,6 +407,25 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
     assert removed == ["nebula-terminal-good123"]
 
 
+def test_verified_terminal_removal_rejects_a_surviving_container(tmp_path, monkeypatch):
+    runtime = tmp_path / "podman"
+    runtime.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = rm ]; then exit 0; fi\n'
+        "if [ \"$1\" = ps ]; then printf 'nebula-terminal-survivor\\n'; exit 0; fi\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    runtime.chmod(0o755)
+    monkeypatch.setattr(ContainerSandboxRunner, "_trusted_runtime_paths", (runtime,))
+    runner = ContainerSandboxRunner(runtime=str(runtime))
+
+    with pytest.raises(SandboxUnavailable, match="remains after removal"):
+        asyncio.run(
+            runner._force_remove("nebula-terminal-survivor", require_removed=True)
+        )
+
+
 def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
     runtime = tmp_path / "podman"
     runtime.write_text("test runtime", encoding="utf-8")

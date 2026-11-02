@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type { OperatorExecution } from "../api/types";
 import { ExecutionHistory } from "./ExecutionHistory";
+import {notifyProjectDataChanged} from "../api/projectDataEvents";
 
 const running: OperatorExecution = {
   id: "execution-1",
+  revision: 1,
   engagementId: "project-1",
   operatorId: "operator-1",
   origin: { kind: "assistant_message", messageId: "message-1", blockOrdinal: 0 },
@@ -65,6 +67,21 @@ afterEach(() => {
 });
 
 describe("ExecutionHistory active updates", () => {
+  it("refreshes the matching project after Butler cancellation and preserves other projects", async () => {
+    const listExecutions = vi.fn().mockResolvedValue({items: [running], total: 1});
+    const view = renderHistory({listExecutions, executionOutput: vi.fn().mockResolvedValue({text: "", totalBytes: 0, nextOffset: 0})});
+    await act(async () => {await Promise.resolve();});
+    expect(screen.getByRole("button", {name: /bash · running/i})).toBeVisible();
+    act(() => notifyProjectDataChanged({projectId: "foreign", resource: "executions", executionId: running.id}));
+    expect(listExecutions).toHaveBeenCalledTimes(1);
+    listExecutions.mockResolvedValue({items: [{...running, status: "cancelled", completedAt: completed.completedAt}], total: 1});
+    await act(async () => notifyProjectDataChanged({projectId: "project-1", resource: "executions", executionId: running.id}));
+    expect(screen.getByRole("button", {name: /bash · cancelled/i})).toBeVisible();
+    expect(listExecutions).toHaveBeenCalledTimes(2);
+    view.unmount();
+    act(() => notifyProjectDataChanged({projectId: "project-1", resource: "executions", executionId: running.id}));
+    expect(listExecutions).toHaveBeenCalledTimes(2);
+  });
   it("shows a placeholder before the first activity response", async () => {
     let resolveExecutions!: (value: { items: OperatorExecution[]; total: number }) => void;
     renderHistory({ listExecutions: vi.fn().mockReturnValue(new Promise((resolve) => { resolveExecutions = resolve; })) });

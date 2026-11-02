@@ -30,7 +30,7 @@ from .domain import (
     SshEnvironmentProbe,
     utc_now,
 )
-from .storage import NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError
 
 MAX_STREAM_BYTES = 1_000_000
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
@@ -78,6 +78,7 @@ class SshEnvironmentSettings(NebulaModel):
     working_directory: str | None = Field(default=None, max_length=1_024)
     command_approval: SshEnvironmentApproval | None = None
     expected_revision: int | None = Field(default=None, ge=1)
+    expected_absent: bool = False
 
 
 def environment_id(alias: str) -> str:
@@ -165,12 +166,18 @@ class SshEnvironmentService:
             raise NotFoundError(f"Host {alias!r} is not defined in the SSH config")
 
     def save(self, alias: str, settings: SshEnvironmentSettings) -> SshEnvironment:
-        changes = settings.model_dump(exclude_unset=True, exclude={"expected_revision"})
+        changes = settings.model_dump(
+            exclude_unset=True, exclude={"expected_revision", "expected_absent"}
+        )
         if "working_directory" in changes:
             changes["working_directory"] = (
                 changes["working_directory"] or ""
             ).strip() or None
         existing = self.get(alias)
+        if (settings.expected_absent and existing is not None) or (
+            settings.expected_revision is not None and existing is None
+        ):
+            raise ConflictError("SSH settings changed; read the host again")
         if existing is None:
             self._require_configured(alias)
             return self.store.create(
@@ -183,11 +190,13 @@ class SshEnvironmentService:
             expected_revision=settings.expected_revision,
         )
 
-    def forget(self, alias: str) -> None:
+    def forget(self, alias: str, *, expected_revision: int | None = None) -> None:
         existing = self.get(alias)
         if existing is None:
             raise NotFoundError(f"No saved settings for SSH host {alias!r}")
-        self.store.delete(SshEnvironment, existing.id)
+        self.store.delete(
+            SshEnvironment, existing.id, expected_revision=expected_revision
+        )
 
     async def probe(self, alias: str) -> SshEnvironment:
         existing = self.get(alias)

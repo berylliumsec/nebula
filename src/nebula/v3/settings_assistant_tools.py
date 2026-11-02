@@ -27,6 +27,11 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
         "Nebula-wide Butler instructions",
         "butler-instructions-settings",
     ),
+    (
+        "butler-check-interval",
+        "Butler check interval",
+        "butler-check-interval-settings",
+    ),
     ("butler-effort", "Butler model and effort", "butler-settings"),
     ("butler-activity", "Butler scheduled activity", "butler-oversight"),
     ("butler-voice", "Butler Voice timeout", "butler-settings"),
@@ -35,6 +40,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("providers", "Model providers", "provider-settings"),
     ("skills", "Shared skills", "native-skill-settings"),
     ("web-search", "Web search runtime", "web-search-runtime-settings"),
+    ("typesafe", "TypeSafe API key", "typesafe-integration-settings"),
     ("storage", "Storage sources", "storage-integration-settings"),
     ("follow-up", "Post-tool assistant", "post-tool-assistant-settings"),
     ("harnesses", "Assistant harnesses", "harness-settings"),
@@ -197,6 +203,11 @@ SETTINGS_API_REQUEST_SCHEMA = {
         "path": {"type": "string", "minLength": 1, "maxLength": 600},
         "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
         "body": {"type": ["object", "array", "null"]},
+        "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Current revision from an exact profile GET; required for profile DELETE and for PUT unless the complete body retains its observed revision. PATCH uses body.expected_revision.",
+        },
     },
     "required": ["path", "method"],
 }
@@ -269,6 +280,31 @@ def catalog() -> dict[str, Any]:
                 "arguments": ["kind", "profile_id", "model"],
                 "effect": "save one listed default model in Core",
             },
+        ],
+        "capability_families": [
+            {
+                "id": "notebook",
+                "discover_with": "nebula.capabilities.search",
+                "operations": [
+                    "nebula.notebook.list",
+                    "nebula.notebook.read",
+                    "nebula.notebook.source",
+                    "nebula.notebook.create",
+                    "nebula.notebook.edit_cell",
+                    "nebula.notebook.run",
+                    "nebula.notebook.run_event",
+                    "nebula.notebook.wait",
+                    "nebula.notebook.file_index_status",
+                    "nebula.notebook.connect_file_index",
+                    "nebula.notebook.remove_file_index",
+                    "nebula.notebook.kernel_status",
+                    "nebula.notebook.restart",
+                    "nebula.notebook.installed_package",
+                    "nebula.notebook.install_package",
+                    "nebula.notebook.search_package",
+                ],
+                "effect": "interactive Butler delegates selected-project Notebook actions to Core under the current grant and project revision; the requesting browser selects host index paths",
+            }
         ],
         "settings": [
             {
@@ -532,7 +568,9 @@ def set_post_tool_preference(
     service = ExecutionAIService(store=store, artifact_store=artifact_store)
     current = service.get_config(engagement.id)
     saved = service.set_config(
-        engagement.id, current.model_copy(update={setting: enabled})
+        engagement.id,
+        current.model_copy(update={setting: enabled}),
+        expected_revision=engagement.revision,
     )
     observed = service.get_config(engagement.id)
     if observed != saved:
@@ -543,6 +581,9 @@ def set_post_tool_preference(
         "project_id": engagement.id,
         "project_name": engagement.name,
         "saved": True,
+        "state": "core_settings_saved",
+        "read_back": True,
+        "client_action": {"kind": "post_tool_refresh", "project_id": engagement.id},
     }
 
 
@@ -697,6 +738,7 @@ def provider_plugins(
             path=arguments.get("path"),
             method=arguments.get("method"),
             body=arguments.get("body"),
+            expected_revision=arguments.get("expected_revision"),
         )
 
     async def read_notebook(_arguments: dict[str, Any]) -> dict[str, Any]:
@@ -764,7 +806,7 @@ def provider_plugins(
         AnalysisTool(
             ToolSpec(
                 name="nebula.settings.api_schema",
-                description="Discover authenticated Core Settings routes in this build, or inspect the exact request schema for one listed path and method. Use before changing settings without a dedicated tool.",
+                description="Discover authenticated Core Settings routes and exact request schemas: provider and harness profiles, health and verification, account credits, public provider directory and fixed local discovery; operator profiles; Web search install/start/stop/test/engines; setup and automation runtime; SSH settings/probe; project skills, hooks and instruction status. Use before settings actions without a dedicated tool.",
                 input_schema=SETTINGS_API_SCHEMA_SCHEMA,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.LOCAL_READ,
@@ -775,7 +817,7 @@ def provider_plugins(
         AnalysisTool(
             ToolSpec(
                 name="nebula.settings.api_request",
-                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. Core validates and saves. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
+                description="Call one listed Core Settings route for the selected project. Read current state and schema first; preserve unrelated fields and revision. MCP reads, exports, edits and probes include only shared and selected-project profiles; preserve their project ownership. Probes use the selected project. Profile DELETE requires expected_revision from the exact profile GET. PUT retains the observed body.revision or explicit expected_revision and forwards Core's If-Match guard; PATCH requires body.expected_revision. Project automation-policy PUT requires body.expected_revision. First Host-access acknowledgment belongs in the requesting browser's network-scope setting; generic edits preserve prior consent and cannot create it in any execution mode. A create reads back the exact new identity. Operator profile PATCH and activation require body.expected_revision. Skills, hooks, instruction status and project runtime queries are scoped by Core; do not add query strings. Runtime actions preserve the API result and include bounded observed_settings from their related status route; accepted setup is still pending until status reports ready. Setup image prepare/retry bind project_id to the selected project; cancel requires its current own operation_id from setup/status and cannot cancel another project. Fixed runtime selection accepts only Core-detected candidate IDs, never an executable path. Account refresh POSTs return Core observations without claiming profile writes. Runner and spawned-harness program trust and first or rebound follow-up cloud consent remain browser-owned. Preserve authentication references, sharing permissions and trusted program definitions; changes require the corresponding browser Settings or managed-reference handoff. TypeSafe key entry/removal, VPN profile import/removal and MCP configuration import belong in the requesting browser: use nebula.settings.open with typesafe, vpn-egress or mcp. Never put their private input in tool arguments. Report saved state only when read_back is true or a subsequent GET confirms it; no additional confirmation for an explicit operator request.",
                 input_schema=SETTINGS_API_REQUEST_SCHEMA,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.WORKSPACE_WRITE,

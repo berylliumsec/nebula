@@ -23,7 +23,7 @@ function statusLabel(guide: GuideDefinition, progress?: GuideProgress): { label:
 export function GuidesDrawer({ onClose }: { onClose(): void }) {
   const { guides, page, progress, progressError, progressState, restart, retryProgress, start } = useGuides();
   const [query, setQuery] = useState("");
-  const surfaceRef = useRef<HTMLElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
@@ -66,8 +66,8 @@ export function GuidesDrawer({ onClose }: { onClose(): void }) {
 
   return createPortal(<div className="guides-drawer-layer" data-guide-layer>
     <button className="guides-drawer-scrim" type="button" tabIndex={-1} aria-label="Close guides" onClick={onClose} />
-    <aside ref={surfaceRef} className="guides-drawer" role="dialog" aria-modal="true" aria-labelledby="guides-drawer-title" onKeyDown={onKeyDown}>
-      <header className="guides-drawer-header">
+    <div ref={surfaceRef} className="guides-drawer" role="dialog" aria-modal="true" aria-labelledby="guides-drawer-title" onKeyDown={onKeyDown}>
+      <header className="guides-drawer-header" role="presentation">
         <h2 id="guides-drawer-title">Guides</h2>
         <span className="guides-drawer-count">{doneCount} of {guides.length} done</span>
         <button className="icon-button subtle" type="button" aria-label="Close guides" title="Close guides" onClick={onClose}><X size={18} aria-hidden="true" /></button>
@@ -103,6 +103,6 @@ export function GuidesDrawer({ onClose }: { onClose(): void }) {
           </ul>
         </section>)}
       </div>
-    </aside>
+    </div>
   </div>, document.body);
 }

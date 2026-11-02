@@ -10,7 +10,7 @@ import re
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator, ValidationError
@@ -33,6 +33,10 @@ from .domain import (
 )
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
+
+if TYPE_CHECKING:
+    from .container_terminal import ContainerTerminalService
+    from .workspace import WorkspaceService
 
 
 _SEARCH_SCHEMA: dict[str, Any] = {
@@ -65,7 +69,43 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.set_device_theme",
         "nebula.settings.set_project_mode",
         "nebula.settings.set_project_scope",
+        "nebula.sources.add",
+        "nebula.sources.download",
+        "nebula.sources.reindex",
+        "nebula.sources.remove",
+        "nebula.data.delete_result",
+        "nebula.inspect.download_artifact",
         "nebula.settings.headless_session",
+        "nebula.chats.export",
+        "nebula.storage.enroll",
+        "nebula.storage.rotate",
+        "nebula.storage.revoke",
+        "nebula.storage.configure_reporting",
+        "nebula.storage.edit_callbacks",
+        "nebula.devices.pair",
+        "nebula.devices.revoke",
+        "nebula.credentials.create",
+        "nebula.credentials.delete",
+        "nebula.providers.attach_credential",
+        "nebula.harnesses.attach_credential",
+        "nebula.mcp.attach_credential",
+        "nebula.notes.create",
+        "nebula.notes.update",
+        "nebula.notes.delete",
+        "nebula.diagnostics.export",
+        "nebula.workspace.download_file",
+        "nebula.library.add",
+        "nebula.library.download",
+        "nebula.library.reindex",
+        "nebula.library.remove",
+        "nebula.evidence.upload",
+        "nebula.evidence.download",
+        "nebula.reports.create",
+        "nebula.reports.update",
+        "nebula.reports.signoff",
+        "nebula.reports.export_pdf",
+        "nebula.reports.export_bundle",
+        "nebula.terminal.stop",
     }
 )
 _BACKGROUND_CHANGES = frozenset(
@@ -112,6 +152,14 @@ _BACKGROUND_CHANGES = frozenset(
 )
 _CATEGORIES = (
     {
+        "id": "inspect",
+        "description": "Bounded conversation context, evidence and tool output; exact project execution history, cancellation and browser-owned original artifact downloads",
+    },
+    {
+        "id": "data",
+        "description": "Bounded saved Results and resource search, private conversation boundaries, Core metadata and Git inspection, operator/revision-bound guide progress and fixed templates",
+    },
+    {
         "id": "work",
         "description": "Project chats, main agents, subagents, missions, goals, queues, schedules, and approvals",
     },
@@ -120,8 +168,64 @@ _CATEGORIES = (
         "description": "Butler preferences and verified lessons visible in this project",
     },
     {
+        "id": "projects",
+        "description": "Interactive operator project discovery, creation, rename, archive, restore, and deletion through the requesting browser",
+    },
+    {
+        "id": "notebook",
+        "description": "Project-scoped Notebook files, cells, package lookup, and existing run results under the current Notebook grant",
+    },
+    {
+        "id": "workspace",
+        "description": "Selected-project file listing, bounded text reads, hash-checked changes, exact Evidence preservation, and requesting-device downloads",
+    },
+    {
+        "id": "library",
+        "description": "Bounded shared Library item discovery and requesting-browser upload, download, reindex or removal",
+    },
+    {
+        "id": "sources",
+        "description": "Selected-project Sources metadata and browser-owned file or URL ingestion, verified original download, revision-fenced reindex and removal",
+    },
+    {
+        "id": "reports",
+        "description": "Selected-project report and source discovery, draft changes, operator signoff handoff, and requesting-device exports",
+    },
+    {
+        "id": "assets",
+        "description": "Selected-project inventory discovery and creation without scanning",
+    },
+    {
+        "id": "findings",
+        "description": "Selected-project finding discovery, candidate creation and revision edits without starting validation",
+    },
+    {
+        "id": "notes",
+        "description": "Selected-project Notes and same-project link discovery with exact browser-owned create, edit and confirmed deletion",
+    },
+    {
+        "id": "terminal",
+        "description": "Selected-project live terminal discovery and confirmed stop through the requesting browser",
+    },
+    {
         "id": "settings",
         "description": "Project and next-turn Assistant settings, model choices, and device actions",
+    },
+    {
+        "id": "storage",
+        "description": "Selected-project storage source discovery and requesting-browser enrollment, token, reporting, and callback controls",
+    },
+    {
+        "id": "devices",
+        "description": "Nonsecret paired-device discovery and requesting-browser pairing and revocation handoffs",
+    },
+    {
+        "id": "credentials",
+        "description": "Write-only credential creation and exact-reference deletion on the requesting browser",
+    },
+    {
+        "id": "diagnostics",
+        "description": "Public diagnostics settings and confirmed sensitive review or ZIP export on the requesting browser",
     },
     {"id": "help", "description": "Source-linked Nebula help and live project context"},
     {
@@ -148,6 +252,18 @@ _SEARCH_FILLER = frozenset(
 )
 
 
+class _ButlerAction(Protocol):
+    """Fields shared by broker plugins and Core-owned Butler actions."""
+
+    @property
+    def spec(self) -> ToolSpec: ...
+
+    @property
+    def _handler(
+        self,
+    ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]: ...
+
+
 class ButlerCapabilities:
     """Validated gateway to the selected project's existing Core actions."""
 
@@ -159,6 +275,8 @@ class ButlerCapabilities:
         *,
         settings_api: Any = None,
         notebooks: Any = None,
+        workspace: WorkspaceService | None = None,
+        container_terminals: ContainerTerminalService | None = None,
         work: Any = None,
         memory: Any = None,
         operator_message: str = "",
@@ -177,7 +295,7 @@ class ButlerCapabilities:
         self._operator_turn_id = operator_turn_id
         self._background_case_id = background_case_id
         self._work = work
-        self._actions = {
+        self._actions: dict[str, _ButlerAction] = {
             plugin.spec.name: plugin
             for plugin in provider_plugins(
                 store,
@@ -189,6 +307,172 @@ class ButlerCapabilities:
                 all_work=True,
             )
         }
+        if background_case_id is None:
+            from .butler_administration import ButlerAdministration
+            from .butler_chat_export import ButlerChatExport
+            from .butler_credentials import ButlerCredentials
+            from .butler_diagnostics import ButlerDiagnostics
+            from .butler_devices import ButlerDevices
+            from .butler_data import ButlerData
+            from .butler_inspection import ButlerInspection
+            from .butler_evidence import ButlerEvidence
+            from .butler_library import ButlerLibrary
+            from .butler_projects import ButlerProjects
+            from .butler_providers import ButlerProviders
+            from .butler_harnesses import ButlerHarnesses
+            from .butler_mcp import ButlerMcp
+            from .butler_notes import ButlerNotes
+            from .butler_records import ButlerRecords
+            from .butler_reports import ButlerReports
+            from .butler_storage import ButlerStorage
+            from .butler_sources import ButlerSources
+            from .butler_terminal import ButlerTerminal
+            from .butler_workspace import ButlerWorkspace
+
+            self._actions.update(
+                {plugin.spec.name: plugin for plugin in ButlerProjects(store).plugins()}
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerData(store, project_id, settings_api).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerAdministration(
+                        store, project_id, settings_api
+                    ).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerInspection(
+                        store, project_id, settings_api
+                    ).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerSources(
+                        store,
+                        project_id,
+                        getattr(
+                            getattr(getattr(settings_api, "app", None), "state", None),
+                            "knowledge_index",
+                            None,
+                        ),
+                    ).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerChatExport(store, project_id).actions()
+                }
+            )
+            if workspace is not None:
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerWorkspace(workspace, project_id).actions()
+                    }
+                )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerLibrary(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerEvidence(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerReports(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerStorage(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerDevices(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerCredentials(project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerProviders(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerHarnesses(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerMcp(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerNotes(store, project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerDiagnostics(project_id).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerRecords(store, project_id).actions()
+                }
+            )
+            if container_terminals is not None:
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerTerminal(
+                            container_terminals, project_id
+                        ).actions()
+                    }
+                )
+            if notebooks is not None:
+                from .butler_notebook import ButlerNotebook
+
+                self._actions.update(
+                    {
+                        plugin.spec.name: plugin
+                        for plugin in ButlerNotebook(
+                            store, notebooks, project_id
+                        ).actions()
+                    }
+                )
         if memory is not None:
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in self._memory_actions()}
@@ -633,13 +917,13 @@ class ButlerCapabilities:
         ]
 
     @staticmethod
-    def _read_only(plugin: AnalysisTool) -> bool:
+    def _read_only(plugin: _ButlerAction) -> bool:
         return (
-            plugin.spec.risk_class == RiskClass.LOCAL_READ
+            plugin.spec.risk_class in {RiskClass.LOCAL_READ, RiskClass.PASSIVE}
             and plugin.spec.name not in _BROWSER_ACTIONS
         )
 
-    def _description(self, plugin: AnalysisTool) -> str:
+    def _description(self, plugin: _ButlerAction) -> str:
         description = plugin.spec.description
         if self._background_case_id is None:
             return description
@@ -670,7 +954,7 @@ class ButlerCapabilities:
             )
         )
 
-    def _input_schema(self, plugin: AnalysisTool) -> dict[str, Any]:
+    def _input_schema(self, plugin: _ButlerAction) -> dict[str, Any]:
         schema = plugin.spec.input_schema
         if (
             self._background_case_id is None
@@ -710,6 +994,7 @@ class ButlerCapabilities:
                 "suggested": [
                     name
                     for name in (
+                        "nebula.projects.list",
                         "nebula.work.overview",
                         "nebula.work.attention",
                         "nebula.memory.search",
@@ -720,7 +1005,7 @@ class ButlerCapabilities:
                 ],
                 "hint": "Search for the requested action, then describe its exact fields.",
             }
-        ranked: list[tuple[int, str, AnalysisTool]] = []
+        ranked: list[tuple[int, str, _ButlerAction]] = []
         for name, plugin in self._actions.items():
             title = name.lower()
             description = self._description(plugin).lower()
@@ -892,7 +1177,7 @@ class ButlerCapabilities:
         descriptions = (
             (
                 "nebula.capabilities.search",
-                "Find Butler actions for the selected project by intent: chats, agents, subagents, missions, goals, approvals, settings, help, or navigation. Empty query lists categories. Describe a match before invoking it.",
+                "Find Butler actions by intent: projects, selected-project chats and agents, goals, approvals, settings, help, or navigation. Empty query lists categories. Describe a match before invoking it.",
                 _SEARCH_SCHEMA,
                 RiskClass.LOCAL_READ,
                 self.search,

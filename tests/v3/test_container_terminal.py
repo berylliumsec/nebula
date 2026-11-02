@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import time
 import zipfile
+from datetime import datetime, timezone
 from functools import wraps
 from uuid import NAMESPACE_URL, uuid5
 
@@ -17,6 +18,8 @@ from pydantic import ValidationError
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.butler_capabilities import ButlerCapabilities
+from nebula.v3.butler_terminal import ButlerTerminal
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.container_terminal import (
     ContainerTerminalError,
@@ -388,6 +391,166 @@ async def test_project_supports_multiple_independent_terminals_and_bulk_recovery
     async with service.guard_workspace_operation(engagement.id):
         pass
     assert (await service.capacity()).active_sessions == 0
+
+
+@async_test
+async def test_project_session_listing_and_conditional_close_keep_tickets_private(
+    tmp_path,
+):
+    store, project, runner, _platform, service = continuity_fixture(tmp_path)
+    other = store.create(Engagement(name="Other Project"))
+    first, _first_attachment = await start_controllable_terminal(
+        service, project, idempotency_key="project-one"
+    )
+    second, _second_attachment = await start_controllable_terminal(
+        service, other, idempotency_key="project-two"
+    )
+
+    current = await service.list_sessions(project.id)
+    assert current.engagement_id == project.id
+    assert [item.session_id for item in current.sessions] == [first.session_id]
+    assert current.sessions[0].state == "running"
+    assert current.sessions[0].attached is True
+    assert "websocket_ticket" not in current.model_dump_json()
+    assert first.websocket_ticket not in current.model_dump_json()
+    assert second.session_id not in current.model_dump_json()
+
+    identity = current.sessions[0].created_at
+    with pytest.raises(ContainerTerminalError) as wrong_project:
+        await service.close_project_session(other.id, first.session_id, identity)
+    assert wrong_project.value.code == "terminal_not_found"
+    with pytest.raises(ContainerTerminalError) as stale:
+        await service.close_project_session(
+            project.id, first.session_id, datetime(2000, 1, 1, tzinfo=timezone.utc)
+        )
+    assert stale.value.code == "terminal_changed"
+    assert [
+        item.session_id for item in (await service.list_sessions(project.id)).sessions
+    ] == [first.session_id]
+
+    observed = await service.close_project_session(
+        project.id, first.session_id, identity
+    )
+    assert observed.sessions == []
+    assert runner.processes[0].closed == 1
+    assert runner.processes[1].closed == 0
+    assert [
+        item.session_id for item in (await service.list_sessions(other.id)).sessions
+    ] == [second.session_id]
+    await service.close(second.session_id)
+
+
+@async_test
+async def test_project_terminal_cleanup_failure_stays_visible_until_retry(
+    tmp_path, monkeypatch
+):
+    _store, project, runner, _platform, service = continuity_fixture(tmp_path)
+    started, _attachment = await start_controllable_terminal(service, project)
+    process = runner.processes[0]
+    original_close = process.close
+    attempts = 0
+
+    async def fail_first_cleanup():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("runtime did not verify container removal")
+        await original_close()
+
+    monkeypatch.setattr(process, "close", fail_first_cleanup)
+    identity = (await service.list_sessions(project.id)).sessions[0].created_at
+    with pytest.raises(ContainerTerminalError) as failed:
+        await service.close_project_session(project.id, started.session_id, identity)
+    assert failed.value.code == "terminal_cleanup_failed"
+    assert failed.value.status_code == 503
+    listed = await service.list_sessions(project.id)
+    assert [item.state for item in listed.sessions] == ["stopping"]
+    assert (await service.capacity()).active_sessions == 1
+
+    stop = await ButlerTerminal(service, project.id).stop(
+        {
+            "session_id": started.session_id,
+            "expected_created_at": listed.model_dump(mode="json")["sessions"][0][
+                "created_at"
+            ],
+        }
+    )
+    assert stop["state"] == "pending_browser_apply"
+    observed = await service.close_project_session(
+        project.id, started.session_id, identity
+    )
+    assert observed.sessions == []
+    assert process.closed == 1
+    assert attempts == 2
+    assert (await service.capacity()).active_sessions == 0
+
+
+@async_test
+async def test_butler_terminal_stop_is_exact_browser_handoff(tmp_path):
+    store, project, _runner, _platform, service = continuity_fixture(tmp_path)
+    started, _attachment = await start_controllable_terminal(service, project)
+    actions = {
+        action.spec.name: action
+        for action in ButlerTerminal(service, project.id).actions()
+    }
+
+    listed = await actions["nebula.terminal.list"]._handler({})
+    assert listed["sessions"][0]["session_id"] == started.session_id
+    assert started.websocket_ticket not in str(listed)
+    assert "websocket_ticket" not in str(listed)
+    with pytest.raises(ValueError, match="changed"):
+        await actions["nebula.terminal.stop"]._handler(
+            {"session_id": started.session_id, "expected_created_at": "stale"}
+        )
+    pending = await actions["nebula.terminal.stop"]._handler(
+        {
+            "session_id": started.session_id,
+            "expected_created_at": listed["sessions"][0]["created_at"],
+        }
+    )
+    assert pending == {
+        "state": "pending_browser_apply",
+        "client_action": {
+            "kind": "terminal_stop",
+            "project_id": project.id,
+            "session_id": started.session_id,
+            "expected_created_at": listed["sessions"][0]["created_at"],
+        },
+    }
+    assert [
+        item.session_id for item in (await service.list_sessions(project.id)).sessions
+    ] == [started.session_id]
+    gateway = ButlerCapabilities(
+        store,
+        ArtifactStore(tmp_path / "butler-artifacts"),
+        project.id,
+        container_terminals=service,
+    )
+    matches = await gateway.search({"query": "stop terminal"})
+    assert any(row["operation"] == "nebula.terminal.stop" for row in matches["matches"])
+    assert (await gateway.describe({"operation": "nebula.terminal.stop"}))[
+        "invoke_with"
+    ] == "nebula.capabilities.change"
+    gateway_list = await gateway.invoke(
+        {"operation": "nebula.terminal.list", "arguments": {}}, change=False
+    )
+    assert gateway_list["sessions"] == listed["sessions"]
+    assert gateway_list["butler_project_id"] == project.id
+    assert "websocket_ticket" not in str(gateway_list)
+    gateway_stop = await gateway.invoke(
+        {
+            "operation": "nebula.terminal.stop",
+            "arguments": {
+                "session_id": started.session_id,
+                "expected_created_at": listed["sessions"][0]["created_at"],
+            },
+        },
+        change=True,
+    )
+    assert gateway_stop["client_action"] == pending["client_action"]
+    assert gateway_stop["state"] == "pending_browser_apply"
+    assert gateway_stop["butler_operation"] == "nebula.terminal.stop"
+    await service.close(started.session_id)
 
 
 @async_test
@@ -1454,6 +1617,77 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
             ]
             == 31
         )
+
+
+def test_project_terminal_listing_and_conditional_stop_api(tmp_path):
+    store, project, _policy, _runner, _platform, service = fixture(tmp_path)
+    other = store.create(Engagement(name="Other Project"))
+    app = create_app(store, auth_token="test-token", container_terminal_service=service)
+    headers = {"Authorization": "Bearer test-token"}
+
+    with TestClient(app) as client:
+        preview = client.post(
+            "/api/v1/container-terminal/preflight",
+            headers=headers,
+            json={"engagement_id": project.id},
+        ).json()
+        started = client.post(
+            "/api/v1/container-terminal/sessions",
+            headers=headers,
+            json={
+                "engagement_id": project.id,
+                "preview_token": preview["preview_token"],
+                "preview_fingerprint": preview["preview_fingerprint"],
+                "client_idempotency_key": "butler-list-test",
+            },
+        ).json()
+        path = f"/api/v1/engagements/{project.id}/container-terminals"
+        listed = client.get(path, headers=headers)
+        assert listed.status_code == 200
+        assert listed.headers["Cache-Control"] == "private, no-store"
+        assert [item["session_id"] for item in listed.json()["sessions"]] == [
+            started["session_id"]
+        ]
+        assert "websocket_ticket" not in listed.text
+        assert started["websocket_ticket"] not in listed.text
+        assert client.get(path).status_code == 401
+        assert (
+            client.get(
+                f"/api/v1/engagements/{other.id}/container-terminals", headers=headers
+            ).json()["sessions"]
+            == []
+        )
+
+        stop_path = f"{path}/{started['session_id']}/close"
+        expected = {"expected_created_at": listed.json()["sessions"][0]["created_at"]}
+        wrong_project = client.post(
+            f"/api/v1/engagements/{other.id}/container-terminals/{started['session_id']}/close",
+            headers=headers,
+            json=expected,
+        )
+        assert wrong_project.status_code == 404
+        assert wrong_project.json()["code"] == "terminal_not_found"
+        stale = client.post(
+            stop_path,
+            headers=headers,
+            json={"expected_created_at": "2000-01-01T00:00:00Z"},
+        )
+        assert stale.status_code == 409
+        assert stale.json()["code"] == "terminal_changed"
+        assert (
+            client.post(
+                stop_path,
+                headers=headers,
+                json={"expected_created_at": "2000-01-01T00:00:00"},
+            ).status_code
+            == 422
+        )
+
+        stopped = client.post(stop_path, headers=headers, json=expected)
+        assert stopped.status_code == 200
+        assert stopped.headers["Cache-Control"] == "private, no-store"
+        assert stopped.json() == {"engagement_id": project.id, "sessions": []}
+        assert client.get(path, headers=headers).json()["sessions"] == []
 
 
 def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):

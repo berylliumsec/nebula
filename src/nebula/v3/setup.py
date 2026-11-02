@@ -10,8 +10,11 @@ from .diagnostics import (
 
 import asyncio
 import hashlib
+import json
 import os
 import platform as host_platform
+import re
+import unicodedata
 from collections import deque
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -20,11 +23,13 @@ from typing import Literal, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import Field
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from .database import (
     BootstrapStateRow,
     EntityRow,
+    ProjectCreateRequestRow,
     SCRATCH_PROJECT_BOOTSTRAP_KEY,
 )
 from .domain import (
@@ -303,21 +308,123 @@ def create_engagement_with_default_scope(
     engagement: Engagement,
     *,
     host_access_acknowledged: bool = False,
+    actor_id: str | None = None,
+    request_id: str | None = None,
 ) -> Engagement:
-    """Atomically create a Project with scope and Host runtime policy."""
+    """Atomically create a Project and optionally persist its retry identity."""
 
     if engagement.scope_policy_id is not None:
         raise ValueError("new Projects cannot supply a scope policy reference")
+    if request_id is not None and not actor_id:
+        raise ValueError("project-create request_id requires an actor_id")
     scope = default_scope_policy(engagement.id)
     runtime_policy = default_host_policy(
         engagement.id, host_access_acknowledged=host_access_acknowledged
     )
     prepared = engagement.model_copy(update={"scope_policy_id": scope.id})
-    with store.transaction() as transaction:
-        transaction.add(scope)
-        transaction.add(prepared)
-        transaction.add(runtime_policy)
-    return prepared
+    if request_id is None:
+        with store.transaction() as transaction:
+            transaction.add(scope)
+            transaction.add(prepared)
+            transaction.add(runtime_policy)
+        return prepared
+    assert actor_id is not None
+
+    # Butler's browser preflight is advisory. A name guard inside Core's write
+    # transaction also handles two independent Butler actions created at once.
+    name_key = re.sub(
+        r"\s+", " ", unicodedata.normalize("NFKC", engagement.name).strip()
+    ).lower()
+
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "project": engagement.model_dump(
+                    mode="json",
+                    exclude={"id", "created_at", "updated_at", "revision"},
+                ),
+                "host_access_acknowledged": host_access_acknowledged,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    receipt_key = (actor_id, request_id)
+    created = False
+    try:
+        # SQLite takes the writer lock before the absent-row read. PostgreSQL's
+        # name lock serializes Butler creates with equal normalized names; the
+        # primary key also serializes a reused ID with different details.
+        with store.transaction(immediate=True) as transaction:
+            if (
+                transaction.session.bind
+                and transaction.session.bind.dialect.name == "postgresql"
+            ):
+                transaction.session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:name_key))"),
+                    {"name_key": f"nebula:project-name:{name_key}"},
+                )
+            receipt = transaction.session.get(ProjectCreateRequestRow, receipt_key)
+            if receipt is None:
+                existing_names = transaction.session.execute(
+                    select(EntityRow.id, EntityRow.payload).where(
+                        EntityRow.kind == Engagement.entity_kind
+                    )
+                )
+                for existing_id, payload in existing_names:
+                    existing_name = payload.get("name")
+                    if (
+                        isinstance(existing_name, str)
+                        and re.sub(
+                            r"\s+",
+                            " ",
+                            unicodedata.normalize("NFKC", existing_name).strip(),
+                        ).lower()
+                        == name_key
+                    ):
+                        raise ConflictError(
+                            f"project name already exists: {existing_id}"
+                        )
+                transaction.session.add(
+                    ProjectCreateRequestRow(
+                        actor_id=actor_id,
+                        request_id=request_id,
+                        payload_hash=fingerprint,
+                        engagement_id=engagement.id,
+                    )
+                )
+                transaction.session.flush()
+                transaction.add(scope)
+                transaction.add(prepared)
+                transaction.add(runtime_policy)
+                created = True
+                project_id = prepared.id
+            else:
+                if receipt.payload_hash != fingerprint:
+                    raise ConflictError(
+                        "request_id was used for different project details"
+                    )
+                project_id = receipt.engagement_id
+    except IntegrityError:
+        # A concurrent PostgreSQL writer committed the receipt first. Resolve
+        # only that exact receipt; an unrelated integrity failure still raises.
+        with store.database.session() as session:
+            receipt = session.get(ProjectCreateRequestRow, receipt_key)
+            if receipt is None:
+                raise
+            if receipt.payload_hash != fingerprint:
+                raise ConflictError(
+                    "request_id was used for different project details"
+                ) from None
+            project_id = receipt.engagement_id
+    if created:
+        return prepared
+    try:
+        return store.get(Engagement, project_id)
+    except NotFoundError as exc:
+        raise ConflictError(
+            "request_id belongs to a project that has since been deleted"
+        ) from exc
 
 
 def bootstrap_scratch_project(store: NebulaStore) -> str | None:

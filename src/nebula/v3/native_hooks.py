@@ -15,7 +15,13 @@ from uuid import uuid4
 from pydantic import Field, field_validator
 
 from .diagnostics import record_caught_exception
-from .domain import NativeHookExecution, NativeHookLateOutcome, NebulaModel, utc_now
+from .domain import (
+    Engagement,
+    NativeHookExecution,
+    NativeHookLateOutcome,
+    NebulaModel,
+    utc_now,
+)
 from .storage import NebulaStore, NotFoundError
 from .workspace_provenance import (
     PROVENANCE_SCHEMA,
@@ -305,6 +311,7 @@ class NativeHookRunner:
         event_name: str,
         payload: dict[str, Any],
         workspace_provenance: dict[str, Any] | None = None,
+        project_workspace_binding: tuple[str, str | None] | None = None,
     ) -> NativeHookExecution:
         if event_name not in snapshot.manifest.events:
             raise NativeHookError(
@@ -324,21 +331,26 @@ class NativeHookRunner:
                 f"hook {snapshot.id!r} executable changed after selection"
             )
         started = utc_now()
-        execution = self.store.create(
-            NativeHookExecution(
-                id=str(uuid4()),
-                engagement_id=engagement_id,
-                chat_session_id=chat_session_id,
-                chat_turn_id=chat_turn_id,
-                owner_kind=owner_kind,
-                owner_id=owner_id or chat_session_id or chat_turn_id,
-                hook_id=snapshot.id,
-                hook_snapshot=snapshot.model_dump(mode="json"),
-                event_name=event_name,
-                side_effects=snapshot.manifest.side_effects,
-                started_at=started,
-            )
+        pending_execution = NativeHookExecution(
+            id=str(uuid4()),
+            engagement_id=engagement_id,
+            chat_session_id=chat_session_id,
+            chat_turn_id=chat_turn_id,
+            owner_kind=owner_kind,
+            owner_id=owner_id or chat_session_id or chat_turn_id,
+            hook_id=snapshot.id,
+            hook_snapshot=snapshot.model_dump(mode="json"),
+            event_name=event_name,
+            side_effects=snapshot.manifest.side_effects,
+            started_at=started,
         )
+        if project_workspace_binding is None:
+            execution = self.store.create(pending_execution)
+        else:
+            with self.store.transaction(immediate=True) as admission:
+                admission.assert_project_workspace(*project_workspace_binding)
+                admission.add(pending_execution)
+                execution = pending_execution
         envelope = json.dumps(
             {
                 "schema": "nebula.native-hook-event/v1",
@@ -481,6 +493,13 @@ async def run_project_tool_hooks(
 ) -> list[NativeHookExecution]:
     """Run automatically selected project hooks at one command-tool boundary."""
 
+    project = store.get(Engagement, engagement_id)
+    if (
+        project.workspace_path is not None
+        and Path(project.workspace_path).expanduser().resolve() != workspace.resolve()
+    ):
+        raise NativeHookError("project workspace changed before its tool hook began")
+    project_workspace_binding = (engagement_id, project.workspace_path)
     catalog = discover_native_hooks(workspace)
     snapshots = [
         snapshot_native_hook(item.id, catalog)
@@ -569,6 +588,7 @@ async def run_project_tool_hooks(
             event_name=event_name,
             payload=payload,
             workspace_provenance=workspace_receipt,
+            project_workspace_binding=project_workspace_binding,
         )
         executions.append(outcome)
         if (

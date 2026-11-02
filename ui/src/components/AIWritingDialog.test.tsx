@@ -42,6 +42,33 @@ const response: WritingTransformResponse = {
 };
 
 describe("AIWritingDialog", () => {
+  it("keeps the reviewed draft available when a Core save is not confirmed", async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn().mockRejectedValueOnce(new Error("Report changed; reread it."))
+      .mockResolvedValueOnce(undefined);
+    render(<AIWritingDialog
+      api={{transformWriting: vi.fn().mockResolvedValue(response)} as unknown as ApiClient}
+      engagementId="engagement-1"
+      providers={[provider]}
+      purpose="report_section"
+      title="Transform report note"
+      description="Review the result before Core saves it."
+      sourceLabel="TLS note"
+      sourceText="Port 443 was open."
+      initialInstruction="Make it concise."
+      applyLabel="Save report section"
+      onApply={onApply}
+      onClose={vi.fn()}
+    />);
+    await user.click(screen.getByRole("button", {name: "Generate draft"}));
+    expect(await screen.findByRole("textbox", {name: "AI writing draft"})).toHaveValue(response.content);
+    await user.click(screen.getByRole("button", {name: "Save report section"}));
+    expect(await screen.findByText("Report changed; reread it.")).toBeVisible();
+    expect(screen.getByRole("textbox", {name: "AI writing draft"})).toHaveValue(response.content);
+    await user.click(screen.getByRole("button", {name: "Save report section"}));
+    await waitFor(() => expect(onApply).toHaveBeenCalledTimes(2));
+  });
+
   it("generates an editable draft and applies only the reviewed text", async () => {
     const user = userEvent.setup();
     const transformWriting = vi.fn().mockResolvedValue(response);

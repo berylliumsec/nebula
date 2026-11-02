@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 import type { ApiClient } from "../api/client";
 import type { HealthResponse } from "../api/types";
 
@@ -15,7 +15,7 @@ export function useCoreConnectionMonitor(
   onHealth: (health: HealthResponse) => void,
   onUnavailable: (message: string) => void,
 ) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!api || !enabled) return;
     let active = true;
     let unavailable = false;

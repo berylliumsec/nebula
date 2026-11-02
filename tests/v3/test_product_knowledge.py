@@ -227,6 +227,462 @@ def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_work_agent_access_and_history(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    access = search_product_knowledge(
+        "Can Butler disable Work agent tools for a project?"
+    )
+    assert any("nebula.work.set_work_setting" in str(item["text"]) for item in access)
+    history = search_product_knowledge(
+        "How does Butler read older Work check-in history?"
+    )
+    assert any("nebula.work.work_updates" in str(item["text"]) for item in history)
+
+
+def test_product_search_finds_butler_chat_rewind_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler rewind an older chat message and send a replacement?"
+    )
+    assert any(
+        "nebula.work.chat_messages" in str(item["text"])
+        and "nebula.work.rewind_chat" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_notebook_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does Butler edit a project Notebook cell and check Host consent?"
+    )
+    assert any(
+        "nebula.notebook" in str(item["text"]) and "Host consent" in str(item["text"])
+        for item in matches
+    )
+    runs = search_product_knowledge(
+        "How does Butler execute an exact Notebook cell, check uncertain runs and interrupt it?"
+    )
+    assert any(
+        "nebula.notebook.execute" in str(item["text"])
+        and "nebula.notebook.recent_runs" in str(item["text"])
+        and "nebula.notebook.interrupt" in str(item["text"])
+        for item in runs
+    )
+    resources = search_product_knowledge(
+        "Can Butler install an exact Notebook package and restart the current kernel?"
+    )
+    assert any(
+        "installed_package" in str(item["text"])
+        and "kernel_status" in str(item["text"])
+        and "name==version" in str(item["text"])
+        for item in resources
+    )
+    file_index = search_product_knowledge(
+        "Can Butler connect and remove the project's Notebook file index without seeing the host path?"
+    )
+    assert any(
+        "file_index_status" in str(item["text"])
+        and "requesting browser" in str(item["text"])
+        for item in file_index
+    )
+
+
+def test_product_search_finds_butler_project_lifecycle_and_confirmation(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler archive restore or delete a project with confirmation?"
+    )
+    assert any(
+        "nebula.projects.list" in str(item["text"])
+        and "confirmations" in str(item["text"])
+        for item in matches
+    )
+    retry = search_product_knowledge("Butler create receipt retry ID")
+    assert any(
+        "request fingerprint" in str(item["text"])
+        and "same transaction" in str(item["text"])
+        for item in retry
+    )
+    linked = search_product_knowledge(
+        "Can Butler create a linked project using a Nebula host folder?"
+    )
+    assert any(
+        "nebula.projects.create_linked" in str(item["text"])
+        and "host folder picker" in str(item["text"])
+        for item in linked
+    )
+    relink = search_product_knowledge(
+        "Can Butler relink an existing project to another host folder?"
+    )
+    assert any(
+        "nebula.projects.relink" in str(item["text"])
+        and "existing project" in str(item["text"])
+        for item in relink
+    )
+
+
+def test_product_search_finds_butler_scoped_browser_mission(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler start a scoped browser automation mission for my project?"
+    )
+    assert any(
+        "nebula.work.browser_sessions" in str(item["text"])
+        and "nebula.work.start_mission" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_device_transcript_export(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does Butler export a chat transcript on my browser?"
+    )
+    assert any(
+        "nebula.chats.export" in str(item["text"])
+        and "requesting browser" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_storage_token_handoff(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler rotate or revoke a storage source token on this device?"
+    )
+    assert any(
+        "storage" in str(item["text"]).lower()
+        and "requesting browser" in str(item["text"]).lower()
+        and "token" in str(item["text"]).lower()
+        for item in matches
+    )
+    configuration = search_product_knowledge(
+        "Can Butler change a storage source reporting interval and edit its callback credential?"
+    )
+    assert any(
+        "reporting" in str(item["text"]).lower()
+        and "callback" in str(item["text"]).lower()
+        and "requesting device" in str(item["text"]).lower()
+        for item in configuration
+    )
+
+
+def test_product_search_finds_butler_device_pairing_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler pair a phone and revoke a paired device without seeing the pairing link?"
+    )
+    assert any(
+        "paired" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "pairing link" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_write_only_credentials(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create a write-only credential without seeing the secret?"
+    )
+    assert any(
+        "write-only" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_private_typesafe_and_vpn_handoffs(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler open private TypeSafe, VPN and MCP configuration import?"
+    )
+    assert any(
+        all(
+            word in " ".join(str(item["text"]).lower().split())
+            for word in ("typesafe", "vpn", "mcp", "requesting browser", "private")
+        )
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_provider_credential_attachment(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler attach a saved credential reference to an OpenRouter provider?"
+    )
+    assert any(
+        "provider" in str(item["text"]).lower()
+        and "credential" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_harness_credential_attachment(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler attach a credential reference to an Assistant harness?"
+    )
+    assert any(
+        "harness" in str(item["text"]).lower()
+        and "credential" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_mcp_credential_attachment(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler attach a saved credential to an MCP server HTTP header?"
+    )
+    assert any(
+        "mcp" in str(item["text"]).lower()
+        and "credential" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        for item in matches
+    )
+    scoped = search_product_knowledge(
+        "Can Butler export or probe an MCP profile owned by another project?"
+    )
+    assert any(
+        "selected project" in str(item["text"]).lower()
+        and "ownership" in str(item["text"]).lower()
+        and "probe" in str(item["text"]).lower()
+        for item in scoped
+    )
+
+
+def test_product_search_finds_butler_integration_profile_lifecycle(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create rename or delete an integration provider profile at its current revision?"
+    )
+    assert any(
+        "profile" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        and "read" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_runtime_trust_boundaries(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler runner executable trust and SSH standing Allow approval metadata revision"
+    )
+    assert any(
+        "standing" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in matches
+    )
+    consent = search_product_knowledge(
+        "Butler follow-up cloud consent backend identity body expected_revision requesting browser"
+    )
+    assert any(
+        "consent" in str(item["text"]).lower()
+        and "backend" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in consent
+    )
+
+
+def test_product_search_finds_butler_project_sources_lifecycle(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler add a project source URL, reindex it or remove it at its current revision?"
+    )
+    assert any(
+        "nebula.sources" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_explains_butler_host_policy_consent(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler grant the first Host access acknowledgment through the generic project policy Settings API?"
+    )
+    assert any(
+        "host" in str(item["text"]).lower()
+        and "requesting" in str(item["text"]).lower()
+        and "consent" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_project_notes_lifecycle(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create edit or delete a project note linked to a report?"
+    )
+    assert any(
+        "notes" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        and "report" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_explains_manual_note_review_and_saved_provenance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "manual execution note draft harness operator acceptance Project Notes"
+    )
+    text = " ".join(" ".join(str(item["text"]).split()) for item in matches)
+    assert "manual draft remains ready" in text
+    assert "explicit operator acceptance" in text
+    assert "operator-accepted" in text
+    assert "Butler's note catalog" in text
+
+
+def test_product_search_finds_butler_diagnostics_export(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler export a diagnostics support ZIP without seeing log bytes?"
+    )
+    assert any(
+        "diagnostics" in str(item["text"]).lower()
+        and "ZIP" in str(item["text"])
+        and "browser" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_report_drafts_and_operator_signoff(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler create a report draft and sign off or export its PDF?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.reports" in text
+    assert "operator" in text.lower()
+    assert "requesting" in text.lower()
+
+
+def test_product_search_finds_butler_terminal_stop_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler list terminal sessions and stop a project terminal?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.terminal.list" in text
+    assert "nebula.terminal.stop" in text
+    assert "WebSocket ticket" in text
+    assert "requesting browser" in text
+
+
+def test_product_search_finds_butler_report_deletion_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler delete a draft report and what if it has a saved PDF render?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "nebula.reports.delete" in text
+    assert "render" in text
+    assert "signed" in text
+
+
+def test_product_search_finds_butler_report_note_transform_review(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler transform a linked report note with AI and save the reviewed section?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "nebula.reports.transform_note" in text
+    assert "cloud consent" in text
+    assert "review" in text
+
+
+def test_product_search_finds_butler_evidence_file_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler upload project evidence from my device and download the original?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "nebula.evidence.upload" in text
+    assert "nebula.evidence.download" in text
+    assert "requesting-browser" in text
+    assert "sha-256" in text
+
+
+def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler edit and download a project workspace file?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.workspace.list" in text
+    assert "nebula.workspace.download_file" in text
+    assert "file picker" in text
+
+
+def test_product_search_finds_workspace_preservation_and_reset_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler preserve an exact workspace file as Evidence and reset the workspace?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.workspace.preserve_evidence" in text
+    assert "workspace_reset_status" in text
+    assert "types the exact project name" in text
+
+
+def test_product_search_finds_operator_owned_workflow_reviews(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler scope document import storage plan dispatch retry sensitive diagnostic remediation checkpoint rewind"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "private scope-document import" in text
+    assert "source-plan approval" in text
+    assert "sensitive detail and remediation" in text
+    assert "destructive checkpoint rewind" in text
+    assert "does not report" in text
+
+
+def test_product_search_finds_butler_device_upload_and_folder_guidance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler upload a binary workspace file and create or delete a folder?"
+    )
+    assert any(
+        "nebula.workspace.upload_from_device" in str(item["text"])
+        and "nebula.workspace.create_directory" in str(item["text"])
+        and "directory identities" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_shared_library_confirmation(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler reindex or remove a shared Library item?"
+    )
+    assert any(
+        "shared Library" in str(item["text"])
+        and "revision" in str(item["text"])
+        and "confirmation" in str(item["text"])
+        for item in matches
+    )
+    handoffs = search_product_knowledge(
+        "How does Butler add a file from my device or download the shared Library original?"
+    )
+    assert any(
+        "shared Library" in str(item["text"])
+        and "picker" in str(item["text"])
+        and "download" in str(item["text"])
+        for item in handoffs
+    )
+
+
 def test_product_search_finds_butler_effort_setting(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
@@ -307,3 +763,66 @@ def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     replaced = index.sync_product_knowledge()
     assert replaced["updated"] is True
     assert index._product_collection.metadata["source_digest"] == first["source_digest"]
+
+
+def test_product_search_finds_butler_inventory_and_candidate_records(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler create inventory assets and edit candidate finding records without verification?"
+    )
+    assert any(
+        "nebula.assets.create" in str(item["text"])
+        and "nebula.findings.update" in str(item["text"])
+        and "verification" in str(item["text"])
+        for item in matches
+    )
+
+
+def test_product_search_finds_butler_saved_results_and_bookmarks(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler read saved Results JSON and set a message bookmark?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.data.read_result" in text
+    assert "nebula.data.delete_result" in text
+    assert "nebula.data.set_bookmark" in text
+    assert "4,096" in text
+    assert "requesting" in text
+
+
+def test_product_search_finds_butler_inspection_and_sensitive_original_boundary(
+    monkeypatch,
+):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler inspect tool output, cancel an execution and download an original artifact?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.inspect.output" in text
+    assert "nebula.inspect.cancel_execution" in text
+    assert "nebula.inspect.download_artifact" in text
+    assert "redacted" in text
+    assert "requesting browser" in text
+
+
+def test_product_search_finds_butler_core_observations_and_guide_progress(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler Core observations resource search guide progress"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.data.system" in text
+    assert "nebula.data.search_resources" in text
+    assert "nebula.data.guides" in text
+
+
+def test_product_search_finds_butler_fixed_setup_and_terminal_egress(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler fixed runtime setup image prepare retry cancellation egress"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "candidate_id" in text
+    assert "operation_id" in text
+    assert "terminal_public_ip" in text

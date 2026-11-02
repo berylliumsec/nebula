@@ -1,9 +1,10 @@
-import {render, screen, waitFor} from "@testing-library/react";
+import {act, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {MemoryRouter} from "react-router-dom";
 import {beforeEach, describe, expect, it, vi} from "vitest";
 import {DialogProvider} from "./DialogSystem";
 import {EngagementPolicySettings} from "./EngagementPolicySettings";
+import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
 
 const fixture = vi.hoisted(() => ({api: {} as Record<string, ReturnType<typeof vi.fn>>, project: "first"}));
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api: fixture.api, coreState: "online", engagement: {id: fixture.project}, previewMode: false})}));
@@ -35,6 +36,19 @@ beforeEach(() => {
 });
 
 describe("web search opt-in on a project", () => {
+  it("rereads runtime health without replacing the project's saved search consent", async () => {
+    fixture.api.getEngagementScope.mockResolvedValue(scope({webSearch: true, webSearchDisclosesScope: true}));
+    render(view());
+    const toggle = await screen.findByRole("checkbox", {name: /Web search/});
+    await waitFor(() => expect(toggle).toBeChecked());
+    fixture.api.getWebSearchRuntime.mockResolvedValue(runtime({containerState: "stopped"}));
+    act(() => notifyRuntimeSettingsChanged("web-search"));
+    expect(await screen.findByText(/search runtime is not ready \(stopped\)/)).toBeVisible();
+    expect(toggle).toBeChecked();
+    expect(screen.getByRole("checkbox", {name: /Allow queries naming in-scope targets/})).toBeChecked();
+    expect(fixture.api.getEngagementScope).toHaveBeenCalledTimes(1);
+    expect(fixture.api.updateEngagementScope).not.toHaveBeenCalled();
+  });
   it("is off by default and hides the disclosure option until it is on", async () => {
     render(view());
     const toggle = await screen.findByRole("checkbox", {name: /Web search/});

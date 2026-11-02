@@ -1,4 +1,5 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, render, renderHook } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HealthResponse } from "../api/types";
 import { useCoreConnectionMonitor } from "./useCoreConnectionMonitor";
@@ -9,6 +10,19 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("Core reachability monitoring", () => {
+  it("observes an offline event by the time the ready view commits", () => {
+    const api = {health: vi.fn().mockResolvedValue(healthy)};
+    const update = vi.fn(), fail = vi.fn();
+    function ReadyView() {
+      useCoreConnectionMonitor(api, true, update, fail);
+      useLayoutEffect(() => { window.dispatchEvent(new Event("offline")); }, []);
+      return null;
+    }
+    render(<ReadyView />);
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(api.health).not.toHaveBeenCalled();
+  });
+
   it("refreshes degraded health without treating optional feature loss as disconnection", async () => {
     const api = {health: vi.fn().mockResolvedValue({...healthy, status: "degraded"})};
     const update = vi.fn(), fail = vi.fn();

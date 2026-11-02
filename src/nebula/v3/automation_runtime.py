@@ -1971,28 +1971,31 @@ class AutomationRuntimeManager:
                     else None
                 )
                 backend: RuntimeBackendSession = HostRuntimeSession(workspace)
-                entity = self.store.create(
-                    AutomationSession(
-                        engagement_id=engagement_id,
-                        owner_kind=owner_kind,
-                        owner_id=owner_id,
-                        execution_mode="host",
-                        runtime_image="host:/bin/bash",
-                        runtime_digest=self.project_runtime_digest(engagement_id),
-                        runner_profile_id="host",
-                        runner_profile_revision=1,
-                        policy_id=policy.id,
-                        policy_revision=policy.revision,
-                        scope_policy_id=scope.id if scope else None,
-                        scope_policy_revision=scope.revision if scope else None,
-                        status=AutomationSessionStatus.READY,
-                        network_granted=True,
-                        metadata={
-                            "network_boundary": "host_os",
-                            "workspace": str(workspace),
-                        },
-                    )
+                entity = AutomationSession(
+                    engagement_id=engagement_id,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    execution_mode="host",
+                    runtime_image="host:/bin/bash",
+                    runtime_digest=self.project_runtime_digest(engagement_id),
+                    runner_profile_id="host",
+                    runner_profile_revision=1,
+                    policy_id=policy.id,
+                    policy_revision=policy.revision,
+                    scope_policy_id=scope.id if scope else None,
+                    scope_policy_revision=scope.revision if scope else None,
+                    status=AutomationSessionStatus.READY,
+                    network_granted=True,
+                    metadata={
+                        "network_boundary": "host_os",
+                        "workspace": str(workspace),
+                    },
                 )
+                with self.store.transaction(immediate=True) as transaction:
+                    transaction.assert_project_workspace(
+                        engagement_id, engagement.workspace_path
+                    )
+                    transaction.add(entity)
                 managed = _ManagedSession(
                     entity=entity,
                     policy=policy,
@@ -2069,7 +2072,11 @@ class AutomationRuntimeManager:
                 # command explicitly asks for project_scope.
                 network_granted=False,
             )
-            session = self.store.create(session)
+            with self.store.transaction(immediate=True) as transaction:
+                transaction.assert_project_workspace(
+                    engagement_id, engagement.workspace_path
+                )
+                transaction.add(session)
             resolver_file: Path | None = None
             if domains:
                 resolver_directory = self.capture_root / session.id

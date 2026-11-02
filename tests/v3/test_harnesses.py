@@ -114,7 +114,7 @@ from nebula.v3.mcp import (
     McpProbeService,
 )
 from nebula.v3.mcp_gateway import GatewayClient
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.tool_results import ToolOutputService
 
 
@@ -302,6 +302,132 @@ def _runtime(tmp_path: Path, *, fail: bool = False):
         adapter_factory=lambda _: adapter,
     )
     return store, engagement, profile, mcp, adapter, runtime
+
+
+def test_harness_session_refuses_relink_after_workspace_preparation(tmp_path):
+    store, project, profile, _, _, runtime = _runtime(tmp_path)
+    next_folder = tmp_path / "next-folder"
+    next_folder.mkdir()
+    project = store.update(
+        Engagement,
+        project.id,
+        {"workspace_path": str(tmp_path)},
+        expected_revision=project.revision,
+    )
+    execution_mode = runtime._project_execution_mode
+
+    def relink_before_admission(engagement_id):
+        runtime._project_execution_mode = execution_mode
+        mode = execution_mode(engagement_id)
+        store.relink_project_workspace(
+            project.id, str(next_folder), expected_revision=project.revision
+        )
+        return mode
+
+    runtime._project_execution_mode = relink_before_admission
+    with pytest.raises(ConflictError, match="Project workspace changed"):
+        runtime.create_session(
+            engagement_id=project.id, profile_id=profile.id, model="test-model"
+        )
+    assert store.count(HarnessSession, engagement_id=project.id) == 0
+    assert store.get(Engagement, project.id).workspace_path == str(next_folder)
+
+
+def test_harness_chat_refuses_relink_before_turn_admission(tmp_path):
+    store, project, profile, _, _, runtime = _runtime(tmp_path)
+    next_folder = tmp_path / "next-folder"
+    next_folder.mkdir()
+    project = store.update(
+        Engagement,
+        project.id,
+        {"workspace_path": str(tmp_path)},
+        expected_revision=project.revision,
+    )
+    original_messages = runtime._chat_messages
+    relinked = False
+
+    def relink_before_turn(*args, **kwargs):
+        nonlocal relinked
+        messages = original_messages(*args, **kwargs)
+        if not relinked:
+            relinked = True
+            for session in store.list_entities(
+                HarnessSession, engagement_id=project.id
+            ):
+                store.update(
+                    HarnessSession,
+                    session.id,
+                    {"status": HarnessSessionStatus.CLOSED},
+                    expected_revision=session.revision,
+                )
+            store.relink_project_workspace(
+                project.id, str(next_folder), expected_revision=project.revision
+            )
+        return messages
+
+    runtime._chat_messages = relink_before_turn
+    with pytest.raises(ConflictError, match="Project workspace changed"):
+        runtime.prepare_chat(
+            engagement_id=project.id,
+            profile_id=profile.id,
+            model="test-model",
+            prompt="Work in the old folder",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+    assert relinked
+    assert store.count(HarnessTurn, engagement_id=project.id) == 0
+    assert store.count(ChatTurn, engagement_id=project.id) == 0
+
+
+def test_harness_mission_refuses_relink_before_queue_admission(tmp_path):
+    store, project, profile, _, _, runtime = _runtime(tmp_path)
+    next_folder = tmp_path / "next-folder"
+    next_folder.mkdir()
+    project = store.update(
+        Engagement,
+        project.id,
+        {"workspace_path": str(tmp_path)},
+        expected_revision=project.revision,
+    )
+    original_components = runtime._ensure_oci_components
+    relinked = False
+
+    def relink_after_components(session, **kwargs):
+        nonlocal relinked
+        components = original_components(session, **kwargs)
+        if not relinked:
+            relinked = True
+            current = store.get(HarnessSession, session.id)
+            store.update(
+                HarnessSession,
+                current.id,
+                {"status": HarnessSessionStatus.CLOSED},
+                expected_revision=current.revision,
+            )
+            store.relink_project_workspace(
+                project.id, str(next_folder), expected_revision=project.revision
+            )
+        return components
+
+    runtime._ensure_oci_components = relink_after_components
+
+    async def start():
+        await runtime.start_mission(
+            engagement_id=project.id,
+            objective="Work in the old folder",
+            profile_id=profile.id,
+            model="test-model",
+            budget=RunBudget(max_duration_seconds=5),
+            mcp_server_ids=[],
+        )
+
+    with pytest.raises(ConflictError, match="Project workspace changed"):
+        asyncio.run(start())
+    assert relinked
+    assert store.count(AgentRun, engagement_id=project.id) == 0
+    assert store.count(HarnessTurn, engagement_id=project.id) == 0
 
 
 def test_external_harness_session_can_be_discovered_and_imported_once(tmp_path):

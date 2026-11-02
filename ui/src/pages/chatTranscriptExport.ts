@@ -82,3 +82,17 @@ export function formatChatTranscript(input: ChatTranscriptExportInput): string {
 export function chatTranscriptFilename(session: ChatSessionSummary): string {
   return `${safeFilename(session.title)}-${safeFilename(session.id).slice(-8) || "session"}.md`;
 }
+
+/** Keep sensitive transcript bytes in the requesting browser. */
+export function startChatTranscriptDownload(input: ChatTranscriptExportInput): void {
+  const blob = new Blob([formatChatTranscript(input)], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = chatTranscriptFilename(input.session);
+    anchor.click();
+  } finally {
+    globalThis.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}

@@ -25,7 +25,7 @@ from time import monotonic
 from typing import AsyncIterator, Callable, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator
 
 from .domain import (
     AutomationProjectPolicy,
@@ -311,6 +311,22 @@ class ContainerTerminalRecoveryListResponse(NebulaModel):
     sessions: list[ContainerTerminalRecoveredSession] = Field(default_factory=list)
 
 
+class ContainerTerminalSessionSummary(NebulaModel):
+    session_id: str
+    created_at: datetime
+    state: Literal["pending", "claimed", "launching", "running", "stopping"]
+    attached: bool
+
+
+class ContainerTerminalSessionList(NebulaModel):
+    engagement_id: str
+    sessions: list[ContainerTerminalSessionSummary] = Field(default_factory=list)
+
+
+class ContainerTerminalCloseRequest(NebulaModel):
+    expected_created_at: AwareDatetime
+
+
 class ContainerTerminalCapacity(NebulaModel):
     active_sessions: int = Field(ge=0)
     available_sessions: int = Field(ge=0)
@@ -365,6 +381,7 @@ class _TerminalReservation:
     parser: Osc633CommandParser = field(default_factory=Osc633CommandParser)
     parser_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     finished: asyncio.Event = field(default_factory=asyncio.Event)
+    cleanup_error: Exception | None = None
     replay: deque["ContainerTerminalOutput"] = field(default_factory=deque)
     replay_bytes: int = 0
     next_sequence: int = 1
@@ -566,6 +583,64 @@ class ContainerTerminalService:
                     *self._finishing_sessions.values(),
                 )
             )
+
+    async def list_sessions(self, engagement_id: str) -> ContainerTerminalSessionList:
+        """Read one Project's live sessions without issuing WebSocket tickets."""
+
+        self.store.get(Engagement, engagement_id)
+        await self._finish_expired_reconnects(engagement_id)
+        async with self._lock:
+            sessions = [
+                ContainerTerminalSessionSummary(
+                    session_id=session.id,
+                    created_at=session.created_at,
+                    state=(
+                        "stopping"
+                        if session.id in self._finishing_sessions
+                        else session.state
+                    ),
+                    attached=session.attachment is not None,
+                )
+                for session in (
+                    *self._sessions.values(),
+                    *self._finishing_sessions.values(),
+                )
+                if session.request.engagement_id == engagement_id
+            ]
+        sessions.sort(key=lambda item: (item.created_at, item.session_id))
+        return ContainerTerminalSessionList(
+            engagement_id=engagement_id, sessions=sessions
+        )
+
+    async def close_project_session(
+        self, engagement_id: str, session_id: str, expected_created_at: datetime
+    ) -> ContainerTerminalSessionList:
+        """Stop only the exact session previously read in this Project."""
+
+        self.store.get(Engagement, engagement_id)
+        async with self._lock:
+            session = self._sessions.get(session_id) or self._finishing_sessions.get(
+                session_id
+            )
+            if session is None or session.request.engagement_id != engagement_id:
+                raise ContainerTerminalError(
+                    "terminal_not_found",
+                    "terminal session was not found in this Project",
+                    status_code=404,
+                )
+            if session.created_at != expected_created_at:
+                raise ContainerTerminalError(
+                    "terminal_changed",
+                    "terminal session changed; read its current identity before stopping it",
+                )
+        await self.close(session_id)
+        if session.cleanup_error is not None:
+            raise ContainerTerminalError(
+                "terminal_cleanup_failed",
+                "terminal container removal could not be verified; retry this stop",
+                status_code=503,
+            )
+        return await self.list_sessions(engagement_id)
 
     async def capacity(self) -> ContainerTerminalCapacity:
         async with self._lock:
@@ -1337,6 +1412,7 @@ class ContainerTerminalService:
         tasks: list[asyncio.Task[None]] = []
         unfinished_capture = None
         finishing_waiter: asyncio.Event | None = None
+        finishing: _TerminalReservation | None = None
         async with self._lock:
             session = self._sessions.pop(session_id, None)
             if session is None:
@@ -1370,6 +1446,24 @@ class ContainerTerminalService:
                     session.attachment.terminal_finishing = True
         if finishing_waiter is not None:
             await finishing_waiter.wait()
+            assert finishing is not None
+            if finishing.cleanup_error is not None and finishing.process is not None:
+                try:
+                    await finishing.process.close()
+                except Exception as exc:
+                    record_caught_exception(
+                        "terminal",
+                        "terminal.container_terminal.cleanup_retry_failed",
+                        "Terminal container removal retry could not be verified.",
+                        exc,
+                        stage="cleanup",
+                    )
+                    finishing.cleanup_error = exc
+                else:
+                    finishing.cleanup_error = None
+                    async with self._lock:
+                        if self._finishing_sessions.get(session_id) is finishing:
+                            self._finishing_sessions.pop(session_id, None)
             return
         assert session is not None
         if tasks:
@@ -1409,8 +1503,9 @@ class ContainerTerminalService:
                 stage="container_terminal",
             )
             cleanup_error = exc
-        if cleanup_error is not None and detail is None:
-            detail = f"terminal cleanup reported: {type(cleanup_error).__name__}"
+        if cleanup_error is not None:
+            if detail is None:
+                detail = f"terminal cleanup reported: {type(cleanup_error).__name__}"
             error_code = error_code or "cleanup_failed"
         if session.audit_task is not None:
             if unfinished_capture is not None:
@@ -1427,7 +1522,9 @@ class ContainerTerminalService:
         elif unfinished_capture is not None:
             await self._persist_capture(session, unfinished_capture)
         async with self._lock:
-            self._finishing_sessions.pop(session_id, None)
+            session.cleanup_error = cleanup_error
+            if cleanup_error is None:
+                self._finishing_sessions.pop(session_id, None)
             session.finished.set()
         if session.attachment is not None:
             session.attachment.terminal_event = ContainerTerminalExit(

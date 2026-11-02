@@ -12,22 +12,39 @@ import shutil
 import sys
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .automation_runtime import AutomationRuntimeManager, ContainerRuntimeSession
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import AutomationProjectPolicy, ChatSession, Engagement, NotebookRun
 from .notebook_file_index import FileIndexUnavailable, list_indexed_notebooks
-from .storage import NebulaStore
+from .storage import ConflictError, NebulaStore
 
 
 MAX_NOTEBOOK_BYTES = 20_000_000
 MAX_SOURCE_BYTES = 1_000_000
 MAX_WARM_KERNELS = 4
 NOTEBOOK_LIST_CACHE_SECONDS = 10
+PACKAGE_NAME_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+PACKAGE_REQUIREMENT_PATTERN = (
+    rf"(?P<name>{PACKAGE_NAME_PATTERN})(?:\[[A-Za-z0-9,._-]+\])?"
+    r"(?:(?:==)(?P<version>[A-Za-z0-9._+-]+))?"
+)
+PACKAGE_METADATA_SCRIPT = """
+import importlib.metadata as metadata
+import json
+import sys
+try:
+    package = metadata.distribution(sys.argv[1])
+except metadata.PackageNotFoundError:
+    print(json.dumps({"installed": False, "version": None}))
+else:
+    print(json.dumps({"installed": True, "version": package.version}))
+"""
 
 
 class NotebookError(ValueError):
@@ -330,11 +347,16 @@ class NotebookWorkerConnection:
         *,
         mode: str,
         policy_revision: int,
+        workspace_path: Path | None = None,
     ) -> None:
         self.process = process
         self.on_event = on_event
         self.mode = mode
         self.policy_revision = policy_revision
+        self.workspace_path = workspace_path
+        self.instance_id = uuid4().hex
+        self.generation = 1
+        self.restart_uncertain = False
         self.ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self.runs: dict[str, asyncio.Future[str]] = {}
         self.requests: dict[str, asyncio.Future[None]] = {}
@@ -419,6 +441,10 @@ class NotebookWorkerConnection:
         self.last_used = asyncio.get_running_loop().time()
 
     async def execute(self, run_id: str, code: str) -> str:
+        if self.restart_uncertain:
+            raise NotebookConflict(
+                "kernel restart is unconfirmed; retry after it is replaced"
+            )
         if self.active_run is not None:
             raise NotebookConflict("kernel is busy; wait for the current cell")
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
@@ -481,10 +507,14 @@ class NotebookService:
         self._sessions: dict[str, tuple[str, int]] = {}
         self._mode_changes: set[str] = set()
         self._list_locks: dict[str, asyncio.Lock] = {}
-        self._list_cache: dict[str, tuple[float, builtins.list[dict[str, Any]]]] = {}
+        self._list_cache: dict[
+            str, tuple[int, float, builtins.list[dict[str, Any]]]
+        ] = {}
         self._index_errors: dict[str, str] = {}
         self._index_warnings: dict[str, str] = {}
         self._created_notebooks: dict[str, set[str]] = {}
+        self._restarting: set[tuple[str, str]] = set()
+        self._package_changes: set[str] = set()
 
     def startup(self) -> None:
         for run in self.store.find_entities(NotebookRun, {}, limit=None):
@@ -513,10 +543,27 @@ class NotebookService:
             limit=None,
         )
 
+    @asynccontextmanager
+    async def guard_workspace_relink(self, engagement_id: str) -> AsyncIterator[None]:
+        """Serialize notebook run admission and worker startup with a relink."""
+
+        async with self._worker_lock:
+            try:
+                yield
+            finally:
+                self._list_cache.pop(engagement_id, None)
+                self._created_notebooks.pop(engagement_id, None)
+                self._index_errors.pop(engagement_id, None)
+                self._index_warnings.pop(engagement_id, None)
+
     async def prepare_policy_change(self, engagement_id: str, next_mode: str) -> bool:
         async with self._worker_lock:
             if engagement_id in self._mode_changes:
                 raise NotebookConflict("Project mode is changing; retry in a moment")
+            if engagement_id in self._package_changes:
+                raise NotebookConflict(
+                    "Project packages are changing; wait before changing mode"
+                )
             if self.policy(engagement_id).execution_mode == next_mode:
                 return False
             if self.active_runs(engagement_id):
@@ -572,6 +619,7 @@ class NotebookService:
         engagement = self.store.get(Engagement, engagement_id)
         path = engagement.metadata.get("notebook_file_index")
         return {
+            "project_revision": engagement.revision,
             "path": path if isinstance(path, str) else None,
             "state": "fallback"
             if path and engagement_id in self._index_errors
@@ -585,9 +633,18 @@ class NotebookService:
         }
 
     async def set_file_index(
-        self, engagement_id: str, path: str | None
+        self,
+        engagement_id: str,
+        path: str | None,
+        *,
+        expected_project_revision: int | None = None,
     ) -> dict[str, Any]:
         engagement = self.store.get(Engagement, engagement_id)
+        if (
+            expected_project_revision is not None
+            and engagement.revision != expected_project_revision
+        ):
+            raise ConflictError("Project changed; read its file-index status again")
         if path is not None:
             listing = await asyncio.to_thread(
                 list_indexed_notebooks,
@@ -618,12 +675,16 @@ class NotebookService:
     async def list_async(
         self, engagement_id: str, *, refresh: bool = False
     ) -> builtins.list[dict[str, Any]]:
-        self.store.get(Engagement, engagement_id)
         async with self._list_locks.setdefault(engagement_id, asyncio.Lock()):
-            cached = self._list_cache.get(engagement_id)
-            if not refresh and cached and cached[0] > time.monotonic():
-                return cached[1]
             engagement = self.store.get(Engagement, engagement_id)
+            cached = self._list_cache.get(engagement_id)
+            if (
+                not refresh
+                and cached
+                and cached[0] == engagement.revision
+                and cached[1] > time.monotonic()
+            ):
+                return cached[2]
             index_path = engagement.metadata.get("notebook_file_index")
             if isinstance(index_path, str):
                 try:
@@ -663,6 +724,7 @@ class NotebookService:
                             entries, key=lambda item: str(item["path"]).lower()
                         )[:1000]
                         self._list_cache[engagement_id] = (
+                            engagement.revision,
                             time.monotonic() + NOTEBOOK_LIST_CACHE_SECONDS,
                             entries,
                         )
@@ -679,6 +741,7 @@ class NotebookService:
             # on the FastAPI event loop, and share the result between callers.
             entries = await asyncio.to_thread(self.documents.list, engagement_id)
             self._list_cache[engagement_id] = (
+                engagement.revision,
                 time.monotonic() + NOTEBOOK_LIST_CACHE_SECONDS,
                 entries,
             )
@@ -741,11 +804,40 @@ class NotebookService:
         ][:20]
 
     async def start_run(
-        self, engagement_id: str, path: str, cell_id: str
+        self,
+        engagement_id: str,
+        path: str,
+        cell_id: str,
+        *,
+        expected_source_hash: str | None = None,
+    ) -> NotebookRun:
+        async with self._worker_lock:
+            return await self._admit_run(
+                engagement_id,
+                path,
+                cell_id,
+                expected_source_hash=expected_source_hash,
+            )
+
+    async def _admit_run(
+        self,
+        engagement_id: str,
+        path: str,
+        cell_id: str,
+        *,
+        expected_source_hash: str | None = None,
     ) -> NotebookRun:
         if engagement_id in self._mode_changes:
             raise NotebookConflict(
                 "Project mode is changing; retry the cell in a moment"
+            )
+        if engagement_id in self._package_changes:
+            raise NotebookConflict(
+                "Project packages are changing; retry the cell after installation"
+            )
+        if (engagement_id, path) in self._restarting:
+            raise NotebookConflict(
+                "Notebook kernel is restarting; retry the cell afterward"
             )
         policy = self.policy(engagement_id)
         if policy.execution_mode == "host" and not policy.host_access_acknowledged:
@@ -759,12 +851,17 @@ class NotebookService:
         if cell is None or cell.get("cell_type") != "code":
             raise NotebookError("choose a saved code cell")
         source = _cell_source(cell)
+        source_hash = _source_hash(source)
+        if expected_source_hash is not None and source_hash != expected_source_hash:
+            raise NotebookConflict(
+                "saved code cell changed; read its current source hash before executing"
+            )
         run = self.store.create(
             NotebookRun(
                 engagement_id=engagement_id,
                 notebook_path=path,
                 cell_id=cell_id,
-                source_hash=_source_hash(source),
+                source_hash=source_hash,
                 execution_mode=policy.execution_mode,
             )
         )
@@ -890,24 +987,114 @@ class NotebookService:
                 await worker.command("interrupt")
         return self.store.get(NotebookRun, run_id)
 
-    async def restart(self, engagement_id: str, path: str) -> None:
+    def kernel_status(self, engagement_id: str, path: str) -> dict[str, Any]:
         self.read(engagement_id, path)
-        worker = self.workers.get((engagement_id, path))
+        key = (engagement_id, path)
+        worker = self.workers.get(key)
+        if worker is not None and worker.workspace_path != self._workspace_path(
+            engagement_id
+        ):
+            worker = None
+        runs = [
+            run.id
+            for run in self.active_runs(engagement_id)
+            if run.notebook_path == path
+        ]
         if worker is None:
-            return
-        if worker.active_run:
-            raise NotebookConflict("cell is running; interrupt it before restarting")
-        await worker.command("restart")
+            state = "absent"
+        elif worker.process.returncode is not None:
+            state = "stopped"
+        elif worker.restart_uncertain:
+            state = "uncertain"
+        elif key in self._restarting:
+            state = "restarting"
+        elif runs or worker.active_run:
+            state = "busy"
+        else:
+            state = "idle"
+        return {
+            "path": path,
+            "state": state,
+            "instance_id": worker.instance_id if worker is not None else None,
+            "generation": worker.generation if worker is not None else None,
+            "active_run_id": worker.active_run if worker is not None else None,
+            "pending_run_ids": runs[:20],
+        }
+
+    async def restart(
+        self,
+        engagement_id: str,
+        path: str,
+        *,
+        expected_instance_id: str | None = None,
+        expected_generation: int | None = None,
+    ) -> dict[str, Any]:
+        self.read(engagement_id, path)
+        key = (engagement_id, path)
+        async with self._worker_lock:
+            if engagement_id in self._package_changes:
+                raise NotebookConflict(
+                    "Project packages are changing; wait before restarting the kernel"
+                )
+            worker = self.workers.get(key)
+            if worker is None:
+                if expected_instance_id is not None or expected_generation is not None:
+                    raise NotebookConflict("kernel is absent; read its current status")
+                return {**self.kernel_status(engagement_id, path), "restarted": False}
+            if worker.workspace_path != self._workspace_path(engagement_id):
+                raise NotebookConflict(
+                    "project workspace changed; read the current kernel status"
+                )
+            if (
+                expected_instance_id is not None
+                and worker.instance_id != expected_instance_id
+            ) or (
+                expected_generation is not None
+                and worker.generation != expected_generation
+            ):
+                raise NotebookConflict(
+                    "kernel identity changed; read its current status"
+                )
+            if worker.process.returncode is not None or worker.restart_uncertain:
+                raise NotebookConflict("kernel is unavailable; read its current status")
+            if worker.policy_revision != self.policy(engagement_id).revision:
+                raise NotebookConflict(
+                    "project execution policy changed; read its current status"
+                )
+            if worker.active_run or any(
+                run.notebook_path == path for run in self.active_runs(engagement_id)
+            ):
+                raise NotebookConflict(
+                    "cell is running or queued; interrupt it before restarting"
+                )
+            self._restarting.add(key)
+            try:
+                await worker.command("restart")
+            except BaseException:
+                worker.restart_uncertain = True
+                raise
+            finally:
+                self._restarting.discard(key)
+            previous_generation = worker.generation
+            worker.generation += 1
+            return {
+                **self.kernel_status(engagement_id, path),
+                "restarted": True,
+                "previous_generation": previous_generation,
+            }
 
     async def _worker(self, engagement_id: str, path: str) -> NotebookWorkerConnection:
         key = (engagement_id, path)
         async with self._worker_lock:
             policy = self.policy(engagement_id)
+            workspace_path = self._workspace_path(engagement_id)
             existing = self.workers.get(key)
             if (
                 existing is not None
                 and existing.policy_revision == policy.revision
+                and existing.workspace_path == workspace_path
                 and existing.process.returncode is None
+                and not existing.restart_uncertain
             ):
                 return existing
             if existing is not None:
@@ -931,9 +1118,13 @@ class NotebookService:
                 await evict.close()
                 self.workers.pop(evict_key, None)
             command = await self._worker_command(engagement_id, policy)
+            if workspace_path != self._workspace_path(engagement_id):
+                raise NotebookConflict(
+                    "project workspace changed while starting a kernel; retry the cell"
+                )
             process = await asyncio.create_subprocess_exec(
                 *command,
-                cwd=str(self.documents.workspace_resolver(engagement_id)),
+                cwd=str(workspace_path),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -944,6 +1135,7 @@ class NotebookService:
                 self._on_event,
                 mode=policy.execution_mode,
                 policy_revision=policy.revision,
+                workspace_path=workspace_path,
             )
             try:
                 await asyncio.wait_for(worker.ready, timeout=45)
@@ -954,6 +1146,13 @@ class NotebookService:
                 ) from exc
             self.workers[key] = worker
             return worker
+
+    def _workspace_path(self, engagement_id: str) -> Path:
+        return (
+            self.documents.workspace_resolver(engagement_id)
+            .expanduser()
+            .resolve(strict=True)
+        )
 
     async def _worker_command(
         self, engagement_id: str, policy: AutomationProjectPolicy
@@ -1036,9 +1235,8 @@ class NotebookService:
             )
             uv_location = shutil.which("uv")
             uv = Path(uv_location) if uv_location else None
-        key = hashlib.sha256(engagement_id.encode("utf-8")).hexdigest()[:32]
-        environment = self.data_root / "notebooks" / "envs" / key / "host"
-        python = environment / "bin" / "python"
+        python = self._host_environment_python(engagement_id)
+        environment = python.parent.parent
         if not python.is_file():
             environment.parent.mkdir(parents=True, exist_ok=True)
             await self._capture(
@@ -1051,6 +1249,10 @@ class NotebookService:
                 ]
             )
         return python, worker, uv
+
+    def _host_environment_python(self, engagement_id: str) -> Path:
+        key = hashlib.sha256(engagement_id.encode("utf-8")).hexdigest()[:32]
+        return self.data_root / "notebooks" / "envs" / key / "host" / "bin" / "python"
 
     async def _staged_runtime(self, resource: Path) -> Path:
         manifest_path = resource / "nebula-notebook-runtime.json"
@@ -1122,65 +1324,175 @@ class NotebookService:
         self, engagement_id: str, path: str, requirement: str
     ) -> dict[str, Any]:
         self.read(engagement_id, path)
-        if not re.fullmatch(
-            r"[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]+\])?(?:==[A-Za-z0-9._+-]+)?",
-            requirement,
-        ):
+        match = re.fullmatch(PACKAGE_REQUIREMENT_PATTERN, requirement)
+        if match is None:
             raise NotebookError(
                 "use a package name, optional extras, and an optional exact version"
             )
-        worker = self.workers.get((engagement_id, path))
-        if worker is not None and worker.active_run:
-            raise NotebookConflict("cell is running; wait before installing a package")
+        name = match.group("name")
+        requested_version = match.group("version")
+        if engagement_id in self._package_changes:
+            raise NotebookConflict(
+                "Project packages are changing; read the installed version before retrying"
+            )
+        if any(project_id == engagement_id for project_id, _ in self._restarting):
+            raise NotebookConflict(
+                "A project kernel is restarting; wait before installing packages"
+            )
+        if self.active_runs(engagement_id):
+            raise NotebookConflict(
+                "a project cell is running or queued; wait before installing a package"
+            )
         policy = self.policy(engagement_id)
         if policy.execution_mode == "host" and not policy.host_access_acknowledged:
             raise NotebookPermissionRequired(
                 "Acknowledge Host access in Project settings before installing packages"
             )
-        if policy.execution_mode == "host":
-            python, _, uv = await self._host_environment(engagement_id)
-            if uv is None:
+        self._package_changes.add(engagement_id)
+        try:
+            if policy.execution_mode != "host":
+                # A Docker environment survives Core restarts, but its session does
+                # not. Mount it before checking whether an exact pin is present.
+                await self._worker_command(engagement_id, policy)
+            before = await self.installed_package(engagement_id, path, name)
+            if before["installed"] is None:
                 raise NotebookRuntimeUnavailable(
-                    "uv is unavailable in this development environment"
+                    "installed package version is unknown; read installed_package after the environment is available"
                 )
-            command = [
-                str(uv),
-                "pip",
-                "install",
-                "--no-python-downloads",
-                "--python",
-                str(python),
-                requirement,
-            ]
-            if not policy.network_enabled:
-                command.insert(-1, "--offline")
+            if (
+                requested_version is not None
+                and before["installed"]
+                and before["version"] == requested_version
+            ):
+                return {
+                    "requirement": requirement,
+                    "installed": True,
+                    "version": before["version"],
+                    "already_present": True,
+                    "detail": "Exact version was already present in the selected environment.",
+                    "restart_recommended": False,
+                }
+            if policy.execution_mode == "host":
+                python, _, uv = await self._host_environment(engagement_id)
+                if uv is None:
+                    raise NotebookRuntimeUnavailable(
+                        "uv is unavailable in this development environment"
+                    )
+                command = [
+                    str(uv),
+                    "pip",
+                    "install",
+                    "--no-python-downloads",
+                    "--python",
+                    str(python),
+                    requirement,
+                ]
+                if not policy.network_enabled:
+                    command.insert(-1, "--offline")
+            else:
+                if self.automation_runtime is None:
+                    raise NotebookRuntimeUnavailable("project runtime is unavailable")
+                session_id, _ = self._sessions[engagement_id]
+                backend = self.automation_runtime._sessions[session_id].backend
+                assert isinstance(backend, ContainerRuntimeSession)
+                command = [
+                    *backend.runner._runtime_argv(),
+                    "exec",
+                    backend.container_name,
+                    "/usr/local/bin/uv",
+                    "pip",
+                    "install",
+                    "--no-python-downloads",
+                    "--python",
+                    "/nebula-notebook-env/bin/python",
+                    requirement,
+                ]
+                if not backend.network_enabled:
+                    command.insert(-1, "--offline")
+            output = await self._capture(command, timeout=300)
+            observed = await self.installed_package(engagement_id, path, name)
+            if not observed["installed"]:
+                raise NotebookRuntimeUnavailable(
+                    "package installation returned success but the selected environment has no matching distribution; read installed_package before retrying"
+                )
+            if (
+                requested_version is not None
+                and observed["version"] != requested_version
+            ):
+                raise NotebookConflict(
+                    "installed package version differs from the exact request; read installed_package before retrying"
+                )
+            return {
+                "requirement": requirement,
+                "installed": True,
+                "version": observed["version"],
+                "already_present": False,
+                "detail": output[-2000:],
+                "restart_recommended": True,
+            }
+        finally:
+            self._package_changes.discard(engagement_id)
+
+    async def installed_package(
+        self, engagement_id: str, path: str, name: str
+    ) -> dict[str, Any]:
+        self.read(engagement_id, path)
+        if not re.fullmatch(PACKAGE_NAME_PATTERN, name) or len(name) > 200:
+            raise NotebookError("choose one exact package name")
+        policy = self.policy(engagement_id)
+        if policy.execution_mode == "host":
+            if not policy.host_access_acknowledged:
+                raise NotebookPermissionRequired(
+                    "Acknowledge Host access in Project settings before reading packages"
+                )
+            python = self._host_environment_python(engagement_id)
+            if not python.is_file():
+                return {
+                    "name": name,
+                    "installed": False,
+                    "version": None,
+                    "environment_ready": False,
+                    "execution_mode": policy.execution_mode,
+                }
+            command = [str(python), "-I", "-c", PACKAGE_METADATA_SCRIPT, name]
         else:
+            prior = self._sessions.get(engagement_id)
+            if prior is None or prior[1] != policy.revision:
+                return {
+                    "name": name,
+                    "installed": None,
+                    "version": None,
+                    "environment_ready": False,
+                    "execution_mode": policy.execution_mode,
+                    "reason": "No current Notebook container is available to inspect the persisted environment.",
+                }
             if self.automation_runtime is None:
                 raise NotebookRuntimeUnavailable("project runtime is unavailable")
-            await self._worker_command(engagement_id, policy)
-            session_id, _ = self._sessions[engagement_id]
-            backend = self.automation_runtime._sessions[session_id].backend
-            assert isinstance(backend, ContainerRuntimeSession)
+            managed = self.automation_runtime._sessions.get(prior[0])
+            if managed is None or not isinstance(
+                managed.backend, ContainerRuntimeSession
+            ):
+                raise NotebookRuntimeUnavailable(
+                    "project notebook container is unavailable"
+                )
+            backend = managed.backend
             command = [
                 *backend.runner._runtime_argv(),
                 "exec",
                 backend.container_name,
-                "/usr/local/bin/uv",
-                "pip",
-                "install",
-                "--no-python-downloads",
-                "--python",
                 "/nebula-notebook-env/bin/python",
-                requirement,
+                "-I",
+                "-c",
+                PACKAGE_METADATA_SCRIPT,
+                name,
             ]
-            if not backend.network_enabled:
-                command.insert(-1, "--offline")
-        output = await self._capture(command, timeout=300)
+        observed = json.loads(await self._capture(command, timeout=30))
         return {
-            "requirement": requirement,
-            "installed": True,
-            "detail": output[-2000:],
-            "restart_recommended": True,
+            "name": name,
+            "installed": observed["installed"],
+            "version": observed["version"],
+            "environment_ready": True,
+            "execution_mode": policy.execution_mode,
         }
 
     async def search_package(

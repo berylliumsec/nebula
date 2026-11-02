@@ -44,7 +44,7 @@ from nebula.v3.settings_assistant_tools import (
 
 def test_catalog_covers_settings_destinations_without_secrets():
     result = catalog()
-    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 21
+    assert len(result["destinations"]) == len(APP_DESTINATIONS) == 22
     assert {item["id"] for item in result["destinations"]} == {
         item["id"] for item in APP_DESTINATIONS
     }
@@ -54,11 +54,31 @@ def test_catalog_covers_settings_destinations_without_secrets():
         ]
         == "/projects"
     )
-    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 23
+    assert len(result["settings"]) == len(SETTING_DESTINATIONS) == 25
+    assert any(item["id"] == "butler-check-interval" for item in result["settings"])
+    assert any(item["id"] == "typesafe" for item in result["settings"])
     assert (
         next(item for item in result["destinations"] if item["id"] == "storage")["path"]
         == "/storage"
     )
+    assert (
+        next(item for item in result["destinations"] if item["id"] == "notebook")[
+            "path"
+        ]
+        == "/projects/{project_id}/workbench?view=notebook"
+    )
+    notebook_family = next(
+        item for item in result["capability_families"] if item["id"] == "notebook"
+    )
+    assert notebook_family["discover_with"] == "nebula.capabilities.search"
+    assert "nebula.notebook.edit_cell" in notebook_family["operations"]
+    assert "nebula.notebook.file_index_status" in notebook_family["operations"]
+    assert "nebula.notebook.connect_file_index" in notebook_family["operations"]
+    assert "nebula.notebook.remove_file_index" in notebook_family["operations"]
+    assert "nebula.notebook.kernel_status" in notebook_family["operations"]
+    assert "nebula.notebook.restart" in notebook_family["operations"]
+    assert "nebula.notebook.installed_package" in notebook_family["operations"]
+    assert "nebula.notebook.install_package" in notebook_family["operations"]
     assert (
         "Butler conversations"
         in next(item for item in result["destinations"] if item["id"] == "chat")[
@@ -153,6 +173,11 @@ def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies
         "state": "pending_browser_apply",
         "client_action": {"kind": "open_setting", "setting_id": "appearance"},
     }
+    for setting_id in ("typesafe", "vpn-egress"):
+        assert open_setting({"setting_id": setting_id}) == {
+            "state": "pending_browser_apply",
+            "client_action": {"kind": "open_setting", "setting_id": setting_id},
+        }
     assert request_device_theme({"theme": "zero-dark"}) == {
         "state": "pending_browser_apply",
         "client_action": {"kind": "device_theme", "theme": "zero-dark"},
@@ -207,6 +232,9 @@ def test_post_tool_change_reads_back_from_core(tmp_path):
         "project_id": project.id,
         "project_name": "Bounded project",
         "saved": True,
+        "state": "core_settings_saved",
+        "read_back": True,
+        "client_action": {"kind": "post_tool_refresh", "project_id": project.id},
     }
     with pytest.raises(Exception):
         set_post_tool_preference(

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from nebula.v3.domain import Engagement, NativeHookExecution
 from nebula.v3.native_hooks import (
     MAX_INHERITED_ANCESTORS,
     NativeHookError,
@@ -12,7 +13,7 @@ from nebula.v3.native_hooks import (
     discover_native_hooks,
     snapshot_native_hook,
 )
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore
 
 
 def _hook(
@@ -73,6 +74,46 @@ def test_native_hook_catalog_uses_agents_root_and_freezes_source_digests(tmp_pat
                 payload={},
             )
         )
+
+
+def test_native_hook_refuses_relink_before_running_row_is_saved(tmp_path, monkeypatch):
+    old_folder = tmp_path / "old"
+    new_folder = tmp_path / "new"
+    _hook(old_folder)
+    new_folder.mkdir()
+    snapshot = snapshot_native_hook("audit", discover_native_hooks(old_folder))
+    store = NebulaStore(tmp_path / "hook-relink.db")
+    project = store.create(
+        Engagement(name="Hook relink", workspace_path=str(old_folder))
+    )
+    original_transaction = store.transaction
+    relinked = False
+
+    def relink_before_admission(*args, **kwargs):
+        nonlocal relinked
+        if not relinked:
+            relinked = True
+            store.relink_project_workspace(
+                project.id, str(new_folder), expected_revision=project.revision
+            )
+        return original_transaction(*args, **kwargs)
+
+    monkeypatch.setattr(store, "transaction", relink_before_admission)
+    with pytest.raises(ConflictError, match="Project workspace changed"):
+        asyncio.run(
+            NativeHookRunner(store).run(
+                snapshot,
+                engagement_id=project.id,
+                chat_session_id="session",
+                chat_turn_id="turn",
+                event_name="chat.turn.started",
+                payload={},
+                project_workspace_binding=(project.id, str(old_folder)),
+            )
+        )
+
+    assert relinked
+    assert store.count(NativeHookExecution, engagement_id=project.id) == 0
 
 
 def test_native_hook_exact_git_root_does_not_require_inheritance_opt_in(tmp_path):

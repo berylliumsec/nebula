@@ -904,6 +904,7 @@ class BrowserAutomationToolPlatform:
             specialists={SpecialistRole.NETWORK_SERVICE: specialist},
             context={
                 "browser_automation": True,
+                "tool_names": selected,
                 "scope_policy_revision": scope.revision,
             },
         )

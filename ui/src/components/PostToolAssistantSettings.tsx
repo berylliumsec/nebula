@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Check, Cpu, LoaderCircle, Sparkles } from "lucide-react";
+import { Check, Cpu, LoaderCircle, RefreshCw, Sparkles } from "lucide-react";
+import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/projectDataEvents";
 import type { ApiClient } from "../api/client";
 import type { HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -44,6 +45,8 @@ export function PostToolAssistantSettings({ api, engagementId, providers, previe
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const [externallyChanged, setExternallyChanged] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -53,6 +56,7 @@ export function PostToolAssistantSettings({ api, engagementId, providers, previe
       .then(([nextConfig, nextHarnesses]) => {
         if (!active) return;
         setConfig(nextConfig);
+        setExternallyChanged(false);
         setHarnesses(nextHarnesses);
         setError(undefined);
       })
@@ -62,7 +66,16 @@ export function PostToolAssistantSettings({ api, engagementId, providers, previe
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [api, engagementId]);
+  }, [api, engagementId, reloadVersion]);
+
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<ProjectDataChange>).detail;
+      if (detail?.projectId === engagementId && detail.resource === "post-tool-settings") setExternallyChanged(true);
+    };
+    window.addEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+  }, [engagementId]);
 
   const enabledProviders = providers.filter((item) => item.enabled);
   const enabledHarnesses = harnesses.filter((item) => item.enabled);
@@ -142,7 +155,9 @@ export function PostToolAssistantSettings({ api, engagementId, providers, previe
         <div className="post-tool-settings-intro">
           <span><Sparkles size={18} /></span>
           <div><h3>Analysis runtime</h3><p>Choose the model that reads completed tool output. Turn notes and suggestions on only when you need them from the Workbench.</p></div>
+          <button className="icon-button" type="button" aria-label="Reload tool follow-up" title="Reload tool follow-up" disabled={loading || saving} onClick={() => setReloadVersion((version) => version + 1)}><RefreshCw size={16} aria-hidden="true" /></button>
         </div>
+        {externallyChanged && <p role="status">Saved follow-up settings changed. Reload to load them; your unsaved input is retained until then.</p>}
         <div className="post-tool-settings-fields">
           <label>Runtime<select aria-label="Tool follow-up runtime" value={backendValue(config)} disabled={loading || saving || previewMode} onChange={(event) => chooseBackend(event.target.value)}><option value="">Choose a model or harness</option>{enabledProviders.length > 0 && <optgroup label="Model providers">{enabledProviders.map((item) => <option value={`provider:${item.id}`} key={item.id}>{item.name}{item.local ? " · local" : " · cloud"}</option>)}</optgroup>}{enabledHarnesses.length > 0 && <optgroup label="Agent harnesses">{enabledHarnesses.map((item) => <option value={`harness:${item.id}`} key={item.id}>{item.name}{item.localOnly ? " · local" : " · cloud"}</option>)}</optgroup>}</select></label>
           <label>Model<input aria-label="Tool follow-up model" list="post-tool-analysis-models" value={config.model ?? ""} disabled={!selectedBackend || loading || saving || previewMode} placeholder={selectedHarness ? "Model name or harness alias" : "Select or enter a model"} onChange={(event) => setConfig((current) => ({ ...current, model: event.target.value || undefined }))} /><datalist id="post-tool-analysis-models">{models.map((item) => <option value={item} key={item} />)}</datalist></label>

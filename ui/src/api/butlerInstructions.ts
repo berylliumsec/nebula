@@ -1,5 +1,7 @@
 import type { ApiClient } from "./client";
 
+export const BUTLER_INTERVAL_CHANGED_EVENT = "nebula:butler-interval-changed";
+
 export interface ButlerInstructionsFile {
   path: string;
   status: "ready" | "missing" | "invalid";

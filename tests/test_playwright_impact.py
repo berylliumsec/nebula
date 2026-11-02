@@ -118,8 +118,7 @@ def test_sharded_core_api_and_shell_entries_deduplicate():
     ]
     assert len(real_core) == 4
     assert {(entry["area"], entry["shard"]) for entry in real_core} == {
-        ("core-api+desktop-shell", f"{shard}/4")
-        for shard in range(1, 5)
+        ("core-api+desktop-shell", f"{shard}/4") for shard in range(1, 5)
     }
 
 
@@ -288,6 +287,24 @@ def test_catalog_exposes_stable_choices_for_agents_and_humans():
     assert "assistant" in catalog["areas"]
     assert "mobile-webkit" in catalog["projects"]
     assert "themes/mobile-webkit" in catalog["entries"]
+    assert len(MANIFEST["areas"]["butler-devices"]) == 8
+    assert all(
+        entry["grep"]
+        == "assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser"
+        for entry in MANIFEST["areas"]["butler-devices"]
+    )
+    assert len(MANIFEST["areas"]["butler-credentials"]) == 8
+    assert all(
+        entry["grep"]
+        == "assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser"
+        for entry in MANIFEST["areas"]["butler-credentials"]
+    )
+    assert len(MANIFEST["areas"]["butler-diagnostics"]) == 8
+    assert all(
+        entry["grep"]
+        == "assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser"
+        for entry in MANIFEST["areas"]["butler-diagnostics"]
+    )
 
 
 def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import type { AIWritingProvenance, ReportNoteTransform } from "../api/types";
 import { AIWritingDialog } from "../components/AIWritingDialog";
 import { aiRuntimeOptions } from "../components/aiRuntimes";
@@ -8,7 +8,7 @@ import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { resourcePath } from "../resourceRoutes";
 import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
 
@@ -34,6 +34,7 @@ function downloadBlob(filename: string, content: Blob): void {
 
 export function ReportsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { resourceId } = useParams();
   const confirm = useConfirmation();
   const {
@@ -41,6 +42,7 @@ export function ReportsPage() {
     api,
     createOperatorProfile,
     createReport,
+    deleteReport,
     engagement,
     findings,
     harnesses,
@@ -78,6 +80,7 @@ export function ReportsPage() {
   const [signoffName, setSignoffName] = useState("");
   const [attestation, setAttestation] = useState("I reviewed this report and approve it as the final record.");
   const [signing, setSigning] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [writingTarget, setWritingTarget] = useState<{ kind: "summary" } | { kind: "note"; observationId: string }>();
   const readOnly = selected?.status === "final";
   const writingRuntimes = useMemo(
@@ -315,6 +318,44 @@ export function ReportsPage() {
     setSignoffOpen(true);
   };
 
+  const remove = async () => {
+    if (!selected || !engagement || selected.status === "final" || dirty || deleting) return;
+    const target = selected;
+    const approved = await confirm({
+      title: `Permanently delete ${target.title}?`,
+      message: "This removes the saved draft or review report. Its source findings, notes and evidence remain. A signed final report cannot be deleted.",
+      confirmLabel: "Delete report",
+      tone: "danger",
+    });
+    if (!approved) return;
+    setDeleting(true);
+    setError(undefined);
+    try {
+      await deleteReport(target.id, engagement.id, target.revision);
+      setSelectedId("");
+      navigate(resourcePath(engagement.id, "report"), {replace: true});
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.reports_page.delete_failed", "A report deletion could not be confirmed.", caught, "reports_page");
+      setError(caught instanceof Error ? caught.message : "Core could not confirm the report deletion. Inspect Reports before retrying.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  useEffect(() => {
+    const requestedRevision = new URLSearchParams(location.search).get("butler_signoff");
+    if (!requestedRevision || !selected || selected.id !== resourceId) return;
+    navigate(resourcePath(engagement?.id, "report", selected.id), { replace: true });
+    if (requestedRevision !== String(selected.revision) || selected.status !== "review" || dirty) {
+      setError("This report changed before sign-off. Read its current revision and review it again.");
+      return;
+    }
+    setSignoffName(activeOperator?.displayName ?? "");
+    setAttestation("I reviewed this report and approve it as the final record.");
+    setError(undefined);
+    setSignoffOpen(true);
+  }, [activeOperator?.displayName, dirty, engagement?.id, location.search, navigate, resourceId, selected]);
+
   const completeSignoff = async (event: FormEvent) => {
     event.preventDefault();
     if (!selected || selected.status !== "review") return;
@@ -338,12 +379,12 @@ export function ReportsPage() {
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {missingResourceId && <div className="workspace-state-banner degraded" role="alert"><span><strong>Report unavailable</strong><small>The linked report was deleted, is inaccessible, or belongs to another project.</small></span><button className="button quiet" type="button" onClick={() => navigate(resourcePath(engagement?.id, "report"))}>Return to reports</button></div>}
       {!selected ? <StandardEmptyState className="report-empty-state" icon={<FileText size={28} />} title="Create your first report" explanation="Turn verified findings and evidence into a reviewable deliverable." primaryAction={<button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={15} /> New report</button>} /> : <div className="report-layout">
-        <aside className="panel report-outline">
+        <aside className="panel report-outline" aria-label="Report list">
           <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>
           <nav aria-label="Reports">{reports.map((report) => <button className={report.id === selected.id ? "active" : undefined} type="button" title={report.title} key={report.id} onClick={() => void selectReport(report.id)}><FileText size={15} /><span className="report-list-label">{report.title}<small>{report.status} · revision {report.revision}</small></span></button>)}</nav>
           <footer><span>Persisted by Core</span><strong>{reports.length}</strong></footer>
         </aside>
-        <section className="panel report-editor" aria-readonly={readOnly || undefined}>
+        <section className="panel report-editor">
           <header className="report-editor-toolbar"><div><label>Status<select value={status} disabled={readOnly} onChange={(event) => setField(setStatus, event.target.value)}><option value="draft">Draft</option><option value="review">In review</option><option value="final" disabled>Final · signed</option></select></label></div><span>{readOnly ? `Final · read-only · revision ${selected.revision}` : saving ? "Saving…" : dirty ? "Unsaved changes" : `Saved · revision ${selected.revision}`}</span></header>
           <div className="report-form">
             {readOnly && <p className="provider-dialog-note" role="status">This final report is an immutable signed record. Export remains available; create a new draft to make changes.</p>}
@@ -370,11 +411,11 @@ export function ReportsPage() {
             <footer><span>{linkedFindings.length} finding{linkedFindings.length === 1 ? "" : "s"} · {linkedObservations.length} note section{linkedObservations.length === 1 ? "" : "s"}</span><button className="button primary" type="button" disabled={readOnly || !dirty || saving || !title.trim()} onClick={() => void save()}><Save size={15} /> {readOnly ? "Final report" : saving ? "Saving…" : "Save report"}</button></footer>
           </div>
         </section>
-        <aside className="panel report-review">
+        <aside className="panel report-review" aria-label="Report review and export">
           <header><h2>{selected.status === "review" ? "Sign off & export" : "Export"}</h2><p>{dirty ? "Save this revision before exporting. PDF output is always rendered from the persisted record." : `PDF output uses saved revision ${selected.revision}.`}</p></header>
           {engagement && <ResourceRelationsPanel resource={{ projectId: engagement.id, kind: "report", id: selected.id, revision: selected.revision }} actionAdapters={{ download: exportPdf }} />}
           <ul><li className={summary.trim() ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Executive summary</strong><small>{summary.trim() ? "Present" : "Needs content"}</small></span></li><li className={linkedFindings.length ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Finding coverage</strong><small>{linkedFindings.length} included</small></span></li></ul>
-          <div className="export-actions">{selected.status === "review" && <button className="button primary full" type="button" disabled={dirty || signing} title={dirty ? "Save the report before sign-off" : undefined} onClick={openSignoff}><BadgeCheck size={15} /> Sign off final report</button>}<button className={`button ${selected.status === "review" ? "secondary" : "primary"} full`} type="button" disabled={dirty || !api || pdfState !== "idle"} title={dirty ? "Save the report before exporting" : undefined} onClick={() => void exportPdf()}>{pdfState === "idle" ? <Download size={15} /> : <LoaderCircle className="spin" size={15} />} {pdfState === "idle" ? "Export PDF" : pdfState === "downloading" ? "Downloading…" : "Rendering PDF…"}</button><button className="button secondary full" type="button" disabled={!api || !engagement || bundleSaving} onClick={() => void exportBundle()}>{bundleSaving ? <LoaderCircle className="spin" size={15} /> : <Archive size={15} />} {bundleSaving ? "Exporting…" : "Export engagement bundle"}</button><p className="provider-dialog-note">The .nebula.zip bundle is a portable sensitive export, not a backup. It includes unredacted evidence, retained selected-tool terminal results, and metadata-only terminal records; scratch workspace files are excluded.</p></div>
+          <div className="export-actions">{selected.status === "review" && <button className="button primary full" type="button" disabled={dirty || signing} title={dirty ? "Save the report before sign-off" : undefined} onClick={openSignoff}><BadgeCheck size={15} /> Sign off final report</button>}<button className={`button ${selected.status === "review" ? "secondary" : "primary"} full`} type="button" disabled={dirty || !api || pdfState !== "idle"} title={dirty ? "Save the report before exporting" : undefined} onClick={() => void exportPdf()}>{pdfState === "idle" ? <Download size={15} /> : <LoaderCircle className="spin" size={15} />} {pdfState === "idle" ? "Export PDF" : pdfState === "downloading" ? "Downloading…" : "Rendering PDF…"}</button><button className="button secondary full" type="button" disabled={!api || !engagement || bundleSaving} onClick={() => void exportBundle()}>{bundleSaving ? <LoaderCircle className="spin" size={15} /> : <Archive size={15} />} {bundleSaving ? "Exporting…" : "Export engagement bundle"}</button><p className="provider-dialog-note">The .nebula.zip bundle is a portable sensitive export, not a backup. It includes unredacted evidence, retained selected-tool terminal results, and metadata-only terminal records; scratch workspace files are excluded.</p>{!readOnly && <button className="button quiet full" type="button" disabled={!api || dirty || saving || deleting} title={dirty ? "Save or discard edits before deleting" : undefined} onClick={() => void remove()}>{deleting ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />} {deleting ? "Deleting…" : "Delete report"}</button>}</div>
         </aside>
       </div>}
       {creating && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="report-dialog-title" onClose={() => setCreating(false)} onSubmit={(event) => void create(event)}><header><div><small>Persisted deliverable</small><h2 id="report-dialog-title">New report</h2></div><button className="icon-button subtle" type="button" aria-label="Close report dialog" onClick={() => setCreating(false)}><X size={17} /></button></header><label>Title<input required autoFocus value={newTitle} placeholder={`${engagement?.name ?? "Engagement"} assessment`} onChange={(event) => setNewTitle(event.target.value)} /></label><p className="provider-dialog-note">Validated and confirmed findings are included initially and can be changed in the editor.</p>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button secondary" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={createSaving || !newTitle.trim()}>{createSaving ? "Creating…" : "Create report"}</button></footer></ModalSurface>}

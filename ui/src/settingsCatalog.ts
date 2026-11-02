@@ -10,6 +10,10 @@ export interface SettingCatalogEntry {
   keywords: string[];
 }
 
+export function settingOpensInButler(entry: SettingCatalogEntry): boolean {
+  return entry.target === "butler-settings" || entry.target === "butler-oversight";
+}
+
 export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-instructions",
@@ -41,11 +45,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-activity",
     label: "Butler scheduled activity",
-    description: "Read Butler's saved scheduled-check conversations and linked recovery reports in Oversight",
+    description: "Read Butler's saved checks and recovery reports, and review improvement-issue destinations and held drafts in Oversight",
     category: "Automation",
     scope: "Project",
     target: "butler-oversight",
-    keywords: ["butler", "scheduled", "checks", "transcript", "history", "blocked goal", "check-in", "agent reply", "conversation", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings"],
+    keywords: ["butler", "scheduled", "checks", "transcript", "history", "blocked goal", "check-in", "agent reply", "conversation", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings", "improvement issues", "held draft", "issue destination", "repository review"],
   },
   {
     id: "settings.butler-voice",
@@ -81,7 +85,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Models",
     scope: "Workspace",
     target: "provider-settings",
-    keywords: ["provider", "model", "openai", "anthropic", "gemini", "ollama", "vllm", "credential", "api key"],
+    keywords: ["provider", "model", "models", "openai", "anthropic", "gemini", "ollama", "vllm", "credential", "api key", "api keys"],
   },
   {
     id: "settings.skills",
@@ -95,7 +99,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.web-search",
     label: "Web search runtime",
-    description: "Run the local metasearch container agents use to research the public web",
+    description: "Install, start, stop and refresh local Web search and choose its engines",
     category: "Integrations",
     scope: "Workspace",
     target: "web-search-runtime-settings",
@@ -104,20 +108,29 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.storage",
     label: "Storage sources",
-    description: "Connect storage systems, reporting intervals, webhook tokens, and optional callbacks",
+    description: "Manage storage sources and review source-proposed plans, reconciliation, and failed dispatch retries",
     category: "Integrations",
     scope: "Workspace",
     target: "storage-integration-settings",
-    keywords: ["storage", "storage integration", "storage source", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
+    keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "reporting interval", "callback settings", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage", "source action", "preview effects", "approve plan", "reconcile action", "retry dispatch"],
+  },
+  {
+    id: "settings.typesafe",
+    label: "TypeSafe API key",
+    description: "Enter, replace or remove the tool-suggestions key on this device",
+    category: "Integrations",
+    scope: "Security",
+    target: "typesafe-integration-settings",
+    keywords: ["typesafe", "jev", "tool suggestions", "typesafe api key", "integration key"],
   },
   {
     id: "settings.follow-up",
     label: "Post-tool assistant",
-    description: "Configure automatic follow-up after terminal and tool results",
+    description: "Choose automatic follow-up analysis and project cloud consent; manual note drafts require operator acceptance",
     category: "Automation",
     scope: "Project",
     target: "post-tool-assistant-settings",
-    keywords: ["post tool", "follow up", "assistant", "automatic", "suggestion"],
+    keywords: ["post tool", "follow up", "assistant", "automatic", "suggestion", "manual draft", "execution note", "operator acceptance"],
   },
   {
     id: "settings.harnesses",
@@ -126,7 +139,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "plan only", "safe handoff", "provider goal", "main agent switch"],
+    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "plan only", "safe handoff", "provider goal", "main agent switch", "test turn", "external session", "import session history"],
   },
   {
     id: "settings.mcp",
@@ -140,7 +153,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.ssh-environments",
     label: "Environments",
-    description: "Let agents run commands on machines from ~/.ssh/config",
+    description: "Manage SSH host metadata; grant standing command approval in this browser",
     category: "Environments",
     scope: "Security",
     target: "ssh-environment-settings",
@@ -149,7 +162,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.automation-runtime",
     label: "Automation runtime",
-    description: "Select the command runtime used by automated operations",
+    description: "Inspect and prepare the shared automation image; project policy chooses the command runtime",
     category: "Automation",
     scope: "Workspace",
     target: "automation-runtime-settings",
@@ -167,7 +180,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.runners",
     label: "Sandbox runners",
-    description: "Configure trusted Docker or Podman execution profiles",
+    description: "Review trusted Docker or Podman programs and isolation; Butler can rename existing profiles",
     category: "Automation",
     scope: "Workspace",
     target: "runtime-settings",
@@ -176,16 +189,16 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.network-scope",
     label: "Project policy and network scope",
-    description: "Control targets, ports, URLs, approvals, privacy, and execution limits",
+    description: "Control targets, ports, URLs, approvals and limits, or review targets extracted from a private scope document",
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
-    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools"],
+    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools", "notebook", "notebook host consent", "notebook package downloads", "notebook package installation", "restart notebook kernel", "notebook file index", "connect notebook index", "remove notebook index", "scope import", "scope document", "review targets", "discard import"],
   },
   {
     id: "settings.operators",
     label: "Operator profiles",
-    description: "Manage the local identity used for activity attribution",
+    description: "Choose and manage local activity attribution profiles",
     category: "Identity & Security",
     scope: "Security",
     target: "operator-settings",
@@ -198,7 +211,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Identity & Security",
     scope: "Security",
     target: "device-pairing-settings",
-    keywords: ["device", "pair", "phone", "mobile", "browser", "qr", "revoke"],
+    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke"],
   },
   {
     id: "settings.release",
@@ -212,16 +225,16 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.diagnostics",
     label: "Diagnostics and logging",
-    description: "Configure logs and inspect recoverable interface failures",
+    description: "Configure logs, inspect failures, and review sensitive detail or remediation actions in the browser",
     category: "Diagnostics",
     scope: "Device",
     target: "diagnostics-settings",
-    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry"],
+    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry", "public incidents", "Core health", "sensitive detail", "reveal detail", "copy detail", "remediation", "recovery action", "log level"],
   },
   {
     id: "settings.setup",
     label: "Terminal and Core setup",
-    description: "Check runtime readiness and configure the UI shell connection",
+    description: "Choose a verified runtime, prepare or retry its image, and inspect Core readiness",
     category: "Setup",
     scope: "Workspace",
     target: "setup-settings",

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, CircleAlert, Clipboard, LoaderCircle, Play, Sparkles, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/projectDataEvents";
 import type { GeneratedDraft, HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { logCaughtDiagnostic } from "../diagnostics";
@@ -85,6 +86,19 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   }); }, [refresh]);
 
   useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<ProjectDataChange>).detail;
+      if (detail?.projectId !== engagementId || detail.resource !== "post-tool-settings") return;
+      void refresh().catch((caught) => {
+        void logCaughtDiagnostic("interface.post_tool_assistant.refresh_failed", "Saved follow-up settings could not refresh.", caught, "post_tool_assistant");
+        setFeedback({kind: "error", title: "Follow-up settings changed", message: "Reload this view to read Core's saved settings."});
+      });
+    };
+    window.addEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+  }, [engagementId, refresh]);
+
+  useEffect(() => {
     if (!feedback) return;
     positionFeedback();
     globalThis.addEventListener("resize", positionFeedback);
@@ -133,7 +147,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
         const next = executions.items.filter((item) => ["completed", "failed", "timed_out"].includes(item.status) && !known.has(item.id)).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))[0];
         if (next) {
           setBusy(true);
-          let generated = await api.generateExecutionDraft(next.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current);
+          let generated = await api.generateExecutionDraft(next.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current, true);
           for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
             await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
             generated = await api.getGeneratedDraft(generated.id);
@@ -144,7 +158,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
             .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
           if (mission) {
             setBusy(true);
-            let generated = await api.generateMissionDraft(mission.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current);
+            let generated = await api.generateMissionDraft(mission.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current, true);
             for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
               await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
               generated = await api.getGeneratedDraft(generated.id);

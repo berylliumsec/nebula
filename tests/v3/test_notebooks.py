@@ -322,6 +322,79 @@ def test_package_install_requires_host_consent(tmp_path):
     asyncio.run(scenario())
 
 
+def test_idle_notebook_worker_is_replaced_after_project_folder_relink(
+    tmp_path, monkeypatch
+):
+    store, project, notebooks = _project(tmp_path)
+    old_folder = tmp_path / "workspace"
+    new_folder = tmp_path / "new-workspace"
+    new_folder.mkdir()
+    notebooks.documents.workspace_resolver = lambda engagement_id: Path(
+        store.get(Engagement, engagement_id).workspace_path
+    )
+    policy = AutomationProjectPolicy(
+        engagement_id=project.id,
+        execution_mode="host",
+        host_access_acknowledged=True,
+    )
+    notebooks.automation_runtime = type(
+        "Runtime", (), {"project_policy": lambda self, _: policy}
+    )()
+    launched: list[Path] = []
+
+    async def command(*_args):
+        return ["synthetic-worker"]
+
+    async def launch(*_args, cwd: str, **_kwargs):
+        launched.append(Path(cwd))
+        return type("Process", (), {"returncode": None})()
+
+    class Worker:
+        def __init__(self, process, _on_event, *, workspace_path, **_kwargs):
+            self.process = process
+            self.workspace_path = workspace_path
+            self.policy_revision = policy.revision
+            self.restart_uncertain = False
+            self.active_run = None
+            self.instance_id = str(len(launched))
+            self.generation = 1
+            self.last_used = 0.0
+            self.ready = asyncio.get_running_loop().create_future()
+            self.ready.set_result("synthetic-worker")
+
+        async def close(self):
+            self.process.returncode = 0
+
+    monkeypatch.setattr(notebooks, "_worker_command", command)
+    monkeypatch.setattr("nebula.v3.notebooks.asyncio.create_subprocess_exec", launch)
+    monkeypatch.setattr("nebula.v3.notebooks.NotebookWorkerConnection", Worker)
+
+    async def scenario():
+        await notebooks.create(project.id, "same.ipynb")
+        (new_folder / "same.ipynb").write_bytes(
+            (old_folder / "same.ipynb").read_bytes()
+        )
+        old_worker = await notebooks._worker(project.id, "same.ipynb")
+        assert await notebooks._worker(project.id, "same.ipynb") is old_worker
+        assert launched == [old_folder]
+        store.relink_project_workspace(
+            project.id, str(new_folder), expected_revision=project.revision
+        )
+        assert notebooks.kernel_status(project.id, "same.ipynb")["state"] == "absent"
+        with pytest.raises(NotebookConflict, match="workspace changed"):
+            await notebooks.restart(
+                project.id,
+                "same.ipynb",
+                expected_instance_id=old_worker.instance_id,
+            )
+        new_worker = await notebooks._worker(project.id, "same.ipynb")
+        assert new_worker is not old_worker
+        assert old_worker.process.returncode == 0
+        assert launched == [old_folder, new_folder]
+
+    asyncio.run(scenario())
+
+
 def test_run_replay_uses_an_ordered_sequence_cursor(tmp_path):
     store, project, notebooks = _project(tmp_path)
     run = store.create(

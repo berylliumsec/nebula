@@ -607,6 +607,10 @@ class MissionService:
                 run,
                 run_id=run.id,
                 event_type="run.queued",
+                project_workspace_binding=(
+                    engagement.id,
+                    engagement.workspace_path,
+                ),
                 event_payload={
                     "objective": clean_objective,
                     "provider_id": profile.id,

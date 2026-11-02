@@ -1,10 +1,11 @@
-import {render, screen, waitFor} from "@testing-library/react";
+import {act, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {MemoryRouter} from "react-router-dom";
 import {beforeEach, describe, expect, it, vi} from "vitest";
 import type {WebSearchRuntime} from "../api/types";
 import {DialogProvider} from "./DialogSystem";
 import {WebSearchRuntimeSettings, runtimeHealth, shortDigest} from "./WebSearchRuntimeSettings";
+import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
 
 const api = {
   getWebSearchRuntime: vi.fn(),
@@ -42,6 +43,20 @@ describe("web search runtime settings", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     api.getWebSearchRuntime.mockResolvedValue(runtime());
+  });
+
+  it("rereads a Core change and offers a read-only retry without inventing a stopped state", async () => {
+    mount();
+    expect(await screen.findByText("Ready")).toBeVisible();
+    api.getWebSearchRuntime.mockRejectedValueOnce(new Error("Synthetic status read failed"));
+    act(() => notifyRuntimeSettingsChanged("web-search"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Synthetic status read failed");
+    expect(screen.getByText("Ready")).toBeVisible();
+    expect(api.stopWebSearchRuntime).not.toHaveBeenCalled();
+    api.getWebSearchRuntime.mockResolvedValue(runtime({containerState: "stopped"}));
+    await userEvent.setup().click(screen.getByRole("button", {name: "Refresh Web search status"}));
+    expect(await screen.findByText("Stopped")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows a ready runtime with its pinned image and loopback address", async () => {

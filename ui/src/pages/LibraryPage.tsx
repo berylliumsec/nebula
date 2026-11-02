@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import type { LibraryItem } from "../api/types";
+import { ACCEPTED_LIBRARY_FILES, encodeLibraryFile, MAX_LIBRARY_ITEM_BYTES, startLibraryArtifactDownload } from "../api/libraryFiles";
 import { useConfirmation } from "../components/DialogSystem";
 import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
@@ -22,24 +23,6 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useCanonicalResourceSelection } from "../hooks/useCanonicalResourceSelection";
 import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
-
-const MAX_ITEM_BYTES = 20 * 1024 * 1024;
-const ACCEPTED_FILES = [
-  ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".json", ".jsonl",
-  ".ndjson", ".html", ".htm", ".pdf", ".docx", ".xlsx", ".py", ".sh",
-  ".bash", ".zsh", ".js", ".jsx", ".ts", ".tsx", ".rb", ".go", ".rs",
-  ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".php", ".pl", ".lua",
-  ".sql", ".yaml", ".yml", ".toml", ".xml", ".ini", ".conf",
-].join(",");
-
-function encodeBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-}
 
 function displayTime(value: string): string {
   const date = new Date(value);
@@ -97,7 +80,7 @@ export function LibraryPage() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (file.size > MAX_ITEM_BYTES) {
+    if (file.size > MAX_LIBRARY_ITEM_BYTES) {
       setError(`${file.name} is larger than the 20 MB Library limit.`);
       return;
     }
@@ -108,7 +91,7 @@ export function LibraryPage() {
       await ingestLibraryItem({
         filename: file.name,
         mediaType: file.type || undefined,
-        contentBase64: encodeBase64(await file.arrayBuffer()),
+        contentBase64: encodeLibraryFile(await file.arrayBuffer()),
       });
       // A successful upload must be discoverable even if an earlier search
       // would hide the newly saved item.
@@ -177,12 +160,7 @@ export function LibraryPage() {
     setBusy(item.id, true);
     try {
       const blob = await api.getArtifactContent(item.artifactId);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = item.metadata.filename || item.name;
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      startLibraryArtifactDownload(blob, item.metadata.filename || item.name);
     } catch (caughtError) {
       void logCaughtDiagnostic(
         "interface.library_page.download_failed",
@@ -208,7 +186,7 @@ export function LibraryPage() {
             className="sr-only"
             type="file"
             aria-label="Choose Library item"
-            accept={ACCEPTED_FILES}
+            accept={ACCEPTED_LIBRARY_FILES}
             onChange={(event) => void upload(event)}
           />
           <PageHeaderAction label={uploading ? "Indexing…" : "Add document or script"} icon={uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()} />

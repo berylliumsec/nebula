@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,6 +41,24 @@ describe("TopBar page title", () => {
     expect(screen.getByRole("group", { name: `${label} actions` })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: `${label} primary action` })).toBeInTheDocument();
   });
+});
+
+it("keeps a keyboard-owned top menu open when the pointer leaves it", () => {
+  const media = window.matchMedia;
+  window.matchMedia = vi.fn().mockReturnValue({matches: true} as MediaQueryList);
+  const leave = vi.fn();
+  try {
+    render(<MemoryRouter><TopBar activityOpen={false} approvalsCount={0} onToggleActivity={vi.fn()} onToggleSidebar={vi.fn()} onOpenPalette={vi.fn()} setToolbarHost={vi.fn()} sidebarCollapsed lensOpen onToggleLens={vi.fn()} onLeaveLens={leave} /></MemoryRouter>);
+    const handle = screen.getByRole("button", {name: "Open top menu"});
+    handle.focus();
+    fireEvent.mouseLeave(screen.getByRole("banner"), {relatedTarget: document.body});
+    expect(handle).toHaveFocus();
+    expect(leave).not.toHaveBeenCalled();
+    handle.blur();
+    expect(leave).toHaveBeenCalledOnce();
+  } finally {
+    window.matchMedia = media;
+  }
 });
 
 describe("TopBar public IP", () => {

@@ -2,6 +2,7 @@ import { IconAction } from "./IconAction";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import { isProjectNoteType } from "../api/noteTypes";
 import type {
   ObservationCreateRequest,
   ObservationSummary,
@@ -131,7 +132,7 @@ export function NotesPanel({
   const confirm = useConfirmation();
   const cachedNotesReady = initialNotesReady;
   const [notes, setNotes] = useState<ObservationSummary[]>(() => cachedNotesReady
-    ? initialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"))
+    ? initialNotes.filter((note) => note.engagementId === engagementId && isProjectNoteType(note.observationType))
     : []);
   const restoredPanel = panelSessionKey ? notePanelStates.get(panelSessionKey) : undefined;
   const [selectedId, setSelectedId] = useState<string | undefined>(restoredPanel?.selectedId ?? notes[0]?.id);
@@ -231,7 +232,7 @@ export function NotesPanel({
     setError(undefined);
     try {
       const response = await api.listObservations(engagementId, signal);
-      const next = response.items.filter((item) => item.observationType === "note" || item.observationType === "ai_tool_note");
+      const next = response.items.filter((item) => item.engagementId === engagementId && isProjectNoteType(item.observationType));
       const captured = capturedNoteRef.current;
       const merged = captured && !next.some((item) => item.id === captured.id) ? [captured, ...next] : next;
       setNotes(merged);
@@ -258,7 +259,7 @@ export function NotesPanel({
 
   useEffect(() => {
     if (!cachedNotesReady) return;
-    const next = initialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"));
+    const next = initialNotes.filter((note) => note.engagementId === engagementId && isProjectNoteType(note.observationType));
     setNotes(next);
     setSelectedId((current) => creatingRef.current || (current && next.some((note) => note.id === current)) ? current : next[0]?.id);
     setLoading(false);
@@ -346,7 +347,7 @@ export function NotesPanel({
         // Read the current revision and body before appending. The list visible
         // in this panel can be older than edits from another device.
         const current = currentNotes.find((item) => item.id === captureTargetId);
-        if (!current || (current.observationType !== "note" && current.observationType !== "ai_tool_note")) {
+        if (!current || !isProjectNoteType(current.observationType)) {
           throw new Error("This note is no longer available. Refresh the list and choose another note.");
         }
         saved = await updateNote(current.id, {
@@ -508,7 +509,7 @@ export function NotesPanel({
             <button className="button quiet square" type="button" aria-label="Create note" disabled={saving} onClick={() => void startNote()}><Plus size={15} /></button>
           </div>
         </header>
-        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} disabled={saving} onClick={() => void selectNote(note.id)}><strong>{note.title}</strong><small>{note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
+        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} disabled={saving} onClick={() => void selectNote(note.id)}><strong>{note.title}</strong><small>{note.observationType === "ai_execution_note" ? "AI-generated · Operator accepted · " : note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
         {loading && notes.length > 0 && <p className="notes-load-status" role="status">Refreshing notes…</p>}
         {!notes.length && !loading && <p>No notes yet.</p>}
       </aside>

@@ -1,6 +1,7 @@
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/client";
+import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/projectDataEvents";
 
 export interface ChatBookmark { message_id: string; active: boolean; revision: number }
 export interface ChatSearchHit { message_id: string; session_id: string; title: string; role: string; excerpt: string; sequence: number }
@@ -10,6 +11,14 @@ export function useChatNavigation(api: ApiClient | undefined, projectId: string 
   const [bookmarks, setBookmarks] = useState<ChatBookmark[]>([]);
   const [error, setError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<ProjectDataChange>).detail;
+      if (detail?.resource === "bookmarks" && detail.projectId === projectId && detail.sessionId === sessionId) setRefresh(value => value + 1);
+    };
+    window.addEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+  }, [projectId, sessionId]);
   useEffect(() => {
     setBookmarks([]);
     if (!api || !sessionId) return;

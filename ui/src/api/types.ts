@@ -187,6 +187,7 @@ export interface AssistantDefaults {
 
 export interface EngagementCreateRequest {
   name: string;
+  requestId?: string;
   hostAccessAcknowledged?: boolean;
   description?: string;
   clientName?: string;
@@ -1246,6 +1247,7 @@ export interface ReportSummary {
 
 export interface ReportCreateRequest {
   engagementId: Identifier;
+  reportId?: Identifier;
   title: string;
   status?: string;
   executiveSummary?: string;
@@ -1400,6 +1402,7 @@ export interface GeneratedDraftContent {
 }
 
 export interface PostToolAssistantConfig {
+  revision?: number;
   suggestNextSteps: boolean;
   takeNotes: boolean;
   providerId?: Identifier;
@@ -1434,6 +1437,7 @@ export interface ExecutionChatAttachment {
 
 export interface EvidenceSummary {
   id: Identifier;
+  revision: number;
   engagementId: Identifier;
   evidenceType: string;
   title: string;
@@ -2737,6 +2741,9 @@ export interface McpServerProfile {
   arguments: string[];
   url?: string;
   authMode: "none" | "bearer" | "headers";
+  bearerSecretRef?: string;
+  headerSecretRefs?: Record<string, string>;
+  environmentSecretRefs?: Record<string, string>;
   enabled: boolean;
   required: boolean;
   trustedStdio: boolean;
@@ -2759,7 +2766,7 @@ export interface NotebookStatus {
 }
 
 export interface NotebookListing { path: string; size: number; modifiedAt: string }
-export interface NotebookFileIndexStatus { path: string | null; state: "none" | "connected" | "partial" | "fallback"; detail: string | null }
+export interface NotebookFileIndexStatus { path: string | null; state: "none" | "connected" | "partial" | "fallback"; detail: string | null; project_revision: number }
 export interface NotebookCell {
   id: string;
   cell_type: "code" | "markdown";
@@ -2999,6 +3006,7 @@ export interface KnowledgeSource {
 
 export interface LibraryItem {
   id: Identifier;
+  revision: number;
   name: string;
   sourceType: string;
   artifactId?: Identifier;
@@ -3486,6 +3494,7 @@ export interface WorkspaceChange {
 
 export interface OperatorExecution {
   id: Identifier;
+  revision: number;
   engagementId: Identifier;
   operatorId: Identifier;
   origin: ExecutionOrigin;
@@ -3522,6 +3531,15 @@ export interface WorkspaceEntry {
   kind: "file" | "directory" | "symlink" | "other";
   size: number;
   modifiedAt: string;
+}
+
+export interface WorkspaceEntryState {
+  engagementId: Identifier;
+  path: string;
+  kind: "file" | "directory";
+  size: number;
+  sha256?: string;
+  entryIdentity?: string;
 }
 
 export interface WorkspaceListing {

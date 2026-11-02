@@ -183,7 +183,7 @@ export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }
     {!open && error && <small role="alert">{error}</small>}
     {open && createPortal(
       <ModalSurface labelledBy="host-folder-dialog-title" className="host-folder-dialog" onClose={closeBrowser}>
-        <header>
+        <header role="presentation">
           <div>
             <span className="host-folder-dialog-kicker"><Server size={14} /> Nebula host</span>
             <h2 id="host-folder-dialog-title">{purpose === "index" ? "Choose file index" : purpose === "account" ? "Choose account folder" : "Choose project folder"}</h2>

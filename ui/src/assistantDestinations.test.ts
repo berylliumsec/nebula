@@ -5,6 +5,7 @@ describe("assistant app destinations", () => {
   it("opens All projects from the operator's wording without a model turn", () => {
     expect(destinationToOpen("show me my projects")?.id).toBe("projects");
     expect(destinationToOpen("open all projects")?.id).toBe("projects");
+    expect(destinationToOpen("open project folder on Nebula host")?.id).toBe("projects");
     expect(destinationToOpen("open Workbench")?.id).toBe("chat");
     expect(destinationToOpen("show Butler conversations")?.id).toBe("chat");
     expect(destinationToOpen("show archived Butler chats")?.id).toBe("chat");
@@ -14,13 +15,17 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("open select conversations")?.id).toBe("chat");
     expect(destinationToOpen("open goal resume instruction")?.id).toBe("chat");
     expect(destinationToOpen("open switch chat provider")?.id).toBe("chat");
+    expect(destinationToOpen("open check-in history")?.id).toBe("project-work");
+    expect(destinationToOpen("open notebook file index")?.id).toBe("notebook");
+    expect(destinationToOpen("open delete report")?.id).toBe("reports");
+    expect(destinationToOpen("open transform report note")?.id).toBe("reports");
     expect(destinationToOpen("open Knowledge")?.id).toBe("sources");
     expect(destinationToOpen("show storage devices")?.id).toBe("storage");
     expect(destinationToOpen("How do projects work?")).toBeUndefined();
   });
 
   it("resolves every listed route with the selected project and preserves encoded IDs", () => {
-    expect(assistantDestinations).toHaveLength(21);
+    expect(assistantDestinations).toHaveLength(22);
     expect(destinationToOpen("open Butler scheduled activity")?.path).toBe("/settings#butler-oversight");
     expect(new Set(assistantDestinations.map((entry) => entry.id)).size).toBe(assistantDestinations.length);
     for (const destination of assistantDestinations) {

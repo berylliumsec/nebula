@@ -8,6 +8,7 @@ import { ExecutionInsightDialog } from "./ExecutionInsightDialog";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
 import { LoadingSurface } from "./SurfacePrimitives";
+import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/projectDataEvents";
 
 interface ExecutionHistoryProps {
   api: ApiClient;
@@ -93,6 +94,16 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
     void load(controller.signal);
     return () => controller.abort();
   }, [load, refreshKey]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<ProjectDataChange>).detail;
+      if (detail?.resource === "executions" && detail.projectId === engagementId) void load(controller.signal, true);
+    };
+    window.addEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+    return () => {controller.abort(); window.removeEventListener(PROJECT_DATA_CHANGED_EVENT, changed);};
+  }, [engagementId, load]);
 
   useEffect(() => {
     if (!hasActive || pollingPaused) return;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 
@@ -28,6 +29,8 @@ from nebula.v3.domain import (
     AssistantDefaults,
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
+    ChatMessage,
+    ChatRole,
     ChatSession,
     Engagement,
     ProviderProfile,
@@ -40,6 +43,11 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessRuntimeOption,
     HarnessSession,
+    McpServerProfile,
+    McpTransport,
+    StorageSource,
+    PairedDeviceSession,
+    WorkItem,
     utc_now,
 )
 from nebula.v3.runtime_platform import RuntimePlatform
@@ -144,6 +152,880 @@ def _scheduled_capabilities(tmp_path):
         background_runtime_local=True,
     )
     return store, project, chat, foreign_chat, policy, case, scheduled
+
+
+def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
+    store, selected, chat, _, capabilities = _capabilities(tmp_path)
+    first = store.create(
+        ChatMessage(
+            engagement_id=selected.id,
+            session_id=chat.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Original question",
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=selected.id,
+            session_id=chat.id,
+            sequence=2,
+            role=ChatRole.ASSISTANT,
+            content="Original answer",
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "rewind chat"})
+        assert any(
+            row["operation"] == "nebula.work.rewind_chat" for row in found["matches"]
+        )
+        description = await capabilities.describe(
+            {"operation": "nebula.work.rewind_chat"}
+        )
+        assert description["invoke_with"] == "nebula.capabilities.change"
+        page = await capabilities.invoke(
+            {
+                "operation": "nebula.work.chat_messages",
+                "arguments": {"session_id": chat.id},
+            },
+            change=False,
+        )
+        assert page["messages"][0]["id"] == first.id
+        changed = await capabilities.invoke(
+            {
+                "operation": "nebula.work.rewind_chat",
+                "arguments": {
+                    "session_id": chat.id,
+                    "expected_revision": page["revision"],
+                    "before_message_id": first.id,
+                },
+            },
+            change=True,
+        )
+        assert changed["retracted_message_count"] == 2
+        assert changed["revision"] > page["revision"]
+        assert (
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.chat_messages",
+                    "arguments": {"session_id": chat.id},
+                },
+                change=False,
+            )
+        )["messages"] == []
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    older = [store.create(Engagement(name=f"Project {index}")) for index in range(51)]
+
+    async def scenario():
+        found = await capabilities.search({"query": "archive project"})
+        assert any(
+            row["operation"] == "nebula.projects.archive" for row in found["matches"]
+        )
+        listed = await capabilities.invoke(
+            {"operation": "nebula.projects.list", "arguments": {}}, change=False
+        )
+        assert listed["next_offset"] == 50
+        second = await capabilities.invoke(
+            {"operation": "nebula.projects.list", "arguments": {"offset": 50}},
+            change=False,
+        )
+        assert any(row["project_id"] == older[-1].id for row in second["projects"])
+        detail = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.detail",
+                "arguments": {"project_id": selected.id},
+            },
+            change=False,
+        )
+        assert detail["revision"] == selected.revision
+        archive = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.archive",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": selected.revision,
+                },
+            },
+            change=True,
+        )
+        assert archive["state"] == "pending_browser_apply"
+        assert archive["client_action"] == {
+            "kind": "project_archive",
+            "project_id": selected.id,
+            "expected_revision": selected.revision,
+            "name": selected.name,
+        }
+        assert store.get(Engagement, selected.id).status == selected.status
+        renamed = store.update(
+            Engagement,
+            selected.id,
+            {"name": "Changed on another device"},
+            expected_revision=selected.revision,
+        )
+        with pytest.raises(ValueError, match="project changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.projects.rename",
+                    "arguments": {
+                        "project_id": selected.id,
+                        "expected_revision": selected.revision,
+                        "name": "Stale name",
+                    },
+                },
+                change=True,
+            )
+        rename = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.rename",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": renamed.revision,
+                    "name": "New name",
+                },
+            },
+            change=True,
+        )
+        assert rename["client_action"]["old_name"] == renamed.name
+        assert store.get(Engagement, selected.id).name == renamed.name
+        relink = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.relink",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": renamed.revision,
+                },
+            },
+            change=True,
+        )
+        assert relink["client_action"] == {
+            "kind": "project_relink",
+            "project_id": selected.id,
+            "expected_revision": renamed.revision,
+            "name": renamed.name,
+        }
+        assert "workspace_path" not in relink["client_action"]
+        create = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.create",
+                "arguments": {"name": "New project"},
+            },
+            change=True,
+        )
+        assert create["client_action"]["kind"] == "project_create"
+        assert create["client_action"]["name"] == "New project"
+        assert create["client_action"]["request_id"]
+        linked = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.create_linked",
+                "arguments": {"name": "Linked project"},
+            },
+            change=True,
+        )
+        assert linked["client_action"]["kind"] == "project_create_linked"
+        assert linked["client_action"]["name"] == "Linked project"
+        assert linked["client_action"]["request_id"]
+        assert "workspace_path" not in linked["client_action"]
+        assert len(store.list_entities(Engagement, limit=1000)) == 53
+        archived = store.update(
+            Engagement,
+            selected.id,
+            {"status": EngagementStatus.ARCHIVED},
+            expected_revision=renamed.revision,
+        )
+        restore = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.restore",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": archived.revision,
+                },
+            },
+            change=True,
+        )
+        assert restore["client_action"]["kind"] == "project_restore"
+        delete = await capabilities.invoke(
+            {
+                "operation": "nebula.projects.delete",
+                "arguments": {
+                    "project_id": selected.id,
+                    "expected_revision": archived.revision,
+                },
+            },
+            change=True,
+        )
+        assert delete["client_action"]["kind"] == "project_delete"
+        assert store.get(Engagement, selected.id).status == EngagementStatus.ARCHIVED
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_path):
+    store, selected, own_chat, foreign_chat, capabilities = _capabilities(tmp_path)
+    private = store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Private side chat",
+            provider_profile_id=own_chat.provider_profile_id,
+            model="model-a",
+            metadata={"side_chat": True},
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "export chat transcript"})
+        assert any(
+            row["operation"] == "nebula.chats.export" for row in found["matches"]
+        )
+        described = await capabilities.describe({"operation": "nebula.chats.export"})
+        assert described["invoke_with"] == "nebula.capabilities.change"
+        prepared = await capabilities.invoke(
+            {
+                "operation": "nebula.chats.export",
+                "arguments": {
+                    "session_id": own_chat.id,
+                    "expected_revision": own_chat.revision,
+                },
+            },
+            change=True,
+        )
+        assert prepared["state"] == "pending_browser_apply"
+        assert prepared["client_action"] == {
+            "kind": "chat_export",
+            "project_id": selected.id,
+            "session_id": own_chat.id,
+            "expected_revision": own_chat.revision,
+        }
+        assert "messages" not in prepared and "transcript" not in prepared
+        assert store.get(ChatSession, own_chat.id).revision == own_chat.revision
+        for target in (foreign_chat, private):
+            with pytest.raises(ValueError, match="saved main chat"):
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.chats.export",
+                        "arguments": {
+                            "session_id": target.id,
+                            "expected_revision": target.revision,
+                        },
+                    },
+                    change=True,
+                )
+        store.update(
+            ChatSession,
+            own_chat.id,
+            {"title": "Changed on another device"},
+            expected_revision=own_chat.revision,
+        )
+        with pytest.raises(ValueError, match="chat changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.chats.export",
+                    "arguments": {
+                        "session_id": own_chat.id,
+                        "expected_revision": own_chat.revision,
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
+    store, selected, _, foreign_chat, capabilities = _capabilities(tmp_path)
+    own = store.create(
+        StorageSource(
+            name="Fixture NAS",
+            engagement_id=selected.id,
+            profile_id="runtime",
+            model="model-a",
+            token_sha256="a" * 64,
+            callback_credential_ref="env:STORAGE_CALLBACK_TOKEN",
+        )
+    )
+    foreign = store.create(
+        StorageSource(
+            name="Other source",
+            engagement_id=foreign_chat.engagement_id,
+            profile_id="runtime",
+            model="model-a",
+            token_sha256="b" * 64,
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "storage source token"})
+        assert {
+            "nebula.storage.sources",
+            "nebula.storage.rotate",
+            "nebula.storage.revoke",
+            "nebula.storage.configure_reporting",
+            "nebula.storage.edit_callbacks",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.storage.sources", "arguments": {}}, change=False
+        )
+        assert [item["source_id"] for item in listed["sources"]] == [own.id]
+        assert "token" not in str(listed).lower()
+        assert "credential" not in str(listed).lower()
+        with pytest.raises(ValueError, match="selected project"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.storage.source",
+                    "arguments": {"source_id": foreign.id},
+                },
+                change=False,
+            )
+        enrolled = await capabilities.invoke(
+            {"operation": "nebula.storage.enroll", "arguments": {}}, change=True
+        )
+        assert enrolled["client_action"] == {
+            "kind": "storage_enroll",
+            "project_id": selected.id,
+        }
+        for operation, kind in (
+            ("rotate", "storage_rotate"),
+            ("revoke", "storage_revoke"),
+            ("edit_callbacks", "storage_edit_callbacks"),
+        ):
+            prepared = await capabilities.invoke(
+                {
+                    "operation": f"nebula.storage.{operation}",
+                    "arguments": {
+                        "source_id": own.id,
+                        "expected_revision": own.revision,
+                    },
+                },
+                change=True,
+            )
+            assert prepared["client_action"] == {
+                "kind": kind,
+                "project_id": selected.id,
+                "source_id": own.id,
+                "expected_revision": own.revision,
+                "name": own.name,
+            }
+            assert store.get(StorageSource, own.id).revision == own.revision
+            with pytest.raises(ValueError, match="changed"):
+                await capabilities.invoke(
+                    {
+                        "operation": f"nebula.storage.{operation}",
+                        "arguments": {
+                            "source_id": own.id,
+                            "expected_revision": own.revision + 1,
+                        },
+                    },
+                    change=True,
+                )
+            with pytest.raises(ValueError, match="selected project"):
+                await capabilities.invoke(
+                    {
+                        "operation": f"nebula.storage.{operation}",
+                        "arguments": {
+                            "source_id": foreign.id,
+                            "expected_revision": foreign.revision,
+                        },
+                    },
+                    change=True,
+                )
+        reporting = await capabilities.invoke(
+            {
+                "operation": "nebula.storage.configure_reporting",
+                "arguments": {
+                    "source_id": own.id,
+                    "expected_revision": own.revision,
+                    "enabled": True,
+                    "reporting_interval_seconds": 3600,
+                },
+            },
+            change=True,
+        )
+        assert reporting["client_action"]["changes"] == {
+            "enabled": True,
+            "reporting_interval_seconds": 3600,
+        }
+        assert "credential" not in str(reporting).lower()
+        assert store.get(StorageSource, own.id).revision == own.revision
+        with pytest.raises(CapabilityInputError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.storage.configure_reporting",
+                    "arguments": {
+                        "source_id": own.id,
+                        "expected_revision": own.revision,
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    now = utc_now()
+    device = store.create(
+        PairedDeviceSession(
+            name="Fixture phone",
+            token_sha256="a" * 64,
+            csrf_sha256="b" * 64,
+            idle_expires_at=now + timedelta(days=30),
+            absolute_expires_at=now + timedelta(days=90),
+        )
+    )
+
+    async def scenario():
+        found = await capabilities.search({"query": "pair or revoke a device"})
+        assert {"nebula.devices.pair", "nebula.devices.revoke"}.issubset(
+            {row["operation"] for row in found["matches"]}
+        )
+        listed = await capabilities.invoke(
+            {"operation": "nebula.devices.list", "arguments": {}}, change=False
+        )
+        assert [item["device_id"] for item in listed["devices"]] == [device.id]
+        assert "token" not in str(listed).lower()
+        assert "csrf" not in str(listed).lower()
+        paired = await capabilities.invoke(
+            {"operation": "nebula.devices.pair", "arguments": {}}, change=True
+        )
+        assert paired["client_action"] == {
+            "kind": "device_pair",
+            "project_id": selected.id,
+        }
+        assert len(store.find_entities(PairedDeviceSession, {"revoked_at": None})) == 1
+        created_at = listed["devices"][0]["created_at"]
+        revoke = await capabilities.invoke(
+            {
+                "operation": "nebula.devices.revoke",
+                "arguments": {
+                    "device_id": device.id,
+                    "expected_created_at": created_at,
+                },
+            },
+            change=True,
+        )
+        assert revoke["client_action"] == {
+            "kind": "device_revoke",
+            "project_id": selected.id,
+            "device_id": device.id,
+            "name": device.name,
+            "expected_created_at": created_at,
+        }
+        assert store.get(PairedDeviceSession, device.id).revoked_at is None
+        with pytest.raises(ValueError, match="changed"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.devices.revoke",
+                    "arguments": {
+                        "device_id": device.id,
+                        "expected_created_at": "2000-01-01T00:00:00Z",
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
+    _, selected, _, _, capabilities = _capabilities(tmp_path)
+    reference = "session:" + "a" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "create or delete credential"})
+        assert {"nebula.credentials.create", "nebula.credentials.delete"}.issubset(
+            {row["operation"] for row in found["matches"]}
+        )
+        created = await capabilities.invoke(
+            {"operation": "nebula.credentials.create", "arguments": {}}, change=True
+        )
+        assert created["client_action"] == {
+            "kind": "credential_create",
+            "project_id": selected.id,
+        }
+        assert "secret" not in str(created).lower()
+        deleted = await capabilities.invoke(
+            {
+                "operation": "nebula.credentials.delete",
+                "arguments": {"reference": reference},
+            },
+            change=True,
+        )
+        assert deleted["client_action"] == {
+            "kind": "credential_delete",
+            "project_id": selected.id,
+            "reference": reference,
+        }
+        with pytest.raises(CapabilityInputError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.credentials.delete",
+                    "arguments": {"reference": "env:NEBULA_TOKEN"},
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    profile = next(
+        item
+        for item in store.list_entities(ProviderProfile, limit=10)
+        if item.name == "Local"
+    )
+    management = store.create(
+        ProviderProfile(name="OpenRouter", provider_type="openrouter")
+    )
+    reference = "session:" + "a" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "attach credential to provider"})
+        assert {
+            "nebula.providers.list",
+            "nebula.providers.profile",
+            "nebula.providers.attach_credential",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.providers.list", "arguments": {"offset": 0}},
+            change=False,
+        )
+        assert listed["providers"][0]["provider_id"] == profile.id
+        assert "secret_ref" not in str(listed)
+        attached = await capabilities.invoke(
+            {
+                "operation": "nebula.providers.attach_credential",
+                "arguments": {
+                    "provider_id": profile.id,
+                    "expected_revision": profile.revision,
+                    "credential_ref": reference,
+                    "slot": "inference",
+                },
+            },
+            change=True,
+        )
+        assert attached["client_action"] == {
+            "kind": "provider_attach_credential",
+            "project_id": selected.id,
+            "provider_id": profile.id,
+            "name": profile.name,
+            "expected_revision": profile.revision,
+            "credential_ref": reference,
+            "slot": "inference",
+        }
+        assert store.get(ProviderProfile, profile.id).secret_ref is None
+        management_action = await capabilities.invoke(
+            {
+                "operation": "nebula.providers.attach_credential",
+                "arguments": {
+                    "provider_id": management.id,
+                    "expected_revision": management.revision,
+                    "credential_ref": reference,
+                    "slot": "management",
+                },
+            },
+            change=True,
+        )
+        assert management_action["client_action"]["slot"] == "management"
+        assert (
+            store.get(ProviderProfile, management.id).openrouter_management_secret_ref
+            is None
+        )
+        for changes in (
+            {"expected_revision": profile.revision + 1},
+            {"slot": "management"},
+            {"credential_ref": "env:NEBULA_KEY"},
+        ):
+            with pytest.raises((ValueError, CapabilityInputError)):
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.providers.attach_credential",
+                        "arguments": {
+                            "provider_id": profile.id,
+                            "expected_revision": profile.revision,
+                            "credential_ref": reference,
+                            "slot": "inference",
+                            **changes,
+                        },
+                    },
+                    change=True,
+                )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_exact_harness_credential_attachment(tmp_path):
+    store, selected, _, _, capabilities = _capabilities(tmp_path)
+    harness = store.create(
+        HarnessProfile(name="SDK", kind=HarnessKind.CLAUDE_AGENT_SDK)
+    )
+    grok = store.create(
+        HarnessProfile(name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true")
+    )
+    reference = "session:" + "b" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "attach credential to harness"})
+        assert {
+            "nebula.harnesses.list",
+            "nebula.harnesses.harness",
+            "nebula.harnesses.attach_credential",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.harnesses.list", "arguments": {}}, change=False
+        )
+        assert any(item["harness_id"] == harness.id for item in listed["harnesses"])
+        assert "secret_ref" not in str(listed)
+        attached = await capabilities.invoke(
+            {
+                "operation": "nebula.harnesses.attach_credential",
+                "arguments": {
+                    "harness_id": harness.id,
+                    "expected_revision": harness.revision,
+                    "credential_ref": reference,
+                },
+            },
+            change=True,
+        )
+        assert attached["client_action"] == {
+            "kind": "harness_attach_credential",
+            "project_id": selected.id,
+            "harness_id": harness.id,
+            "name": harness.name,
+            "expected_revision": harness.revision,
+            "credential_ref": reference,
+            "auth_mode": "secret_ref",
+        }
+        assert store.get(HarnessProfile, harness.id).secret_ref is None
+        for invalid in (
+            {
+                "harness_id": harness.id,
+                "expected_revision": harness.revision + 1,
+                "credential_ref": reference,
+            },
+            {
+                "harness_id": grok.id,
+                "expected_revision": grok.revision,
+                "credential_ref": reference,
+            },
+            {
+                "harness_id": harness.id,
+                "expected_revision": harness.revision,
+                "credential_ref": "env:KEY",
+            },
+        ):
+            with pytest.raises((ValueError, CapabilityInputError)):
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.harnesses.attach_credential",
+                        "arguments": invalid,
+                    },
+                    change=True,
+                )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
+    store, selected, other, _, capabilities = _capabilities(tmp_path)
+    foreign = store.create(
+        McpServerProfile(
+            name="foreign",
+            transport=McpTransport.STREAMABLE_HTTP,
+            url="https://example.test/other",
+            metadata={"engagement_id": other.id},
+        )
+    )
+    for number in range(49):
+        store.create(
+            McpServerProfile(
+                name=f"foreign-{number}",
+                transport=McpTransport.STREAMABLE_HTTP,
+                url="https://example.test/other",
+                metadata={"engagement_id": other.id},
+            )
+        )
+    http = store.create(
+        McpServerProfile(
+            name="remote",
+            transport=McpTransport.STREAMABLE_HTTP,
+            url="https://example.test/mcp",
+        )
+    )
+    stdio = store.create(
+        McpServerProfile(
+            name="local", transport=McpTransport.STDIO, command="/bin/true"
+        )
+    )
+    reference = "session:" + "b" * 32
+
+    async def scenario():
+        found = await capabilities.search({"query": "attach credential to MCP server"})
+        assert {
+            "nebula.mcp.list",
+            "nebula.mcp.server",
+            "nebula.mcp.attach_credential",
+        }.issubset({row["operation"] for row in found["matches"]})
+        listed = await capabilities.invoke(
+            {"operation": "nebula.mcp.list", "arguments": {}}, change=False
+        )
+        assert any(row["server_id"] == http.id for row in listed["servers"])
+        assert not any(row["server_id"] == foreign.id for row in listed["servers"])
+        assert "secret_ref" not in str(listed)
+        with pytest.raises(ValueError, match="selected project"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.mcp.server",
+                    "arguments": {"server_id": foreign.id},
+                },
+                change=False,
+            )
+        prepared = await capabilities.invoke(
+            {
+                "operation": "nebula.mcp.attach_credential",
+                "arguments": {
+                    "server_id": http.id,
+                    "expected_revision": http.revision,
+                    "credential_ref": reference,
+                    "slot": "header",
+                    "key": "X-API-Key",
+                },
+            },
+            change=True,
+        )
+        assert prepared["client_action"] == {
+            "kind": "mcp_attach_credential",
+            "project_id": selected.id,
+            "server_id": http.id,
+            "name": "remote",
+            "transport": "streamable_http",
+            "expected_revision": http.revision,
+            "credential_ref": reference,
+            "slot": "header",
+            "key": "X-API-Key",
+        }
+        assert store.get(McpServerProfile, http.id).header_secret_refs == {}
+        for server, slot, key in (
+            (http, "environment", "TOKEN"),
+            (stdio, "header", "X-API-Key"),
+            (http, "header", "bad header"),
+            (foreign, "bearer", None),
+        ):
+            with pytest.raises(ValueError):
+                arguments = {
+                    "server_id": server.id,
+                    "expected_revision": server.revision,
+                    "credential_ref": reference,
+                    "slot": slot,
+                }
+                if key is not None:
+                    arguments["key"] = key
+                await capabilities.invoke(
+                    {
+                        "operation": "nebula.mcp.attach_credential",
+                        "arguments": arguments,
+                    },
+                    change=True,
+                )
+
+    asyncio.run(scenario())
+
+
+def test_interactive_butler_prepares_device_owned_diagnostics_export(tmp_path):
+    _, selected, _, _, capabilities = _capabilities(tmp_path)
+
+    async def scenario():
+        found = await capabilities.search({"query": "export diagnostics support zip"})
+        assert "nebula.diagnostics.export" in {
+            row["operation"] for row in found["matches"]
+        }
+        prepared = await capabilities.invoke(
+            {"operation": "nebula.diagnostics.export", "arguments": {}}, change=True
+        )
+        assert prepared["client_action"] == {
+            "kind": "diagnostics_export",
+            "project_id": selected.id,
+        }
+        assert "zip" not in str(prepared).lower()
+        with pytest.raises(CapabilityInputError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.diagnostics.export",
+                    "arguments": {"include_database": True},
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
+    _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
+
+    async def scenario():
+        assert not any(
+            row["operation"].startswith("nebula.notes.")
+            for row in (await capabilities.search({"query": "project notes"}))[
+                "matches"
+            ]
+        )
+        assert "projects" not in [
+            row["id"] for row in (await capabilities.search({}))["categories"]
+        ]
+        assert "devices" not in [
+            row["id"] for row in (await capabilities.search({}))["categories"]
+        ]
+        assert not any(
+            row["operation"].startswith("nebula.projects.")
+            for row in (await capabilities.search({"query": "archive project"}))[
+                "matches"
+            ]
+        )
+        assert not any(
+            row["operation"] == "nebula.chats.export"
+            for row in (await capabilities.search({"query": "export chat transcript"}))[
+                "matches"
+            ]
+        )
+        assert not any(
+            row["operation"].startswith("nebula.library.")
+            for row in (await capabilities.search({"query": "shared library"}))[
+                "matches"
+            ]
+        )
+        with pytest.raises(CapabilityInputError, match="listed operation"):
+            await capabilities.invoke(
+                {"operation": "nebula.projects.archive", "arguments": {}}, change=True
+            )
+        with pytest.raises(CapabilityInputError, match="listed operation"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.projects.create_linked",
+                    "arguments": {"name": "No"},
+                },
+                change=True,
+            )
+
+        for operation in (
+            "nebula.assets.create",
+            "nebula.findings.create",
+            "nebula.findings.update",
+            "nebula.sources.add",
+            "nebula.sources.reindex",
+            "nebula.sources.remove",
+        ):
+            with pytest.raises(CapabilityInputError, match="listed operation"):
+                await capabilities.invoke(
+                    {"operation": operation, "arguments": {}}, change=True
+                )
+
+    asyncio.run(scenario())
 
 
 def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_path):
@@ -1032,6 +1914,159 @@ def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path
     asyncio.run(scenario())
 
 
+def test_butler_discovers_and_uses_chat_priority(tmp_path):
+    store, _, chat, _, capabilities = _capabilities(tmp_path)
+
+    async def scenario():
+        for query, operation in (
+            ("page older chats", "nebula.work.chats"),
+            ("pin and flag a chat", "nebula.work.update_chat"),
+        ):
+            found = await capabilities.search({"query": query})
+            assert operation in {item["operation"] for item in found["matches"]}
+        described = await capabilities.describe(
+            {"operation": "nebula.work.update_chat"}
+        )
+        assert described["invoke_with"] == "nebula.capabilities.change"
+        assert {"pinned", "flag_color"}.issubset(
+            described["input_schema"]["properties"]
+        )
+        saved = await capabilities.invoke(
+            {
+                "operation": "nebula.work.update_chat",
+                "arguments": {
+                    "session_id": chat.id,
+                    "expected_revision": chat.revision,
+                    "pinned": True,
+                    "flag_color": "blue",
+                },
+            },
+            change=True,
+        )
+        assert saved["pinned"] is True
+        assert saved["flag_color"] == "blue"
+        with pytest.raises(CapabilityInputError, match="invalid arguments"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.update_chat",
+                    "arguments": {
+                        "session_id": chat.id,
+                        "expected_revision": saved["revision"],
+                        "flag_color": "magenta",
+                    },
+                },
+                change=True,
+            )
+
+    asyncio.run(scenario())
+    assert store.get(ChatSession, chat.id).metadata["pinned"] is True
+    assert store.get(ChatSession, chat.id).metadata["flag_color"] == "blue"
+
+
+def test_butler_discovers_and_uses_project_work_board(tmp_path):
+    store, project, _, _, capabilities = _capabilities(tmp_path)
+
+    async def scenario():
+        found = await capabilities.search({"query": "create a Work board item"})
+        assert "nebula.work.create_work_item" in {
+            item["operation"] for item in found["matches"]
+        }
+        described = await capabilities.describe(
+            {"operation": "nebula.work.create_work_item"}
+        )
+        assert described["invoke_with"] == "nebula.capabilities.change"
+        assert "request_id" in described["input_schema"]["required"]
+        created = await capabilities.invoke(
+            {
+                "operation": "nebula.work.create_work_item",
+                "arguments": {"title": "Review launch", "request_id": "launch-1"},
+            },
+            change=True,
+        )
+        item_id = created["item"]["id"]
+        read = await capabilities.invoke(
+            {"operation": "nebula.work.work_item", "arguments": {"item_id": item_id}},
+            change=False,
+        )
+        assert read["item"]["title"] == "Review launch"
+        assert read["item"]["revision"] == created["item"]["revision"]
+        checked = await capabilities.invoke(
+            {
+                "operation": "nebula.work.check_in_work_item",
+                "arguments": {
+                    "item_id": item_id,
+                    "expected_revision": read["item"]["revision"],
+                    "summary": "Ready for review",
+                    "status": "review",
+                    "request_id": "launch-check-1",
+                },
+            },
+            change=True,
+        )
+        assert checked["status"] == "review"
+        setting_matches = await capabilities.search(
+            {"query": "disable Work agent tools"}
+        )
+        assert "nebula.work.set_work_setting" in {
+            item["operation"] for item in setting_matches["matches"]
+        }
+        setting = await capabilities.invoke(
+            {"operation": "nebula.work.work_setting", "arguments": {}},
+            change=False,
+        )
+        assert setting["enabled"] is True
+        setting_schema = await capabilities.describe(
+            {"operation": "nebula.work.set_work_setting"}
+        )
+        assert setting_schema["invoke_with"] == "nebula.capabilities.change"
+        disabled = await capabilities.invoke(
+            {
+                "operation": "nebula.work.set_work_setting",
+                "arguments": {
+                    "enabled": False,
+                    "expected_revision": setting["revision"],
+                },
+            },
+            change=True,
+        )
+        assert disabled["saved"] is True and disabled["enabled"] is False
+        updates = await capabilities.invoke(
+            {
+                "operation": "nebula.work.work_updates",
+                "arguments": {"item_id": item_id},
+            },
+            change=False,
+        )
+        assert checked["update_id"] in {update["id"] for update in updates["updates"]}
+        update = await capabilities.invoke(
+            {
+                "operation": "nebula.work.work_update",
+                "arguments": {"item_id": item_id, "update_id": checked["update_id"]},
+            },
+            change=False,
+        )
+        assert update["update"]["summary"] == "Ready for review"
+        with pytest.raises(CapabilityInputError, match="invalid arguments"):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.work.check_in_work_item",
+                    "arguments": {
+                        "item_id": item_id,
+                        "expected_revision": checked["revision"],
+                        "summary": "Invalid status",
+                        "status": "invented",
+                        "request_id": "launch-check-2",
+                    },
+                },
+                change=True,
+            )
+        return item_id
+
+    item_id = asyncio.run(scenario())
+    assert store.get(WorkItem, item_id).engagement_id == project.id
+    assert store.get(WorkItem, item_id).status == "review"
+
+
 def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):
     _, _, _, _, capabilities = _capabilities(tmp_path)
     spec = next(
@@ -1221,6 +2256,11 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
     async def scenario():
         with pytest.raises(CapabilityInputError, match="listed operation"):
             await background.describe({"operation": "nebula.settings.set_device_theme"})
+        with pytest.raises(CapabilityInputError, match="listed operation"):
+            await background.describe({"operation": "nebula.work.rewind_chat"})
+        assert (await background.describe({"operation": "nebula.work.chat_messages"}))[
+            "invoke_with"
+        ] == "nebula.capabilities.read"
         assert (await background.describe({"operation": "nebula.work.delete_chat"}))[
             "invoke_with"
         ] == "nebula.capabilities.change"

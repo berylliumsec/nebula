@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote, urlsplit
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 from fastapi import (
@@ -198,6 +198,7 @@ from .conditional_reads import conditional, content_etag, revision_etag
 from .container_terminal import (
     ContainerTerminalCapacity,
     ContainerTerminalCapabilities,
+    ContainerTerminalCloseRequest,
     ContainerTerminalError,
     ContainerTerminalExit,
     ContainerTerminalOutput,
@@ -207,6 +208,7 @@ from .container_terminal import (
     ContainerTerminalRecoveryListResponse,
     ContainerTerminalRecoveryResponse,
     ContainerTerminalService,
+    ContainerTerminalSessionList,
     ContainerTerminalStartRequest,
     ContainerTerminalStartResponse,
     MAX_TERMINAL_INPUT_BYTES,
@@ -220,6 +222,7 @@ from .work import (
     WorkImportBatch,
     WorkImportResult,
     WorkPatch,
+    WorkSettingPatch,
     WorkProjectBatchResult,
     WorkProjectBatchUpdate,
     WorkService,
@@ -424,6 +427,8 @@ from .execution_ai import (
     ExecutionChatAttachRequest,
     ExecutionChatAttachment,
     PostToolAssistantConfig,
+    PostToolAssistantRead,
+    PostToolAssistantRequest,
 )
 from .knowledge import (
     MAX_DOCUMENT_BYTES,
@@ -585,6 +590,8 @@ from .version import __version__, build_metadata
 from .workspace import (
     SourceControlDiff,
     SourceControlStatus,
+    WorkspaceCreateDirectoryRequest,
+    WorkspaceEntryState,
     WorkspaceListing,
     WorkspaceMutationResult,
     WorkspacePreview,
@@ -913,6 +920,7 @@ class NotebookCellRequest(NebulaModel):
 class NotebookRunRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
     cell_id: str = Field(min_length=1, max_length=200)
+    expected_source_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class NotebookPackageRequest(NebulaModel):
@@ -1088,6 +1096,7 @@ class ChatSessionForkRequest(NebulaModel):
 
 class ChatSessionRewindRequest(NebulaModel):
     before_message_id: str = Field(min_length=1, max_length=200)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class ChatSessionRewind(NebulaModel):
@@ -1295,13 +1304,20 @@ class ApprovalDecisionRequest(NebulaModel):
 
 
 class EngagementCreateRequest(Engagement):
-    """Creation-only consent; this field is never persisted on the project."""
+    """Creation-only consent and retry key; neither is persisted on the project."""
 
     host_access_acknowledged: bool = False
+    request_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class ProjectWorkspaceRelinkRequest(NebulaModel):
+    path: str = Field(min_length=1, max_length=4096)
+    expected_revision: int = Field(ge=1)
 
 
 class NotebookFileIndexRequest(NebulaModel):
     path: str = Field(min_length=1, max_length=4096)
+    expected_project_revision: int | None = Field(default=None, ge=1)
 
 
 class AutomationPolicyUpdateRequest(NebulaModel):
@@ -1589,6 +1605,28 @@ class OperatorProfileActivateRequest(NebulaModel):
 
 class ReportRenderRequest(NebulaModel):
     report_revision: int = Field(ge=1)
+
+
+class ButlerNoteDraftRequest(NebulaModel):
+    """A requesting-browser note ID for exact create reconciliation."""
+
+    note_id: UUID
+    engagement_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(default="", max_length=100000)
+    asset_ids: list[str] = Field(default_factory=list, max_length=500)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class ButlerReportDraftRequest(NebulaModel):
+    """A browser-owned draft ID for readback after an uncertain create response."""
+
+    report_id: UUID
+    engagement_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=500)
+    executive_summary: str = Field(default="", max_length=100000)
+    finding_ids: list[str] = Field(default_factory=list, max_length=500)
+    observation_ids: list[str] = Field(default_factory=list, max_length=500)
 
 
 class DiagnosticsSettingsRequest(NebulaModel):
@@ -2676,6 +2714,7 @@ def create_app(
         harness_runtime,
         app,
         token,
+        work_service,
         harness_quota_observer,
     )
     from .butler_authority import ButlerAuthorityService
@@ -2722,9 +2761,17 @@ def create_app(
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
         tool_platform.bind_control_assistant_work(control_assistant_work)
         tool_platform.bind_butler_memory(butler_memory_service)
+        if workspaces is not None:
+            tool_platform.bind_workspace_service(workspaces)
+        if container_terminals is not None:
+            tool_platform.bind_container_terminal_service(container_terminals)
     harness_runtime.bind_settings_assistant_api(settings_assistant_api)
     harness_runtime.bind_control_assistant_work(control_assistant_work)
     harness_runtime.bind_butler_memory(butler_memory_service)
+    if workspaces is not None:
+        harness_runtime.bind_workspace_service(workspaces)
+    if container_terminals is not None:
+        harness_runtime.bind_container_terminal_service(container_terminals)
     app.state.store = store
     app.state.butler_oversight = butler_oversight
     app.state.butler_authority = butler_authority
@@ -4868,8 +4915,12 @@ def create_app(
         tags=["environments"],
         dependencies=[Depends(require_auth)],
     )
-    async def forget_ssh_environment(alias: str) -> Response:
-        await asyncio.to_thread(ssh_environments.forget, alias)
+    async def forget_ssh_environment(
+        alias: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> Response:
+        await asyncio.to_thread(
+            ssh_environments.forget, alias, expected_revision=expected_revision
+        )
         return Response(status_code=204)
 
     @app.get(
@@ -5401,6 +5452,39 @@ def create_app(
             store.get(Engagement, engagement_id)
             return ContainerTerminalRecoveryListResponse()
         return await container_terminals.recover_all(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminals",
+        response_model=ContainerTerminalSessionList,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_project_container_terminals(
+        engagement_id: str,
+        response: Response,
+    ) -> ContainerTerminalSessionList:
+        response.headers["Cache-Control"] = "private, no-store"
+        if container_terminals is None:
+            store.get(Engagement, engagement_id)
+            return ContainerTerminalSessionList(engagement_id=engagement_id)
+        return await container_terminals.list_sessions(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminals/{{session_id}}/close",
+        response_model=ContainerTerminalSessionList,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def close_project_container_terminal(
+        engagement_id: str,
+        session_id: str,
+        request: ContainerTerminalCloseRequest,
+        response: Response,
+    ) -> ContainerTerminalSessionList:
+        response.headers["Cache-Control"] = "private, no-store"
+        return await require_container_terminal_service().close_project_session(
+            engagement_id, session_id, request.expected_created_at
+        )
 
     @app.delete(
         f"{API_PREFIX}/container-terminals/{{session_id}}",
@@ -6016,8 +6100,15 @@ def create_app(
         tags=["executions"],
         dependencies=[Depends(require_auth)],
     )
-    async def cancel_execution(execution_id: str) -> OperatorExecution:
-        return await require_execution_service().cancel(execution_id)
+    async def cancel_execution(
+        execution_id: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> OperatorExecution:
+        service = require_execution_service()
+        if expected_revision is not None:
+            return await service.cancel(
+                execution_id, expected_revision=expected_revision
+            )
+        return await service.cancel(execution_id)
 
     @app.get(
         f"{API_PREFIX}/executions/{{execution_id}}/events",
@@ -6407,23 +6498,31 @@ def create_app(
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
-        response_model=PostToolAssistantConfig,
+        response_model=PostToolAssistantRead,
         tags=["execution-ai"],
         dependencies=[Depends(require_auth)],
     )
-    async def get_post_tool_assistant(engagement_id: str) -> PostToolAssistantConfig:
-        return require_execution_ai_service().get_config(engagement_id)
+    async def get_post_tool_assistant(engagement_id: str) -> PostToolAssistantRead:
+        return require_execution_ai_service().read_config(engagement_id)
 
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
-        response_model=PostToolAssistantConfig,
+        response_model=PostToolAssistantRead,
         tags=["execution-ai"],
         dependencies=[Depends(require_auth)],
     )
     async def put_post_tool_assistant(
-        engagement_id: str, request: PostToolAssistantConfig
-    ) -> PostToolAssistantConfig:
-        return require_execution_ai_service().set_config(engagement_id, request)
+        engagement_id: str, request: PostToolAssistantRequest
+    ) -> PostToolAssistantRead:
+        service = require_execution_ai_service()
+        service.set_config(
+            engagement_id,
+            PostToolAssistantConfig.model_validate(
+                request.model_dump(exclude={"expected_revision"})
+            ),
+            expected_revision=request.expected_revision,
+        )
+        return service.read_config(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-results",
@@ -7081,6 +7180,11 @@ def create_app(
             alias="X-Content-SHA256",
             pattern=r"^[0-9a-f]{64}$",
         ),
+        expected_parent_identity: str | None = Header(
+            default=None,
+            alias="X-Parent-Identity",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
     ) -> WorkspaceUploadResult:
         workspace = require_workspace_service()
 
@@ -7092,6 +7196,7 @@ def create_app(
                 overwrite=overwrite,
                 expected_sha256=if_match,
                 expected_content_sha256=expected_content_sha256,
+                expected_parent_identity=expected_parent_identity,
             )
 
         # Uploads use a private file plus an atomic directory-fd rename and are
@@ -7099,6 +7204,33 @@ def create_app(
         # safely coexist with a user's persistent terminal; destructive reset
         # remains guarded until the terminal stops.
         return await upload()
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
+        response_model=WorkspaceEntryState,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def inspect_workspace_entry(
+        engagement_id: str, path: str = Query(default="", max_length=4096)
+    ) -> WorkspaceEntryState:
+        return await asyncio.to_thread(
+            require_workspace_service().inspect_entry, engagement_id, path
+        )
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/directory",
+        response_model=WorkspaceMutationResult,
+        status_code=201,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_workspace_directory(
+        engagement_id: str, request: WorkspaceCreateDirectoryRequest
+    ) -> WorkspaceMutationResult:
+        return await asyncio.to_thread(
+            require_workspace_service().create_directory, engagement_id, request
+        )
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
@@ -7122,9 +7254,23 @@ def create_app(
     async def delete_workspace_entry(
         engagement_id: str,
         path: str = Query(min_length=1, max_length=4096),
+        if_match: str | None = Header(
+            default=None,
+            alias="If-Match",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
+        if_entry_identity: str | None = Header(
+            default=None,
+            alias="If-Entry-Identity",
+            pattern=r"^[0-9a-f]{64}$",
+        ),
     ) -> WorkspaceMutationResult:
         return await asyncio.to_thread(
-            require_workspace_service().delete, engagement_id, path
+            require_workspace_service().delete,
+            engagement_id,
+            path,
+            expected_sha256=if_match,
+            expected_entry_identity=if_entry_identity,
         )
 
     @app.post(
@@ -7159,6 +7305,31 @@ def create_app(
                 return await asyncio.to_thread(workspace.reset, engagement_id, request)
         return await asyncio.to_thread(workspace.reset, engagement_id, request)
 
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/relink",
+        response_model=Engagement,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def relink_project_workspace(
+        engagement_id: str, request: ProjectWorkspaceRelinkRequest
+    ) -> Engagement:
+        path = _resolve_engagement_workspace_path(request.path)
+
+        def save() -> Engagement:
+            return store.relink_project_workspace(
+                engagement_id, path, expected_revision=request.expected_revision
+            )
+
+        async with notebook_service.guard_workspace_relink(engagement_id):
+            if container_terminals is not None:
+                async with container_terminals.guard_workspace_operation(engagement_id):
+                    return await asyncio.to_thread(save)
+            if executions is not None:
+                async with executions.engagement_lock(engagement_id):
+                    return await asyncio.to_thread(save)
+            return await asyncio.to_thread(save)
+
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset-status",
         response_model=WorkspaceResetStatus,
@@ -7188,6 +7359,31 @@ def create_app(
         return _observation_dependencies(store, observation_id)
 
     @app.post(
+        f"{API_PREFIX}/observations/butler-drafts",
+        response_model=Observation,
+        status_code=201,
+        tags=["observations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_butler_note_draft(request: ButlerNoteDraftRequest) -> Observation:
+        note = Observation(
+            id=str(request.note_id),
+            engagement_id=request.engagement_id,
+            observation_type="note",
+            title=request.title.strip(),
+            body=request.body,
+            asset_ids=request.asset_ids,
+            evidence_ids=request.evidence_ids,
+            source="operator-note",
+        )
+        if not note.title:
+            raise ValueError("note title cannot be blank")
+        entity_validator.validate_create(note)
+        created = relation_service.create_legacy_entity(note)
+        assert isinstance(created, Observation)
+        return created
+
+    @app.post(
         f"{API_PREFIX}/writing/transform",
         response_model=WritingTransformResponse,
         tags=["writing-ai"],
@@ -7197,6 +7393,29 @@ def create_app(
         request: WritingTransformRequest,
     ) -> WritingTransformResponse:
         return await require_writing_ai_service().transform(request)
+
+    @app.post(
+        f"{API_PREFIX}/reports/butler-drafts",
+        response_model=Report,
+        status_code=201,
+        tags=["reports"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_butler_report_draft(request: ButlerReportDraftRequest) -> Report:
+        # Keep the generic CRUD route's server-managed ID guard. This narrow
+        # contract permits a stable UUID solely for draft-create reconciliation.
+        report = Report(
+            id=str(request.report_id),
+            engagement_id=request.engagement_id,
+            title=request.title,
+            executive_summary=request.executive_summary,
+            finding_ids=request.finding_ids,
+            observation_ids=request.observation_ids,
+        )
+        entity_validator.validate_create(report)
+        created = relation_service.create_legacy_entity(report)
+        assert isinstance(created, Report)
+        return created
 
     @app.post(
         f"{API_PREFIX}/reports/{{report_id}}/sign-off",
@@ -7565,6 +7784,15 @@ def create_app(
     )
     async def active_operator_profile() -> OperatorProfile:
         return operators.active_profile()
+
+    @app.get(
+        f"{API_PREFIX}/operator-profiles/{{profile_id}}",
+        response_model=OperatorProfile,
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_operator_profile(profile_id: str) -> OperatorProfile:
+        return operators.get_profile(profile_id)
 
     @app.post(
         f"{API_PREFIX}/operator-profiles",
@@ -7991,9 +8219,11 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def set_work_enabled(
-        engagement_id: str, enabled: bool = Body(embed=True)
+        engagement_id: str, body: WorkSettingPatch
     ) -> Engagement:
-        return work_service.set_enabled(engagement_id, enabled)
+        return work_service.set_enabled(
+            engagement_id, body.enabled, expected_revision=body.expected_revision
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work",
@@ -8675,7 +8905,11 @@ def create_app(
         body: NotebookFileIndexRequest,
     ) -> dict[str, Any]:
         try:
-            return await notebook_service.set_file_index(engagement_id, body.path)
+            return await notebook_service.set_file_index(
+                engagement_id,
+                body.path,
+                expected_project_revision=body.expected_project_revision,
+            )
         except (FileIndexUnavailable, OSError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -8684,8 +8918,14 @@ def create_app(
         tags=["notebooks"],
         dependencies=[Depends(require_auth)],
     )
-    async def remove_notebook_file_index(engagement_id: str) -> dict[str, Any]:
-        return await notebook_service.set_file_index(engagement_id, None)
+    async def remove_notebook_file_index(
+        engagement_id: str, expected_project_revision: int | None = None
+    ) -> dict[str, Any]:
+        return await notebook_service.set_file_index(
+            engagement_id,
+            None,
+            expected_project_revision=expected_project_revision,
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks",
@@ -8734,7 +8974,12 @@ def create_app(
     async def start_notebook_run(
         engagement_id: str, body: NotebookRunRequest
     ) -> NotebookRun:
-        return await notebook_service.start_run(engagement_id, body.path, body.cell_id)
+        return await notebook_service.start_run(
+            engagement_id,
+            body.path,
+            body.cell_id,
+            expected_source_hash=body.expected_source_hash,
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs",
@@ -8824,6 +9069,14 @@ def create_app(
     async def interrupt_notebook_run(engagement_id: str, run_id: str) -> NotebookRun:
         return await notebook_service.interrupt(run_id, engagement_id=engagement_id)
 
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/kernel",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def notebook_kernel_status(engagement_id: str, path: str) -> dict[str, Any]:
+        return notebook_service.kernel_status(engagement_id, path)
+
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/kernel/restart",
         tags=["notebooks"],
@@ -8831,9 +9084,8 @@ def create_app(
     )
     async def restart_notebook_kernel(
         engagement_id: str, body: NotebookCreateRequest
-    ) -> dict[str, bool]:
-        await notebook_service.restart(engagement_id, body.path)
-        return {"restarted": True}
+    ) -> dict[str, Any]:
+        return await notebook_service.restart(engagement_id, body.path)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages",
@@ -8846,6 +9098,16 @@ def create_app(
         return await notebook_service.install_package(
             engagement_id, body.path, body.requirement
         )
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages/installed",
+        tags=["notebooks"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def installed_notebook_package(
+        engagement_id: str, path: str, name: str
+    ) -> dict[str, Any]:
+        return await notebook_service.installed_package(engagement_id, path, name)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/packages/search",
@@ -9250,6 +9512,10 @@ def create_app(
                 caught_error,
                 stage="api",
             )
+            if request.expected_revision is not None:
+                raise ConflictError(
+                    "Runner profile changed; read it again"
+                ) from caught_error
             profile = store.create(RunnerProfile(id=profile_id, **payload))
         else:
             profile = store.update(
@@ -9281,6 +9547,7 @@ def create_app(
         if (
             request.backend == RunBackend.NATIVE
             and request.max_tool_calls is None
+            and request.browser_autonomy is None
             and automation_runtime is not None
         ):
             default_command_runtime_ready = (
@@ -9288,7 +9555,7 @@ def create_app(
                     engagement_id=request.engagement_id
                 )
             ).ready
-        wants_command_tools = (
+        wants_command_tools = request.browser_autonomy is None and (
             default_command_runtime_ready
             if request.max_tool_calls is None
             else request.max_tool_calls > 0
@@ -9327,7 +9594,7 @@ def create_app(
                 8
                 if request.allow_subagents
                 else 1
-                if command_tools or request.mcp_server_ids
+                if command_tools or request.mcp_server_ids or browser_tools
                 else 0
             ),
             max_duration_seconds=request.max_duration_seconds,
@@ -9814,7 +10081,11 @@ def create_app(
         tags=["knowledge"],
         dependencies=[Depends(require_auth)],
     )
-    async def reindex_knowledge(knowledge_id: str) -> KnowledgeSource:
+    async def reindex_knowledge(
+        knowledge_id: str,
+        engagement_id: str | None = None,
+        if_match: int | None = Header(default=None, alias="If-Match", ge=1),
+    ) -> KnowledgeSource:
         if artifact_store is None:
             raise HTTPException(
                 status_code=503,
@@ -9827,6 +10098,8 @@ def create_app(
                 artifact_store=artifact_store,
                 source_id=knowledge_id,
                 knowledge_index=knowledge_index,
+                expected_revision=if_match,
+                engagement_id=engagement_id,
             )
             return knowledge_summary(updated)
         except DocumentTooLargeError as exc:
@@ -9868,10 +10141,19 @@ def create_app(
         tags=["knowledge"],
         dependencies=[Depends(require_auth)],
     )
-    async def delete_knowledge(knowledge_id: str) -> Response:
+    async def delete_knowledge(
+        knowledge_id: str,
+        engagement_id: str | None = None,
+        if_match: int | None = Header(default=None, alias="If-Match", ge=1),
+    ) -> Response:
         """Remove a retrieval source while retaining its immutable artifact."""
 
-        store.delete(KnowledgeSource, knowledge_id)
+        source = store.get(KnowledgeSource, knowledge_id)
+        if engagement_id is not None and source.engagement_id != engagement_id:
+            raise HTTPException(
+                status_code=404, detail="source is not in the selected project"
+            )
+        store.delete(KnowledgeSource, knowledge_id, expected_revision=if_match)
         if knowledge_index is not None:
             try:
                 await asyncio.to_thread(knowledge_index.delete_source, knowledge_id)
@@ -9989,7 +10271,9 @@ def create_app(
         tags=["library"],
         dependencies=[Depends(require_auth)],
     )
-    async def reindex_global_library_item(item_id: str) -> LibraryItem:
+    async def reindex_global_library_item(
+        item_id: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> LibraryItem:
         if artifact_store is None:
             raise HTTPException(
                 status_code=503,
@@ -10002,6 +10286,7 @@ def create_app(
                 artifact_store=artifact_store,
                 item_id=item_id,
                 knowledge_index=knowledge_index,
+                expected_revision=expected_revision,
             )
             return library_item_summary(updated)
         except DocumentTooLargeError as exc:
@@ -10022,10 +10307,12 @@ def create_app(
         tags=["library"],
         dependencies=[Depends(require_auth)],
     )
-    async def delete_global_library_item(item_id: str) -> Response:
+    async def delete_global_library_item(
+        item_id: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> Response:
         """Remove an item from retrieval while retaining its immutable artifact."""
 
-        store.delete(LibraryItem, item_id)
+        store.delete(LibraryItem, item_id, expected_revision=expected_revision)
         if knowledge_index is not None:
             try:
                 await asyncio.to_thread(knowledge_index.delete_library_item, item_id)
@@ -12402,7 +12689,9 @@ def create_app(
         """Retract an operator message and its replies without leaving the chat."""
 
         session, retained, replaced = chat_service().rewind_session(
-            session_id, before_message_id=request.before_message_id
+            session_id,
+            before_message_id=request.before_message_id,
+            expected_revision=request.expected_revision,
         )
         # Subagents the edited exchange started stop instead of working on
         # and reporting into the conversation that replaced it.
@@ -14449,9 +14738,9 @@ def _output_page_end(data: bytes, offset: int, limit: int, *, raw: bool) -> int:
 def _resolve_engagement_workspace_path(workspace_path: str) -> str:
     """Return the canonical folder a project links, or reject an unusable one.
 
-    Create, replace and patch all store this resolved form so a later
-    workspace read never resolves a relative or missing path against Core's
-    working directory.
+    Creation stores this resolved form so a later workspace read never resolves
+    a relative or missing path against Core's working directory. Generic
+    replacement and patch cannot change a project's folder.
     """
 
     try:
@@ -15242,10 +15531,14 @@ def _register_crud_routes(
                     f"cannot set server-managed fields: {sorted(protected)}"
                 )
             host_access_acknowledged = False
+            project_request_id = None
             if isinstance(entity, EngagementCreateRequest):
                 host_access_acknowledged = entity.host_access_acknowledged
+                project_request_id = entity.request_id
                 entity = Engagement.model_validate(
-                    entity.model_dump(exclude={"host_access_acknowledged"})
+                    entity.model_dump(
+                        exclude={"host_access_acknowledged", "request_id"}
+                    )
                 )
             if isinstance(entity, ProviderProfile):
                 entity = entity.model_copy(
@@ -15276,6 +15569,8 @@ def _register_crud_routes(
                     store,
                     entity,
                     host_access_acknowledged=host_access_acknowledged,
+                    actor_id=actor_id(),
+                    request_id=project_request_id,
                 )
                 if isinstance(entity, Engagement)
                 else relation_service.create_legacy_entity(entity)
@@ -15443,19 +15738,6 @@ def _register_crud_routes(
                 raise ConflictError(
                     f"revision conflict: expected {if_match}, found {current.revision}"
                 )
-            if (
-                isinstance(current, Engagement)
-                and isinstance(entity, Engagement)
-                and entity.workspace_path
-                and entity.workspace_path != current.workspace_path
-            ):
-                entity = entity.model_copy(
-                    update={
-                        "workspace_path": _resolve_engagement_workspace_path(
-                            entity.workspace_path
-                        )
-                    }
-                )
             entity_validator.validate_update(current, entity)
             if isinstance(current, ProviderProfile) and isinstance(
                 entity, ProviderProfile
@@ -15513,18 +15795,6 @@ def _register_crud_routes(
                 changes["grants"] = [
                     grant.model_dump(mode="python") for grant in candidate.grants
                 ]
-            if (
-                isinstance(current, Engagement)
-                and isinstance(candidate, Engagement)
-                and candidate.workspace_path
-                and candidate.workspace_path != current.workspace_path
-            ):
-                changes["workspace_path"] = _resolve_engagement_workspace_path(
-                    candidate.workspace_path
-                )
-                candidate = candidate.model_copy(
-                    update={"workspace_path": changes["workspace_path"]}
-                )
             if isinstance(current, ProviderProfile) and isinstance(
                 candidate, ProviderProfile
             ):

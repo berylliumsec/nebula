@@ -62,6 +62,12 @@ class WorkCheckIn(NebulaModel):
     blocker: str | None = Field(default=None, max_length=2_000)
     status: WorkStatus | None = None
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class WorkSettingPatch(NebulaModel):
+    enabled: bool
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class WorkListRequest(NebulaModel):
@@ -80,6 +86,7 @@ class WorkPatch(NebulaModel):
     description: str | None = Field(default=None, max_length=20_000)
     priority: WorkPriority | None = None
     assignee_session_id: str | None = Field(default=None, max_length=200)
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class WorkImportUpdate(NebulaModel):
@@ -364,9 +371,15 @@ class WorkService:
             )
         return roster
 
-    def set_enabled(self, engagement_id: str, enabled: bool) -> Engagement:
+    def set_enabled(
+        self, engagement_id: str, enabled: bool, *, expected_revision: int | None = None
+    ) -> Engagement:
         for _ in range(3):
             project = self.store.get(Engagement, engagement_id)
+            if expected_revision is not None and project.revision != expected_revision:
+                raise ConflictError(
+                    "project Work setting changed; read its current revision"
+                )
             if project.work_enabled == enabled:
                 return project
             try:
@@ -379,6 +392,8 @@ class WorkService:
                 self.changes.publish("projects")
                 return updated
             except ConflictError:
+                if expected_revision is not None:
+                    raise
                 # diagnostic-expected: concurrent settings edits are retried.
                 continue
         raise ConflictError("project Work setting changed concurrently; retry")
@@ -455,22 +470,30 @@ class WorkService:
         )
 
     def agent_list_page(
-        self, engagement_id: str, *, offset: int = 0, limit: int = 20
+        self,
+        engagement_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+        envelope: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """A byte-fitted page of Work summaries for either agent transport."""
 
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("offset must be nonnegative and limit between 1 and 100")
+        envelope = envelope or {}
         rows = self.list(engagement_id, offset=offset, limit=limit + 1)
         items: list[dict[str, object]] = []
         for item in rows[:limit]:
             summary = item.model_dump(mode="json", exclude={"description"})
             summary["description_preview"] = item.description[:256]
             summary["description_truncated"] = len(item.description) > 256
+            next_count = len(items) + 1
             candidate = {
+                **envelope,
                 "items": [*items, summary],
                 "offset": offset,
-                "next_offset": offset + len(items) + 1,
+                "next_offset": offset + next_count if len(rows) > next_count else None,
             }
             if model_result_bytes(candidate) > MAX_EXCERPT_BYTES:
                 break
@@ -478,17 +501,24 @@ class WorkService:
         if rows and not items:
             raise ValueError("Work item summary exceeds the model-delivery bound")
         return {
+            **envelope,
             "items": items,
             "offset": offset,
             "next_offset": offset + len(items) if len(rows) > len(items) else None,
         }
 
     def agent_get_item(
-        self, engagement_id: str, item_id: str, *, description_offset: int = 0
+        self,
+        engagement_id: str,
+        item_id: str,
+        *,
+        description_offset: int = 0,
+        envelope: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """Read a Work item with its description in byte-fitted chunks."""
 
         item = self.get(engagement_id, item_id)
+        envelope = envelope or {}
         description = item.description
         if not 0 <= description_offset <= len(description):
             raise ValueError("description_offset is outside this item's description")
@@ -497,6 +527,7 @@ class WorkService:
         def chunk(length: int) -> dict[str, object]:
             end = description_offset + length
             return {
+                **envelope,
                 "item": {**base, "description": description[description_offset:end]},
                 "description_offset": description_offset,
                 "next_description_offset": end if end < len(description) else None,
@@ -526,6 +557,110 @@ class WorkService:
             limit=limit,
             newest_first=True,
         )
+
+    def agent_updates_page(
+        self,
+        engagement_id: str,
+        item_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 20,
+        envelope: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Page every saved check-in with compact, byte-fitted summaries."""
+
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError("offset must be nonnegative and limit between 1 and 100")
+        self.get(engagement_id, item_id)
+        envelope = envelope or {}
+        rows = self.store.find_entities(
+            WorkUpdate,
+            {"item_id": item_id},
+            engagement_id=engagement_id,
+            offset=offset,
+            limit=limit + 1,
+            newest_first=True,
+        )
+        updates: list[dict[str, object]] = []
+        for update in rows[:limit]:
+            summary = update.model_dump(
+                mode="json", exclude={"summary", "next_step", "blocker"}
+            )
+            summary["summary_preview"] = update.summary[:256]
+            summary["summary_truncated"] = len(update.summary) > 256
+            next_count = len(updates) + 1
+            candidate = {
+                **envelope,
+                "updates": [*updates, summary],
+                "offset": offset,
+                "next_offset": offset + next_count if len(rows) > next_count else None,
+            }
+            if model_result_bytes(candidate) > MAX_EXCERPT_BYTES:
+                break
+            updates.append(summary)
+        if rows and not updates:
+            raise ValueError("Work check-in summary exceeds the model-delivery bound")
+        return {
+            **envelope,
+            "updates": updates,
+            "offset": offset,
+            "next_offset": offset + len(updates) if len(rows) > len(updates) else None,
+        }
+
+    def agent_get_update(
+        self,
+        engagement_id: str,
+        item_id: str,
+        update_id: str,
+        *,
+        field: Literal["summary", "next_step", "blocker"] = "summary",
+        content_offset: int = 0,
+        envelope: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Read exact check-in text in byte-fitted chunks."""
+
+        self.get(engagement_id, item_id)
+        update = self.store.get(WorkUpdate, update_id)
+        if update.engagement_id != engagement_id or update.item_id != item_id:
+            raise NotFoundError("work check-in does not belong to this item")
+        if field not in {"summary", "next_step", "blocker"}:
+            raise ValueError("field must be summary, next_step, or blocker")
+        content = getattr(update, field)
+        if not 0 <= content_offset <= len(content or ""):
+            raise ValueError("content_offset is outside this check-in field")
+        envelope = envelope or {}
+        base = update.model_dump(
+            mode="json", exclude={"summary", "next_step", "blocker"}
+        )
+
+        def chunk(length: int) -> dict[str, object]:
+            end = content_offset + length
+            return {
+                **envelope,
+                "update": {
+                    **base,
+                    field: content[content_offset:end] if content is not None else None,
+                },
+                "field": field,
+                "content_offset": content_offset,
+                "content_length": len(content or ""),
+                "next_content_offset": end
+                if content is not None and end < len(content)
+                else None,
+            }
+
+        remaining = min(4096, len(content or "") - content_offset)
+        low, high = 0, remaining
+        while low < high:
+            middle = (low + high + 1) // 2
+            if model_result_bytes(chunk(middle)) <= MAX_EXCERPT_BYTES:
+                low = middle
+            else:
+                high = middle - 1
+        result = chunk(low)
+        if model_result_bytes(result) > MAX_EXCERPT_BYTES or remaining > 0 and low == 0:
+            raise ValueError("Work check-in metadata exceeds the model-delivery bound")
+        return result
 
     def create(
         self,
@@ -607,12 +742,19 @@ class WorkService:
     def patch(self, engagement_id: str, item_id: str, data: WorkPatch) -> WorkItem:
         changes = {
             key: value
-            for key, value in data.model_dump(exclude_unset=True).items()
+            for key, value in data.model_dump(
+                exclude_unset=True, exclude={"expected_revision"}
+            ).items()
             if value is not None or key == "assignee_session_id"
         }
         self._session(engagement_id, changes.get("assignee_session_id"))
-        for _ in range(3):
+        for _ in range(1 if data.expected_revision is not None else 3):
             item = self.get(engagement_id, item_id)
+            if (
+                data.expected_revision is not None
+                and item.revision != data.expected_revision
+            ):
+                raise ConflictError("work item changed; read its current revision")
             if not changes:
                 return item
             try:
@@ -622,6 +764,8 @@ class WorkService:
                 self.changes.publish()
                 return updated
             except ConflictError:
+                if data.expected_revision is not None:
+                    raise
                 # diagnostic-expected: a concurrent edit retries with the latest revision.
                 continue
         raise ConflictError("work item changed concurrently; retry")
@@ -674,6 +818,11 @@ class WorkService:
                 pass
         for _ in range(3):
             item = self.get(engagement_id, item_id)
+            if (
+                data.expected_revision is not None
+                and item.revision != data.expected_revision
+            ):
+                raise ConflictError("work item changed; read its current revision")
             status = "blocked" if data.blocker else (data.status or item.status)
             update = (
                 WorkUpdate(
@@ -727,6 +876,8 @@ class WorkService:
                     except NotFoundError:
                         # diagnostic-expected: the conflicting write was another item edit.
                         pass
+                if data.expected_revision is not None:
+                    raise
         raise ConflictError("work item changed concurrently; retry")
 
     def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:

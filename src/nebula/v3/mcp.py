@@ -40,6 +40,7 @@ from .domain import (
 )
 from . import mcp_gateway as gateway_shim
 from .mcp_gateway import MAX_MCP_MESSAGE_BYTES, MCP_PROTOCOL_VERSION
+from .mcp_scope import mcp_metadata_is_visible
 from .redaction import redact_text
 from .storage import NebulaStore
 
@@ -443,6 +444,7 @@ class McpProbeService:
         self, profile_id: str, *, engagement_id: str | None = None
     ) -> McpProbeReport:
         profile = self.store.get(McpServerProfile, profile_id)
+        self._require_probe_scope(profile, engagement_id)
         if profile.metadata.get("built_in") == "notebook_v1":
             if self.notebook_tools is None or engagement_id != profile.metadata.get(
                 "engagement_id"
@@ -458,6 +460,7 @@ class McpProbeService:
                 raise McpProbeError("Security Tools are unavailable in this Core")
             snapshot = self.security_tools.capabilities()
             latest = self.store.get(McpServerProfile, profile.id)
+            self._require_probe_scope(latest, engagement_id)
             self.store.update(
                 McpServerProfile,
                 latest.id,
@@ -538,6 +541,7 @@ class McpProbeService:
             detail = _safe(exc)
             failed = McpCapabilitySnapshot(checked_at=utc_now(), detail=detail)
             latest = self.store.get(McpServerProfile, profile.id)
+            self._require_probe_scope(latest, engagement_id)
             self.store.update(
                 McpServerProfile,
                 latest.id,
@@ -558,6 +562,7 @@ class McpProbeService:
         # from a concurrent write in this window is a real conflict and is
         # raised as one rather than recorded as an incompatible server.
         latest = self.store.get(McpServerProfile, profile.id)
+        self._require_probe_scope(latest, engagement_id)
         self.store.update(
             McpServerProfile,
             latest.id,
@@ -569,6 +574,18 @@ class McpProbeService:
             compatible=True,
             capabilities=snapshot,
         )
+
+    @staticmethod
+    def _require_probe_scope(
+        profile: McpServerProfile, engagement_id: str | None
+    ) -> None:
+        if engagement_id is not None and not mcp_metadata_is_visible(
+            profile.metadata, engagement_id
+        ):
+            raise McpProbeError(
+                "MCP server is not in the selected project",
+                usage_reason="project_mismatch",
+            )
 
     async def _connect(
         self,

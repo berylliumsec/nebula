@@ -551,6 +551,36 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
         assert saved["item"]["source_ref"] == turn.id
         assert saved["item"]["scope"] == "global_preference"
         assert saved["item"]["id"] == memory.list(first.id).items[0].id
+        searched = await capabilities.invoke(
+            {"operation": "nebula.memory.search", "arguments": {"query": "Eastern"}},
+            change=False,
+        )
+        assert any(item["id"] == saved["item"]["id"] for item in searched["items"])
+        edited = await capabilities.invoke(
+            {
+                "operation": "nebula.memory.update",
+                "arguments": {
+                    "id": saved["item"]["id"],
+                    "expected_revision": saved["item"]["revision"],
+                    "content": "The operator prefers Eastern Time for timestamps.",
+                },
+            },
+            change=True,
+        )
+        assert edited["item"]["revision"] > saved["item"]["revision"]
+        assert memory.list(second.id).items[0].content == edited["item"]["content"]
+        with pytest.raises(MemoryConflictError):
+            await capabilities.invoke(
+                {
+                    "operation": "nebula.memory.update",
+                    "arguments": {
+                        "id": saved["item"]["id"],
+                        "expected_revision": saved["item"]["revision"],
+                        "content": "The operator prefers Eastern Time for all dates.",
+                    },
+                },
+                change=True,
+            )
         with pytest.raises(UnsafeMemoryError):
             await capabilities.invoke(
                 {
@@ -566,7 +596,10 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
         forgotten = await capabilities.invoke(
             {
                 "operation": "nebula.memory.forget",
-                "arguments": {"id": saved["item"]["id"], "expected_revision": 1},
+                "arguments": {
+                    "id": saved["item"]["id"],
+                    "expected_revision": edited["item"]["revision"],
+                },
             },
             change=True,
         )

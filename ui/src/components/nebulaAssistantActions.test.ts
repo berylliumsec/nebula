@@ -3,6 +3,44 @@ import type { ChatStreamEvent, HarnessProfile } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("refreshes guides only for an observed selected-project guide write", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "core_project_data_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.data.set_guide_progress", client_action: {kind: "guides_refresh", project_id: "selected"}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "guides_refresh", projectId: "selected"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.data.system"}}, "selected")).toBeUndefined();
+  });
+  it("accepts only verified execution refresh and bounded original artifact receipts", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "core_execution_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.inspect.cancel_execution", client_action: {kind: "execution_refresh", project_id: "selected", execution_id: "execution"}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "execution_refresh", projectId: "selected", executionId: "execution"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "selected")).toBeUndefined();
+    const receipt = {state: "pending_browser_apply", butler_project_id: "selected", butler_operation: "nebula.inspect.download_artifact", client_action: {kind: "artifact_download", project_id: "selected", artifact_id: "artifact", expected_revision: 1, owner_kind: "tool_call", owner_id: "call", sha256: "a".repeat(64), size: 12, filename: "out.txt"}};
+    expect(settingClientAction({...event, receipt}, "selected")).toMatchObject({kind: "artifact_download", artifactId: "artifact", size: 12});
+    expect(settingClientAction({...event, receipt}, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...receipt, client_action: {...receipt.client_action, size: 20 * 1024 * 1024 + 1}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...receipt, butler_operation: "nebula.data.delete_result"}}, "selected")).toBeUndefined();
+  });
+  it("accepts result deletion only through the selected project's exact operation", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Prepared", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "pending_browser_apply", butler_project_id: "selected", butler_operation: "nebula.data.delete_result", client_action: {kind: "result_delete", project_id: "selected", result_id: "result", title: "Result", expected_revision: 2}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "result_delete", projectId: "selected", resultId: "result", title: "Result", expectedRevision: 2});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.sources.remove"}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...(event.receipt!.client_action as object), expected_revision: 0}}}, "selected")).toBeUndefined();
+  });
+  it("refreshes bookmarks only after a verified Core write receipt", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "core_project_data_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.data.set_bookmark", client_action: {kind: "bookmarks_refresh", project_id: "selected", session_id: "chat"}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "bookmarks_refresh", projectId: "selected", sessionId: "chat"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "selected")).toBeUndefined();
+    expect(settingClientAction(event, "other")).toBeUndefined();
+  });
+  it("keeps model API-key questions distinct from private TypeSafe entry", () => {
+    expect(settingToOpen("which setting holds API keys for models?")?.id).toBe("settings.providers");
+    expect(settingToOpen("where can I enter the TypeSafe API key?")?.id).toBe("settings.typesafe");
+  });
   it("maps explicit device-theme commands to bounded values without taking over questions", () => {
     expect(themeChange("change to zero theme")).toBe("zero-dark");
     expect(themeChange("set the theme to Zero Light")).toBe("zero-light");
@@ -53,6 +91,9 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({ ...event, capability: "nebula.navigate.open",
       receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "projects" } } }))
       .toMatchObject({ kind: "navigate", destination: { id: "projects" } });
+    expect(settingClientAction({ ...event, capability: "nebula.navigate.open",
+      receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "notebook" } } }))
+      .toMatchObject({ kind: "navigate", destination: { path: "/projects/{project_id}/workbench?view=notebook" } });
     expect(settingClientAction({ ...event, capability: "nebula_navigate_open_1234567890abcdef",
       receipt: { state: "pending_browser_apply", client_action: { kind: "navigate", destination_id: "unlisted" } } })).toBeUndefined();
     expect(settingClientAction({ ...event, capability: "other.tool" })).toBeUndefined();
@@ -86,6 +127,492 @@ describe("settings assistant actions", () => {
     expect(settingClientAction(browser, "other")).toBeUndefined();
     expect(settingClientAction({...browser, receipt: {...browser.receipt, butler_operation: "nebula.work.start_chat"}}, "selected")).toBeUndefined();
   });
+  it("accepts only selected-project storage handoffs with an exact source revision", () => {
+    const sourceId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "storage-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.storage.rotate", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "storage_rotate", project_id: "project",
+          source_id: sourceId, expected_revision: 3, name: "Fixture NAS"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "storage_rotate", projectId: "project",
+      sourceId, expectedRevision: 3, name: "Fixture NAS"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "storage_rotate", project_id: "project", source_id: "../other", expected_revision: 3, name: "Fixture NAS"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "storage_rotate", project_id: "project", source_id: sourceId, expected_revision: 0, name: "Fixture NAS"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.storage.revoke"}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.storage.enroll",
+      client_action: {kind: "storage_enroll", project_id: "project"}}}, "project"))
+      .toEqual({kind: "storage_enroll", projectId: "project"});
+    const reporting = {kind: "storage_configure_reporting", project_id: "project", source_id: sourceId,
+      expected_revision: 3, name: "Fixture NAS", changes: {enabled: true, reporting_interval_seconds: 3600}};
+    expect(settingClientAction({...event, receipt: {...event.receipt,
+      butler_operation: "nebula.storage.configure_reporting", client_action: reporting}}, "project"))
+      .toEqual({kind: "storage_configure_reporting", projectId: "project", sourceId,
+        expectedRevision: 3, name: "Fixture NAS", changes: reporting.changes});
+    for (const changes of [{}, {enabled: "yes"}, {reporting_interval_seconds: 10}, {callback_credential_ref: "secret"}]) {
+      expect(settingClientAction({...event, receipt: {...event.receipt,
+        butler_operation: "nebula.storage.configure_reporting", client_action: {...reporting, changes}}}, "project"))
+        .toBeUndefined();
+    }
+    expect(settingClientAction({...event, receipt: {...event.receipt,
+      butler_operation: "nebula.storage.edit_callbacks", client_action: {...reporting,
+        kind: "storage_edit_callbacks", changes: undefined}}}, "project"))
+      .toMatchObject({kind: "storage_edit_callbacks", projectId: "project", sourceId});
+  });
+  it("accepts only scoped paired-device handoffs with an exact identity", () => {
+    const deviceId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const base: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "device-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.devices.revoke", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "device_revoke", project_id: "project",
+          device_id: deviceId, name: "Fixture phone", expected_created_at: "2026-11-01T12:00:00Z"}},
+    };
+    expect(settingClientAction(base, "project")).toEqual({kind: "device_revoke", projectId: "project",
+      deviceId, name: "Fixture phone", expectedCreatedAt: "2026-11-01T12:00:00Z"});
+    expect(settingClientAction(base, "other")).toBeUndefined();
+    expect(settingClientAction({...base, receipt: {...base.receipt, client_action: {kind: "device_revoke",
+      project_id: "project", device_id: "../other", name: "Fixture phone", expected_created_at: "2026-11-01T12:00:00Z"}}}, "project"))
+      .toBeUndefined();
+    expect(settingClientAction({...base, receipt: {...base.receipt, butler_operation: "nebula.devices.pair",
+      client_action: {kind: "device_pair", project_id: "project"}}}, "project"))
+      .toEqual({kind: "device_pair", projectId: "project"});
+  });
+  it("accepts only scoped credential handoffs for managed references", () => {
+    const reference = `session:${"a".repeat(32)}`;
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "credential-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.credentials.delete", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "credential_delete", project_id: "project", reference}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "credential_delete", projectId: "project", reference});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "credential_delete", project_id: "project", reference: "env:NEBULA_TOKEN"}}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.credentials.create",
+      client_action: {kind: "credential_create", project_id: "project"}}}, "project"))
+      .toEqual({kind: "credential_create", projectId: "project"});
+  });
+  it("accepts only scoped source receipts with exact identity and revision", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "source-call",
+      capability: "nebula.capabilities.change", status: "complete", summary: "Pending", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.sources.reindex", butler_project_id: "project", state: "pending_browser_apply",
+        client_action: {kind: "source_reindex", project_id: "project", source_id: "12345678-1234-1234-1234-123456789abc", name: "source.txt", expected_revision: 2}}};
+    expect(settingClientAction(event, "project")).toMatchObject({kind: "source_reindex", expectedRevision: 2});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.settings.api_request"}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "source_remove", source_id: "invalid", expected_revision: 0}}}, "project")).toBeUndefined();
+  });
+  it("refreshes records only for scoped exact Core-verified record operations", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "record-call",
+      capability: "nebula.capabilities.change", status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.assets.create", butler_project_id: "project", state: "core_records_saved", read_back: true,
+        client_action: {kind: "records_refresh", project_id: "project", resource: "assets"}}};
+    expect(settingClientAction(event, "project")).toEqual({kind: "records_refresh", projectId: "project", resource: "assets"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, state: "pending_browser_apply"}}, "project")).toBeUndefined();
+    for (const operation of ["nebula.findings.create", "nebula.findings.update"]) {
+      const finding = {...event, receipt: {...event.receipt, butler_operation: operation,
+        client_action: {kind: "records_refresh", project_id: "project", resource: "findings"}}};
+      expect(settingClientAction(finding, "project")).toEqual({kind: "records_refresh", projectId: "project", resource: "findings"});
+    }
+    const evidence = {...event, receipt: {...event.receipt, butler_operation: "nebula.workspace.preserve_evidence",
+      client_action: {kind: "records_refresh", project_id: "project", resource: "evidence"}}};
+    expect(settingClientAction(evidence, "project"))
+      .toEqual({kind: "records_refresh", projectId: "project", resource: "evidence"});
+    expect(settingClientAction({...evidence, receipt: {...evidence.receipt,
+      butler_operation: "nebula.workspace.create_text"}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.findings.update"}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_mission"}}, "project")).toBeUndefined();
+  });
+  it("refreshes profile catalogs only from a scoped Core-verified settings receipt", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "settings-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project",
+        state: "core_settings_saved", read_back: true,
+        client_action: {kind: "settings_profile_refresh", project_id: "project", resource: "providers"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "settings_profile_refresh", projectId: "project", resource: "providers"});
+    for (const resource of ["runner-profiles", "ssh-environments", "operator-profiles"] as const) {
+      const runtime = {...event, receipt: {...event.receipt, client_action: {
+        kind: "settings_profile_refresh", project_id: "project", resource,
+      }}};
+      expect(settingClientAction(runtime, "project")).toEqual({kind: "settings_profile_refresh", projectId: "project", resource});
+      expect(settingClientAction(runtime, "other")).toBeUndefined();
+      expect(settingClientAction({...runtime, receipt: {...runtime.receipt, read_back: false}}, "project")).toBeUndefined();
+    }
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
+  });
+  it("refreshes only named runtime owners from scoped observed Core state", () => {
+    for (const resource of ["web-search", "setup", "automation-runtime"] as const) {
+      const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "runtime-call",
+        capability: "nebula.capabilities.change", status: "complete", summary: "Core state", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project", state: "core_settings_saved", read_back: true,
+          client_action: {kind: "runtime_settings_refresh", project_id: "project", resource}}};
+      expect(settingClientAction(event, "project")).toEqual({kind: "runtime_settings_refresh", projectId: "project", resource});
+      expect(settingClientAction(event, "other")).toBeUndefined();
+      expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+      expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
+    }
+  });
+  it("refreshes project follow-up settings only from scoped Core readback", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "settings-call",
+      capability: "nebula.capabilities.change", status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project", state: "core_settings_saved", read_back: true,
+        client_action: {kind: "post_tool_refresh", project_id: "project"}}};
+    expect(settingClientAction(event, "project")).toEqual({kind: "post_tool_refresh", projectId: "project"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.settings.set_post_tool"}}, "project")).toEqual({kind: "post_tool_refresh", projectId: "project"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
+  });
+  it("refreshes the Butler interval only after scoped Core readback", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "interval-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project",
+        state: "core_settings_saved", read_back: true,
+        client_action: {kind: "butler_interval_refresh", project_id: "project"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "butler_interval_refresh", projectId: "project"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, state: "pending_browser_apply"}}, "project")).toBeUndefined();
+  });
+  it("accepts only scoped bounded note changes with exact identity and revisions", () => {
+    const noteId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "note-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.notes.update", butler_project_id: "project", state: "pending_browser_apply",
+        client_action: {kind: "note_update", project_id: "project", note_id: noteId, name: "Note", expected_revision: 3, body: "Edited"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "note_update", projectId: "project", noteId, name: "Note", expectedRevision: 3, body: "Edited"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "note_update", project_id: "project",
+      note_id: noteId, name: "Note", expected_revision: 0, body: "Unsafe"}}}, "project")).toBeUndefined();
+  });
+  it("accepts an exact provider credential attachment and rejects unsafe receipt fields", () => {
+    const providerId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const reference = `session:${"a".repeat(32)}`;
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "provider-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.providers.attach_credential", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "provider_attach_credential", project_id: "project",
+          provider_id: providerId, name: "Local model", expected_revision: 3, credential_ref: reference, slot: "inference"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "provider_attach_credential", projectId: "project",
+      providerId, name: "Local model", expectedRevision: 3, reference, slot: "inference"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "provider_attach_credential", project_id: "project", provider_id: providerId,
+      name: "Local model", expected_revision: 3, credential_ref: "env:KEY", slot: "inference"}}}, "project")).toBeUndefined();
+  });
+  it("accepts only an exact managed harness credential attachment", () => {
+    const harnessId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const reference = `session:${"b".repeat(32)}`;
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "harness-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.harnesses.attach_credential", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "harness_attach_credential", project_id: "project",
+          harness_id: harnessId, name: "Codex endpoint", expected_revision: 5, credential_ref: reference,
+          auth_mode: "endpoint_bearer"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "harness_attach_credential", projectId: "project",
+      harnessId, name: "Codex endpoint", expectedRevision: 5, reference, authMode: "endpoint_bearer"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "harness_attach_credential", project_id: "project", harness_id: harnessId,
+      name: "Codex endpoint", expected_revision: 5, credential_ref: "env:KEY", auth_mode: "endpoint_bearer"}}}, "project")).toBeUndefined();
+    expect(settingClientAction(event, "other")).toBeUndefined();
+  });
+  it("accepts only an exact MCP credential slot for the selected browser project", () => {
+    const serverId = "b96e898d-207f-4943-846e-c00f4415fc26";
+    const reference = `session:${"b".repeat(32)}`;
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "mcp-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.mcp.attach_credential", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "mcp_attach_credential", project_id: "project",
+          server_id: serverId, name: "remote", transport: "streamable_http", expected_revision: 5,
+          credential_ref: reference, slot: "header", key: "X-API-Key"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "mcp_attach_credential", projectId: "project",
+      serverId, name: "remote", transport: "streamable_http", expectedRevision: 5,
+      reference, slot: "header", key: "X-API-Key"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "mcp_attach_credential", project_id: "project", server_id: serverId, name: "remote",
+      transport: "stdio", expected_revision: 5, credential_ref: reference, slot: "header", key: "X-API-Key"}}}, "project"))
+      .toBeUndefined();
+  });
+  it("accepts only the scoped diagnostics export intent", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "diagnostics-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.diagnostics.export", butler_project_id: "project",
+        state: "pending_browser_apply", client_action: {kind: "diagnostics_export", project_id: "project"}},
+    };
+    expect(settingClientAction(event, "project")).toEqual({kind: "diagnostics_export", projectId: "project"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.credentials.create"}}, "project"))
+      .toBeUndefined();
+  });
+  it("accepts only scoped, typed project lifecycle handoffs", () => {
+    const projectId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "project-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: { butler_operation: "nebula.projects.archive", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "project_archive", project_id: projectId, name: "Fixture", expected_revision: 3} },
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "project_archive", projectId, name: "Fixture", expectedRevision: 3});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "project_archive", project_id: "../other", name: "Fixture", expected_revision: 3}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "project_archive", project_id: projectId, name: "Fixture", expected_revision: 0}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.restore"}}, "selected")).toBeUndefined();
+    const requestId = "70790d17-cd62-450a-b73b-28684e410300";
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: "", request_id: requestId}}}, "selected"))
+      .toEqual({kind: "project_create", name: "New", description: "", clientName: "", requestId});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: {kind: "project_create", name: "New", description: "", client_name: ""}}}, "selected")).toBeUndefined();
+    const linked = {kind: "project_create_linked", name: "Linked", description: "", client_name: "", request_id: requestId};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create_linked", client_action: linked}}, "selected"))
+      .toEqual({kind: "project_create_linked", sourceProjectId: "selected", name: "Linked", description: "", clientName: "", requestId});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create_linked", client_action: {...linked, workspace_path: "/private"}}}, "selected"))
+      .toEqual({kind: "project_create_linked", sourceProjectId: "selected", name: "Linked", description: "", clientName: "", requestId});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.create", client_action: linked}}, "selected")).toBeUndefined();
+    const relink = {kind: "project_relink", project_id: projectId, expected_revision: 3, name: "Fixture"};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.relink", client_action: relink}}, "selected"))
+      .toEqual({kind: "project_relink", sourceProjectId: "selected", projectId, expectedRevision: 3, name: "Fixture"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.projects.relink", client_action: {...relink, expected_revision: 0}}}, "selected"))
+      .toBeUndefined();
+  });
+  it("accepts only a scoped transcript export handoff from Core", () => {
+    const sessionId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "export-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.chats.export", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "chat_export", project_id: "selected", session_id: sessionId, expected_revision: 5}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "chat_export", projectId: "selected", sessionId, expectedRevision: 5});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.chat"}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "other", session_id: sessionId, expected_revision: 5}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "chat_export", project_id: "selected", session_id: "../other", expected_revision: 5}}}, "selected")).toBeUndefined();
+  });
+  it("accepts only an exact selected-project terminal stop handoff", () => {
+    const sessionId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const action = {kind: "terminal_stop", project_id: "selected", session_id: sessionId,
+      expected_created_at: "2026-10-30T20:30:00.123456Z"};
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "terminal-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending browser action", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.terminal.stop", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: action},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "terminal_stop", projectId: "selected",
+      sessionId, expectedCreatedAt: action.expected_created_at});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, session_id: "../other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...action, expected_created_at: "2026-10-30T20:30:00"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff"}}, "selected")).toBeUndefined();
+  });
+  it("accepts only scoped report drafts, current revisions and device handoffs", () => {
+    const reportId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const findingId = "70d5a305-6f30-4270-b27d-2322d7385fbf";
+    const createAction = {kind: "report_create", project_id: "selected", report_id: reportId,
+      title: "Assessment", executive_summary: "Summary", finding_ids: [findingId], observation_ids: []};
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "report-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending browser action", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.reports.create", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: createAction},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "report_create", projectId: "selected",
+      reportId, title: "Assessment", executiveSummary: "Summary", findingIds: [findingId], observationIds: []});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...createAction,
+      project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...createAction,
+      finding_ids: ["../foreign"]}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.update",
+      client_action: {kind: "report_update", project_id: "selected", report_id: reportId,
+        expected_revision: 3, status: "review", executive_summary: "Saved"}}}, "selected"))
+      .toEqual({kind: "report_update", projectId: "selected", reportId, expectedRevision: 3,
+        status: "review", executiveSummary: "Saved"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.update",
+      client_action: {kind: "report_update", project_id: "selected", report_id: reportId,
+        expected_revision: 3, status: "final"}}}, "selected")).toBeUndefined();
+    const noteId = "4d99ec94-0c52-47ca-89de-9792f67ecf6b";
+    const transformAction = {kind: "report_transform_note", project_id: "selected", report_id: reportId,
+      expected_revision: 3, observation_id: noteId, expected_source_revision: 2,
+      instruction: "Keep uncertainty visible."};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.transform_note",
+      client_action: transformAction}}, "selected"))
+      .toEqual({kind: "report_transform_note", projectId: "selected", reportId, expectedRevision: 3,
+        observationId: noteId, expectedSourceRevision: 2, instruction: "Keep uncertainty visible."});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.transform_note",
+      client_action: {...transformAction, expected_source_revision: 0}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.transform_note",
+      client_action: {...transformAction, project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.signoff",
+      client_action: {kind: "report_signoff", project_id: "selected", report_id: reportId, expected_revision: 3}}}, "selected"))
+      .toEqual({kind: "report_signoff", projectId: "selected", reportId, expectedRevision: 3});
+    const deleteAction = {kind: "report_delete", project_id: "selected", report_id: reportId,
+      expected_revision: 3, title: "Assessment"};
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: deleteAction}}, "selected"))
+      .toEqual({kind: "report_delete", projectId: "selected", reportId, expectedRevision: 3, title: "Assessment"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: {...deleteAction, project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: {...deleteAction, expected_revision: 0}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.delete",
+      client_action: {...deleteAction, title: ""}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.reports.export_bundle",
+      client_action: {kind: "report_export_bundle", project_id: "selected", expected_project_revision: 2}}}, "selected"))
+      .toEqual({kind: "report_export_bundle", projectId: "selected", expectedProjectRevision: 2});
+  });
+  it("accepts only scoped workspace file actions with exact paths and hashes", () => {
+    const hash = "a".repeat(64);
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "workspace-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.workspace.download_file", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "workspace_download", project_id: "selected",
+          path: "notes/research.txt", expected_sha256: hash, size: 12}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "workspace_download", projectId: "selected",
+      path: "notes/research.txt", expectedSha256: hash, size: 12});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_download", project_id: "selected", path: "../escape", expected_sha256: hash, size: 12,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_download", project_id: "selected", path: "notes/research.txt", expected_sha256: "bad", size: 12,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt,
+      butler_operation: "nebula.workspace.delete_file", client_action: {kind: "workspace_delete",
+        project_id: "selected", path: "notes/research.txt", expected_sha256: hash},
+    }}, "selected")).toEqual({kind: "workspace_delete", projectId: "selected",
+      path: "notes/research.txt", expectedSha256: hash});
+  });
+
+  it("accepts only selected-project evidence file handoffs with exact download identity", () => {
+    const evidenceId = "12345678-1234-1234-1234-123456789abc";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "evidence-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.evidence.upload", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "evidence_upload", project_id: "selected"}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "evidence_upload", projectId: "selected"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    const downloadAction = {kind: "evidence_download", project_id: "selected", evidence_id: evidenceId,
+      expected_revision: 2, title: "Proof", expected_sha256: "a".repeat(64)};
+    const download: Extract<ChatStreamEvent, {type: "tool_completed"}> = {...event, receipt: {
+      ...event.receipt, butler_operation: "nebula.evidence.download", client_action: downloadAction,
+    }};
+    expect(settingClientAction(download, "selected")).toEqual({kind: "evidence_download", projectId: "selected",
+      evidenceId, expectedRevision: 2, title: "Proof", expectedSha256: "a".repeat(64)});
+    expect(settingClientAction({...download, receipt: {...download.receipt, client_action: {
+      ...downloadAction, project_id: "foreign"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...download, receipt: {...download.receipt, client_action: {
+      ...downloadAction, expected_sha256: "bad"}}}, "selected")).toBeUndefined();
+  });
+
+  it("accepts only scoped device uploads and empty-folder deletion receipts", () => {
+    const identity = "a".repeat(64);
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "folder-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.workspace.upload_from_device", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "workspace_upload", project_id: "selected",
+          directory: "captures", expected_directory_identity: identity}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "workspace_upload", projectId: "selected",
+      directory: "captures", expectedDirectoryIdentity: identity});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_upload", project_id: "selected", directory: "../escape", expected_directory_identity: identity,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "workspace_upload", project_id: "selected", directory: "captures", expected_directory_identity: "bad",
+    }}}, "selected")).toBeUndefined();
+    const deletion = {...event, receipt: {...event.receipt, butler_operation: "nebula.workspace.delete_directory",
+      client_action: {kind: "workspace_delete_directory", project_id: "selected", path: "captures",
+        expected_entry_identity: identity}}} as ChatStreamEvent;
+    expect(settingClientAction(deletion, "selected")).toEqual({kind: "workspace_delete_directory",
+      projectId: "selected", path: "captures", expectedEntryIdentity: identity});
+  });
+
+  it("accepts revision-bound Notebook index handoffs without a model-supplied host path", () => {
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "index-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.notebook.connect_file_index", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "notebook_index_connect", project_id: "selected",
+          expected_project_revision: 4}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "notebook_index_connect",
+      projectId: "selected", expectedProjectRevision: 4});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "notebook_index_connect", project_id: "other", expected_project_revision: 4,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "notebook_index_connect", project_id: "selected", expected_project_revision: 0,
+    }}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {
+      kind: "notebook_index_connect", project_id: "selected", expected_project_revision: 4, path: "/private/index.db",
+    }}}, "selected")).toEqual({kind: "notebook_index_connect", projectId: "selected", expectedProjectRevision: 4});
+    const removal: ChatStreamEvent = {...event, receipt: {...event.receipt,
+      butler_operation: "nebula.notebook.remove_file_index",
+      client_action: {kind: "notebook_index_remove", project_id: "selected", expected_project_revision: 4}}};
+    expect(settingClientAction(removal, "selected")).toEqual({kind: "notebook_index_remove",
+      projectId: "selected", expectedProjectRevision: 4});
+    expect(settingClientAction({...removal, receipt: {...removal.receipt,
+      butler_operation: "nebula.notebook.connect_file_index"}}, "selected")).toBeUndefined();
+  });
+
+  it("accepts only exact shared Library actions for the requesting project", () => {
+    const itemId = "9482d86e-2ddc-436b-90be-30b878f68537";
+    const event: ChatStreamEvent = {
+      type: "tool_completed", turnId: "turn", toolCallId: "library-call", capability: "nebula.capabilities.change",
+      status: "complete", summary: "Pending on browser", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.library.remove", butler_project_id: "selected",
+        state: "pending_browser_apply", client_action: {kind: "library_remove", project_id: "selected", item_id: itemId, expected_revision: 5, name: "Shared note"}},
+    };
+    expect(settingClientAction(event, "selected")).toEqual({kind: "library_remove", projectId: "selected", itemId, expectedRevision: 5, name: "Shared note"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.reindex",
+      client_action: {kind: "library_reindex", project_id: "selected", item_id: itemId, expected_revision: 5, name: "Shared note"}}}, "selected"))
+      .toEqual({kind: "library_reindex", projectId: "selected", itemId, expectedRevision: 5, name: "Shared note"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.download",
+      client_action: {kind: "library_download", project_id: "selected", item_id: itemId, expected_revision: 5, name: "Shared note"}}}, "selected"))
+      .toEqual({kind: "library_download", projectId: "selected", itemId, expectedRevision: 5, name: "Shared note"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.add",
+      client_action: {kind: "library_add", project_id: "selected"}}}, "selected"))
+      .toEqual({kind: "library_add", projectId: "selected"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.add",
+      client_action: {kind: "library_add", project_id: "other"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.library.reindex"}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "library_remove", project_id: "other", item_id: itemId, expected_revision: 5, name: "Shared note"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "library_remove", project_id: "selected", item_id: "../other", expected_revision: 5, name: "Shared note"}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "library_remove", project_id: "selected", item_id: itemId, expected_revision: 0, name: "Shared note"}}}, "selected")).toBeUndefined();
+  });
   it("recognizes explicit project mode changes without treating questions as commands", () => {
     expect(projectModeChange("open project policy and change from dockermode to host mode"))
       .toEqual({ from: "docker", mode: "host" });
@@ -117,9 +644,15 @@ describe("settings assistant actions", () => {
     expect(settingToOpen("Please open storage source settings")?.id).toBe("settings.storage");
     expect(settingToOpen("can you bring up model provider settings?")?.id).toBe("settings.providers");
     expect(settingToOpen("open project scope")?.id).toBe("settings.network-scope");
+    expect(settingToOpen("open notebook host consent settings")?.id).toBe("settings.network-scope");
     expect(settingToOpen("What can I change in settings?")).toBeUndefined();
     expect(settingToOpen("open assistant")).toBeUndefined();
     expect(isSettingNavigationRequest("Where can I fix a host file permission error in Docker mode?")).toBe(false);
+    expect(isSettingNavigationRequest("Open sign-off for the synthetic Butler report.")).toBe(false);
+    expect(isSettingNavigationRequest("Prepare storage source enrollment")).toBe(false);
+    expect(isSettingNavigationRequest("Prepare callback editing for Fixture NAS")).toBe(false);
+    expect(isSettingNavigationRequest("Prepare a new device pairing")).toBe(false);
+    expect(settingToOpen("Open sign-off for the synthetic Butler report.")).toBeUndefined();
     expect(settingToOpen("Why can't my assistant edit a host file in Docker mode?")).toBeUndefined();
   });
 
@@ -164,10 +697,14 @@ describe("settings assistant actions", () => {
       ["where do I upload an OpenVPN tunnel profile?", "settings.vpn-egress"],
       ["where is the Podman runner config?", "settings.runners"],
       ["where is project scope for CIDR ports?", "settings.network-scope"],
+      ["where do I review targets from a scope document import?", "settings.network-scope"],
       ["where can I set operator identity?", "settings.operators"],
       ["where can I pair my phone?", "settings.devices"],
       ["where are release channel updates?", "settings.release"],
       ["where do I inspect logs?", "settings.diagnostics"],
+      ["where do I review sensitive diagnostic remediation?", "settings.diagnostics"],
+      ["where can I retry a failed storage dispatch?", "settings.storage"],
+      ["where can I review a held improvement issue draft?", "settings.butler-activity"],
       ["where can I check Core readiness?", "settings.setup"],
     ];
     for (const [prompt, expected] of cases) expect(settingToOpen(prompt)?.id, prompt).toBe(expected);

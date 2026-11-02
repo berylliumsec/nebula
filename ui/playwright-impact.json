@@ -8,6 +8,13 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"butler-saved-data","patterns":["src/nebula/v3/butler_data.py","ui/src/components/butlerResultAction*","ui/src/pages/useChatNavigation*","ui/src/api/projectDataEvents.ts"],"areas":["butler-saved-data"]},
+    {"name":"butler-inspection","patterns":["src/nebula/v3/butler_inspection.py","src/nebula/v3/executions.py","ui/src/components/butlerArtifactAction*","ui/src/components/ExecutionHistory*","ui/tests/fixtures/butler_inspection_core.py"],"areas":["butler-inspection"]},
+    {"name":"butler-sources","patterns":["src/nebula/v3/butler_sources.py","ui/src/components/ButlerSourceAdd.tsx","ui/src/components/butlerSourceAction.ts"],"areas":["butler-sources"]},
+    {"name":"butler-records","patterns":["src/nebula/v3/butler_records.py"],"areas":["butler-records"]},
+    {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts"],"areas":["butler-notes"]},
+    {"name":"manual-note-review","patterns":["ui/src/components/ExecutionInsightDialog.tsx","ui/src/api/noteTypes.ts","ui/tests/fixtures/manual_note_review_core.py"],"areas":["manual-note-review"]},
+    {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
     {"name": "harness-catalog-refresh", "patterns": ["ui/src/components/HarnessSettings.tsx", "ui/src/state/WorkspaceContext.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["harness-catalog-refresh"]},
     {"name": "assistant-browser-viewer", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "src/nebula/v3/browser_companion.py", "tests/v3/application_model_fixture.py", "ui/playwright.application-model.config.ts"], "areas": ["assistant-browser-viewer"]},
     {"name": "working-knowledge", "patterns": ["ui/src/pages/ProjectPage.tsx", "src/nebula/v3/application_model/**", "tests/v3/application_model_fixture.py", "ui/playwright.application-model.config.ts"], "areas": ["working-knowledge"]},
@@ -19,6 +26,10 @@
     {"name": "chat-planning", "patterns": ["src/nebula/v3/chat_planning.py", "src/nebula/v3/chat_assistant_config.py", "ui/src/pages/SessionsPage.tsx", "ui/tests/fixtures/approval_core.py"], "areas": ["chat-planning"]},
     {"name": "goal-handoff", "patterns": ["src/nebula/v3/chat_goals.py", "src/nebula/v3/butler_global_capabilities.py", "ui/src/components/ProviderGoalPanel.tsx", "ui/tests/fixtures/approval_core.py"], "areas": ["goal-handoff"]},
     {"name": "storage-integrations", "patterns": ["src/nebula/v3/storage_integrations.py", "ui/src/components/Storage*", "ui/src/pages/StoragePage.tsx", "ui/src/storage.css", "docs/storage-integrations.md"], "areas": ["storage-integrations"]},
+    {"name": "butler-storage", "patterns": ["src/nebula/v3/butler_storage.py", "ui/src/components/butlerStorageAction*", "ui/src/components/StorageIntegrations.tsx"], "areas": ["butler-storage"]},
+    {"name": "butler-devices", "patterns": ["src/nebula/v3/butler_devices.py", "src/nebula/v3/settings_assistant_api.py", "ui/src/components/butlerDeviceAction*", "ui/src/components/DevicePairingSettings.tsx"], "areas": ["butler-devices"]},
+    {"name": "butler-credentials", "patterns": ["src/nebula/v3/butler_credentials.py", "src/nebula/v3/settings_assistant_api.py", "ui/src/components/ButlerCredentialCreate*", "ui/src/components/butlerCredentialAction*"], "areas": ["butler-credentials"]},
+    {"name": "butler-diagnostics", "patterns": ["src/nebula/v3/butler_diagnostics.py", "ui/src/components/butlerDiagnosticsAction*", "ui/src/diagnostics/DiagnosticsPanel.tsx"], "areas": ["butler-diagnostics"]},
     {"name": "notebooks", "patterns": ["ui/src/components/NotebookPanel*", "ui/src/components/notebook.css", "src/nebula/v3/notebooks.py", "src/nebula/v3/notebook_mcp.py", "packaging/notebook/**"], "areas": ["notebooks"]},
     {"name": "notebook-file-index", "patterns": ["src/nebula/v3/notebook_file_index.py", "ui/src/components/NotebookFileIndexSettings*", "docs/notebook-file-index.md"], "areas": ["notebook-file-index"]},
     {"name": "conversation-progress", "patterns": ["src/nebula/v3/chat.py", "src/nebula/v3/chat_subagents.py", "ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatProgressContent*", "ui/src/pages/chatMessageReconciliation*", "ui/src/components/ActivityLedger*", "ui/src/components/activityLedgerModel.ts", "ui/src/components/CallbackWaitingStatus*", "ui/src/components/AssistantMarkdown.tsx", "ui/src/api/client.ts", "ui/src/api/types.ts"], "areas": ["conversation-progress", "chat-switching-scroll"]},
@@ -63,6 +74,15 @@
     {"name": "nebula-theme-command", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/nebulaAssistantActions.ts"], "areas": ["nebula-theme-command"]},
     {"name": "settings-assistant-full-control", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/assistantSettingsMutations.ts", "src/nebula/v3/settings_assistant_api.py", "src/nebula/v3/settings_assistant_tools.py", "src/nebula/v3/agent_security_tools.py"], "areas": ["settings-assistant-full-control"]},
     {"name": "control-assistant-work", "patterns": ["src/nebula/v3/control_assistant_work.py", "src/nebula/v3/settings_assistant_tools.py", "ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["control-assistant-work"]},
+    {"name": "butler-chat-rewind", "patterns": ["src/nebula/v3/chat.py", "src/nebula/v3/control_assistant_work.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["butler-chat-rewind"]},
+    {"name": "butler-chat-export", "patterns": ["src/nebula/v3/butler_chat_export.py", "ui/src/pages/chatTranscriptExport.ts", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-chat-export"]},
+    {"name": "butler-workspace", "patterns": ["src/nebula/v3/butler_workspace.py", "src/nebula/v3/workspace.py", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-workspace"]},
+    {"name": "butler-library", "patterns": ["src/nebula/v3/butler_library.py"], "areas": ["butler-library"]},
+    {"name": "butler-evidence", "patterns": ["src/nebula/v3/butler_evidence.py", "ui/src/pages/EvidencePage.tsx", "ui/src/components/ButlerEvidenceUpload.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-evidence"]},
+    {"name": "butler-reports", "patterns": ["src/nebula/v3/butler_reports.py", "ui/src/pages/ReportsPage.tsx", "ui/src/components/AIWritingDialog.tsx", "ui/src/components/butlerReportTransform.ts", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-reports"]},
+    {"name": "butler-notebook", "patterns": ["src/nebula/v3/butler_notebook.py", "src/nebula/v3/butler_capabilities.py", "src/nebula/v3/notebook_mcp.py"], "areas": ["butler-notebook"]},
+    {"name": "butler-notebook-file-index", "patterns": ["src/nebula/v3/butler_notebook.py", "src/nebula/v3/notebooks.py", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-notebook-file-index"]},
+    {"name": "butler-project-lifecycle", "patterns": ["src/nebula/v3/butler_projects.py", "ui/src/components/nebulaAssistantActions.ts", "ui/src/components/NebulaControlAssistant.tsx"], "areas": ["butler-project-lifecycle"]},
     {"name": "butler-timeline", "patterns": ["src/nebula/v3/butler_timeline.py"], "areas": ["butler-timeline"]},
     {"name": "butler-context", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css", "ui/src/state/WorkbenchDraftContext.tsx", "ui/src/components/selection/SelectionActionsProvider.tsx"], "areas": ["butler-context"]},
     {"name": "butler-response-table", "patterns": ["ui/src/components/NebulaControlAssistant.tsx", "ui/src/components/NebulaControlAssistant.module.css"], "areas": ["butler-response-table"]},
@@ -86,10 +106,142 @@
     {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
     {"name": "file-navigation-search", "patterns": ["src/nebula/v3/workspace.py", "ui/src/components/WorkspacePanel*", "ui/src/components/EditorWorkspaceSearch*", "ui/src/components/CodeEditorPanel*", "ui/src/api/types.ts"], "areas": ["editor-files-scroll", "file-search-real-core"]},
     {"name": "code-editor", "patterns": ["ui/src/components/CodeEditorPanel*", "ui/src/components/CodeMirrorSurface*", "ui/src/components/Editor*", "ui/src/components/editor*", "ui/src/components/fileIcons*", "ui/src/components/useEditorSidebarWidth*"], "areas": ["coding-makeover", "editor-files-scroll"]},
+    {"name": "butler-terminal", "patterns": ["src/nebula/v3/butler_terminal.py", "src/nebula/v3/container_terminal.py", "ui/src/components/butlerTerminalStop.ts", "ui/src/api/terminalTypes.ts", "ui/tests/fixtures/terminal_core.py", "ui/tests/fixtures/terminal-core.ts"], "areas": ["butler-terminal"]},
     {"name": "remaining-ui-components", "fallback": true, "patterns": ["ui/src/components/**", "ui/src/pages/**", "ui/src/hooks/**", "ui/src/lib/**"], "areas": ["desktop-interface", "mobile-layout"]},
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "butler-settings-catalog": [
+      {"area":"butler-settings-catalog","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-settings-catalog","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-saved-data": [
+      {"area":"butler-saved-data","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-saved-data","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-saved-data","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-saved-data","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-saved-data","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-saved-data","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-saved-data","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-saved-data","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-core-metadata": [
+      {"area":"butler-core-metadata","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-core-metadata","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-core-metadata","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-core-metadata","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-core-metadata","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-core-metadata","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-core-metadata","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-core-metadata","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-setup-controls": [
+      {"area":"butler-setup-controls","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-setup-controls","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-setup-controls","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-setup-controls","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-setup-controls","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-setup-controls","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-setup-controls","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-setup-controls","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-administration": [
+      {"area":"butler-administration","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+
+    "butler-inspection": [
+      {"area":"butler-inspection","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-sources": [
+      {"area":"butler-sources","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-records": [
+      {"area":"butler-records","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-records","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-private-settings": [
+      {"area":"butler-private-settings","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-private-settings","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens private TypeSafe VPN and MCP entry on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-device-handoffs": [
+      {"area":"butler-device-handoffs","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-device-handoffs","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "manual-note-review": [
+      {"area":"manual-note-review","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-notes": [
+      {"area":"butler-notes","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notes","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-integration-profiles": [
+      {"area":"butler-integration-profiles","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-integration-profiles","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages nonsecret integration profiles on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "harness-catalog-refresh": [
       {"area":"harness-catalog-refresh","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness catalog refresh","runtime":"real-core","shard":"1/1"},
       {"area":"harness-catalog-refresh","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness catalog refresh","runtime":"real-core","shard":"1/1"},
@@ -204,6 +356,46 @@
       {"area":"storage-integrations","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"storage-integrations","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"stabilization storage public source reaches dashboard chat and approved receipt on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
+    "butler-storage": [
+      {"area":"butler-storage","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-storage","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-storage","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-storage","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-storage","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-storage","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-storage","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-storage","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler enrolls and changes a storage source through the requesting LAN browser","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-devices": [
+      {"area":"butler-devices","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-devices","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-devices","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-devices","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-devices","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-devices","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-devices","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-devices","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler opens pairing and revokes a paired device through the requesting LAN browser","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-credentials": [
+      {"area":"butler-credentials","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-credentials","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-credentials","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-credentials","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-credentials","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-credentials","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-credentials","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-credentials","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates and deletes a write-only credential through the requesting LAN browser","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-diagnostics": [
+      {"area":"butler-diagnostics","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-diagnostics","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-diagnostics","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-diagnostics","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-diagnostics","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-diagnostics","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-diagnostics","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-diagnostics","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler confirms and downloads a diagnostics ZIP through the requesting LAN browser","runtime":"real-core","shard":"1/1"}
+    ],
     "settings-assistant-full-control": [
       {"area":"settings-assistant-full-control","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"settings-assistant-full-control","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
@@ -220,6 +412,106 @@
       {"area":"control-assistant-work","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade control assistant starts project work on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"control-assistant-work","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade control assistant starts project work on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"control-assistant-work","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade control assistant starts project work on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-project-lifecycle": [
+      {"area":"butler-project-lifecycle","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-project-lifecycle","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-project-lifecycle","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-project-lifecycle","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-project-lifecycle","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-project-lifecycle","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-project-lifecycle","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-project-lifecycle","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"Butler project lifecycle confirms and reads back changes on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-reports": [
+      {"area":"butler-reports","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-reports","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-reports","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-reports","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-reports","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-reports","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-reports","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-reports","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler drafts, transforms, deletes, signs and exports a report on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-evidence": [
+      {"area":"butler-evidence","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-evidence","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stores and downloads project evidence on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-library": [
+      {"area":"butler-library","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-library","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler adds, downloads, reindexes and removes one shared Library item on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-browser-mission": [
+      {"area":"butler-browser-mission","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-browser-mission","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-browser-mission","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-browser-mission","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-browser-mission","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-browser-mission","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-browser-mission","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-browser-mission","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler starts a scoped browser mission on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-chat-export": [
+      {"area":"butler-chat-export","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-export","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-export","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-export","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-export","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-export","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-export","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-export","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler exports a saved chat on the requesting LAN browser","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-workspace": [
+      {"area":"butler-workspace","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-workspace","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-workspace","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-workspace","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-workspace","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-workspace","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-workspace","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-workspace","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages a workspace text file on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-chat-rewind": [
+      {"area":"butler-chat-rewind","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-chat-rewind","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler rewinds a saved chat on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-notebook": [
+      {"area":"butler-notebook","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler edits, runs and interrupts a project Notebook on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-notebook-file-index": [
+      {"area":"butler-notebook-file-index","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook-file-index","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook-file-index","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook-file-index","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook-file-index","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook-file-index","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook-file-index","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-notebook-file-index","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler connects and removes a Notebook file index on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-timeline": [
       {"area":"butler-timeline","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler briefs named agent evidence on production LAN Core","runtime":"real-core","shard":"1/1"},
@@ -363,8 +655,13 @@
       {"area":"notebook-file-index","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file: file index connects from a host file and survives reload","runtime":"mock","shard":"1/1"},
       {"area":"notebook-file-index","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file: file index connects from a host file and survives reload","runtime":"mock","shard":"1/1"},
       {"area":"notebook-file-index","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
       {"area":"notebook-file-index","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
-      {"area":"notebook-file-index","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"}
+      {"area":"notebook-file-index","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"notebook-file-index","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"notebook real Core uses a supplied file index on LAN","runtime":"real-core","shard":"1/1"}
     ],
     "notebooks": [
       {"area":"notebooks","project":"desktop","test_match":"tests/interface.spec.ts","grep":"notebook Workbench tab and chat companion keep the same Python file$","runtime":"mock","shard":"1/1"},
@@ -799,7 +1096,10 @@
     "core-connection-resilience": [
       {"area":"core-connection-resilience","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
       {"area":"core-connection-resilience","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
-      {"area":"core-connection-resilience","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"}
+      {"area":"core-connection-resilience","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core outage retains the conversation and exposes reconnect","runtime":"real-core","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core outage retains the conversation and exposes reconnect","runtime":"real-core","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core outage retains the conversation and exposes reconnect","runtime":"real-core","shard":"1/1"}
     ],
     "host-startup-default": [
       {"area":"host-startup-default","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode starts new projects in Host mode on production LAN Core","runtime":"real-core","shard":"1/1"},
@@ -2376,6 +2676,16 @@
     "desktop-interface": [
       {"area":"desktop-interface","project":"desktop","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
       {"area":"desktop-interface","project":"compact","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
+    ],
+    "butler-terminal": [
+      {"area":"butler-terminal","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-terminal","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-terminal","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-terminal","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-terminal","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-terminal","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-terminal","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-terminal","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler stops a selected project terminal on paired LAN Core","runtime":"real-core","shard":"1/1"}
     ]
   },
   "full_include": [

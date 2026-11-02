@@ -425,7 +425,11 @@ class SearchRuntime:
                     "the search runtime started but never became ready: "
                     + logs.strip()[-400:]
                 )
-            self.record(digest=digest, port=port, state=WebSearchRuntimeState.READY)
+            self.record(
+                image_digest=digest,
+                port=port,
+                container_state=WebSearchRuntimeState.READY,
+            )
             self._touch()
             self._schedule_idle_stop()
             return port
@@ -488,13 +492,23 @@ class SearchRuntime:
 
     async def stop(self) -> None:
         profile = self._profile()
-        await self._run(profile, "stop", "--time", "5", CONTAINER_NAME, timeout=30)
-        self.record(state=WebSearchRuntimeState.STOPPED)
+        _, stderr, code = await self._run(
+            profile, "stop", "--time", "5", CONTAINER_NAME, timeout=30
+        )
+        if code != 0:
+            raise WebSearchError(f"search runtime stop failed: {stderr.strip()[:500]}")
+        self.record(container_state=WebSearchRuntimeState.STOPPED)
 
     async def remove(self) -> None:
         profile = self._profile()
-        await self._run(profile, "rm", "--force", CONTAINER_NAME, timeout=30)
-        self.record(state=WebSearchRuntimeState.ABSENT)
+        _, stderr, code = await self._run(
+            profile, "rm", "--force", CONTAINER_NAME, timeout=30
+        )
+        if code != 0:
+            raise WebSearchError(
+                f"search runtime removal failed: {stderr.strip()[:500]}"
+            )
+        self.record(container_state=WebSearchRuntimeState.ABSENT)
 
     def record(self, **changes: Any) -> None:
         settings = load_settings(self.store)

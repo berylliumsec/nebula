@@ -38,6 +38,9 @@ class GuideProgressWrite(BaseModel):
     status: Literal["in_progress", "completed", "dismissed"]
     step_index: int = Field(default=0, ge=0, le=64)
     expected_revision: int = Field(ge=0)
+    expected_operator_key: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
 
 
 class StarterFilesRequest(BaseModel):
@@ -95,6 +98,8 @@ def guides_router(
         if not _valid_guide_id(guide_id):
             raise HTTPException(422, "Unknown guide identity")
         key = operator_key()
+        if body.expected_operator_key is not None and body.expected_operator_key != key:
+            raise ConflictError("Active operator changed; read guide progress again")
         identity = progress_id(key, guide_id)
         completed_at = utc_now() if body.status == "completed" else None
         if body.expected_revision == 0:

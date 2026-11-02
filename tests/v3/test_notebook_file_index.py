@@ -9,7 +9,7 @@ from nebula.v3.api import create_app
 from nebula.v3.domain import Engagement
 from nebula.v3.notebook_file_index import FileIndexUnavailable, list_indexed_notebooks
 from nebula.v3.notebooks import NotebookService
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore
 
 
 def _inventory(tmp_path, root, *, complete=1, pending=0):
@@ -110,6 +110,106 @@ def test_project_prefers_index_then_falls_back_and_removal_persists(
         assert len(scans) == 2
 
     asyncio.run(scenario())
+
+
+def test_file_index_change_requires_current_project_revision(tmp_path):
+    store = NebulaStore(tmp_path / "store.db")
+    root = tmp_path / "workspace"
+    root.mkdir()
+    project = store.create(Engagement(name="Index project", workspace_path=str(root)))
+    index = _inventory(tmp_path, root)
+    service = NotebookService(
+        store=store,
+        workspace_resolver=lambda _: root,
+        automation_runtime=None,
+        data_root=tmp_path / "data",
+    )
+
+    async def scenario():
+        initial = service.file_index_status(project.id)
+        assert initial["path"] is None
+        with pytest.raises(ConflictError, match="Project changed"):
+            await service.set_file_index(
+                project.id,
+                str(index),
+                expected_project_revision=initial["project_revision"] + 1,
+            )
+        assert service.file_index_status(project.id)["path"] is None
+        saved = await service.set_file_index(
+            project.id,
+            str(index),
+            expected_project_revision=initial["project_revision"],
+        )
+        assert saved["state"] == "connected"
+        assert saved["project_revision"] > initial["project_revision"]
+        with pytest.raises(ConflictError, match="Project changed"):
+            await service.set_file_index(
+                project.id, None, expected_project_revision=initial["project_revision"]
+            )
+        assert service.file_index_status(project.id)["path"] == str(index)
+        removed = await service.set_file_index(
+            project.id, None, expected_project_revision=saved["project_revision"]
+        )
+        assert removed["state"] == "none"
+        assert index.is_file()
+
+    asyncio.run(scenario())
+
+
+def test_file_index_api_rejects_stale_connect_and_remove(tmp_path):
+    store = NebulaStore(tmp_path / "store.db")
+    root = tmp_path / "workspace"
+    root.mkdir()
+    project = store.create(Engagement(name="Index project", workspace_path=str(root)))
+    index = _inventory(tmp_path, root)
+    url = f"/api/v1/engagements/{project.id}/notebooks/file-index"
+    headers = {"Authorization": "Bearer test-token"}
+    with TestClient(create_app(store, auth_token="test-token")) as client:
+        initial = client.get(url, headers=headers).json()
+        assert initial["path"] is None
+        assert (
+            client.put(
+                url,
+                headers=headers,
+                json={
+                    "path": str(index),
+                    "expected_project_revision": initial["project_revision"] + 1,
+                },
+            ).status_code
+            == 409
+        )
+        connected = client.put(
+            url,
+            headers=headers,
+            json={
+                "path": str(index),
+                "expected_project_revision": initial["project_revision"],
+            },
+        )
+        assert connected.status_code == 200, connected.text
+        saved = connected.json()
+        assert saved["path"] == str(index)
+        assert (
+            client.delete(
+                url,
+                headers=headers,
+                params={
+                    "expected_project_revision": initial["project_revision"],
+                },
+            ).status_code
+            == 409
+        )
+        assert client.get(url, headers=headers).json()["path"] == str(index)
+        removed = client.delete(
+            url,
+            headers=headers,
+            params={
+                "expected_project_revision": saved["project_revision"],
+            },
+        )
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["path"] is None
+        assert index.is_file()
 
 
 def test_host_index_browser_pages_sqlite_files(tmp_path):

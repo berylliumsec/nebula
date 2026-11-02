@@ -50,6 +50,12 @@ def workspace_router(store: NebulaStore) -> APIRouter:
                     and_(
                         func.coalesce(
                             visible_chat.payload["metadata"][
+                                "control_assistant"
+                            ].as_boolean(),
+                            False,
+                        ).is_(False),
+                        func.coalesce(
+                            visible_chat.payload["metadata"][
                                 "temporary_assistant"
                             ].as_boolean(),
                             False,
