@@ -677,3 +677,40 @@ current revision, or zero when no bookmark record exists. Core owns revisions
 and confirms the saved value; the requesting chat rereads its controls. Private
 Butler, side, temporary and other-project conversations are excluded. These
 interactive controls do not run agents or enable command execution.
+
+
+### Inspect conversation and execution history
+
+Butler can discover saved turns with `nebula.inspect.turns`, then read Core
+context, message reasoning or evidence, turn summaries, hook outcomes and saved
+result projections with `nebula.inspect.chat`. Read projections as bounded
+4,096-character ASCII JSON chunks. Pass the returned SHA-256 on later chunks
+so a changing projection is refused instead of spliced into an older one.
+Project results have a separate `page_next_offset`. Private Butler, side,
+temporary and other-project chats are excluded.
+
+`nebula.inspect.calls` enumerates one chat or mission's tool-call identities;
+`nebula.inspect.artifacts` pages its original metadata without storage paths.
+`nebula.inspect.output` and `nebula.inspect.search_output` use Core's existing
+ownership-checked, redacted line projections, bounds and continuation cursors.
+Original bytes stay outside model-facing control receipts.
+
+`nebula.inspect.executions` and `nebula.inspect.execution` expose existing
+operator execution history. `nebula.inspect.execution_output` reads verified
+redacted stdout or stderr in 4 KiB byte pages, with UTF-8 continuation offsets.
+`nebula.inspect.cancel_execution` requires the freshly observed execution
+revision and calls Core's atomic revision check before cancellation, then reads
+back its actual status. A cancelling status still needs a terminal readback.
+The requesting Activity history refreshes; none of these actions starts or
+reruns code. Code execution and source-copy controls retain their operator review
+and device interaction in Activity.
+
+For a listed original, first read its metadata (`nebula.inspect.artifacts` or
+`nebula.inspect.execution_artifact`), then use `nebula.inspect.download_artifact`.
+The requesting browser confirms sensitive original content, rereads its owner,
+project and revision, verifies hash and size, and starts a device download. The
+control supports originals up to 20 MiB; larger originals use their existing
+browser controls. Cancellation sends no content request. A browser download
+start does not prove the operating system's final save location. Selecting a
+saved source's preview for a chat attachment remains an explicit browser input
+step; closing it transfers no excerpt to Butler.

@@ -8,6 +8,8 @@ export type ProjectMode = "docker" | "host";
 export type ProjectScopeMode = "bounded" | "all_destinations" | "allow_all";
 type NoteChanges = {title?: string; body?: string; assetIds?: string[]; evidenceIds?: string[]};
 export type SettingClientAction =
+  | { kind: "artifact_download"; projectId: string; artifactId: string; expectedRevision: number; ownerKind: "tool_call" | "execution"; ownerId: string; sha256: string; size: number; filename: string }
+  | { kind: "execution_refresh"; projectId: string; executionId: string }
   | { kind: "result_delete"; projectId: string; resultId: string; expectedRevision: number; title: string }
   | { kind: "bookmarks_refresh"; projectId: string; sessionId: string }
   | { kind: "records_refresh"; projectId: string; resource: "assets" | "findings" }
@@ -132,7 +134,7 @@ export function validScopeChanges(value: unknown): value is Record<string, unkno
 export function settingClientAction(event: ChatStreamEvent, projectId?: string): SettingClientAction | undefined {
   if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
   const receipt = event.receipt;
-  if (receipt?.state !== "pending_browser_apply" && receipt?.state !== "core_settings_saved" && receipt?.state !== "core_records_saved" && receipt?.state !== "core_project_data_saved") return undefined;
+  if (receipt?.state !== "pending_browser_apply" && receipt?.state !== "core_settings_saved" && receipt?.state !== "core_records_saved" && receipt?.state !== "core_project_data_saved" && receipt?.state !== "core_execution_saved") return undefined;
   if ((event.capability === "nebula.capabilities.change" || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability))
     && !butlerGatewayOperation(event, projectId)) return undefined;
@@ -143,6 +145,14 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (receipt.state === "core_execution_saved") {
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && operation === "nebula.inspect.cancel_execution" && receipt.read_back === true
+        && value.kind === "execution_refresh" && validNoteReferences([value.execution_id])) {
+      return {kind: "execution_refresh", projectId, executionId: value.execution_id as string};
+    }
+    return undefined;
+  }
   if (receipt.state === "core_project_data_saved") {
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && operation === "nebula.data.set_bookmark" && receipt.read_back === true
@@ -176,6 +186,16 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     return undefined;
   }
   if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    if (operation === "nebula.inspect.download_artifact" && value.kind === "artifact_download"
+        && validNoteReferences([value.artifact_id, value.owner_id])
+        && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+        && (value.owner_kind === "tool_call" || value.owner_kind === "execution")
+        && typeof value.sha256 === "string" && /^[0-9a-f]{64}$/.test(value.sha256)
+        && Number.isInteger(value.size) && Number(value.size) >= 0 && Number(value.size) <= 20 * 1024 * 1024
+        && typeof value.filename === "string" && value.filename.length > 0 && value.filename.length <= 255) {
+      return {kind: "artifact_download", projectId, artifactId: value.artifact_id as string, ownerKind: value.owner_kind,
+        ownerId: value.owner_id as string, expectedRevision: Number(value.expected_revision), sha256: value.sha256, size: Number(value.size), filename: value.filename};
+    }
     if (operation === "nebula.data.delete_result" && value.kind === "result_delete"
         && validNoteReferences([value.result_id]) && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
         && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 200) {

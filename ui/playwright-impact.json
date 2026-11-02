@@ -9,6 +9,7 @@
   ],
   "rules": [
     {"name":"butler-saved-data","patterns":["src/nebula/v3/butler_data.py","ui/src/components/butlerResultAction*","ui/src/pages/useChatNavigation*","ui/src/api/projectDataEvents.ts"],"areas":["butler-saved-data"]},
+    {"name":"butler-inspection","patterns":["src/nebula/v3/butler_inspection.py","src/nebula/v3/executions.py","ui/src/components/butlerArtifactAction*","ui/src/components/ExecutionHistory*","ui/tests/fixtures/butler_inspection_core.py"],"areas":["butler-inspection"]},
     {"name":"butler-sources","patterns":["src/nebula/v3/butler_sources.py","ui/src/components/ButlerSourceAdd.tsx","ui/src/components/butlerSourceAction.ts"],"areas":["butler-sources"]},
     {"name":"butler-records","patterns":["src/nebula/v3/butler_records.py"],"areas":["butler-records"]},
     {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts"],"areas":["butler-notes"]},
@@ -128,6 +129,16 @@
       {"area":"butler-saved-data","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-saved-data","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-saved-data","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-inspection": [
+      {"area":"butler-inspection","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-inspection","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-sources": [
       {"area":"butler-sources","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},

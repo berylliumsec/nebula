@@ -2340,6 +2340,138 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core",
       "result": "Core saves exact bookmark state at the observed revision, the visible message button refreshes, and bookmarked search and paired reload agree; stale writes preserve newer state.",
       "status": "supported"
+    },
+    {
+      "id": "chat.inspect_history",
+      "entry_point": "Saved conversation context/evidence/results and Activity execution history",
+      "ui_calls": [
+        "ui/src/components/ChatEvidence.tsx::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/evidence`",
+        "ui/src/components/ChatResults.tsx::downloadToolArtifact",
+        "ui/src/components/ChatResults.tsx::fetchChatImagePreview",
+        "ui/src/components/ChatResults.tsx::listToolCallArtifacts",
+        "ui/src/components/ChatResults.tsx::readToolOutput",
+        "ui/src/components/ChatResults.tsx::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/results?offset=${offset}`",
+        "ui/src/components/ChatTurnDetails.tsx::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/summary`",
+        "ui/src/components/butlerArtifactAction.ts::downloadToolArtifact",
+        "ui/src/components/butlerArtifactAction.ts::request::GET `artifacts/${encodeURIComponent(action.artifactId)}`",
+        "ui/src/components/butlerArtifactAction.ts::request::GET `chat-sessions/${encodeURIComponent(owner.chat_session_id)}`",
+        "ui/src/components/butlerArtifactAction.ts::request::GET ownerPath",
+        "ui/src/pages/SessionsPage.tsx::downloadToolArtifact",
+        "ui/src/pages/SessionsPage.tsx::getChatContext",
+        "ui/src/pages/SessionsPage.tsx::getChatMessageReasoning",
+        "ui/src/pages/SessionsPage.tsx::listChatHookExecutions",
+        "ui/src/pages/SessionsPage.tsx::listSessionHookExecutions",
+        "ui/src/pages/SessionsPage.tsx::listToolCallArtifacts",
+        "ui/src/pages/SessionsPage.tsx::readToolOutput",
+        "ui/src/pages/SessionsPage.tsx::searchToolOutput"
+      ],
+      "core_owner": "Core visible-chat records, ToolOutputService and ExecutionService; immutable ArtifactStore identities",
+      "butler": {
+        "discover": "nebula.capabilities.search",
+        "read": "nebula.inspect.turns, nebula.inspect.chat, nebula.inspect.calls, nebula.inspect.artifacts, nebula.inspect.output and nebula.inspect.search_output",
+        "change": "nebula.inspect.download_artifact"
+      },
+      "authority": "Interactive selected project; exact visible conversation or mission owner; Core redaction and pagination; current execution revision; requesting-browser sensitive-original confirmation and hash/size verification",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core",
+      "result": "Core-owned context/result/hook projections are chunked with stable hashes; output/search preserve Core redaction and cursors; original bytes require browser confirmation, fresh ownership and integrity checks, and stay outside model receipts.",
+      "status": "supported"
+    },
+    {
+      "id": "execution.inspect_and_cancel",
+      "entry_point": "Saved conversation context/evidence/results and Activity execution history",
+      "ui_calls": [
+        "ui/src/components/ExecutionHistory.tsx::cancelExecution",
+        "ui/src/components/ExecutionHistory.tsx::executionOutput",
+        "ui/src/components/ExecutionHistory.tsx::listExecutions"
+      ],
+      "core_owner": "Core visible-chat records, ToolOutputService and ExecutionService; immutable ArtifactStore identities",
+      "butler": {
+        "discover": "nebula.capabilities.search",
+        "read": "nebula.inspect.executions, nebula.inspect.execution, nebula.inspect.execution_artifact and nebula.inspect.execution_output",
+        "change": "nebula.inspect.cancel_execution and nebula.inspect.download_artifact"
+      },
+      "authority": "Interactive selected project; exact visible conversation or mission owner; Core redaction and pagination; current execution revision; requesting-browser sensitive-original confirmation and hash/size verification",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core",
+      "result": "Core validates the observed execution revision before cancellation, reads back actual status, and refreshes visible Activity history; only terminal readback proves settlement. Original transfers stay browser-owned.",
+      "status": "supported"
+    },
+    {
+      "id": "execution.operator_review",
+      "entry_point": "Activity: original source copy and mandatory reviewed code execution",
+      "ui_calls": [
+        "ui/src/components/ExecutionReviewDialog.tsx::preflightExecution",
+        "ui/src/components/ExecutionReviewDialog.tsx::startExecution"
+      ],
+      "core_owner": "ExecutionService reviewed-preview/start boundary and the requesting browser clipboard",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.inspect.execution",
+        "change": "nebula.navigate.open destination_id=activity"
+      },
+      "authority": "Operator review and requesting-device interaction; opening Activity grants no execution or clipboard operation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "Only Activity opening is observed; the operator chooses the exact source and personally approves execution or clipboard interaction.",
+      "status": "device_handoff",
+      "handoff": {
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Starting or rerunning code needs the operator to review the exact source, runtime and network preview in the mandatory execution review control. Butler may inspect or cancel existing records but cannot bypass that review.",
+        "operation": "nebula.navigate.open",
+        "target_id": "activity",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "execution.device_source_copy",
+      "entry_point": "Activity: original source copy and mandatory reviewed code execution",
+      "ui_calls": [
+        "ui/src/components/ExecutionHistory.tsx::getArtifactContent"
+      ],
+      "core_owner": "ExecutionService reviewed-preview/start boundary and the requesting browser clipboard",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.inspect.execution",
+        "change": "nebula.navigate.open destination_id=activity"
+      },
+      "authority": "Operator review and requesting-device interaction; opening Activity grants no execution or clipboard operation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "Only Activity opening is observed; the operator chooses the exact source and personally approves execution or clipboard interaction.",
+      "status": "device_handoff",
+      "handoff": {
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "Copying an original execution source to this device clipboard and opening it for a rerun are requesting-browser interactions; the model receives neither original bytes nor clipboard authority.",
+        "operation": "nebula.navigate.open",
+        "target_id": "activity",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "ui.selected_source_preview",
+      "entry_point": "Chat attachment picker: explicitly choose a saved source, preview or cancel before attaching an excerpt",
+      "ui_calls": [
+        "ui/src/components/ChatAttachments.tsx::request::GET `chat/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(source.id)}/preview`"
+      ],
+      "core_owner": "Core project-source ownership/extraction route; the requesting browser chooses whether any excerpt enters a message",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "Authenticated requesting browser and explicit source selection; closing preview transfers no text to Butler",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core",
+      "result": "The private source preview is visible on its requesting browser and cancellation leaves the excerpt out of model requests.",
+      "status": "supporting_transport",
+      "transport": {
+        "owner": "requesting_browser",
+        "kind": "selected_source_preview",
+        "model_operation": false,
+        "reason": "A browser-selected input projection before explicit attachment, not a separate model source-read operation.",
+        "workflows": [
+          "sources.add",
+          "chat.inspect_history"
+        ]
+      }
     }
   ],
   "ui_api_calls": [
@@ -3754,6 +3886,22 @@
     {
       "key": "ui/src/components/assistantSettingsMutations.ts::request::GET path",
       "count": 2
+    },
+    {
+      "key": "ui/src/components/butlerArtifactAction.ts::downloadToolArtifact",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerArtifactAction.ts::request::GET `artifacts/${encodeURIComponent(action.artifactId)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerArtifactAction.ts::request::GET `chat-sessions/${encodeURIComponent(owner.chat_session_id)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerArtifactAction.ts::request::GET ownerPath",
+      "count": 1
     },
     {
       "key": "ui/src/components/butlerCredentialAction.ts::credentialStatus",

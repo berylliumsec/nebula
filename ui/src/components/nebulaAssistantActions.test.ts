@@ -3,6 +3,17 @@ import type { ChatStreamEvent, HarnessProfile } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("accepts only verified execution refresh and bounded original artifact receipts", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "core_execution_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.inspect.cancel_execution", client_action: {kind: "execution_refresh", project_id: "selected", execution_id: "execution"}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "execution_refresh", projectId: "selected", executionId: "execution"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "selected")).toBeUndefined();
+    const receipt = {state: "pending_browser_apply", butler_project_id: "selected", butler_operation: "nebula.inspect.download_artifact", client_action: {kind: "artifact_download", project_id: "selected", artifact_id: "artifact", expected_revision: 1, owner_kind: "tool_call", owner_id: "call", sha256: "a".repeat(64), size: 12, filename: "out.txt"}};
+    expect(settingClientAction({...event, receipt}, "selected")).toMatchObject({kind: "artifact_download", artifactId: "artifact", size: 12});
+    expect(settingClientAction({...event, receipt}, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...receipt, client_action: {...receipt.client_action, size: 20 * 1024 * 1024 + 1}}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...receipt, butler_operation: "nebula.data.delete_result"}}, "selected")).toBeUndefined();
+  });
   it("accepts result deletion only through the selected project's exact operation", () => {
     const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Prepared", evidenceIds: [], artifacts: [], step: 0,
       receipt: {state: "pending_browser_apply", butler_project_id: "selected", butler_operation: "nebula.data.delete_result", client_action: {kind: "result_delete", project_id: "selected", result_id: "result", title: "Result", expected_revision: 2}}};

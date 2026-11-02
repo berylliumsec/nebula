@@ -566,11 +566,11 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 104
-reviewed entries: 80 supported workflows, fifteen operator-owned handoffs and
-nine supporting UI protocols that grant no model operation. Its
-source inventory contains 588 distinct API call signatures in production UI
-TypeScript, of which 443 are linked to reviewed entries; 145 still require
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 109
+reviewed entries: 82 supported workflows, seventeen operator-owned handoffs and
+ten supporting UI protocols that grant no model operation. Its
+source inventory contains 592 distinct API call signatures in production UI
+TypeScript, of which 468 are linked to reviewed entries; 124 still require
 action-level review. An additional 37 call sites reuse the already reviewed workspace, Notebook, private credential, integration-profile, report export, chat-setting and Work services. Global Work pages retain their existing UI aggregate; Butler reads and changes only the selected project through its typed roster and Work board operations. These mappings add no operation or wider authority. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions; Butler can page and apply those actions
 to exact chats one at a time. Direct `ApiClient.request` calls are keyed by route
@@ -655,6 +655,46 @@ refusal, result-deletion cancellation and confirmed absence, retained item refre
 network transition, accessibility and clipping checks. Its final saved screen was
 inspected. This is local loopback evidence; the eight permanent LAN/browser entries
 are committed and await CI for this head. Physical devices were not exercised.
-The reviewed selection now collects 250 Python, 415 frontend and 230 Playwright
-cases, with no native tests. The 145 remaining signatures still need review and
-implementation where appropriate before this PR can be called complete or merged.
+All eight saved-data LAN/browser entries passed at f5509f74 with 238 successful checks, four skips and no failures. The remaining signatures still need review and implementation before this PR can be called complete or merged.
+
+
+## Branch slice: conversation inspection and execution history
+
+Interactive Butler can page visible-chat turns and tool calls; read bounded Core
+context, reasoning, evidence, turn summaries, hook outcomes and saved result
+projections; page original artifact metadata; and use Core's existing redacted
+output read/search projections and cursors. Projection chunks carry a SHA-256
+precondition so changing data is not spliced across reads. Private chat owners
+and foreign project targets are refused before Core dispatch. Execution history
+and verified redacted byte pages remain separate from raw originals. Cancellation
+uses the observed revision at Core's store write, reads actual status back and
+refreshes requesting-project Activity history. A cancelling status does not prove
+settlement. No execution start or rerun operation is granted.
+
+Original artifact transfers remain on the requesting browser: exact owner,
+project, revision, hash and size are checked around confirmation and download.
+Cancellation sends no content GET. Model-facing receipts contain metadata only;
+originals up to 20 MiB are supported through this control. Larger originals,
+mandatory code execution review and device clipboard interaction keep their
+existing operator controls. Saved-source attachment preview is explicitly a
+requesting-browser input projection, with no extra model operation.
+
+Validation passed 39 focused Core/registry/product-help cases and 126 affected
+frontend cases, including strict real-route mock checks for artifact parents.
+Production build, mypy (224 Core files), Ruff check/format (498 Core/test/fixture
+files), Python/frontend diagnostics and product-help digest/Chroma synchronization
+(334 passages) passed. The paired production Chromium 1024×768 loopback journey
+passed private source-preview cancellation, scoped turn/summary/call/artifact
+reads, redacted output and search, raw-download cancellation and browser-only
+original bytes with SHA-256/size validation, revision-checked cancellation with
+terminal Core readback and visible history, paired reload and network transition,
+accessibility and clipping. Its final saved screen was inspected. The fixture
+uses saved synthetic records and an inert asyncio waiter; no code executes, so
+this proves cancellation/status control rather than OCI process termination.
+Independent diagnostics confirmed the chat-sessions record route, normal Quiet
+Lens reveal interaction and asynchronous fixture file reader; no assertions,
+hit tests, pairing or privacy guards were weakened. Eight permanent LAN/device
+entries are committed for CI; local evidence is loopback and physical devices
+were unavailable. The reviewed selection collects 267 Python, 437 frontend and
+238 named Playwright cases, with zero native tests. There remain 124 signatures
+requiring action-level review or implementation before completion and merge.

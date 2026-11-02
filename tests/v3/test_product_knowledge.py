@@ -731,3 +731,18 @@ def test_product_search_finds_butler_saved_results_and_bookmarks(monkeypatch):
     assert "nebula.data.set_bookmark" in text
     assert "4,096" in text
     assert "requesting" in text
+
+
+def test_product_search_finds_butler_inspection_and_sensitive_original_boundary(
+    monkeypatch,
+):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler inspect tool output, cancel an execution and download an original artifact?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.inspect.output" in text
+    assert "nebula.inspect.cancel_execution" in text
+    assert "nebula.inspect.download_artifact" in text
+    assert "redacted" in text
+    assert "requesting browser" in text

@@ -74,6 +74,7 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.sources.reindex",
         "nebula.sources.remove",
         "nebula.data.delete_result",
+        "nebula.inspect.download_artifact",
         "nebula.settings.headless_session",
         "nebula.chats.export",
         "nebula.storage.enroll",
@@ -150,6 +151,10 @@ _BACKGROUND_CHANGES = frozenset(
     }
 )
 _CATEGORIES = (
+    {
+        "id": "inspect",
+        "description": "Bounded conversation context, evidence and tool output; exact project execution history, cancellation and browser-owned original artifact downloads",
+    },
     {
         "id": "data",
         "description": "Bounded saved structured Results, project conversation search and revision-checked message bookmarks",
@@ -308,6 +313,7 @@ class ButlerCapabilities:
             from .butler_diagnostics import ButlerDiagnostics
             from .butler_devices import ButlerDevices
             from .butler_data import ButlerData
+            from .butler_inspection import ButlerInspection
             from .butler_evidence import ButlerEvidence
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
@@ -329,6 +335,14 @@ class ButlerCapabilities:
                 {
                     plugin.spec.name: plugin
                     for plugin in ButlerData(store, project_id, settings_api).actions()
+                }
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerInspection(
+                        store, project_id, settings_api
+                    ).actions()
                 }
             )
             self._actions.update(

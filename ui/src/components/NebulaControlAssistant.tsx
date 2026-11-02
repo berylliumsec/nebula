@@ -46,6 +46,7 @@ import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
 import { ButlerSourceAdd } from "./ButlerSourceAdd";
 import { applyButlerSourceAction } from "./butlerSourceAction";
 import { applyButlerResultDelete } from "./butlerResultAction";
+import { applyButlerArtifactDownload } from "./butlerArtifactAction";
 import { notifyProjectDataChanged } from "../api/projectDataEvents";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
 import { useButlerOverview } from "./useButlerOverview";
@@ -1674,6 +1675,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_delete" || action.kind === "report_signoff"
         || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
+    if (action.kind === "execution_refresh") {
+      if (activeImageProject.current !== action.projectId) return "Core confirmed the execution state. Select its original project to refresh history.";
+      notifyProjectDataChanged({projectId: action.projectId, resource: "executions", executionId: action.executionId});
+      return "Core confirmed the execution's current state and requested a refresh of its history. A cancelling status still needs a terminal readback.";
+    }
+    if (action.kind === "artifact_download") {
+      if (!api || coreState !== "online") throw new Error("Reconnect to Core before downloading an artifact.");
+      return applyButlerArtifactDownload(api, action, () => activeImageProject.current, confirm);
+    }
     if (action.kind === "bookmarks_refresh") {
       if (activeImageProject.current !== action.projectId) return "Core confirmed the bookmark. Select its original project to refresh the chat.";
       notifyProjectDataChanged({projectId: action.projectId, resource: "bookmarks", sessionId: action.sessionId});

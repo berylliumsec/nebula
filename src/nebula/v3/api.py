@@ -6085,8 +6085,15 @@ def create_app(
         tags=["executions"],
         dependencies=[Depends(require_auth)],
     )
-    async def cancel_execution(execution_id: str) -> OperatorExecution:
-        return await require_execution_service().cancel(execution_id)
+    async def cancel_execution(
+        execution_id: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> OperatorExecution:
+        service = require_execution_service()
+        if expected_revision is not None:
+            return await service.cancel(
+                execution_id, expected_revision=expected_revision
+            )
+        return await service.cancel(execution_id)
 
     @app.get(
         f"{API_PREFIX}/executions/{{execution_id}}/events",

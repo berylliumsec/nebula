@@ -634,8 +634,15 @@ class ExecutionService:
         )
         return execution
 
-    async def cancel(self, execution_id: str) -> OperatorExecution:
+    async def cancel(
+        self, execution_id: str, *, expected_revision: int | None = None
+    ) -> OperatorExecution:
         execution = self.store.get(OperatorExecution, execution_id)
+        if expected_revision is not None and execution.revision != expected_revision:
+            raise ExecutionServiceError(
+                "execution_revision_conflict",
+                "execution changed; read its current status and revision before cancelling",
+            )
         if execution.status in TERMINAL_EXECUTION_STATUSES:
             return execution
         if execution.status != OperatorExecutionStatus.CANCELLING:
