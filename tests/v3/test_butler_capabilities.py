@@ -154,6 +154,56 @@ def _scheduled_capabilities(tmp_path):
     return store, project, chat, foreign_chat, policy, case, scheduled
 
 
+def test_global_create_goal_exposes_and_saves_harness_max_effort(tmp_path):
+    store, project, _, _, policy, _, butler = _scheduled_capabilities(tmp_path)
+    profile = store.create(
+        HarnessProfile(
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="gpt-6-sol",
+            capabilities=HarnessCapabilities(
+                models=["gpt-6-sol"],
+                model_options=[
+                    HarnessModelOptions(
+                        model="gpt-6-sol",
+                        reasoning_efforts=[HarnessRuntimeOption(id="max", label="Max")],
+                    )
+                ],
+            ),
+        )
+    )
+
+    async def scenario():
+        described = await butler.describe({"operation": "nebula.global.create_goal"})
+        fields = described["input_schema"]["properties"]
+        assert "harness_reasoning_effort" in fields
+        assert "max" not in fields["reasoning_effort"]["enum"]
+        created = await butler.invoke(
+            {
+                "operation": "nebula.global.create_goal",
+                "arguments": {
+                    "project_id": project.id,
+                    "expected_project_revision": project.revision,
+                    "expected_authority_revision": policy.revision,
+                    "backend": "harness",
+                    "profile_id": profile.id,
+                    "model": "gpt-6-sol",
+                    "harness_reasoning_effort": "max",
+                    "objective": "Verify archive byte reachability",
+                    "completion_criteria": ["Report the observed byte path"],
+                },
+            },
+            change=True,
+        )
+        assert created["goal"]["status"] == "draft"
+        session = store.get(ChatSession, created["session_id"])
+        harness = store.get(HarnessSession, session.harness_session_id)
+        assert harness.metadata["runtime_options"]["reasoning_effort"] == "max"
+
+    asyncio.run(scenario())
+
+
 def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
     store, selected, chat, _, capabilities = _capabilities(tmp_path)
     first = store.create(
