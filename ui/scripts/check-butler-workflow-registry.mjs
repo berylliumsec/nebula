@@ -15,6 +15,9 @@ if (registryOption >= 0 && !process.argv[registryOption + 1]) throw new Error("-
 // These are protocols used by existing UI owners, never extra model operations.
 const transportMethods = new Map([
   ["conversation_protocol", new Set(["cancelChatTurn", "createTemporaryChat", "discardTemporaryChat", "getPendingChatTurn", "keepTemporaryChatAlive", "stopHarnessTurn", "streamChat", "getControlAssistantSession", "getOrCreateControlAssistantSession", "getHarnessTurn", "getHarnessTurnEvents"])],
+  ["editor_completion", new Set(["completeCode"])],
+  ["terminal_browser_session", new Set(["containerTerminalCapabilities", "containerTerminalCapacity", "preflightContainerTerminal", "startContainerTerminal", "terminalCommandHistoryStatus"])],
+  ["voice_client", new Set(["getVoiceWorkRoster", "getVoiceWorkDetail", "startVoiceSession"])],
   ["authenticated_media", new Set(["fetchChatImagePreview", "uploadChatImage"])],
   ["device_handoff_protocol", new Set(["createHandoff", "cancelHandoff", "consumeHandoff", "resolveHandoff"])],
   ["connection_auth", new Set(["getToken", "health", "setupStatus"])],

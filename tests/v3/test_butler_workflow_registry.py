@@ -264,13 +264,21 @@ def test_registry_rejects_protocol_without_a_reviewed_parent_workflow(
     assert "must reference reviewed operator workflows" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "ui.resource_descriptors",
+        "ui.editor_completion_protocol",
+        "ui.terminal_session_protocol",
+        "ui.voice_client_protocol",
+    ],
+)
 def test_registry_rejects_ordinary_record_mutation_hidden_as_ui_projection(
     tmp_path: Path,
+    workflow: str,
 ) -> None:
     inventory = json.loads(REGISTRY.read_text())
-    row = next(
-        row for row in inventory["actions"] if row["id"] == "ui.resource_descriptors"
-    )
+    row = next(row for row in inventory["actions"] if row["id"] == workflow)
     row["ui_calls"].append("ui/src/state/WorkspaceContext.tsx::createFinding")
     candidate = tmp_path / "hidden-record-change.json"
     candidate.write_text(json.dumps(inventory))

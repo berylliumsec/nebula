@@ -172,7 +172,8 @@
         "ui/src/state/WorkspaceContext.tsx::createEngagement",
         "ui/src/components/HostFolderPicker.tsx::listHostWorkspaceFolders",
         "ui/src/components/NebulaControlAssistant.tsx::getProjectLifecycle",
-        "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy"
+        "ui/src/components/NebulaControlAssistant.tsx::getAutomationPolicy",
+        "ui/src/components/HostFolderPicker.tsx::createHostWorkspaceFolder"
       ],
       "core_owner": "Core project create receipt, host folder resolution, default scope and Host policy",
       "butler": {
@@ -324,7 +325,8 @@
         "ui/src/components/ChatAttachments.tsx::listWorkspace",
         "ui/src/components/ChatAttachments.tsx::previewWorkspaceFile",
         "ui/src/components/WorkspacePanel.tsx::listWorkspace",
-        "ui/src/components/WorkspacePanel.tsx::previewWorkspaceFile"
+        "ui/src/components/WorkspacePanel.tsx::previewWorkspaceFile",
+        "ui/src/components/AIWritingDialog.tsx::transformWriting"
       ],
       "core_owner": "WorkspaceService and linked-folder policy",
       "butler": {
@@ -385,7 +387,8 @@
       "ui_calls": [
         "ui/src/components/ContainerTerminalPanel.tsx::recoverContainerTerminals",
         "ui/src/components/butlerTerminalStop.ts::listProjectContainerTerminals",
-        "ui/src/components/butlerTerminalStop.ts::closeProjectContainerTerminal"
+        "ui/src/components/butlerTerminalStop.ts::closeProjectContainerTerminal",
+        "ui/src/components/ContainerTerminalPanel.tsx::closeContainerTerminal"
       ],
       "core_owner": "ContainerTerminalService and project-scoped terminal API",
       "butler": {
@@ -624,7 +627,8 @@
       "entry_point": "Butler request or Reports: edit and move a non-final draft into review",
       "ui_calls": [
         "ui/src/state/WorkspaceContext.tsx::updateReport",
-        "ui/src/components/NebulaControlAssistant.tsx::getReport"
+        "ui/src/components/NebulaControlAssistant.tsx::getReport",
+        "ui/src/components/AIWritingDialog.tsx::transformWriting"
       ],
       "core_owner": "Core report API and same-project reference validator",
       "butler": {
@@ -643,7 +647,8 @@
       "ui_calls": [
         "ui/src/components/butlerReportTransform.ts::getObservation",
         "ui/src/components/butlerReportTransform.ts::getReport",
-        "ui/src/components/butlerReportTransform.ts::updateReport"
+        "ui/src/components/butlerReportTransform.ts::updateReport",
+        "ui/src/components/AIWritingDialog.tsx::transformWriting"
       ],
       "core_owner": "Core report and source note revisions, writing service, privacy policy and saved report-local transform; requesting browser owns runtime choice and review",
       "butler": {
@@ -1305,7 +1310,8 @@
         "ui/src/components/butlerNoteAction.ts::createButlerNote",
         "ui/src/components/butlerNoteAction.ts::updateObservation",
         "ui/src/components/butlerNoteAction.ts::deleteObservation",
-        "ui/src/components/butlerNoteAction.ts::observationDependencies"
+        "ui/src/components/butlerNoteAction.ts::observationDependencies",
+        "ui/src/components/AIWritingDialog.tsx::transformWriting"
       ],
       "core_owner": "Core note record and relation projection, same-project references, revision and report-dependency deletion guards",
       "butler": {
@@ -1413,7 +1419,8 @@
         "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserAttack",
         "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserCrawl",
         "ui/src/components/BrowserResearchSuite.tsx::transitionSecurityBrowserRepeaterTab",
-        "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab"
+        "ui/src/components/BrowserResearchSuite.tsx::updateSecurityBrowserRepeaterTab",
+        "ui/src/components/AIWritingDialog.tsx::transformWriting"
       ],
       "core_owner": "Operator-controlled research tabs, private traffic inspection and manual testing services and the requesting browser",
       "butler": {
@@ -1531,7 +1538,8 @@
         "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalCommandHistoryStatus",
         "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalCommandOutput",
         "ui/src/components/TerminalCommandHistoryPanel.tsx::terminalRecordingTools",
-        "ui/src/components/TerminalCommandHistoryPanel.tsx::updateTerminalRecordingTools"
+        "ui/src/components/TerminalCommandHistoryPanel.tsx::updateTerminalRecordingTools",
+        "ui/src/components/ContainerTerminalPanel.tsx::uploadEvidence"
       ],
       "core_owner": "Private command history, captured output and operator recording consent services and the requesting browser",
       "butler": {
@@ -2470,6 +2478,112 @@
         "workflows": [
           "sources.add",
           "chat.inspect_history"
+        ]
+      }
+    },
+    {
+      "id": "chat.native_subagent_control",
+      "entry_point": "Assistant native harness child-task roster and exact Stop control",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::stopHarnessSubagent"
+      ],
+      "core_owner": "ControlAssistantWork native harness task projection and harness native task-stop route",
+      "butler": {
+        "discover": "nebula.work.subagents",
+        "read": "nebula.work.native_subagent",
+        "change": "nebula.work.stop_native_subagent"
+      },
+      "authority": "Selected project, visible parent chat, exact native harness turn and task identity; can_stop must be true; Core readback confirms actual state",
+      "observed_result_test": "tests/v3/test_butler_followup.py::test_butler_native_harness_subagent_roster_and_stop",
+      "result": "Native task stop reads back from the parent harness event stream and refuses another project; it is not delegated-chat messaging.",
+      "status": "supported"
+    },
+    {
+      "id": "ui.editor_completion_protocol",
+      "entry_point": "Existing requesting-browser editor, terminal or Voice interaction",
+      "ui_calls": [
+        "ui/src/components/CodeEditorPanel.tsx::completeCode"
+      ],
+      "core_owner": "Existing authenticated Core service and the requesting browser interaction state",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "Existing operator workflow and requesting-device state; no extra model capability or widened project authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages a workspace text file on production LAN Core",
+      "result": "Existing service/interaction evidence applies to the reviewed parent workflows; this inventory link adds no model mutation or device permission.",
+      "status": "supporting_transport",
+      "transport": {
+        "owner": "requesting_browser",
+        "kind": "editor_completion",
+        "model_operation": false,
+        "reason": "The requesting editor owns its unsaved buffer, caret and transient completion suggestions. Butler can separately read or revision-edit saved workspace files; this editor protocol grants no extra model action.",
+        "workflows": [
+          "workspace.text_files",
+          "code.interactive_debugger"
+        ]
+      }
+    },
+    {
+      "id": "ui.terminal_session_protocol",
+      "entry_point": "Existing requesting-browser editor, terminal or Voice interaction",
+      "ui_calls": [
+        "ui/src/components/ContainerTerminalPanel.tsx::containerTerminalCapabilities",
+        "ui/src/components/ContainerTerminalPanel.tsx::containerTerminalCapacity",
+        "ui/src/components/ContainerTerminalPanel.tsx::preflightContainerTerminal",
+        "ui/src/components/ContainerTerminalPanel.tsx::startContainerTerminal",
+        "ui/src/components/ContainerTerminalPanel.tsx::terminalCommandHistoryStatus"
+      ],
+      "core_owner": "Existing authenticated Core service and the requesting browser interaction state",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "Existing operator workflow and requesting-device state; no extra model capability or widened project authority",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stops a selected project terminal on paired LAN Core",
+      "result": "Existing service/interaction evidence applies to the reviewed parent workflows; this inventory link adds no model mutation or device permission.",
+      "status": "supporting_transport",
+      "transport": {
+        "owner": "requesting_browser",
+        "kind": "terminal_browser_session",
+        "model_operation": false,
+        "reason": "The requesting browser negotiates its interactive terminal capabilities, capacity, preflight and connection and reads recording status. Model navigation opens the existing terminal; typed list/stop controls are separately scoped and ticket-free. Keyboard input, tickets and raw terminal output remain browser-owned.",
+        "workflows": [
+          "terminal.lifecycle",
+          "terminal.recording_consent"
+        ]
+      }
+    },
+    {
+      "id": "ui.voice_client_protocol",
+      "entry_point": "Existing requesting-browser editor, terminal or Voice interaction",
+      "ui_calls": [
+        "ui/src/components/NebulaVoice.tsx::getVoiceWorkDetail",
+        "ui/src/components/NebulaVoice.tsx::getVoiceWorkRoster",
+        "ui/src/components/NebulaVoice.tsx::startVoiceSession"
+      ],
+      "core_owner": "Existing authenticated Core service and the requesting browser interaction state",
+      "butler": {
+        "discover": "not model-callable",
+        "read": "not model-callable",
+        "change": "not model-callable"
+      },
+      "authority": "Existing operator workflow and requesting-device state; no extra model capability or widened project authority",
+      "observed_result_test": "tests/v3/test_voice.py::test_voice_session_uses_direct_openai_credential_and_roster_is_project_bound",
+      "result": "Existing service/interaction evidence applies to the reviewed parent workflows; this inventory link adds no model mutation or device permission.",
+      "status": "supporting_transport",
+      "transport": {
+        "owner": "requesting_browser",
+        "kind": "voice_client",
+        "model_operation": false,
+        "reason": "The requesting browser owns microphone permission, SDP/WebRTC session setup and projected Work view models. Its Core project records already have typed Work read/change controls; this transport neither grants a model microphone nor exposes its session secret.",
+        "workflows": [
+          "butler.memory_manage",
+          "work.create",
+          "mission.lifecycle",
+          "settings.voice_timeout"
         ]
       }
     }

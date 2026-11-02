@@ -566,11 +566,11 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 109
-reviewed entries: 82 supported workflows, seventeen operator-owned handoffs and
-ten supporting UI protocols that grant no model operation. Its
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 113
+reviewed entries: 83 supported workflows, seventeen operator-owned handoffs and
+thirteen supporting UI protocols that grant no model operation. Its
 source inventory contains 592 distinct API call signatures in production UI
-TypeScript, of which 468 are linked to reviewed entries; 124 still require
+TypeScript, of which 482 are linked to reviewed entries; 110 still require
 action-level review. An additional 37 call sites reuse the already reviewed workspace, Notebook, private credential, integration-profile, report export, chat-setting and Work services. Global Work pages retain their existing UI aggregate; Butler reads and changes only the selected project through its typed roster and Work board operations. These mappings add no operation or wider authority. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions; Butler can page and apply those actions
 to exact chats one at a time. Direct `ApiClient.request` calls are keyed by route
@@ -698,3 +698,25 @@ entries are committed for CI; local evidence is loopback and physical devices
 were unavailable. The reviewed selection collects 267 Python, 437 frontend and
 238 named Playwright cases, with zero native tests. There remain 124 signatures
 requiring action-level review or implementation before completion and merge.
+
+
+## Existing editor, terminal, Voice and child-task owners
+
+Fourteen additional signatures reuse the reviewed saved-file, Note/report writing,
+private Browser research, host-folder picker, terminal lifecycle/recording and
+native-harness child-stop owners. Each AIWritingDialog caller was traced: normal
+rewrites use the typed saved-data controls, while private active Browser research
+retains its existing operator interaction. Editor completions use an unsaved
+buffer and caret; terminal negotiation owns browser tickets and input; Voice owns
+microphone/SDP setup and projected Work data. These three client protocols have
+closed method allowlists and grant no model operation. Ordinary record mutations
+are rejected under each new protocol kind. The existing native stop is separately
+registered with exact parent/turn/task authority and Core readback.
+
+Validation passed 27 focused registry, native-child, host-folder and Voice service
+cases; the selection collects 273 Python cases, with 437 frontend and 238 browser
+cases unchanged. This mapping changes no product runtime or UI behavior. The
+inspection head 925b45f3 passed all 246 selected CI checks with four skips,
+including its eight canonical LAN/device entries. The inventory now links
+482/592 signatures through 113 reviewed entries (83 supported, 17 operator
+handoffs, 13 UI protocols); 110 signatures still require review or implementation.
