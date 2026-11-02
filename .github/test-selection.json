@@ -1,5 +1,5 @@
 {
-  "change_digest": "68bc9e81329448a0acc7b630d73f6cd47d4438afb8b0cdc3710782369f5f1189",
+  "change_digest": "eeca49853744452c1a6d16fc289e79ae0e83a46f18674b737a9d839c9ee5358c",
   "reviewed_by": "Codex focused review for control-plane read amplification",
   "reason": "Exercise bounded, thread-owned reads across scheduled and interactive Butler gateways; preserve nonempty catalog results, ownership, revisions, active transcript sequence/retraction semantics, exact project/parent child lookup, MCP horizon/permissions, legacy search policy defaults, temporary cleanup/renewal, and cancellation capacity. A disposable LAN Core scale probe supplements deterministic regression tests. Concurrent harness activity replay must publish snapshots monotonically while preserving bounded ledger reads and native goal display.",
   "exclusions": "Backend query and scheduling changes only: no UI controls, browser origin behavior, settings schemas, native code or provider/harness execution changes. Frontend, native and Playwright layers are excluded; source Core HTTP and inert capability entry points validate the affected backend journeys. No full suites, production data or production deployment.",

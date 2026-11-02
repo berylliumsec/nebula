@@ -61,8 +61,16 @@ def serve(args):
     from nebula.v3.storage import NebulaStore
 
     root = args.directory
+    workspace = root / "workspace"
+    workspace.mkdir()
     store = NebulaStore(root / "core.db")
-    project = store.create(Engagement(id="audit-project", name="Synthetic read audit"))
+    project = store.create(
+        Engagement(
+            id="audit-project",
+            name="Synthetic read audit",
+            workspace_path=str(workspace),
+        )
+    )
     other = store.create(
         Engagement(id="audit-other", name="Synthetic unrelated history")
     )
@@ -232,6 +240,7 @@ async def drive(args, token, process):
         base_url=origin,
         headers={"Authorization": "Bearer " + token},
         timeout=180,
+        limits=httpx.Limits(max_connections=256, max_keepalive_connections=256),
         trust_env=False,
     ) as client:
         for _ in range(480):
@@ -290,7 +299,10 @@ async def drive(args, token, process):
                 "/__synthetic_read_audit__",
                 json={"entry": "global" if index % 2 else "project"},
             )
-            response.raise_for_status()
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Synthetic capability failed: {response.status_code}: {response.text}"
+                )
             assert response.json()["session_id"] == "audit-chat"
             durations["settings_reads"].append((time.perf_counter() - started) * 1000)
 

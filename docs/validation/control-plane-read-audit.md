@@ -68,5 +68,85 @@ Assistant settings operations; permissions remain unchanged. Baseline reproducti
 `timeout 30 /workspace/nebula/.venv/bin/python -m pytest -q tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings`
 from the baseline worktree: one existing assertion failure, matching the candidate.
 
-Final selection, before/after measurements, disposable instance identity and
-cleanup evidence are recorded below after execution.
+## Final verification
+
+The source Core code validated here is `e5c7a55d`. Subsequent commits add this
+receipt and improve only the benchmark fixture/client; the production files'
+SHA-256 values in [control-plane-read-results.json](control-plane-read-results.json)
+match the accepted source. The baseline is `70ee6328` and uses the same interpreter,
+dependencies, private LAN interface and synthetic scale fixture.
+
+The committed `.github/test-selection.json` selects 76 cases across 22 Python
+file/node targets. Local execution covered all 76 (75 passed in the selected run,
+then the corrected enabled-server fixture passed separately). Fresh GitHub CI
+run `41520175486` collected 76 and passed **76 in 83.31 seconds** on Python 3.12.
+Its selection receipt's digest, targets and counts were checked against the
+committed plan. Other Python versions explicitly reported omission; no tests ran
+in those jobs. The Playwright selection was empty and its required gate passed.
+Ruff lint/formatting, mypy over 228 source files, diagnostic blind-spot audit and
+sdist/wheel builds passed. No full suite ran.
+
+The new tests exercise all changed catalog wrapper categories, actual project
+and scheduled capability entry points, Session ownership, a mixed 24-reader
+burst with cancellation, two 20-request delayed-SQL API bursts, stale/foreign
+identity handling, exact transcript ordering and retractions, late-profile
+discovery, legacy policy defaults, temporary lease renewal and racing native
+goal replay. Existing tests retain mutation, permission and native-goal contracts.
+
+## Disposable Core comparison
+
+Both runs bootstrapped a complete Core lifespan and used real TCP HTTP on a
+non-loopback private LAN address. Pairing/bearer authentication stayed enabled;
+unauthorized reads returned 401. Each instance used a fresh temporary SQLite
+store and synthetic workspace. No provider, harness or MCP server was contacted.
+The diagnostic POST calls the real interactive Butler gateway and global
+`work_read`; production GET routes exercise Voice Work chat inspection, goal
+children, scope tool candidates and search integration status. The client had
+256 connections for 140 readers so its own pool could not manufacture timeouts.
+
+| Concurrent workload | Baseline | Candidate |
+| --- | ---: | ---: |
+| Ordinary authenticated request median | 3,002.385 ms | 19.376 ms |
+| Ordinary authenticated request p95 | 3,316.096 ms | 260.368 ms |
+| Maximum completed ordinary request | 3,610.601 ms | 487.159 ms |
+| Ordinary 10-second timeouts | 1 | 0 |
+| Maximum event-loop lag | 1,501.275 ms | 355.147 ms |
+| Completed full settings reads | 140 | 140 |
+
+A full 140-call catalog burst takes about 77 seconds while ordinary requests
+remain responsive. Scheduled roster reviews use `chat_settings_many` to avoid
+rebuilding those catalogs. This change bounds the cost of full catalog reads
+and removes them from the shared request loop; it adds no stale catalog cache.
+
+| Production API operation, median of three | Baseline | Candidate |
+| --- | ---: | ---: |
+| Eight recent message previews from 5,000 messages | 285.777 ms | 28.893 ms |
+| Children with 2,535 unrelated goals | 283.878 ms | 5.486 ms |
+| Search status with 2,535 nonmatching policies | 202.548 ms | 7.750 ms |
+| Scope tool candidates | 98.888 ms, incomplete (0 tools) | 526.952 ms, complete (24 tools) |
+
+Scope discovery now reads the complete catalog: the candidate returned the eight
+tools from eligible server 2,535 plus 16 built-in notebook tools. The baseline
+read its first 1,000 disabled profiles and returned none. The longer discovery
+request reflects the complete result; delayed-SQL tests prove that bursts still
+leave database and worker capacity for ordinary requests.
+
+Origins: `http://172.26.91.246:51277` (baseline) and
+`http://172.26.91.246:53235` (candidate). These are source Core builds, without a
+UI bundle. Both servers exited with code 0. Their temporary directories
+`/tmp/nebula-read-audit-bq3gkqlu` and `/tmp/nebula-read-audit-9wx4vvpm` were removed,
+and absence was independently rechecked. No installed-release, live-provider or
+physical-device coverage is claimed. Browser/device gates do not apply to this
+backend-only change. Production was not accessed or restarted.
+
+Reproduction from the candidate checkout:
+
+```sh
+git worktree add --detach /workspace/nebula-read-audit-baseline 70ee6328
+PYTHONPATH=/workspace/nebula-read-audit-baseline/src timeout 240 .venv/bin/python scripts/benchmarks/control_plane_reads.py --host 172.26.91.246 --label baseline --output /tmp/nebula-control-read-evidence/baseline.json --reads 140
+PYTHONPATH=/workspace/nebula/src timeout 240 .venv/bin/python scripts/benchmarks/control_plane_reads.py --host 172.26.91.246 --label candidate --output /tmp/nebula-control-read-evidence/candidate.json --reads 140
+```
+
+Use the current executor's private non-loopback address when reproducing. The
+harness owns process termination and temporary-data cleanup, and asserts zero
+candidate timeouts, sub-second ordinary HTTP/loop lag, and late-server visibility.
