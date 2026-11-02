@@ -470,6 +470,19 @@ def test_product_search_finds_butler_integration_profile_lifecycle(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_runtime_trust_boundaries(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler runner executable trust and SSH standing Allow approval metadata revision"
+    )
+    assert any(
+        "standing" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_project_sources_lifecycle(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

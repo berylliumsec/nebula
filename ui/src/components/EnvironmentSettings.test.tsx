@@ -1,10 +1,11 @@
-import {render, screen, waitFor, within} from "@testing-library/react";
+import {act, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {MemoryRouter} from "react-router-dom";
 import {beforeEach, describe, expect, it, vi} from "vitest";
 import type {SshEnvironment, SshEnvironmentDiscovery, SshEnvironmentHost} from "../api/types";
 import {DialogProvider} from "./DialogSystem";
 import {EnvironmentSettings, hostStatus} from "./EnvironmentSettings";
+import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
 
 const api = {discoverSshEnvironments: vi.fn(), saveSshEnvironment: vi.fn(), probeSshEnvironment: vi.fn(), forgetSshEnvironment: vi.fn()};
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, previewMode: false})}));
@@ -30,6 +31,24 @@ function renderSettings() {
 
 describe("environment settings", () => {
   beforeEach(() => vi.resetAllMocks());
+
+  it("keeps an open draft and requires reopening after a Core metadata refresh", async () => {
+    api.discoverSshEnvironments.mockResolvedValue(discovery([host("fixture", {environment: environment("fixture")})]));
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(await screen.findByRole("button", {name: "fixture details"}));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox", {name: "Display name"}), "Operator draft");
+    api.discoverSshEnvironments.mockResolvedValue(discovery([host("fixture", {environment: environment("fixture", {revision: 2, displayName: "Core renamed host", label: "Core renamed host"})})]));
+    act(() => notifyRuntimeSettingsChanged("ssh-environments"));
+    expect(await within(dialog).findByText(/Settings changed while this form was open/)).toBeVisible();
+    expect(within(dialog).getByRole("textbox", {name: "Display name"})).toHaveValue("Operator draft");
+    expect(within(dialog).getByRole("button", {name: "Save"})).toBeDisabled();
+    expect(api.saveSshEnvironment).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", {name: "Close host details"}));
+    await user.click(screen.getByRole("button", {name: "Core renamed host details"}));
+    expect(within(screen.getByRole("dialog")).getByRole("textbox", {name: "Display name"})).toHaveValue("Core renamed host");
+  });
 
   it("lists every config host before any is set up, and says nothing is enabled", async () => {
     api.discoverSshEnvironments.mockResolvedValue(discovery([host("research3"), host("jetson")]));

@@ -84,6 +84,19 @@ operations remain subject to the capabilities of the active device. An explicit
 operator setting request authorizes the assistant action without a second
 confirmation dialog. A pending browser action is never reported as saved.
 
+For runner profiles, Butler can rename or enable an existing trusted profile at
+its observed body revision. New profiles and changes to the runtime, executable,
+context, socket, platform, isolation or seccomp selection require the requesting
+browser's Sandbox runners control. Omitted runner fields have Core's replacement
+defaults and must preserve existing trust configuration. For SSH environments,
+Butler reads configured aliases without running SSH resolution, edits nonsecret
+metadata, preserves an existing approval or tightens it to Ask each time, and can
+forget saved settings at the observed revision. The first standing Allow grant
+belongs in the browser's Environments control. Initial metadata creation asserts
+absence; an existing revision cannot recreate deleted settings. Core readback
+refreshes the relevant catalog while open forms retain their original revisions
+and unsaved values. Saving metadata does not establish runtime or SSH health.
+
 The Notebook destination opens the selected project's Workbench Notebook view.
 Project Policy contains execution mode, Host consent acknowledgement, and package
 network access. The MCP server catalog owns the Notebook grant. Butler's

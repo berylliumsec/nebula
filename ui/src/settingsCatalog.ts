@@ -153,7 +153,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.ssh-environments",
     label: "Environments",
-    description: "Let agents run commands on machines from ~/.ssh/config",
+    description: "Manage SSH host metadata; grant standing command approval in this browser",
     category: "Environments",
     scope: "Security",
     target: "ssh-environment-settings",
@@ -180,7 +180,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.runners",
     label: "Sandbox runners",
-    description: "Configure trusted Docker or Podman execution profiles",
+    description: "Review trusted Docker or Podman programs and isolation; Butler can rename existing profiles",
     category: "Automation",
     scope: "Workspace",
     target: "runtime-settings",

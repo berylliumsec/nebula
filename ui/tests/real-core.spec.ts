@@ -1822,7 +1822,7 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     {family: "harnesses", target: "harness-settings", payload: {kind: "codex_app_server", executable: "/bin/true"}, privatePayload: {auth_mode: "secret_ref", secret_ref: "session:" + "a".repeat(32)}},
     {family: "mcp-servers", target: "mcp-settings", payload: {transport: "streamable_http", url: "https://example.test/mcp"}, privatePayload: {auth_mode: "bearer", bearer_secret_ref: "session:" + "a".repeat(32)}},
   ];
-  let request: {prompt: string; path: string; method: string; body?: Record<string, unknown>; expected_revision?: number} | undefined;
+  let request: {prompt: string; path: string; method: string; body?: Record<string, unknown>; expected_revision?: number; readPath?: string} | undefined;
   const stub = await startLocalModelStub({responseContent: "Core returned the profile result.", toolCall: body => {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
     const lastUser = messages.map(message => message.role).lastIndexOf("user");
@@ -1836,12 +1836,12 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     if (replies === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.settings.api_schema", arguments: {path: request.path, method: request.method}}};
     if (replies === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_request"}};
     if (replies === 4 && !["POST", "GET"].includes(request.method)) return {name: "nebula_capabilities_change", arguments: {
-      operation: "nebula.settings.api_request", arguments: {method: "GET", path: request.path}}};
+      operation: "nebula.settings.api_request", arguments: {method: "GET", path: request.readPath ?? request.path}}};
     if (replies === (["POST", "GET"].includes(request.method) ? 4 : 5)) return {name: "nebula_capabilities_change", arguments: {
       operation: "nebula.settings.api_request", arguments: arguments_}};
     return undefined;
   }});
-  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000, fixtureScript: path.resolve(import.meta.dirname, "fixtures/butler_runtime_settings_core.py")});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   await withOwnedCleanup(async () => {
     const createdProject = await api.post("engagements", {data: {name: "Butler integration profile fixture", status: "active", metadata: {}}});
@@ -1958,6 +1958,64 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
       expect(await (await api.get(`mcp-servers/${foreign.id}`)).json()).toEqual(foreign);
       await assistant.getByRole("button", {name: "Hide Butler"}).click();
     }
+    const runRuntimeRequest = async (next: NonNullable<typeof request>) => {
+      request = next;
+      stub.responseContent = `Core inspected ${next.prompt}`;
+      const start = stub.requests.length;
+      if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(next.prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      await assistant.getByRole("button", {name: "Hide Butler"}).click();
+      return JSON.stringify(stub.requests.slice(start));
+    };
+    const runner = (await (await api.get("runner-profiles")).json() as Array<Record<string, unknown> & {id: string; revision: number}>).find(row => row.id === "fixture-runner")!;
+    expect(runner).toBeTruthy();
+    const runnerBody = Object.fromEntries(["name", "runtime", "executable", "context", "socket", "platform", "isolation", "enabled", "seccomp_profile"].map(key => [key, runner[key]]));
+    const trustTrace = await runRuntimeRequest({prompt: "Review the fixture runner trust boundary.", path: `runner-profiles/${runner.id}`, readPath: "runner-profiles", method: "PUT",
+      body: {...runnerBody, executable: "/untrusted/podman", expected_revision: runner.revision}});
+    expect(trustTrace).toContain("runner_trust_required");
+    expect((await (await api.get("runner-profiles")).json() as typeof runner[]).find(row => row.id === runner.id)?.revision).toBe(runner.revision);
+    await page.goto(`${core.origin}/settings#runtime-settings`);
+    const runnerSettings = page.locator("#runtime-settings");
+    const runnerPicker = runnerSettings.getByRole("combobox", {name: "Runner profile"});
+    if (await runnerPicker.count()) await runnerPicker.selectOption(runner.id);
+    await expect(runnerSettings.getByRole("textbox", {name: "Profile name", exact: true})).toHaveValue("Runner metadata fixture");
+    await runnerSettings.getByRole("textbox", {name: "Profile name", exact: true}).fill("Unsaved operator draft");
+    const renamedRunner = "Renamed runner metadata fixture";
+    const runnerTrace = await runRuntimeRequest({prompt: "Rename the trusted runner metadata fixture.", path: `runner-profiles/${runner.id}`, readPath: "runner-profiles", method: "PUT",
+      body: {...runnerBody, name: renamedRunner, expected_revision: runner.revision}});
+    expect(runnerTrace).toContain("core_settings_saved");
+    await expect(runnerSettings.locator("aside").getByText(renamedRunner, {exact: true})).toBeVisible();
+    await expect(runnerSettings.getByRole("textbox", {name: "Profile name", exact: true})).toHaveValue("Unsaved operator draft");
+    await runnerSettings.getByRole("button", {name: "Refresh runner profiles"}).click();
+    await expect(runnerSettings.getByRole("textbox", {name: "Profile name", exact: true})).toHaveValue(renamedRunner);
+    await page.reload();
+    await expect(runnerSettings.locator("aside").getByText(renamedRunner, {exact: true})).toBeVisible();
+    const ssh = await (await api.get("ssh-environments?resolve=false")).json() as {hosts: Array<{alias: string; environment?: {revision: number; command_approval: string}}>};
+    const host = ssh.hosts.find(row => row.alias === "fixture-ask")!;
+    expect(host.environment?.command_approval).toBe("ask");
+    const approvalTrace = await runRuntimeRequest({prompt: "Review the SSH standing approval boundary.", path: "ssh-environments/fixture-ask", readPath: "ssh-environments", method: "PUT",
+      body: {command_approval: "allow", expected_revision: host.environment!.revision}});
+    expect(approvalTrace).toContain("ssh_approval_required");
+    await page.goto(`${core.origin}/settings#ssh-environment-settings`);
+    const renamedSsh = "Renamed SSH metadata fixture";
+    const sshTrace = await runRuntimeRequest({prompt: "Rename the SSH metadata fixture while preserving approval.", path: "ssh-environments/fixture-ask", readPath: "ssh-environments", method: "PUT",
+      body: {display_name: renamedSsh, notes: "Saved synthetic host notes", expected_revision: host.environment!.revision}});
+    expect(sshTrace).toContain("core_settings_saved");
+    await expect(page.getByRole("button", {name: `${renamedSsh} details`, exact: true})).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("button", {name: `${renamedSsh} details`, exact: true})).toBeVisible();
+    const savedSsh = await (await api.get("ssh-environments?resolve=false")).json() as typeof ssh;
+    const savedHost = savedSsh.hosts.find(row => row.alias === "fixture-ask")!;
+    expect(savedHost.environment?.command_approval).toBe("ask");
+    const forgottenTrace = await runRuntimeRequest({prompt: "Forget the SSH metadata fixture settings.", path: "ssh-environments/fixture-ask", readPath: "ssh-environments", method: "DELETE",
+      expected_revision: savedHost.environment!.revision});
+    expect(forgottenTrace).toContain("core_settings_saved");
+    await expect(page.getByRole("button", {name: `${renamedSsh} details`, exact: true})).toHaveCount(0);
+    await page.reload();
+    expect((await (await api.get("ssh-environments?resolve=false")).json() as typeof ssh).hosts.find(row => row.alias === "fixture-ask")?.environment).toBeFalsy();
     for (const profile of profiles) {
       let saved: {id: string; revision: number} | undefined;
       const name = `butler-profile-${profile.family}`;
@@ -2018,7 +2076,7 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-integration-profiles-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
-      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "First-time Host consent refused; ordinary Docker policy edit visible after paired reload, and later Settings-only Butler turns retained commands disabled without a Kali runtime. Foreign MCP data omitted from collection/export and exact reads, edits and probes refused without changing the profile. Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Runner trust and first SSH standing approval refused without persistence; trusted runner rename and SSH metadata edit/forget read back Core, refreshed Settings and survived reload; runner draft input preserved during catalog refresh. First-time Host consent refused; ordinary Docker policy edit visible after paired reload, and later Settings-only Butler turns retained commands disabled without a Kali runtime. Foreign MCP data omitted from collection/export and exact reads, edits and probes refused without changing the profile. Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 

@@ -2586,6 +2586,95 @@
           "settings.voice_timeout"
         ]
       }
+    },
+    {
+      "id": "runners.metadata",
+      "entry_point": "Sandbox runner metadata",
+      "ui_calls": [
+        "ui/src/components/ToolingSettings.tsx::listRunnerProfiles",
+        "ui/src/components/ToolingSettings.tsx::updateRunnerProfile"
+      ],
+      "core_owner": "Core Settings gateway, runtime settings validators and atomic store revision guards",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET collection",
+        "change": "nebula.settings.api_request PUT or DELETE at the observed revision"
+      },
+      "authority": "Existing trusted profile configuration is preserved; observed body.expected_revision is required for rename or enabled changes. New trust is operator-owned.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Exact saved profile readback refreshes the Settings list, preserves unsaved form input and observed revision, and survives reload.",
+      "status": "supported"
+    },
+    {
+      "id": "ssh.metadata",
+      "entry_point": "SSH host metadata and saved settings",
+      "ui_calls": [
+        "ui/src/components/EnvironmentSettings.tsx::discoverSshEnvironments",
+        "ui/src/components/EnvironmentSettings.tsx::saveSshEnvironment",
+        "ui/src/components/EnvironmentSettings.tsx::forgetSshEnvironment",
+        "ui/src/components/EnvironmentTargetPicker.tsx::discoverSshEnvironments",
+        "ui/src/pages/SessionsPage.tsx::saveSshEnvironment"
+      ],
+      "core_owner": "Core Settings gateway, runtime settings validators and atomic store revision guards",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET collection",
+        "change": "nebula.settings.api_request PUT or DELETE at the observed revision"
+      },
+      "authority": "Configured aliases are read without SSH resolution; metadata edits preserve or tighten existing command approval. Initial creation asserts absence; updates and forget use observed revisions.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Saved host metadata and exact absence after forget are read back from Core, refresh the Settings rows and survive reload. No SSH connection or command is part of validation.",
+      "status": "supported"
+    },
+    {
+      "id": "runners.operator_trust",
+      "entry_point": "Choosing a new host executable, runtime, context, socket, platform, isolation or seccomp policy requires personal operator review.",
+      "ui_calls": [
+        "ui/src/components/ToolingSettings.tsx::updateRunnerProfile"
+      ],
+      "core_owner": "Requesting browser operator consent control",
+      "butler": {
+        "discover": "nebula.settings.open",
+        "read": "Nonsecret current settings via nebula.settings.api_request",
+        "change": "nebula.settings.open setting_id=runners"
+      },
+      "authority": "Choosing a new host executable, runtime, context, socket, platform, isolation or seccomp policy requires personal operator review.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "Only the exact Settings control opens. Butler cannot grant host trust or standing approval through its generic Settings request.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "runners",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Choosing a new host executable, runtime, context, socket, platform, isolation or seccomp policy requires personal operator review.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "ssh.operator_approval",
+      "entry_point": "Granting standing Allow approval to SSH commands requires the operator; ordinary metadata edits preserve or tighten the saved approval.",
+      "ui_calls": [
+        "ui/src/components/EnvironmentSettings.tsx::saveSshEnvironment"
+      ],
+      "core_owner": "Requesting browser operator consent control",
+      "butler": {
+        "discover": "nebula.settings.open",
+        "read": "Nonsecret current settings via nebula.settings.api_request",
+        "change": "nebula.settings.open setting_id=ssh-environments"
+      },
+      "authority": "Granting standing Allow approval to SSH commands requires the operator; ordinary metadata edits preserve or tighten the saved approval.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "Only the exact Settings control opens. Butler cannot grant host trust or standing approval through its generic Settings request.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "ssh-environments",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Granting standing Allow approval to SSH commands requires the operator; ordinary metadata edits preserve or tighten the saved approval.",
+        "observed_result": "opened"
+      }
     }
   ],
   "ui_api_calls": [

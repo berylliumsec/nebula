@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Server, ShieldCheck, TerminalSquare, Trash2, UploadCloud } from "lucide-react";
 import { ApiError } from "../api/client";
+import { RUNTIME_SETTINGS_CHANGED_EVENT } from "../api/runtimeSettingsEvents";
 import type { AutomationProjectPolicy, AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime, VpnProfile } from "../api/types";
 import { useCredentialVault, vaultUnavailableNote } from "../hooks/useCredentialVault";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -183,6 +184,8 @@ export function RunnerSettings() {
   const { api, coreState, health, previewMode, runtime } = useWorkspace();
   const [profiles, setProfiles] = useState<RunnerProfile[]>([]);
   const [selectedId, setSelectedId] = useState("local");
+  const [selectedRevision, setSelectedRevision] = useState<number>();
+  const [externallyChanged, setExternallyChanged] = useState(false);
   const [setupKind, setSetupKind] = useState<RunnerSetupKind>("podman_machine");
   const [name, setName] = useState(runtimeDefaults.podman_machine.name);
   const [executable, setExecutable] = useState(runtimeDefaults.podman_machine.executable);
@@ -198,15 +201,18 @@ export function RunnerSettings() {
   const selectedIdRef = useRef(selectedId);
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  const load = useCallback(async (signal?: AbortSignal, preserveForm = false) => {
     if (!api || coreState !== "online") return;
     try {
       const next = await api.listRunnerProfiles(signal);
       if (signal?.aborted) return;
       setAvailable(true);
       setProfiles(next);
+      if (preserveForm) { setExternallyChanged(true); return; }
+      setExternallyChanged(false);
       const selected = next.find((profile) => profile.id === selectedIdRef.current) ?? next[0];
       if (selected) {
+        setSelectedRevision(selected.revision);
         setSelectedId(selected.id); setSetupKind(profileSetup(selected)); setName(selected.name); setExecutable(selected.executable); setContext(selected.context ?? ""); setSocket(selected.socket ?? ""); setPlatform(selected.platform); setSeccompProfile(selected.seccompProfile ?? "");
       }
     } catch (loadError) {
@@ -223,6 +229,15 @@ export function RunnerSettings() {
     return () => controller.abort();
   }, [load]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent).detail === "runner-profiles") void load(controller.signal, true);
+    };
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+    return () => { controller.abort(); window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh); };
+  }, [load]);
+
   const chooseRuntime = (value: RunnerSetupKind) => {
     const defaults = runtimeDefaults[value];
     setSetupKind(value); setName(defaults.name); setExecutable(defaults.executable); setContext(defaults.context); setSocket("");
@@ -231,6 +246,8 @@ export function RunnerSettings() {
   const chooseProfile = (id: string) => {
     setSelectedId(id);
     const profile = profiles.find((item) => item.id === id);
+    setSelectedRevision(profile?.revision);
+    setExternallyChanged(false);
     if (profile) { setSetupKind(profileSetup(profile)); setName(profile.name); setExecutable(profile.executable); setContext(profile.context ?? ""); setSocket(profile.socket ?? ""); setPlatform(profile.platform); setSeccompProfile(profile.seccompProfile ?? ""); }
   };
 
@@ -239,11 +256,12 @@ export function RunnerSettings() {
     if (!api) return;
     setSaving(true); setError(undefined);
     try {
-      const current = profiles.find((profile) => profile.id === selectedId);
       const defaults = runtimeDefaults[setupKind];
-      const saved = await api.updateRunnerProfile(selectedId, { name, runtimeType: defaults.runtime, isolationMode: defaults.isolation, executable, context: context || undefined, socket: socket || undefined, platform, seccompProfile: seccompProfile || undefined, expectedRevision: current?.revision });
+      const saved = await api.updateRunnerProfile(selectedId, { name, runtimeType: defaults.runtime, isolationMode: defaults.isolation, executable, context: context || undefined, socket: socket || undefined, platform, seccompProfile: seccompProfile || undefined, expectedRevision: selectedRevision });
       setProfiles((items) => [saved, ...items.filter((profile) => profile.id !== saved.id)]);
       setSelectedId(saved.id);
+      setSelectedRevision(saved.revision);
+      setExternallyChanged(false);
       announceSettingsSaved("Runner profile verified and updated.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.tooling_settings.caught_failure_03", "A handled interface operation failed.", saveError, "tooling_settings");
@@ -251,5 +269,5 @@ export function RunnerSettings() {
     } finally { setSaving(false); }
   };
 
-  return <section className="settings-section" id="runtime-settings"><div className="section-heading"><div><h2>Sandbox runners</h2><p>Select a trusted absolute executable and local runtime context. Nebula never discovers a runner through PATH.</p></div>{profiles.length > 1 && <label className="inline-select">Profile<select aria-label="Runner profile" value={selectedId} onChange={(event) => chooseProfile(event.target.value)}>{profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>}</div>{!available ? <div className="feature-unavailable" role="status"><Server size={22} /><div><strong>Runner profiles are not available in this Core build</strong><p>Core reports {health?.runner ?? "unavailable"}; missions remain analysis-only.</p></div></div> : <div className="runner-layout"><form className="runner-form panel" onSubmit={(event) => void save(event)}><label>Runtime<select value={setupKind} onChange={(event) => chooseRuntime(event.target.value as RunnerSetupKind)}><option value="podman_machine">Podman Machine · macOS</option><option value="docker_desktop">Docker Desktop · macOS</option><option value="podman">Rootless Podman · Linux</option><option value="docker">Rootless Docker · Linux</option></select></label><label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label><label>Trusted executable<input required value={executable} pattern="/.*" spellCheck={false} onChange={(event) => setExecutable(event.target.value)} /></label><label>Container platform<select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="linux/arm64">Linux ARM64</option><option value="linux/amd64">Linux AMD64</option></select></label><label>Local context<input value={context} placeholder="Optional local runtime context" onChange={(event) => setContext(event.target.value)} /></label><label>Local Unix socket<input value={socket} pattern="^$|(?:unix://)?/.*" placeholder="Optional absolute Unix socket path" spellCheck={false} onChange={(event) => setSocket(event.target.value)} /></label><label>Seccomp profile<input value={seccompProfile} pattern="^$|/.*" placeholder="Optional absolute local profile path" spellCheck={false} onChange={(event) => setSeccompProfile(event.target.value)} /></label>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><span>No remote TCP endpoints or automatic runtime installation.</span><button className="button primary" type="submit" disabled={saving || previewMode}>{saving ? "Checking…" : "Save and check"}</button></footer></form><aside className="panel runner-status"><header className="panel-header compact"><div><h3>Isolation status</h3><p>{runtime?.mode ?? "desktop"} control plane</p></div><Server size={18} /></header>{profiles.length ? profiles.map((profile) => <article key={profile.id}><span className={`status-dot ${profile.state === "ready" ? "healthy" : "unavailable"}`} /><div><strong>{profile.name}</strong><small>{profile.state} · {profile.isolationMode.replaceAll("_", " ")} · {profile.platform}</small>{profile.detail && <p>{profile.detail}</p>}<p>The automation runtime supplies its digest-pinned Kali egress helper.</p></div></article>) : <div className="empty-state compact"><Server size={21} /><strong>No explicit runner profile</strong><p>Save this profile to ask Core to verify the local runtime and isolation boundary.</p></div>}</aside></div>}</section>;
+  return <section className="settings-section" id="runtime-settings"><div className="section-heading"><div><h2>Sandbox runners</h2><p>Select a trusted absolute executable and local runtime context. Nebula never discovers a runner through PATH.</p></div><button className="icon-button" type="button" aria-label="Refresh runner profiles" title="Refresh runner profiles" onClick={() => void load()}><RefreshCw size={16} aria-hidden="true" /></button>{profiles.length > 1 && <label className="inline-select">Profile<select aria-label="Runner profile" value={selectedId} onChange={(event) => chooseProfile(event.target.value)}>{profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>}</div>{!available ? <div className="feature-unavailable" role="status"><Server size={22} /><div><strong>Runner profiles are not available in this Core build</strong><p>Core reports {health?.runner ?? "unavailable"}; missions remain analysis-only.</p></div></div> : <div className="runner-layout"><form className="runner-form panel" onSubmit={(event) => void save(event)}><label>Runtime<select value={setupKind} onChange={(event) => chooseRuntime(event.target.value as RunnerSetupKind)}><option value="podman_machine">Podman Machine · macOS</option><option value="docker_desktop">Docker Desktop · macOS</option><option value="podman">Rootless Podman · Linux</option><option value="docker">Rootless Docker · Linux</option></select></label><label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label><label>Trusted executable<input required value={executable} pattern="/.*" spellCheck={false} onChange={(event) => setExecutable(event.target.value)} /></label><label>Container platform<select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="linux/arm64">Linux ARM64</option><option value="linux/amd64">Linux AMD64</option></select></label><label>Local context<input value={context} placeholder="Optional local runtime context" onChange={(event) => setContext(event.target.value)} /></label><label>Local Unix socket<input value={socket} pattern="^$|(?:unix://)?/.*" placeholder="Optional absolute Unix socket path" spellCheck={false} onChange={(event) => setSocket(event.target.value)} /></label><label>Seccomp profile<input value={seccompProfile} pattern="^$|/.*" placeholder="Optional absolute local profile path" spellCheck={false} onChange={(event) => setSeccompProfile(event.target.value)} /></label>{externallyChanged && <p role="status">Runner profiles changed. Refresh to load saved values; unsaved input is retained until then.</p>}{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><span>No remote TCP endpoints or automatic runtime installation.</span><button className="button primary" type="submit" disabled={saving || previewMode}>{saving ? "Checking…" : "Save and check"}</button></footer></form><aside className="panel runner-status"><header className="panel-header compact"><div><h3>Isolation status</h3><p>{runtime?.mode ?? "desktop"} control plane</p></div><Server size={18} /></header>{profiles.length ? profiles.map((profile) => <article key={profile.id}><span className={`status-dot ${profile.state === "ready" ? "healthy" : "unavailable"}`} /><div><strong>{profile.name}</strong><small>{profile.state} · {profile.isolationMode.replaceAll("_", " ")} · {profile.platform}</small>{profile.detail && <p>{profile.detail}</p>}<p>The automation runtime supplies its digest-pinned Kali egress helper.</p></div></article>) : <div className="empty-state compact"><Server size={21} /><strong>No explicit runner profile</strong><p>Save this profile to ask Core to verify the local runtime and isolation boundary.</p></div>}</aside></div>}</section>;
 }

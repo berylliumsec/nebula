@@ -4904,8 +4904,12 @@ def create_app(
         tags=["environments"],
         dependencies=[Depends(require_auth)],
     )
-    async def forget_ssh_environment(alias: str) -> Response:
-        await asyncio.to_thread(ssh_environments.forget, alias)
+    async def forget_ssh_environment(
+        alias: str, expected_revision: int | None = Query(default=None, ge=1)
+    ) -> Response:
+        await asyncio.to_thread(
+            ssh_environments.forget, alias, expected_revision=expected_revision
+        )
         return Response(status_code=204)
 
     @app.get(
@@ -9480,6 +9484,8 @@ def create_app(
                 caught_error,
                 stage="api",
             )
+            if request.expected_revision is not None:
+                raise ConflictError("Runner profile changed; read it again") from caught_error
             profile = store.create(RunnerProfile(id=profile_id, **payload))
         else:
             profile = store.update(

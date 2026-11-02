@@ -16,7 +16,7 @@ export type SettingClientAction =
   | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
   | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
   | { kind: "note_delete"; projectId: string; noteId: string; name: string; expectedRevision: number }
-  | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" }
+  | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" | "runner-profiles" | "ssh-environments" }
   | { kind: "butler_interval_refresh"; projectId: string }
   | { kind: "open_setting"; setting: SettingCatalogEntry }
   | { kind: "navigate"; destination: AssistantDestination }
@@ -180,7 +180,8 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && operation === "nebula.settings.api_request" && receipt.read_back === true
         && value.kind === "settings_profile_refresh"
-        && (value.resource === "providers" || value.resource === "harnesses" || value.resource === "mcp-servers")) {
+        && (value.resource === "providers" || value.resource === "harnesses" || value.resource === "mcp-servers"
+          || value.resource === "runner-profiles" || value.resource === "ssh-environments")) {
       return {kind: "settings_profile_refresh", projectId, resource: value.resource};
     }
     return undefined;

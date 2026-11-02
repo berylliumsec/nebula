@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import {BUTLER_INTERVAL_CHANGED_EVENT} from "../api/butlerInstructions";
+import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
 import { ApiError } from "../api/client";
 import { ACCEPTED_LIBRARY_FILES, encodeLibraryFile, MAX_LIBRARY_ITEM_BYTES, startLibraryArtifactDownload } from "../api/libraryFiles";
 import { isNebulaShell } from "../hooks/useCompactLayout";
@@ -1781,6 +1782,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     }
     if (action.kind === "settings_profile_refresh") {
       if (!api || coreState !== "online") return "Core confirmed the profile change. Reconnect to refresh Settings.";
+      if (action.resource === "runner-profiles" || action.resource === "ssh-environments") {
+        notifyRuntimeSettingsChanged(action.resource);
+        return "Core confirmed the saved runtime settings and requested a catalog refresh. Open forms keep their observed revision and unsaved values.";
+      }
       if (action.resource !== "mcp-servers") {
         try {
           await retryResource(action.resource);

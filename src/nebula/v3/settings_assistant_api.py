@@ -13,9 +13,18 @@ from fastapi import FastAPI
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.routing import Match
 
-from .domain import HarnessProfile, McpServerProfile, ProviderProfile
+from .domain import (
+    HarnessProfile,
+    McpServerProfile,
+    ProviderProfile,
+    RunnerProfile,
+    SshEnvironment,
+    SshEnvironmentApproval,
+)
+from .environments import SshEnvironmentSettings, environment_id
 from .mcp_import import export_mcp_config
 from .mcp_scope import mcp_metadata_is_visible, project_mcp_profiles
+from .storage import NotFoundError
 from .tools import GuidedToolError
 
 
@@ -333,6 +342,117 @@ async def _check_host_policy(
         )
 
 
+async def _check_runtime_mutation(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    method: str,
+    path: str,
+    body: dict[str, Any] | list[Any] | None,
+) -> dict[str, Any] | list[Any] | None:
+    route = re.fullmatch(r"/api/v1/(runner-profiles|ssh-environments)/([^/]+)", path)
+    if method != "PUT" or route is None:
+        return body
+    family, identity = route.groups()
+    authorized = await client.get(
+        f"/api/v1/{family}",
+        headers=headers,
+        params={"resolve": "false"} if family == "ssh-environments" else None,
+    )
+    if not authorized.is_success:
+        raise ValueError("read the current runtime settings before changing them")
+    if not isinstance(body, dict):
+        raise ValueError("provide the listed runtime settings object")
+    try:
+        if family == "runner-profiles":
+            current: RunnerProfile | SshEnvironment | None = app.state.store.get(
+                RunnerProfile, identity
+            )
+        else:
+            current = app.state.store.get(SshEnvironment, environment_id(identity))
+    except NotFoundError:
+        # diagnostic-expected: first-time settings have no saved entity.
+        current = None
+    if family == "runner-profiles":
+        # Match the route's effective defaults, including omitted fields that clear
+        # an existing context/socket/seccomp selection. Import after API startup.
+        from .api import RunnerProfileRequest
+
+        try:
+            candidate = RunnerProfileRequest.model_validate(body).model_dump(
+                mode="json"
+            )
+        except ValidationError as exc:
+            # diagnostic-expected: invalid model input must not echo host values.
+            raise ValueError(
+                "invalid runner settings; read the current schema"
+            ) from exc
+        protected = (
+            "runtime",
+            "executable",
+            "context",
+            "socket",
+            "platform",
+            "isolation",
+            "seccomp_profile",
+        )
+        if current is None or any(
+            candidate[field] != current.model_dump(mode="json")[field]
+            for field in protected
+        ):
+            raise GuidedToolError(
+                "runner trust belongs in the requesting browser",
+                code="runner_trust_required",
+                category="policy_denied",
+                problem="A runner program or its isolation configuration needs operator review.",
+                next_action="Use nebula.settings.open setting_id=runners. Preserve every existing runtime, executable, context, socket, platform, isolation and seccomp_profile value for a nonsecret edit.",
+                before_execution=True,
+            )
+    else:
+        try:
+            settings = SshEnvironmentSettings.model_validate(body)
+        except ValidationError as exc:
+            # diagnostic-expected: invalid settings are described without values.
+            raise ValueError("invalid SSH settings; read the current schema") from exc
+        before = (
+            current.command_approval
+            if isinstance(current, SshEnvironment)
+            else SshEnvironmentApproval.ASK
+        )
+        if (
+            settings.command_approval == SshEnvironmentApproval.ALLOW
+            and before != SshEnvironmentApproval.ALLOW
+        ):
+            raise GuidedToolError(
+                "standing SSH command approval belongs in the requesting browser",
+                code="ssh_approval_required",
+                category="policy_denied",
+                problem="Only the operator can grant standing command approval for an SSH host.",
+                next_action="Use nebula.settings.open setting_id=ssh-environments. Preserve the current approval or tighten it to ask for ordinary metadata edits.",
+                before_execution=True,
+            )
+        if current is None:
+            if settings.expected_revision is not None:
+                raise ValueError(
+                    "SSH settings revision conflict (409): host settings no longer exist"
+                )
+            return {**body, "expected_absent": True}
+        if settings.expected_absent:
+            raise ValueError(
+                "SSH settings revision conflict (409): host settings already exist"
+            )
+    revision = body.get("expected_revision")
+    if type(revision) is not int or revision < 1:
+        raise ValueError(
+            "read the exact runtime settings and supply body.expected_revision"
+        )
+    if current is None or revision != current.revision:
+        raise ValueError(
+            "runtime settings revision conflict (409): read current settings before retrying"
+        )
+    return body
+
+
 async def _settings_request(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -385,10 +505,14 @@ async def _settings_request(
     await _check_profile_mutation(
         client, headers, method, path, body, expected_revision, project_id
     )
-    response = (
-        await client.get(path, headers=headers)
-        if method == "GET"
-        else await client.request(method, path, json=body, headers=headers)
+    body = await _check_runtime_mutation(app, client, headers, method, path, body)
+    params: dict[str, Any] = {}
+    if method == "GET" and path == "/api/v1/ssh-environments":
+        params["resolve"] = "false"
+    if method == "DELETE" and re.fullmatch(r"/api/v1/ssh-environments/[^/]+", path):
+        params["expected_revision"] = expected_revision
+    response = await client.request(
+        method, path, json=body, headers=headers, params=params
     )
     if exact and not exact[3] and exact[2] != "schema" and response.is_success:
         if response.content:
@@ -517,7 +641,7 @@ async def execute_settings_api(
     if (
         selected == "DELETE"
         and re.fullmatch(
-            r"/api/v1/(?:providers|harnesses|mcp-servers|operator-profiles)/[^/]+",
+            r"/api/v1/(?:providers|harnesses|mcp-servers|operator-profiles|ssh-environments)/[^/]+",
             candidate,
         )
         and expected_revision is None
@@ -557,6 +681,49 @@ async def execute_settings_api(
             )
         result = response.json() if response.content else None
         observed = None
+        runtime_route = re.fullmatch(
+            r"/api/v1/(runner-profiles|ssh-environments)/([^/]+)", candidate
+        )
+        if runtime_route and selected in {"PUT", "DELETE"}:
+            family, identity = runtime_route.groups()
+            readback = await _settings_request(
+                app,
+                client,
+                headers,
+                project_id,
+                "GET",
+                f"/api/v1/{family}",
+                before_execution=False,
+            )
+            if readback.is_success:
+                value = readback.json()
+                values = (
+                    value
+                    if family == "runner-profiles"
+                    else [
+                        host.get("environment")
+                        for host in value["hosts"]
+                        if host.get("alias") == identity
+                    ]
+                )
+                saved = next(
+                    (
+                        item
+                        for item in values
+                        if item
+                        and item.get("id")
+                        == (
+                            identity
+                            if family == "runner-profiles"
+                            else environment_id(identity)
+                        )
+                    ),
+                    None,
+                )
+                if selected == "DELETE" and saved is None:
+                    observed = {"deleted": True}
+                elif selected == "PUT" and saved is not None:
+                    observed = saved
         readback_path: str | None = candidate
         if selected == "POST" and isinstance(result, dict) and "id" in result:
             # A collection GET cannot verify the identity returned by a create.
@@ -610,7 +777,8 @@ async def execute_settings_api(
                 "result": json.loads(rendered),
             }
         profile_route = re.fullmatch(
-            r"/api/v1/(providers|harnesses|mcp-servers)(?:/[^/]+)?", candidate
+            r"/api/v1/(providers|harnesses|mcp-servers|runner-profiles|ssh-environments)(?:/[^/]+)?",
+            candidate,
         )
         if selected != "GET" and observed is not None and profile_route:
             outcome.update(

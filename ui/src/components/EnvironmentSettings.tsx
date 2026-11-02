@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { ChevronRight, Command, FileText, RefreshCw, Server, TerminalSquare, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import { RUNTIME_SETTINGS_CHANGED_EVENT } from "../api/runtimeSettingsEvents";
 import type { SshEnvironment, SshEnvironmentApproval, SshEnvironmentDiscovery, SshEnvironmentHost } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -111,6 +112,15 @@ export function EnvironmentSettings() {
     const controller = new AbortController();
     void reload(controller.signal);
     return () => controller.abort();
+  }, [reload]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent).detail === "ssh-environments") void reload(controller.signal);
+    };
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+    return () => { controller.abort(); window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh); };
   }, [reload]);
 
   const replaceEnvironment = useCallback((saved: SshEnvironment) => {
@@ -259,6 +269,8 @@ interface HostDetailsDialogProps {
 
 function HostDetailsDialog({ api, host, busy, onTest, onClose, onSaved, onForgotten }: HostDetailsDialogProps) {
   const environment = host.environment;
+  const [observedRevision] = useState(environment?.revision);
+  const changed = observedRevision !== environment?.revision;
   const [displayName, setDisplayName] = useState(environment?.displayName ?? "");
   const [notes, setNotes] = useState(environment?.notes || host.comment);
   const [workingDirectory, setWorkingDirectory] = useState(environment?.workingDirectory ?? "");
@@ -287,7 +299,7 @@ function HostDetailsDialog({ api, host, busy, onTest, onClose, onSaved, onForgot
     event.preventDefault();
     setSaving(true);
     try {
-      onSaved(await api.saveSshEnvironment(host.alias, { displayName, notes, workingDirectory, enabled, commandApproval: approval }, environment?.revision));
+      onSaved(await api.saveSshEnvironment(host.alias, { displayName, notes, workingDirectory, enabled, commandApproval: approval }, observedRevision));
       onClose();
     } catch (saveError) {
       void logCaughtDiagnostic("interface.environment_settings.caught_failure_04", "A handled interface operation failed.", saveError, "environment_settings");
@@ -300,7 +312,7 @@ function HostDetailsDialog({ api, host, busy, onTest, onClose, onSaved, onForgot
   async function forget() {
     setSaving(true);
     try {
-      await api.forgetSshEnvironment(host.alias);
+      await api.forgetSshEnvironment(host.alias, observedRevision);
       onForgotten();
     } catch (forgetError) {
       void logCaughtDiagnostic("interface.environment_settings.caught_failure_05", "A handled interface operation failed.", forgetError, "environment_settings");
@@ -358,10 +370,11 @@ function HostDetailsDialog({ api, host, busy, onTest, onClose, onSaved, onForgot
       </div>
     </div>
     {error && <DiagnosticErrorNotice error={error} fallback="The environment operation could not be completed." compact />}
+    {changed && <p role="status">Settings changed while this form was open. Close and reopen it to load saved values.</p>}
     <footer>
-      {environment && <button className="button quiet" type="button" disabled={saving} onClick={() => void forget()} title="Remove Nebula's settings for this host. ~/.ssh/config is not changed.">Forget settings</button>}
+      {environment && <button className="button quiet" type="button" disabled={saving || changed} onClick={() => void forget()} title="Remove Nebula's settings for this host. ~/.ssh/config is not changed.">Forget settings</button>}
       <button className="button secondary" type="button" onClick={close} disabled={saving}>Cancel</button>
-      <button className="button primary" type="submit" disabled={saving || (!host.inConfig && !environment)}>{saving ? "Saving…" : "Save"}</button>
+      <button className="button primary" type="submit" disabled={saving || changed || (!host.inConfig && !environment)}>{saving ? "Saving…" : "Save"}</button>
     </footer>
   </ModalSurface>;
 }

@@ -7131,8 +7131,9 @@ export class ApiClient {
     return this.request<WireSshEnvironment>(`ssh-environments/${encodeURIComponent(alias)}/probe`, { method: "POST" }).then(mapSshEnvironment);
   }
 
-  async forgetSshEnvironment(alias: string): Promise<void> {
-    await this.request<void>(`ssh-environments/${encodeURIComponent(alias)}`, { method: "DELETE" });
+  async forgetSshEnvironment(alias: string, expectedRevision?: number): Promise<void> {
+    const query = expectedRevision === undefined ? "" : `?expected_revision=${expectedRevision}`;
+    await this.request<void>(`ssh-environments/${encodeURIComponent(alias)}${query}`, { method: "DELETE" });
   }
 
   listMcpServers(signal?: AbortSignal): Promise<McpServerProfile[]> {

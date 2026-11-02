@@ -226,6 +226,14 @@ describe("settings assistant actions", () => {
         client_action: {kind: "settings_profile_refresh", project_id: "project", resource: "providers"}},
     };
     expect(settingClientAction(event, "project")).toEqual({kind: "settings_profile_refresh", projectId: "project", resource: "providers"});
+    for (const resource of ["runner-profiles", "ssh-environments"] as const) {
+      const runtime = {...event, receipt: {...event.receipt, client_action: {
+        kind: "settings_profile_refresh", project_id: "project", resource,
+      }}};
+      expect(settingClientAction(runtime, "project")).toEqual({kind: "settings_profile_refresh", projectId: "project", resource});
+      expect(settingClientAction(runtime, "other")).toBeUndefined();
+      expect(settingClientAction({...runtime, receipt: {...runtime.receipt, read_back: false}}, "project")).toBeUndefined();
+    }
     expect(settingClientAction(event, "other")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
