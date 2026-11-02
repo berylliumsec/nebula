@@ -15797,7 +15797,11 @@ class HarnessRuntimeService:
                     )
                 )
             if name == "subagent.capabilities":
-                result = service.available_capabilities(turn.chat_turn_id)
+                from .read_workers import read_in_worker
+
+                result = await read_in_worker(
+                    service.available_capabilities, turn.chat_turn_id
+                )
             elif name == "subagent.start":
                 invocation = ToolInvocation(
                     id=call.id,

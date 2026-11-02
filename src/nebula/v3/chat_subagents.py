@@ -92,6 +92,7 @@ from .domain import (
     utc_now,
 )
 from .providers import REASONING_EFFORTS, ReasoningEffort
+from .read_workers import read_in_worker
 from .model_pricing import combined_billed_cost
 from .runtime_platform import RuntimeToolComponents
 from .native_hooks import discover_native_hooks
@@ -1402,7 +1403,9 @@ class SubagentService:
             else ScopePolicy(engagement_id=engagement.id)
         )
         mcp_profiles = catalog_mcp_profiles(
-            self.store, bypass_permissions=scope.bypass_permissions
+            self.store,
+            bypass_permissions=scope.bypass_permissions,
+            engagement_id=session.engagement_id,
         )
         selected_mcp_ids = set(snapshot.get("mcp_server_ids") or [])
         names.update(
@@ -1923,6 +1926,24 @@ class SubagentService:
 
     # -- start -------------------------------------------------------------
 
+    def _available_mcp_ids(self, parent_turn_id: str) -> list[str]:
+        turn = self.store.get(ChatTurn, parent_turn_id)
+        session = self.store.get(ChatSession, turn.session_id)
+        engagement = self.store.get(Engagement, session.engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if engagement.scope_policy_id
+            else ScopePolicy(engagement_id=engagement.id)
+        )
+        return [
+            item.id
+            for item in catalog_mcp_profiles(
+                self.store,
+                bypass_permissions=scope.bypass_permissions,
+                engagement_id=session.engagement_id,
+            )
+        ]
+
     async def start(
         self,
         invocation: ToolInvocation,
@@ -1941,6 +1962,14 @@ class SubagentService:
             raise ToolNotPermitted(
                 "subagents require a chat turn", rule="subagents.chat_turn"
             )
+        # Read before taking the admission snapshot: yielding later would let
+        # concurrent starts bypass sibling limits or duplicate an idempotency key.
+        # Inherited and empty selections need no global catalog validation.
+        available_mcp_ids = (
+            await read_in_worker(self._available_mcp_ids, invocation.chat_turn_id)
+            if isinstance(capabilities, dict) and capabilities.get("mcp_server_ids")
+            else []
+        )
         parent_turn = self.store.get(ChatTurn, invocation.chat_turn_id)
         parent_session = self.store.get(ChatSession, parent_turn.session_id)
         depth = self.depth(parent_session)
@@ -1977,21 +2006,7 @@ class SubagentService:
         mcp_server_ids = [
             item for item in snapshot.get("mcp_server_ids", []) if isinstance(item, str)
         ]
-        engagement = self.store.get(Engagement, parent_session.engagement_id)
-        scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
-            if engagement.scope_policy_id
-            else ScopePolicy(engagement_id=engagement.id)
-        )
-        selection = _capability_selection(
-            capabilities,
-            [
-                item.id
-                for item in catalog_mcp_profiles(
-                    self.store, bypass_permissions=scope.bypass_permissions
-                )
-            ],
-        )
+        selection = _capability_selection(capabilities, available_mcp_ids)
         if selection is not None and "mcp_server_ids" in selection:
             mcp_server_ids = selection["mcp_server_ids"]
         include_knowledge = bool((selection or {}).get("include_knowledge", False))
@@ -5167,7 +5182,8 @@ class SubagentBroker:
                     InvalidToolArguments("a parent turn is required")
                 )
             return ToolExecutionResult(
-                output=self.service.available_capabilities(
+                output=await read_in_worker(
+                    self.service.available_capabilities,
                     invocation.chat_turn_id,
                     category=arguments.get("category"),
                     cursor=arguments.get("cursor"),

@@ -1128,17 +1128,14 @@ def catalog_mcp_profiles(
     catalog, and any ranking request built from it, is stable across turns.
     """
 
-    skip = set(exclude)
     return tuple(
         sorted(
             (
                 profile
-                for profile in store.list_entities(McpServerProfile, limit=1000)
-                if profile.id not in skip
-                and profile.metadata.get("built_in") != "notebook_v1"
-                and profile.enabled
-                and profile.capabilities.checked_at is not None
-                and usable_mcp_tools(profile, bypass_permissions=bypass_permissions)
+                for profile in store.mcp_catalog_candidates(
+                    exclude=exclude, engagement_id=engagement_id
+                )
+                if usable_mcp_tools(profile, bypass_permissions=bypass_permissions)
             ),
             key=lambda profile: (profile.name, profile.id),
         )

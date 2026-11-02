@@ -1,10 +1,9 @@
 {
-  "change_digest": "eeca49853744452c1a6d16fc289e79ae0e83a46f18674b737a9d839c9ee5358c",
-  "reviewed_by": "Codex focused review for control-plane read amplification",
-  "reason": "Exercise bounded, thread-owned reads across scheduled and interactive Butler gateways; preserve nonempty catalog results, ownership, revisions, active transcript sequence/retraction semantics, exact project/parent child lookup, MCP horizon/permissions, legacy search policy defaults, temporary cleanup/renewal, and cancellation capacity. A disposable LAN Core scale probe supplements deterministic regression tests. Concurrent harness activity replay must publish snapshots monotonically while preserving bounded ledger reads and native goal display.",
-  "exclusions": "Backend query and scheduling changes only: no UI controls, browser origin behavior, settings schemas, native code or provider/harness execution changes. Frontend, native and Playwright layers are excluded; source Core HTTP and inert capability entry points validate the affected backend journeys. No full suites, production data or production deployment.",
+  "reviewed_by": "Codex focused review for MCP catalog filtering and worker boundaries",
+  "reason": "Validate SQL exclusion before hydration, catalogs beyond 1000 rows, fresh permissions and project ownership, async provider/harness capability entry points, inherited and explicit child selections, IPC behavior, and existing delegation cancellation/message/wait contracts. A paired disposable LAN Core benchmark exercises 34 concurrent authenticated gateway connections and unrelated HTTP reads. Concurrent explicit selections must recheck child idempotency after the worker read.",
+  "exclusions": "Backend query/scheduling only. No interface controls, settings schemas, origin behavior, native runtime or live vendor changes; frontend, native and Playwright layers are excluded. Source Core with synthetic static assets validates HTTP responsiveness. No full suites, production data or deployment.",
   "expected_tests": {
-    "python": 76,
+    "python": 44,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,30 +14,20 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_control_plane_reads.py",
-    "tests/v3/test_butler_capabilities.py",
-    "tests/v3/test_temporary_chat.py",
-    "tests/v3/test_web_search.py::test_status_reports_an_unconfigured_runtime_without_failing",
-    "tests/v3/test_web_search.py::test_status_counts_only_projects_that_can_actually_search",
-    "tests/v3/test_chat_goals.py::test_parent_cancel_stops_child_and_reserves_budget",
-    "tests/v3/test_chat_goals.py::test_parent_pause_skips_draft_children_and_commits_with_the_parent",
-    "tests/v3/test_control_assistant_work.py::test_work_roster_and_details_reject_another_project_or_control_chat",
-    "tests/v3/test_control_assistant_work.py::test_managed_goal_tools_are_discoverable_without_advertising_every_schema",
-    "tests/v3/test_control_assistant_work.py::test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message",
-    "tests/v3/test_control_assistant_work.py::test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent",
-    "tests/v3/test_control_assistant_work.py::test_chat_settings_api_reads_back_durable_next_turn_choice",
-    "tests/v3/test_tool_catalog.py::test_tool_candidates_are_the_runtime_names_of_selectable_mcp_tools",
-    "tests/v3/test_butler_data.py::test_butler_saved_results_are_scoped_paged_and_read_without_rewriting",
-    "tests/v3/test_butler_inspection.py::test_butler_inspection_uses_owned_core_conversation_projections",
-    "tests/v3/test_butler_records.py::test_butler_records_discovery_is_project_scoped_and_bounded",
-    "tests/v3/test_butler_notes.py::test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked",
-    "tests/v3/test_butler_reports.py::test_butler_reports_page_sources_and_prepare_exact_project_handoffs",
-    "tests/v3/test_butler_library.py::test_butler_library_pages_metadata_and_refuses_stale_global_change",
-    "tests/v3/test_butler_sources.py::test_butler_sources_page_metadata_and_prepare_only_owned_revisions",
-    "tests/v3/test_harness_activity_cost.py::test_session_activity_reports_state_after_long_streams_and_old_turns",
-    "tests/v3/test_harness_chat_goals.py::test_native_goal_status_survives_turn_end_beside_core_goal"
+    "tests/v3/test_mcp_catalog_reads.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_mcp_gateway.py",
+    "tests/v3/test_tool_catalog.py::test_catalog_offers_every_other_usable_server_in_name_order",
+    "tests/v3/test_tool_catalog.py::test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation",
+    "tests/v3/test_tool_catalog.py::test_prepare_defers_by_default_and_ranks_locally",
+    "tests/v3/test_notebooks.py::test_notebook_mcp_is_project_scoped_and_revocation_is_immediate",
+    "tests/v3/test_chat_subagents.py::test_capability_selection_refuses_unselected_mcp_and_keeps_launch_optional",
+    "tests/v3/test_chat_subagents.py::test_supervisor_assigns_named_tools_and_a_skill_to_one_child",
+    "tests/v3/test_chat_subagents.py::test_supervisor_discovers_and_assigns_a_lifecycle_hook_to_one_child",
+    "tests/v3/test_chat_subagents.py::test_supervisor_can_enable_ready_command_runtime_for_one_child"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [],
+  "change_digest": "676e4b31d232865c66d513e4f70017b45db8dcc3edd91df9c6b851e92338aa5f"
 }

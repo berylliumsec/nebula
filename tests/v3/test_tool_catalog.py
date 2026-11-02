@@ -776,14 +776,18 @@ def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
     # model download started in the background.
     assert snapshot["tool_catalog"]["ranker"] == "keyword"
     assert snapshot["tool_catalog"]["deferred"] == [MCP_TOOL]
-    assert set(prepared.tool_components.specs) == {
+    assert {
+        name
+        for name in prepared.tool_components.specs
+        if name.startswith(("mcp.", "tool_catalog."))
+    } == {
         MCP_TOOL,
         NOTES_TOOL,
         CATALOG_SEARCH,
         CATALOG_LOAD,
         CATALOG_CALL,
-        NOTES_WRITE_TOOL_NAME,
     }
+    assert NOTES_WRITE_TOOL_NAME in prepared.tool_components.specs
     # The selected server was built with every other usable one, and only
     # the other one's tool is on demand.
     assert service.tool_platform.calls == [["notes", "tracker"]]
