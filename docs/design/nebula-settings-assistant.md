@@ -791,3 +791,23 @@ progress metadata, not an operator security attestation. The fixed skill and
 AGENTS.md templates can be created through `nebula.data.create_starter_files` and
 are verified without overwriting existing entries. Registering a hook program
 remains an explicit choice in the lifecycle-hooks guide.
+
+### Fixed runtime setup and observed egress
+
+Use `nebula.data.system` with `setup_status` or `automation_runtime` for bounded
+Core setup and the selected project's runtime availability. For a live terminal,
+`terminal_public_ip` reads its reported egress address and observation time. It
+never creates a terminal or returns a WebSocket ticket. No active terminal means
+availability is unknown; open Terminal only on the operator's request.
+
+The existing `nebula.settings.api_request` supports fixed runtime detection and
+selection plus image prepare, retry and exact-operation cancellation. Describe the
+current schema first. Select only a detected `candidate_id`; Core re-verifies the
+fixed executable. Image prepare/retry always bind to the selected project, even
+when the model omits or supplies null `project_id`. A foreign target is refused.
+Read `setup/status` before cancellation and pass the current own `operation_id`;
+Core preserves stale-ID, cancellation and idempotency guards. Accepted preparation
+is still pending. Report the actual error, cancelled or ready phase from a later
+Core status read, and retry only the requested operation. A shared automation
+image can separately be prepared through `automation/runtime/prepare`; its global
+image metadata is distinct from the project's execution policy or Host consent.

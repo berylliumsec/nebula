@@ -3050,6 +3050,100 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler inspects Core metadata and saves guide progress on production LAN Core",
       "result": "Fixed skill files are created, verified and discovered by Core; existing templates are retained",
       "status": "supported"
+    },
+    {
+      "id": "runtime.setup_readiness",
+      "entry_point": "runtime setup readiness",
+      "ui_calls": [
+        "ui/src/components/ContainerTerminalPanel.tsx::setupStatus",
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::setupStatus",
+        "ui/src/state/WorkspaceContext.tsx::setupStatus"
+      ],
+      "core_owner": "Core SetupService status and current operation metadata",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.data.system",
+        "change": "nebula.settings.api_request"
+      },
+      "authority": "Fixed Core setup/status read; bounded observations; phase and accepted-operation state remain distinct",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core",
+      "result": "Current Core setup state is visible and survives paired browser reload",
+      "status": "supported"
+    },
+    {
+      "id": "runtime.fixed_selection",
+      "entry_point": "runtime fixed selection",
+      "ui_calls": [
+        "ui/src/pages/SettingsPage.tsx::selectSetupRuntime",
+        "ui/src/state/WorkspaceContext.tsx::refreshSetupRuntime"
+      ],
+      "core_owner": "SetupService fixed candidate detection, executable identity re-verification and stored local RunnerProfile",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request",
+        "change": "nebula.settings.api_request"
+      },
+      "authority": "Only currently detected healthy fixed candidate ID; no executable/path from model; Core re-verifies identity; selection/readback refreshes Setup",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core",
+      "result": "Selected fixed Podman metadata persists, repeated selection is idempotent and arbitrary executable input is refused",
+      "status": "supported"
+    },
+    {
+      "id": "runtime.image_preparation",
+      "entry_point": "runtime image preparation",
+      "ui_calls": [
+        "ui/src/components/ContainerTerminalPanel.tsx::prepareSetupImage",
+        "ui/src/components/ContainerTerminalPanel.tsx::retrySetupImage",
+        "ui/src/components/ContainerTerminalPanel.tsx::cancelSetupImage",
+        "ui/src/pages/SettingsPage.tsx::cancelSetupImage",
+        "ui/src/pages/SettingsPage.tsx::retrySetupImage"
+      ],
+      "core_owner": "Core SetupService preparation operation ID, project and phase plus RuntimePlatform metadata cache",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.data.system",
+        "change": "nebula.settings.api_request"
+      },
+      "authority": "Core pins omitted/null preparation target to selected project and rejects foreign target; cancel requires current own operation ID, preserving stale-ID checks. Accepted work is pending; no arbitrary runner definition",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core",
+      "result": "Real Core reports failure, retry, exact cancellation and later ready metadata; live Settings and reload agree with Core under inert OCI I/O",
+      "status": "supported"
+    },
+    {
+      "id": "runtime.shared_automation_image",
+      "entry_point": "runtime shared automation image",
+      "ui_calls": [
+        "ui/src/components/ToolingSettings.tsx::getAutomationRuntime",
+        "ui/src/components/ToolingSettings.tsx::prepareAutomationRuntime",
+        "ui/src/pages/SessionsPage.tsx::getAutomationRuntime"
+      ],
+      "core_owner": "AutomationRuntimeManager fixed shared image preparation and RuntimePlatform verified metadata cache",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.data.system",
+        "change": "nebula.settings.api_request"
+      },
+      "authority": "Fixed shared-image prepare, selected-project availability read; no new program, remote endpoint or Host consent. Readback uses actual stored runtime digest/inventory",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core",
+      "result": "Core cached runtime digest/readiness/inventory refresh live Settings and survive browser reload; fixture asserts no OCI program",
+      "status": "supported"
+    },
+    {
+      "id": "terminal.reported_egress",
+      "entry_point": "terminal reported egress",
+      "ui_calls": [
+        "ui/src/components/TopBar.tsx::engagementContainerTerminalPublicIp"
+      ],
+      "core_owner": "ContainerTerminalService selected-project live terminal and bounded public-IP observation cache",
+      "butler": {
+        "discover": "nebula.data.system",
+        "read": "nebula.data.system",
+        "change": "nebula.data.system"
+      },
+      "authority": "Only an already-running selected-project terminal; fixed Core GET, no ticket or shell output, no terminal creation or additional process. Absence is unavailable, not success",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stops a selected project terminal on paired LAN Core",
+      "result": "Synthetic running process reports reserved example address through real Core; foreign project and ended-terminal reads are refused",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [

@@ -7049,14 +7049,21 @@ test("assistant upgrade Butler stops a selected project terminal on paired LAN C
   let sessionId = "";
   let createdAt = "";
   let modelSawTicket = false;
+  const inspectPrompt = "Inspect this project terminal egress.";
   const prompts = ["Stop this project terminal after checking it.", "Stop this project terminal now."];
   const stub = await startLocalModelStub({responseContent: "The requesting browser will confirm this terminal stop.", toolCall: body => {
     const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
     const lastUser = messages.map(message => message.role).lastIndexOf("user");
     const content = String(messages[lastUser]?.content ?? "");
-    if (!prompts.some(prompt => content === prompt || content.startsWith(`${prompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))) return undefined;
+    const inspecting = content.startsWith(inspectPrompt);
+    if (!inspecting && !prompts.some(prompt => content === prompt || content.startsWith(`${prompt}\n\nREFERENCE MATERIAL NEBULA RETRIEVED`))) return undefined;
     if (JSON.stringify(messages).includes("websocket_ticket")) modelSawTicket = true;
     const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    if (inspecting) return [
+      {name: "nebula_capabilities_search", arguments: {query: "terminal public IP"}},
+      {name: "nebula_capabilities_describe", arguments: {operation: "nebula.data.system"}},
+      {name: "nebula_capabilities_read", arguments: {operation: "nebula.data.system", arguments: {kind: "terminal_public_ip"}}},
+    ][replies];
     return [
       {name: "nebula_capabilities_search", arguments: {query: "stop terminal session"}},
       {name: "nebula_capabilities_describe", arguments: {operation: "nebula.terminal.list"}},
@@ -7107,6 +7114,14 @@ test("assistant upgrade Butler stops a selected project terminal on paired LAN C
       await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(prompt);
       await assistant.getByRole("button", {name: "Send to Butler"}).click();
     };
+    stub.responseContent = "Core returned the synthetic terminal egress observation.";
+    const egressStart = stub.requests.length;
+    await send(inspectPrompt);
+    await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 45_000});
+    const observation = JSON.stringify(stub.requests.slice(egressStart).flatMap(item => Array.isArray(item.messages) ? item.messages : []).filter(message => message.role === "tool"));
+    expect(observation).toContain("203.0.113.42");
+    expect(observation).not.toContain("websocket_ticket");
+    stub.responseContent = "The requesting browser will confirm this terminal stop.";
     await send(prompts[0]);
     const stopDialog = page.getByRole("dialog", {name: new RegExp(`Stop terminal ${sessionId.slice(0, 8)}`)});
     await expect(stopDialog).toBeVisible({timeout: 45_000});
@@ -7130,7 +7145,7 @@ test("assistant upgrade Butler stops a selected project terminal on paired LAN C
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-terminal-lan", {body: JSON.stringify({origin: core.origin, build: "production",
       project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-      sessionId, runner: "synthetic process", result: "Running session listed without a ticket; cancellation retained it; confirmed browser action closed the process once; Core readback and refresh show absence"}), contentType: "application/json"});
+      sessionId, runner: "synthetic process", result: "Running session and synthetic egress observed without a ticket or process creation; cancellation retained it; confirmed browser action closed the process once; Core readback and refresh show absence"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},
@@ -15389,9 +15404,7 @@ test("assistant upgrade Butler inspects Core metadata and saves guide progress o
     const skills = await (await api.get(`skills?engagement_id=${projectId}`)).json() as Array<{name: string}>;
     expect(skills.some(item => item.name === "butler-guide-fixture")).toBe(true);
     const openGuides = async () => {
-      const trigger = page.getByRole("button", {name: "Guides", exact: true});
-      if (!await trigger.isVisible()) await page.getByRole("button", {name: "Open top menu"}).click();
-      await trigger.click();
+      await (await guideEntry(page)).click();
       const hub = page.getByRole("dialog", {name: "Guides", exact: true});
       await expect(hub.getByText("1 of 17 done", {exact: true})).toBeVisible();
       await expect(hub.getByRole("searchbox", {name: "Search guides"})).toBeFocused();
@@ -15410,5 +15423,90 @@ test("assistant upgrade Butler inspects Core metadata and saves guide progress o
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-core-metadata-screen", {body: await page.screenshot(), contentType: "image/png"});
     await testInfo.attach("butler-core-metadata-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry], result: "Closed public Core reads, Git status/diff, selected resource search with private-chat exclusion, saved operator/revision-bound guide progress and verified fixed skill templates; visible guide completion survives paired reload. No model program, container, SSH or vendor account execution."}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
+test("assistant upgrade Butler prepares selected project setup and observes runtime status on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  let action: {method: string; path: string; body?: Record<string, unknown>; prompt: string} | undefined;
+  const stub = await startLocalModelStub({responseContent: "", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const last = messages.map(item => item.role).lastIndexOf("user");
+    if (!action || !String(messages[last]?.content ?? "").startsWith(action.prompt)) return undefined;
+    const count = messages.slice(last + 1).filter(item => item.role === "tool").length;
+    if (count === 0) return {name: "nebula_capabilities_search", arguments: {query: "Core Settings API setup image controls"}};
+    if (count === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_schema"}};
+    if (count === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.settings.api_schema", arguments: {method: action.method, path: action.path}}};
+    if (count === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_request"}};
+    if (count === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.settings.api_request", arguments: {method: action.method, path: action.path, ...(action.body ? {body: action.body} : {})}}};
+    return undefined;
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), fixtureScript: path.resolve(import.meta.dirname, "fixtures/butler_setup_core.py")});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string; name: string}>;
+    const projectId = projects.find(item => item.name === "Setup controls fixture")!.id;
+    const providerResponse = await api.post("providers", {data: {name: "Setup control model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model", options: {context_window: 32768}}}});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${provider.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(item => item.startsWith("assets/index-") && item.endsWith(".js"))!;
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Setup controls LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/settings#setup-settings`);
+    const setup = page.locator("#setup-settings");
+    const ask = async (method: string, route: string, body?: Record<string, unknown>) => {
+      const start = stub.requests.length;
+      action = {method, path: route, body, prompt: `Observe Core setup control ${method} ${route} request ${start}.`};
+      stub.responseContent = `Core returned setup observation ${start}.`;
+      if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(action.prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      const trace = JSON.stringify(stub.requests.slice(start).flatMap(item => Array.isArray(item.messages) ? item.messages : []).filter(message => message.role === "tool"));
+      expect(trace).toContain("read_back");
+      await assistant.getByRole("button", {name: "Hide Butler"}).click();
+      return trace;
+    };
+    const detection = await ask("POST", "setup/runtime/refresh");
+    const status = await (await api.get("setup/status")).json() as {terminal: {candidates: Array<{runtime: string; candidate_id: string}>}};
+    const podman = status.terminal.candidates.find(item => item.runtime === "podman")!;
+    expect(detection).toContain(podman.candidate_id);
+    await ask("POST", "setup/runtime/select", {candidate_id: podman.candidate_id});
+    await ask("POST", "setup/image/prepare");
+    await expect(setup.getByRole("heading", {name: "Kali preparation error", exact: true})).toBeVisible();
+    await expect(setup.getByRole("button", {name: "Retry preparation", exact: true})).toBeVisible();
+    await ask("POST", "setup/image/retry");
+    await expect(setup.getByRole("heading", {name: "Preparing Kali runtime…", exact: true})).toBeVisible();
+    const pending = await (await api.get("setup/status")).json() as {terminal: {image_preparation: {project_id: string; operation_id: string}}};
+    expect(pending.terminal.image_preparation.project_id).toBe(projectId);
+    await ask("POST", "setup/image/cancel", {operation_id: pending.terminal.image_preparation.operation_id});
+    await expect(setup.getByRole("heading", {name: "Kali preparation cancelled", exact: true})).toBeVisible();
+    await ask("POST", "setup/image/retry");
+    await expect(setup.getByRole("heading", {name: "Kali runtime ready", exact: true})).toBeVisible();
+    await ask("GET", "setup/status");
+    await ask("POST", "setup/runtime/refresh");
+    await page.reload();
+    await expect(setup.getByRole("heading", {name: "Kali runtime ready", exact: true})).toBeVisible();
+    await page.goto(`${core.origin}/settings#automation-runtime-settings`);
+    expect(await ask("POST", "automation/runtime/prepare")).toContain("automation-runtime");
+    expect(await ask("GET", "automation/runtime")).toContain("sha256:");
+    const runtime = await (await api.get(`automation/runtime?engagement_id=${projectId}`)).json() as {ready: boolean; digest: string};
+    expect(runtime).toMatchObject({ready: true, digest: "sha256:" + "b".repeat(64)});
+    const automation = page.locator("#automation-runtime-settings");
+    await expect(automation.getByRole("heading", {name: "Ready", exact: true})).toBeVisible();
+    await page.reload();
+    await expect(automation.getByRole("heading", {name: "Ready", exact: true})).toBeVisible();
+    await automation.getByRole("heading", {name: "Ready", exact: true}).scrollIntoViewIfNeeded();
+    await expect(automation.getByRole("heading", {name: "Ready", exact: true})).toBeInViewport();
+    expect((await new AxeBuilder({page}).include("#automation-runtime-settings").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-setup-screen", {body: await page.screenshot(), contentType: "image/png"});
+    await testInfo.attach("butler-setup-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry], runtime: "real SetupService and metadata persistence; all OCI process boundaries inert or forbidden", result: "Fixed-candidate detection/selection; selected-project image failure, retry, exact cancellation, retry to readiness; accepted snapshots distinguished from actual phases; live Settings refresh and paired reload; fixed shared automation metadata readback."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });

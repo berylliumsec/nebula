@@ -162,7 +162,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.automation-runtime",
     label: "Automation runtime",
-    description: "Select the command runtime used by automated operations",
+    description: "Inspect and prepare the shared automation image; project policy chooses the command runtime",
     category: "Automation",
     scope: "Workspace",
     target: "automation-runtime-settings",
@@ -234,7 +234,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.setup",
     label: "Terminal and Core setup",
-    description: "Check runtime readiness and configure the UI shell connection",
+    description: "Choose a verified runtime, prepare or retry its image, and inspect Core readiness",
     category: "Setup",
     scope: "Workspace",
     target: "setup-settings",

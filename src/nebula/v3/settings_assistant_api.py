@@ -575,8 +575,35 @@ async def _settings_request(
     *,
     before_execution: bool = True,
 ) -> httpx.Response:
-    """Keep globally routed MCP profiles within the UI's selected-project boundary."""
+    """Keep MCP profiles and setup image controls within the selected project."""
 
+    if method == "POST" and path in {
+        "/api/v1/setup/image/prepare",
+        "/api/v1/setup/image/retry",
+    }:
+        if body is not None and not isinstance(body, dict):
+            raise ValueError(
+                "provide a setup preparation object for the selected project"
+            )
+        if isinstance(body, dict) and body.get("project_id") not in (None, project_id):
+            raise ValueError("prepare an image only for the selected project")
+        # Retry's public API inherits the previous operation's project when
+        # omitted. An interactive Butler request must retain its own scope.
+        body = {**(body or {}), "project_id": project_id}
+    if method == "POST" and path == "/api/v1/setup/image/cancel":
+        current = await client.get("/api/v1/setup/status", headers=headers)
+        if not current.is_success:
+            return current
+        preparation = current.json()["terminal"]["image_preparation"]
+        operation_id = body.get("operation_id") if isinstance(body, dict) else None
+        if (
+            operation_id is not None
+            and preparation.get("operation_id") == operation_id
+            and preparation.get("project_id") != project_id
+        ):
+            raise ValueError("cancel only an image operation in the selected project")
+        # Core still checks the exact operation ID, including races and
+        # idempotent cancellation; never substitute a newer operation here.
     if method == "GET" and path in {
         "/api/v1/mcp-servers",
         "/api/v1/mcp-servers/export",

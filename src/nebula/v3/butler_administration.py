@@ -46,6 +46,8 @@ _SYSTEM = {
     "diagnostic_files": "/api/v1/diagnostics/files",
     "diagnostic_settings": "/api/v1/diagnostics/settings",
     "runtime_usage": "/api/v1/runtime-usage",
+    "setup_status": "/api/v1/setup/status",
+    "automation_runtime": "/api/v1/automation/runtime?engagement_id={project}",
     "desktop_browser": "/api/v1/desktop-browser-mode",
     "source_control": "/api/v1/engagements/{project}/workspace/source-control",
     "execution_capabilities": "/api/v1/engagements/{project}/execution-capabilities",
@@ -283,7 +285,7 @@ class ButlerAdministration(ButlerData):
         operations: list[tuple[str, str, dict[str, Any], Any, bool]] = [
             (
                 "nebula.data.system",
-                "Read bounded Core health, public diagnostics/errors/files/settings/incidents, runtime usage, execution capabilities, terminal public IP, local issue overview, desktop browser mode, workspace Git status/diff, selected-project harness session metadata or a visible chat's side-chat labels. No sensitive detail, private transcript, arbitrary path/URL, process or account-history import. source_diff requires path; side_chats requires session_id. offset/expected_sha256 page the same stable observation.",
+                "Read bounded Core health, public diagnostics/errors/files/settings/incidents, setup status and project automation runtime, recorded runtime usage, execution capabilities, terminal public IP, local issue overview, desktop browser mode, workspace Git status/diff, selected-project harness session metadata or a visible chat's side-chat labels. No sensitive detail, private transcript, arbitrary path/URL, process or account-history import. source_diff requires path; side_chats requires session_id. offset/expected_sha256 page the same stable observation.",
                 _schema(
                     {
                         "kind": {

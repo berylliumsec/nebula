@@ -779,3 +779,14 @@ def test_product_search_finds_butler_core_observations_and_guide_progress(monkey
     assert "nebula.data.system" in text
     assert "nebula.data.search_resources" in text
     assert "nebula.data.guides" in text
+
+
+def test_product_search_finds_butler_fixed_setup_and_terminal_egress(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler fixed runtime setup image prepare retry cancellation egress"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "candidate_id" in text
+    assert "operation_id" in text
+    assert "terminal_public_ip" in text

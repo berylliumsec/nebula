@@ -21,7 +21,13 @@ from nebula.v3.container_terminal import (
     ContainerTerminalService,
     ContainerTerminalStartRequest,
 )
-from nebula.v3.domain import Engagement, RunnerIsolation, RunnerProfile, RunnerRuntime
+from nebula.v3.domain import (
+    Engagement,
+    RunnerIsolation,
+    RunnerProfile,
+    RunnerRuntime,
+    utc_now,
+)
 from nebula.v3.runtime_platform import HumanTerminalRuntimeResolution, RuntimePlatform
 from nebula.v3.sandbox import PreparedContainerImage
 from nebula.v3.storage import NebulaStore
@@ -39,6 +45,9 @@ class SyntheticTerminalProcess:
 
     async def write(self, data: bytes) -> None:
         del data
+
+    async def read_public_ip_status(self) -> str:
+        return f"203.0.113.42\n{int(utc_now().timestamp())}\n"
 
     def resize(self, columns: int, rows: int) -> None:
         del columns, rows
