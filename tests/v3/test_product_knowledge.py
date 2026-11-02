@@ -483,6 +483,19 @@ def test_product_search_finds_butler_project_sources_lifecycle(monkeypatch):
     )
 
 
+def test_product_search_explains_butler_host_policy_consent(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler grant the first Host access acknowledgment through the generic project policy Settings API?"
+    )
+    assert any(
+        "host" in str(item["text"]).lower()
+        and "requesting" in str(item["text"]).lower()
+        and "consent" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_project_notes_lifecycle(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

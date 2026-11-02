@@ -1616,6 +1616,41 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
     await pairRealCoreBrowser(page, core, "Butler integration LAN browser", {requireReady: false});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    for (const policyAction of ["consent", "ordinary"] as const) {
+      const before = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as Record<string, unknown> & {revision: number};
+      expect(before.host_access_acknowledged).toBe(false);
+      request = {prompt: `Check the ${policyAction} policy boundary through Core.`, path: "engagements/{project}/automation-policy", method: "PUT",
+        body: {...Object.fromEntries(["approval_policy", "runner_profile_id", "vpn_profile_id", "max_timeout_ms"].map(key => [key, before[key]])),
+          execution_mode: "docker", network_enabled: false, expected_revision: before.revision,
+          host_access_acknowledged: policyAction === "consent" ? "yes" : false}};
+      stub.responseContent = `Core inspected the ${policyAction} policy request.`;
+      const requestStart = stub.requests.length;
+      if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(request.prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      const observed = await (await api.get(`engagements/${projectId}/automation-policy`)).json() as typeof before;
+      expect(observed.host_access_acknowledged).toBe(false);
+      if (policyAction === "consent") {
+        expect(observed).toEqual(before);
+        const tools = stub.requests.slice(requestStart).flatMap(body => {
+          const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+          return messages.slice(messages.map(message => message.role).lastIndexOf("user") + 1).filter(message => message.role === "tool");
+        }).map(message => JSON.parse(String(message.content)) as {error_code?: string; side_effects?: string});
+        expect(tools.some(value => value.error_code === "host_consent_required" && value.side_effects === "none")).toBe(true);
+      } else {
+        expect(observed.execution_mode).toBe("docker");
+        expect(observed.network_enabled).toBe(false);
+        expect(observed.revision).toBeGreaterThan(before.revision);
+      }
+      await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    }
+    await page.goto(`${core.origin}/settings#engagement-policy-settings`);
+    await expect(page.getByRole("combobox", {name: "Project execution mode"})).toHaveValue("docker");
+    await page.reload();
+    await expect(page.getByRole("combobox", {name: "Project execution mode"})).toHaveValue("docker");
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
     const otherProject = await api.post("engagements", {data: {name: "Other MCP owner", status: "active", metadata: {}}});
     expect(otherProject.ok(), await otherProject.text()).toBe(true);
     const otherProjectId = (await otherProject.json() as {id: string}).id;
@@ -1736,7 +1771,7 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-integration-profiles-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
-      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Foreign MCP data omitted from collection/export and exact reads, edits and probes refused without changing the profile. Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "First-time Host consent refused; ordinary Docker policy edit visible after paired reload, and later Settings-only Butler turns retained commands disabled without a Kali runtime. Foreign MCP data omitted from collection/export and exact reads, edits and probes refused without changing the profile. Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 

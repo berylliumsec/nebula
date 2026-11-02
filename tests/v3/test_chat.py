@@ -160,6 +160,14 @@ async def _admitted_stream(service: ChatService, prepared):
             await admission.release(turn.id)
 
 
+async def _complete_and_name(service: ChatService, prepared):
+    """Keep optional naming inside the fixture's event-loop lifetime."""
+    completion = await service.complete(prepared)
+    if service._naming_tasks:
+        await asyncio.gather(*tuple(service._naming_tasks))
+    return completion
+
+
 class CountingRecoveryProvider(FakeProvider):
     def __init__(self, provider_id: str) -> None:
         super().__init__(provider_id, local=True)
@@ -3424,15 +3432,17 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(store)
     first = asyncio.run(
-        service.complete(
+        _complete_and_name(
+            service,
             service.prepare(
                 ChatCompletionRequest(
                     engagement_id=engagement.id,
                     provider_id=profile.id,
+                    allow_agent_messaging=False,
                     include_knowledge=False,
                     messages=[{"role": "user", "content": "First"}],
                 )
-            )
+            ),
         )
     )
     assert first.session_id
@@ -3441,6 +3451,7 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
             ChatCompletionRequest(
                 session_id=first.session_id,
                 provider_id=profile.id,
+                allow_agent_messaging=False,
                 include_knowledge=False,
                 messages=[
                     {"role": "user", "content": "Changed first message"},
@@ -3453,6 +3464,7 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
             ChatCompletionRequest(
                 session_id=first.session_id,
                 provider_id=profile.id,
+                allow_agent_messaging=False,
                 include_knowledge=False,
                 messages=[
                     {"role": "user", "content": "First"},
@@ -3469,6 +3481,7 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
                 ChatCompletionRequest(
                     session_id=first.session_id,
                     provider_id=profile.id,
+                    allow_agent_messaging=False,
                     include_knowledge=False,
                     messages=[{"role": "user", "content": "Next"}],
                 )
@@ -3481,6 +3494,7 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
     assert session.metadata == {
         "message_count": 4,
         "last_sequence": 4,
+        "tools_enabled": False,
         "initial_title_state": "generated",
         "mcp_server_ids": [],
         "hook_ids": [],
@@ -3489,6 +3503,8 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
         "reasoning_effort": None,
         "allow_subagents": False,
         "allow_agent_messaging": False,
+        "planning_enabled": False,
+        "subagent_reasoning_effort": None,
         "max_active_subagents": None,
         # Settled with the turn: what a tool-free request adds beside the
         # conversation. The fake provider reports too few tokens to calibrate.
@@ -3515,15 +3531,17 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(store)
     first = asyncio.run(
-        service.complete(
+        _complete_and_name(
+            service,
             service.prepare(
                 ChatCompletionRequest(
                     engagement_id=engagement.id,
                     provider_id=profile.id,
+                    allow_agent_messaging=False,
                     include_knowledge=False,
                     messages=[{"role": "user", "content": "First"}],
                 )
-            )
+            ),
         )
     )
     original_add_all = StoreTransaction.add_all
@@ -3540,6 +3558,7 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
                     ChatCompletionRequest(
                         session_id=first.session_id,
                         provider_id=profile.id,
+                        allow_agent_messaging=False,
                         include_knowledge=False,
                         messages=[{"role": "user", "content": "Second"}],
                     )
@@ -3552,6 +3571,7 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
     assert session.metadata == {
         "message_count": 2,
         "last_sequence": 2,
+        "tools_enabled": False,
         "initial_title_state": "generated",
         "mcp_server_ids": [],
         "hook_ids": [],
@@ -3560,6 +3580,8 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         "reasoning_effort": None,
         "allow_subagents": False,
         "allow_agent_messaging": False,
+        "planning_enabled": False,
+        "subagent_reasoning_effort": None,
         "max_active_subagents": None,
         # Settled with the turn: what a tool-free request adds beside the
         # conversation. The fake provider reports too few tokens to calibrate.
@@ -3586,13 +3608,18 @@ def test_chat_request_defaults_to_unlimited_artifact_queries():
     assert request.model_dump()["max_artifact_queries"] is None
 
 
+@pytest.mark.parametrize("restored", [False, True])
+@pytest.mark.parametrize("operator_choice", [None, False, True])
 def test_model_question_uses_graph_without_command_or_browser_runtime(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, restored, operator_choice
 ):
     store = NebulaStore(tmp_path / "model-chat.db")
     project = store.create(Engagement(name="Model questions"))
     payload = _profile(local=True).model_dump(mode="python")
     payload["capabilities"]["tool_calling"] = True
+    payload["metadata"]["model_descriptors"] = [
+        {"id": "model-a", "context_window": 32_000, "max_output_tokens": 2_048}
+    ]
     payload["capability_verifications"] = {
         "model-a": {"model": "model-a", "status": "verified"}
     }
@@ -3605,6 +3632,7 @@ def test_model_question_uses_graph_without_command_or_browser_runtime(
         ChatCompletionRequest(
             engagement_id=project.id,
             provider_id=profile.id,
+            allow_agent_messaging=False,
             messages=[
                 {"role": "user", "content": "What evidence supports this relationship?"}
             ],
@@ -3632,12 +3660,50 @@ def test_model_question_uses_graph_without_command_or_browser_runtime(
         "model.get_updates",
         "model.transact",
         "notes.write",
+        "plan.submit",
+        "work_list",
+        "work_get",
+        "work_create",
+        "work_check_in",
+        "work_agents",
     }
     resumed = service.prepare_resume(prepared.turn.id)
     assert (
         resumed.tool_components.runtime_digest
         == prepared.tool_components.runtime_digest
     )
+    session_id = prepared.turn.session_id
+    session = store.get(ChatSession, session_id)
+    assert session.metadata["tools_enabled"] is False
+    if operator_choice is not None:
+        # A running turn must preserve a newer command preference, in either
+        # direction, rather than saving its own aggregate tool-routing flag.
+        store.update(
+            ChatSession,
+            session.id,
+            {"metadata": {**session.metadata, "tools_enabled": operator_choice}},
+            expected_revision=session.revision,
+        )
+    asyncio.run(service.complete(resumed if restored else prepared))
+    saved = store.get(ChatSession, session_id)
+    assert saved.metadata["tools_enabled"] is bool(operator_choice)
+    assert len(service.session_messages(session_id)) == 2
+    if not saved.metadata["tools_enabled"]:
+        # This is what the browser forwards from the saved assistant config.
+        # Graph and Settings tools must not introduce an OCI-runtime prerequisite
+        # for the next ordinary message.
+        followup = service.prepare(
+            ChatCompletionRequest(
+                engagement_id=project.id,
+                session_id=session_id,
+                provider_id=profile.id,
+                tools_enabled=saved.metadata["tools_enabled"],
+                include_knowledge=False,
+                messages=[{"role": "user", "content": "Continue the explanation."}],
+            )
+        )
+        asyncio.run(service.complete(followup))
+        assert store.get(ChatSession, session_id).metadata["tools_enabled"] is False
 
 
 @pytest.mark.parametrize("stream", [False, True])

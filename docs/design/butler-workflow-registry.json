@@ -1778,7 +1778,8 @@
         "ui/src/components/NebulaControlAssistant.tsx::getPendingChatTurn",
         "ui/src/components/NebulaControlAssistant.tsx::streamChat",
         "ui/src/components/NebulaControlAssistant.tsx::cancelChatTurn",
-        "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn"
+        "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn",
+        "ui/src/pages/SessionsPage.tsx::getControlAssistantSession"
       ],
       "core_owner": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
       "butler": {
@@ -1812,7 +1813,8 @@
         "ui/src/components/AskNebulaPopup.tsx::getPendingChatTurn",
         "ui/src/components/AskNebulaPopup.tsx::streamChat",
         "ui/src/components/AskNebulaPopup.tsx::cancelChatTurn",
-        "ui/src/components/AskNebulaPopup.tsx::stopHarnessTurn"
+        "ui/src/components/AskNebulaPopup.tsx::stopHarnessTurn",
+        "ui/src/pages/SessionsPage.tsx::discardTemporaryChat"
       ],
       "core_owner": "The popup snapshots operator-selected context and streams with tools disabled. The browser owns its lease, hidden state and discard. These temporary conversations are deliberately excluded from managed Work chats.",
       "butler": {
@@ -2213,6 +2215,74 @@
       "authority": "Interactive operator request; original file and URL entry, transfer and confirmation stay in the requesting browser. Another project and stale revisions are refused. Indexing supports later separate Knowledge retrieval.",
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages project Sources through the requesting LAN browser",
       "result": "A pending receipt alone proves no mutation. Browser ingestion checks exact identity, file digest and list membership; reindex checks a newer ready revision; removal verifies exact absence and retains the artifact. Confirmed downloads verify original size/digest. Private URL input and original bytes are absent from model control messages.",
+      "status": "supported"
+    },
+    {
+      "id": "settings.project_policy",
+      "entry_point": "Project execution mode, scope and command policy",
+      "ui_calls": [
+        "ui/src/components/EngagementPolicySettings.tsx::getAutomationPolicy",
+        "ui/src/components/EngagementPolicySettings.tsx::getEngagementScope",
+        "ui/src/components/EngagementPolicySettings.tsx::listScopeToolCandidates",
+        "ui/src/components/EngagementPolicySettings.tsx::updateAutomationPolicy",
+        "ui/src/components/EngagementPolicySettings.tsx::updateEngagementScope",
+        "ui/src/components/WorkbenchBrowser.tsx::getEngagementScope",
+        "ui/src/components/WorkbenchBrowser.tsx::updateEngagementScope",
+        "ui/src/pages/SessionsPage.tsx::getAutomationPolicy",
+        "ui/src/pages/SessionsPage.tsx::getEngagementScope",
+        "ui/src/pages/SessionsPage.tsx::updateAutomationPolicy",
+        "ui/src/components/ToolingSettings.tsx::getAutomationPolicy",
+        "ui/src/components/ToolingSettings.tsx::updateAutomationPolicy",
+        "ui/src/components/NebulaControlAssistant.tsx::updateAutomationPolicy",
+        "ui/src/components/assistantSettingsMutations.ts::request::\"PUT\" path",
+        "ui/src/components/assistantSettingsMutations.ts::request::GET path"
+      ],
+      "core_owner": "Selected-project Core policy/scope and current revisions; requesting browser owns first Host consent",
+      "butler": {
+        "discover": "nebula.settings.catalog and nebula.settings.api_schema",
+        "read": "nebula.help.project_context and nebula.settings.api_request GET project policy or scope",
+        "change": "nebula.settings.set_project_scope, nebula.settings.set_project_mode and nebula.settings.api_request"
+      },
+      "authority": "Selected-project Core policy/scope and current revisions; requesting browser owns first Host consent",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Only requested scope fields are changed and read back. Policy PUT requires the observed body revision; generic requests cannot create first Host consent, including in Docker mode. The requesting browser retains its explicit Host opt-in. Saved mode remains visible after paired reload.",
+      "status": "supported"
+    },
+    {
+      "id": "settings.voice_timeout",
+      "entry_point": "Butler Voice timeout",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getButlerVoiceSettings",
+        "ui/src/components/NebulaControlAssistant.tsx::updateButlerVoiceSettings"
+      ],
+      "core_owner": "Core global voice setting and body revision; browser owns microphone/session permission",
+      "butler": {
+        "discover": "nebula.settings.catalog and nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET voice/settings",
+        "change": "nebula.settings.api_request PATCH voice/settings"
+      },
+      "authority": "Core global voice setting and body revision; browser owns microphone/session permission",
+      "observed_result_test": "tests/v3/test_settings_assistant_api.py::test_settings_api_discovers_and_reads_back_core_wide_voice_timeout",
+      "result": "Core saves and reads back the configured timeout at the observed revision. This grants no microphone permission and starts no Voice session.",
+      "status": "supported"
+    },
+    {
+      "id": "settings.headless_session",
+      "entry_point": "Selected-project headless browser session service",
+      "ui_calls": [
+        "ui/src/components/NebulaControlAssistant.tsx::getHeadlessSecuritySession",
+        "ui/src/components/NebulaControlAssistant.tsx::startHeadlessSecuritySession",
+        "ui/src/components/NebulaControlAssistant.tsx::stopHeadlessSecuritySession"
+      ],
+      "core_owner": "Core selected-project browser session service and requesting-browser application/readback",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.api_request GET engagements/{project}/agent-security/status",
+        "change": "nebula.settings.headless_session"
+      },
+      "authority": "Core selected-project browser session service and requesting-browser application/readback",
+      "observed_result_test": "tests/v3/test_settings_assistant_api.py::test_headless_session_start_and_status_use_selected_project",
+      "result": "The browser applies the requested start/stop and reads Core status before reporting it. Service availability is conditional; an active session is not a mission, target interaction or assessment result.",
       "status": "supported"
     }
   ],

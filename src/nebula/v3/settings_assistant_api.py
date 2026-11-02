@@ -10,7 +10,7 @@ from urllib.parse import unquote
 
 import httpx
 from fastapi import FastAPI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.routing import Match
 
 from .domain import HarnessProfile, McpServerProfile, ProviderProfile
@@ -34,6 +34,7 @@ _GLOBAL_SETTINGS = re.compile(
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+_BOOLEAN = TypeAdapter(bool)
 _PROFILE_MODELS: dict[str, type[BaseModel]] = {
     "providers": ProviderProfile,
     "harnesses": HarnessProfile,
@@ -270,6 +271,68 @@ def _require_mcp_scope(
         )
 
 
+async def _check_host_policy(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    method: str,
+    path: str,
+    body: dict[str, Any] | list[Any] | None,
+    expected_revision: int | None,
+) -> None:
+    if method != "PUT" or not re.fullmatch(
+        r"/api/v1/engagements/[A-Za-z0-9_.~:-]+/automation-policy", path
+    ):
+        return
+    revision = body.get("expected_revision") if isinstance(body, dict) else None
+    if type(revision) is not int or revision < 1:
+        raise GuidedToolError(
+            "policy PUT requires the observed body.expected_revision",
+            code="settings_revision_required",
+            category="invalid_arguments",
+            problem="Read the current project policy before changing it.",
+            next_action="GET the selected project's automation-policy, preserve unrelated fields, and supply its revision in body.expected_revision. If-Match alone is not this route's revision guard.",
+            field="body.expected_revision",
+            before_execution=True,
+        )
+    if expected_revision is not None and expected_revision != revision:
+        raise ValueError("policy body and request revisions must match")
+    assert isinstance(body, dict)
+    try:
+        acknowledged = _BOOLEAN.validate_python(
+            body.get("host_access_acknowledged", False)
+        )
+    except ValidationError as exc:
+        # diagnostic-expected: reject invalid consent without echoing caller values.
+        raise ValueError(
+            "host_access_acknowledged must match the Core boolean schema"
+        ) from exc
+    response = await client.get(path, headers=headers)
+    if not response.is_success:
+        raise ValueError("read the current project policy before changing it")
+    current = response.json()
+    if revision != current["revision"]:
+        raise GuidedToolError(
+            "project policy revision conflict",
+            code="settings_revision_conflict",
+            category="invalid_arguments",
+            problem="The project policy changed after it was read.",
+            next_action="Read the policy again and use its current body.expected_revision; preserve the operator's other settings.",
+            field="body.expected_revision",
+            before_execution=True,
+        )
+    mode = body.get("execution_mode") or current.get("execution_mode")
+    if not current.get("host_access_acknowledged") and (acknowledged or mode == "host"):
+        raise GuidedToolError(
+            "first Host access acknowledgment belongs in the requesting browser",
+            code="host_consent_required",
+            category="policy_denied",
+            problem="Host access needs the operator's one-time browser acknowledgment.",
+            next_action="Use nebula.settings.open setting_id=network-scope. The operator must acknowledge Host access in the requesting browser; then read the policy again before another edit.",
+            field="body.host_access_acknowledged",
+            before_execution=True,
+        )
+
+
 async def _settings_request(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -318,6 +381,7 @@ async def _settings_request(
             ):
                 raise ValueError("probe MCP servers only in the selected project")
             body = {**body, "engagement_id": project_id}
+    await _check_host_policy(client, headers, method, path, body, expected_revision)
     await _check_profile_mutation(
         client, headers, method, path, body, expected_revision, project_id
     )

@@ -572,6 +572,13 @@ body revision; PUT carries its observed revision in Core's If-Match guard, so a
 concurrent browser change cannot be overwritten after the comparison. A trusted
 MCP program's launch definition also remains under its operator trust choice.
 
+Project policy edits use the observed `body.expected_revision`; the generic
+Settings gateway checks it before dispatch and Core checks it again when saving.
+The first Host-access acknowledgment belongs to the operator's requesting
+browser in `setting_id=network-scope`. Generic policy requests cannot create
+that consent, including coercible boolean values or requests that remain in
+Docker mode. Existing consent is preserved for later nonsecret policy edits.
+
 MCP discovery, exact reads, configuration exports, edits and probes include
 shared profiles and profiles owned by the selected project. Another project's
 profile is excluded before export serialization, including warning text.

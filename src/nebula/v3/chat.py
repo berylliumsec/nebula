@@ -16182,8 +16182,20 @@ class ChatService:
     @staticmethod
     def _assistant_settings(prepared: PreparedChat) -> dict[str, Any]:
         if prepared.source_request is None:
+            # Restored turns retain their command selection separately from
+            # aggregate tool routing. Unknown historical choices stay unchanged.
+            if (
+                prepared.turn is not None
+                and "include_oci_tools" in prepared.turn.request_snapshot
+            ):
+                return {
+                    "tools_enabled": bool(
+                        prepared.turn.request_snapshot["include_oci_tools"]
+                    )
+                }
             return {}
         return {
+            "tools_enabled": prepared.source_request.tools_enabled,
             "mcp_server_ids": list(prepared.source_request.mcp_server_ids),
             "hook_ids": list(prepared.source_request.hook_ids),
             # Absent means the model's own default, which is a real choice and
@@ -16492,7 +16504,6 @@ class ChatService:
         last_sequence = messages[-1].sequence if messages else start - 1
         metadata = {
             **session.metadata,
-            "tools_enabled": prepared.tools_enabled,
             **self._assistant_settings(prepared),
             "message_count": last_sequence,
             "last_sequence": last_sequence,
@@ -16837,12 +16848,6 @@ class ChatService:
                 update={
                     "metadata": {
                         **prepared.pending_session.metadata,
-                        **(
-                            {"tools_enabled": prepared.tools_enabled}
-                            if prepared.tools_enabled
-                            or "tools_enabled" in prepared.pending_session.metadata
-                            else {}
-                        ),
                         **self._assistant_settings(prepared),
                         **self._turn_context_calibration(
                             prepared, prepared.pending_session.metadata
@@ -16887,12 +16892,6 @@ class ChatService:
                         )
                         metadata = {
                             **latest_session.metadata,
-                            **(
-                                {"tools_enabled": prepared.tools_enabled}
-                                if prepared.tools_enabled
-                                or "tools_enabled" in latest_session.metadata
-                                else {}
-                            ),
                             **(
                                 self._assistant_settings(prepared)
                                 if prepared.turn is None

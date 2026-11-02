@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 import httpx
@@ -9,9 +10,11 @@ from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.automation_runtime import AutomationRuntimeManager
 from nebula.v3.butler_capabilities import ButlerCapabilities
 from nebula.v3.domain import (
     BrowserSessionStatus,
+    AutomationProjectPolicy,
     Engagement,
     HarnessProfile,
     McpServerProfile,
@@ -1028,5 +1031,175 @@ def test_settings_mcp_changed_readback_preserves_uncertain_effects(tmp_path):
         assert (
             store.get(McpServerProfile, profile.id).name == "saved-before-owner-change"
         )
+
+    asyncio.run(journey())
+
+
+def _policy_gateway(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    policy = store.create(
+        AutomationProjectPolicy(
+            id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{project.id}")),
+            engagement_id=project.id,
+            execution_mode="docker",
+            host_access_acknowledged=False,
+        )
+    )
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+
+    async def no_execution(_launch):
+        raise AssertionError("policy metadata must not start a command session")
+
+    runtime = AutomationRuntimeManager(
+        store=store,
+        artifact_store=artifacts,
+        data_root=tmp_path / "runtime",
+        workspace_resolver=lambda _: tmp_path,
+        runtime_image="registry.invalid/nebula-automation@sha256:" + "a" * 64,
+        session_factory=no_execution,
+    )
+    app = create_app(
+        store,
+        auth_token="test-token",
+        artifact_store=artifacts,
+        automation_runtime=runtime,
+    )
+    return store, project, policy, app, SettingsAssistantApi(app, "test-token")
+
+
+@pytest.mark.parametrize("acknowledgment", [True, "true", 1, "yes"])
+def test_settings_policy_cannot_create_first_host_consent(tmp_path, acknowledgment):
+    store, project, policy, app, gateway = _policy_gateway(tmp_path)
+    preparations = []
+
+    @app.middleware("http")
+    async def observe_dispatch(request, call_next):
+        if request.method == "PUT":
+            preparations.append(request.url.path)
+        return await call_next(request)
+
+    async def journey():
+        for mode in ("docker", "host", None):
+            with pytest.raises(GuidedToolError) as refusal:
+                await gateway.request(
+                    project.id,
+                    method="PUT",
+                    path="engagements/{project}/automation-policy",
+                    body={
+                        "host_access_acknowledged": acknowledgment,
+                        "execution_mode": mode,
+                        "expected_revision": policy.revision,
+                    },
+                )
+            assert refusal.value.code == "host_consent_required"
+            assert "setting_id=network-scope" in refusal.value.next_action
+            assert getattr(refusal.value, "_nebula_before_execution", False)
+            assert store.get(AutomationProjectPolicy, policy.id) == policy
+        assert preparations == []
+
+    asyncio.run(journey())
+
+
+def test_settings_policy_preserves_prior_consent_and_requires_body_revision(tmp_path):
+    store, project, policy, app, gateway = _policy_gateway(tmp_path)
+    path = "engagements/{project}/automation-policy"
+
+    async def journey():
+        for arguments in ({}, {"expected_revision": policy.revision}):
+            with pytest.raises(GuidedToolError) as refusal:
+                await gateway.request(
+                    project.id,
+                    method="PUT",
+                    path=path,
+                    body={"execution_mode": "docker", "network_enabled": False},
+                    **arguments,
+                )
+            assert refusal.value.code == "settings_revision_required"
+        saved = await gateway.request(
+            project.id,
+            method="PUT",
+            path=path,
+            body={
+                "execution_mode": "docker",
+                "network_enabled": False,
+                "host_access_acknowledged": "false",
+                "expected_revision": policy.revision,
+            },
+        )
+        assert (
+            saved["read_back"] is True and saved["result"]["network_enabled"] is False
+        )
+        assert saved["result"]["host_access_acknowledged"] is False
+        # The direct browser API retains its separate consent authority. This
+        # metadata-only Docker request launches no Host program or session.
+        with TestClient(app, headers={"Authorization": "Bearer test-token"}) as client:
+            response = client.put(
+                f"/api/v1/engagements/{project.id}/automation-policy",
+                json={
+                    "execution_mode": "docker",
+                    "host_access_acknowledged": True,
+                    "expected_revision": saved["result"]["revision"],
+                    "network_enabled": False,
+                },
+            )
+            assert response.status_code == 200, response.text
+            current = response.json()
+        preserved = await gateway.request(
+            project.id,
+            method="PUT",
+            path=path,
+            body={
+                "execution_mode": "docker",
+                "host_access_acknowledged": False,
+                "expected_revision": current["revision"],
+                "max_timeout_ms": 120_000,
+            },
+        )
+        assert preserved["read_back"] is True
+        assert preserved["result"]["host_access_acknowledged"] is True
+        with pytest.raises(GuidedToolError) as refusal:
+            await gateway.request(
+                project.id,
+                method="PUT",
+                path=path,
+                body={"execution_mode": "docker", "expected_revision": policy.revision},
+            )
+        assert refusal.value.code == "settings_revision_conflict"
+
+    asyncio.run(journey())
+
+
+def test_settings_policy_refuses_a_concurrent_operator_edit(tmp_path):
+    store, project, policy, app, gateway = _policy_gateway(tmp_path)
+
+    @app.middleware("http")
+    async def concurrent_edit(request, call_next):
+        if request.method == "PUT" and request.url.path.endswith("/automation-policy"):
+            store.update(
+                AutomationProjectPolicy,
+                policy.id,
+                {"network_enabled": False},
+                expected_revision=policy.revision,
+            )
+        return await call_next(request)
+
+    async def journey():
+        with pytest.raises(ValueError, match="409"):
+            await gateway.request(
+                project.id,
+                method="PUT",
+                path="engagements/{project}/automation-policy",
+                body={
+                    "execution_mode": "docker",
+                    "host_access_acknowledged": False,
+                    "max_timeout_ms": 120_000,
+                    "expected_revision": policy.revision,
+                },
+            )
+        current = store.get(AutomationProjectPolicy, policy.id)
+        assert current.network_enabled is False
+        assert current.max_timeout_ms == policy.max_timeout_ms
+        assert current.host_access_acknowledged is False
 
     asyncio.run(journey())
