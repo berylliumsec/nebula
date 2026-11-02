@@ -35,12 +35,20 @@ describe("Butler note handoff", () => {
     expect(api.updateObservation).not.toHaveBeenCalled();
   });
 
-  it("updates only requested fields and checks the next saved revision", async () => {
-    const saved = {...note, body: update.body, revision: 4};
-    const api = {getObservation: vi.fn().mockResolvedValueOnce(note).mockResolvedValue(saved),
+  it.each(["note", "ai_tool_note", "ai_execution_note"])("updates only requested fields of a %s and checks the next saved revision", async observationType => {
+    const current = {...note, observationType};
+    const saved = {...current, body: update.body, revision: 4};
+    const api = {getObservation: vi.fn().mockResolvedValueOnce(current).mockResolvedValue(saved),
       updateObservation: vi.fn().mockResolvedValue(saved)} as unknown as ApiClient;
     expect((await applyButlerNoteAction(api, update, () => "project", async () => true)).message).toContain("Updated note");
     expect(api.updateObservation).toHaveBeenCalledWith(noteId, {expectedRevision: 3, body: update.body});
+  });
+
+  it("refuses a saved non-note observation even when its identity and revision match", async () => {
+    const api = {getObservation: vi.fn().mockResolvedValue({...note, observationType: "execution_result"}),
+      updateObservation: vi.fn()} as unknown as ApiClient;
+    await expect(applyButlerNoteAction(api, update, () => "project", async () => true)).rejects.toThrow("note identity");
+    expect(api.updateObservation).not.toHaveBeenCalled();
   });
 
   it("cancels deletion without changing Core", async () => {

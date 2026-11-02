@@ -3331,6 +3331,7 @@ function mapExecutionOrigin(value: WireExecutionOrigin) {
 function mapOperatorExecution(value: WireOperatorExecution): OperatorExecution {
   return {
     id: value.id,
+    revision: value.revision,
     engagementId: value.engagement_id,
     operatorId: value.operator_id,
     origin: mapExecutionOrigin(value.origin),
@@ -9108,6 +9109,7 @@ export class ApiClient {
     model: string,
     cloudConfirmed: boolean,
     modes?: PostToolAssistantConfig,
+    automatic = false,
   ): Promise<GeneratedDraft> {
     return this.request<WireGeneratedDraft>(
       `executions/${encodeURIComponent(executionId)}/draft-notes`,
@@ -9121,7 +9123,7 @@ export class ApiClient {
           cloud_confirmed: cloudConfirmed,
           suggest_next_steps: modes?.suggestNextSteps ?? false,
           take_notes: modes?.takeNotes ?? true,
-          automatic: Boolean(modes),
+          automatic,
         }),
       },
     ).then(mapGeneratedDraft);
@@ -9133,6 +9135,7 @@ export class ApiClient {
     model: string,
     cloudConfirmed: boolean,
     modes?: PostToolAssistantConfig,
+    automatic = false,
   ): Promise<GeneratedDraft> {
     return this.request<WireGeneratedDraft>(
       `runs/${encodeURIComponent(runId)}/draft-notes`,
@@ -9146,7 +9149,7 @@ export class ApiClient {
           cloud_confirmed: cloudConfirmed,
           suggest_next_steps: modes?.suggestNextSteps ?? false,
           take_notes: modes?.takeNotes ?? true,
-          automatic: Boolean(modes),
+          automatic,
         }),
       },
     ).then(mapGeneratedDraft);

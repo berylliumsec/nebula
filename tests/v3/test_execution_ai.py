@@ -450,6 +450,51 @@ async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_p
 
 
 @async_test
+async def test_manual_harness_note_stays_ready_until_explicit_acceptance(tmp_path):
+    store, artifacts, engagement, execution, _profile, evidence, provider, _service = (
+        _fixture(tmp_path)
+    )
+    harness = store.create(
+        HarnessProfile(
+            name="Inert local note harness",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/fixture/codex",
+            default_model="model-1",
+            privacy=ProviderPrivacy(local_only=True),
+        )
+    )
+    runtime = StubHarnessRuntime(provider.response_text)
+    service = ExecutionAIService(
+        store=store, artifact_store=artifacts, harness_runtime=runtime
+    )  # type: ignore[arg-type]
+    draft = await service.generate(
+        execution.id,
+        DraftNoteRequest(
+            backend_kind="harness",
+            harness_profile_id=harness.id,
+            model="model-1",
+            take_notes=True,
+        ),
+    )
+    await service._tasks[draft.id]
+    ready = store.get(GeneratedDraft, draft.id)
+    assert ready.status == GeneratedDraftStatus.READY, ready.error_detail
+    assert ready.metadata["automatic"] is False and ready.observation_id is None
+    assert store.count(Observation, engagement_id=engagement.id) == 0
+    assert runtime.requests[0]["profile_id"] == harness.id
+    assert runtime.requests[0]["model"] == "model-1"
+    accepted = service.accept(
+        ready.id, DraftTransitionRequest(expected_revision=ready.revision)
+    )
+    saved = store.get(Observation, accepted.observation_id)
+    assert saved.observation_type == "ai_execution_note"
+    assert saved.source == "operator-accepted-ai-draft"
+    assert saved.metadata["generated_draft_id"] == draft.id
+    assert saved.evidence_ids == [evidence.id]
+    assert store.count(Observation, engagement_id=engagement.id) == 1
+
+
+@async_test
 async def test_draft_context_is_bounded_redacted_deduplicated_and_accepts_once(
     tmp_path,
 ):

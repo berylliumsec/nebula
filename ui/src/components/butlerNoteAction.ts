@@ -1,5 +1,6 @@
 import {ApiError, type ApiClient} from "../api/client";
 import type {ObservationSummary} from "../api/types";
+import {isProjectNoteType} from "../api/noteTypes";
 import {logCaughtDiagnostic} from "../diagnostics";
 import type {SettingClientAction} from "./nebulaAssistantActions";
 
@@ -31,7 +32,7 @@ export async function applyButlerNoteAction(
       throw caught;
     }
     if (note.id !== action.noteId || note.engagementId !== action.projectId
-        || !["note", "ai_tool_note"].includes(note.observationType)) {
+        || !isProjectNoteType(note.observationType)) {
       throw new Error("The note identity does not match the selected project.");
     }
     return note;

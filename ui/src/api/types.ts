@@ -3494,6 +3494,7 @@ export interface WorkspaceChange {
 
 export interface OperatorExecution {
   id: Identifier;
+  revision: number;
   engagementId: Identifier;
   operatorId: Identifier;
   origin: ExecutionOrigin;

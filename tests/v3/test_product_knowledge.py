@@ -531,6 +531,18 @@ def test_product_search_finds_butler_project_notes_lifecycle(monkeypatch):
     )
 
 
+def test_product_search_explains_manual_note_review_and_saved_provenance(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "manual execution note draft harness operator acceptance Project Notes"
+    )
+    text = " ".join(" ".join(str(item["text"]).split()) for item in matches)
+    assert "manual draft remains ready" in text
+    assert "explicit operator acceptance" in text
+    assert "operator-accepted" in text
+    assert "Butler's note catalog" in text
+
+
 def test_product_search_finds_butler_diagnostics_export(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

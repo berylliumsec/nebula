@@ -7,6 +7,7 @@ import {notifyProjectDataChanged} from "../api/projectDataEvents";
 
 const running: OperatorExecution = {
   id: "execution-1",
+  revision: 1,
   engagementId: "project-1",
   operatorId: "operator-1",
   origin: { kind: "assistant_message", messageId: "message-1", blockOrdinal: 0 },

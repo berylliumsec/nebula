@@ -13,6 +13,7 @@
     {"name":"butler-sources","patterns":["src/nebula/v3/butler_sources.py","ui/src/components/ButlerSourceAdd.tsx","ui/src/components/butlerSourceAction.ts"],"areas":["butler-sources"]},
     {"name":"butler-records","patterns":["src/nebula/v3/butler_records.py"],"areas":["butler-records"]},
     {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts"],"areas":["butler-notes"]},
+    {"name":"manual-note-review","patterns":["ui/src/components/ExecutionInsightDialog.tsx","ui/src/api/noteTypes.ts","ui/tests/fixtures/manual_note_review_core.py"],"areas":["manual-note-review"]},
     {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
     {"name": "harness-catalog-refresh", "patterns": ["ui/src/components/HarnessSettings.tsx", "ui/src/state/WorkspaceContext.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["harness-catalog-refresh"]},
     {"name": "assistant-browser-viewer", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "src/nebula/v3/browser_companion.py", "tests/v3/application_model_fixture.py", "ui/playwright.application-model.config.ts"], "areas": ["assistant-browser-viewer"]},
@@ -210,6 +211,16 @@
       {"area":"butler-device-handoffs","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-device-handoffs","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-device-handoffs","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode assistant navigates every app destination on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "manual-note-review": [
+      {"area":"manual-note-review","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"manual-note-review","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-notes": [
       {"area":"butler-notes","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates edits and deletes project Notes on production LAN Core","runtime":"real-core","shard":"1/1"},

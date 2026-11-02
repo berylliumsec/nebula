@@ -16,6 +16,80 @@ from nebula.v3.relations import ResourceRelationService
 from nebula.v3.storage import NebulaStore
 
 
+def test_butler_notes_retains_accepted_execution_note_identity_and_provenance(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    other = store.create(Engagement(name="Other"))
+    note = store.create(
+        Observation(
+            engagement_id=project.id,
+            observation_type="ai_execution_note",
+            title="Reviewed synthetic explanation",
+            body="Operator-reviewed content",
+            source="operator-accepted-ai-draft",
+            metadata={
+                "generated_draft_id": "synthetic-draft",
+                "accepted_by": "operator",
+                "provenance": "ai-generated/operator-edited/operator-accepted",
+            },
+        )
+    )
+    foreign = store.create(
+        note.model_copy(update={"id": str(uuid4()), "engagement_id": other.id})
+    )
+    hidden = store.create(
+        note.model_copy(
+            update={"id": str(uuid4()), "observation_type": "execution_result"}
+        )
+    )
+    capabilities = ButlerCapabilities(
+        store, ArtifactStore(tmp_path / "artifacts"), project.id
+    )
+
+    async def invoke(operation, arguments=None, *, change=False):
+        return await capabilities.invoke(
+            {"operation": f"nebula.notes.{operation}", "arguments": arguments or {}},
+            change=change,
+        )
+
+    async def journey():
+        rows = (await invoke("list"))["notes"]
+        assert [row["note_id"] for row in rows] == [note.id]
+        assert rows[0]["note_type"] == "ai_execution_note"
+        detail = await invoke("detail", {"note_id": note.id})
+        assert detail["body"] == note.body and detail["revision"] == note.revision
+        update = await invoke(
+            "update",
+            {
+                "note_id": note.id,
+                "expected_revision": note.revision,
+                "body": "Reviewed edit",
+            },
+            change=True,
+        )
+        assert update["client_action"]["kind"] == "note_update"
+        assert update["client_action"]["expected_revision"] == note.revision
+        for invalid in (foreign, hidden):
+            with pytest.raises(ValueError):
+                await invoke("detail", {"note_id": invalid.id})
+        with pytest.raises(ValueError):
+            await invoke(
+                "update",
+                {
+                    "note_id": note.id,
+                    "expected_revision": note.revision + 1,
+                    "body": "Stale",
+                },
+                change=True,
+            )
+        retained = store.get(Observation, note.id)
+        assert retained.observation_type == note.observation_type
+        assert retained.source == note.source and retained.metadata == note.metadata
+        assert retained.body == note.body
+
+    asyncio.run(journey())
+
+
 def test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     selected = store.create(Engagement(name="Selected"))

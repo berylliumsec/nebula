@@ -147,7 +147,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
         const next = executions.items.filter((item) => ["completed", "failed", "timed_out"].includes(item.status) && !known.has(item.id)).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))[0];
         if (next) {
           setBusy(true);
-          let generated = await api.generateExecutionDraft(next.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current);
+          let generated = await api.generateExecutionDraft(next.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current, true);
           for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
             await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
             generated = await api.getGeneratedDraft(generated.id);
@@ -158,7 +158,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
             .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
           if (mission) {
             setBusy(true);
-            let generated = await api.generateMissionDraft(mission.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current);
+            let generated = await api.generateMissionDraft(mission.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current, true);
             for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
               await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
               generated = await api.getGeneratedDraft(generated.id);

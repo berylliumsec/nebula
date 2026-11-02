@@ -126,11 +126,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.follow-up",
     label: "Post-tool assistant",
-    description: "Choose follow-up analysis and review project cloud data consent",
+    description: "Choose automatic follow-up analysis and project cloud consent; manual note drafts require operator acceptance",
     category: "Automation",
     scope: "Project",
     target: "post-tool-assistant-settings",
-    keywords: ["post tool", "follow up", "assistant", "automatic", "suggestion"],
+    keywords: ["post tool", "follow up", "assistant", "automatic", "suggestion", "manual draft", "execution note", "operator acceptance"],
   },
   {
     id: "settings.harnesses",

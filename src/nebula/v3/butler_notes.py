@@ -43,6 +43,7 @@ class ButlerNotes:
         if note.engagement_id != self.project_id or note.observation_type not in {
             "note",
             "ai_tool_note",
+            "ai_execution_note",
         }:
             raise ValueError("choose an editable note from the selected project")
         projected = self.relations.project_legacy(note)
@@ -63,7 +64,7 @@ class ButlerNotes:
         offset = arguments.get("offset", 0)
         rows = self.store.find_entities(
             Observation,
-            {"observation_type": ["note", "ai_tool_note"]},
+            {"observation_type": ["note", "ai_tool_note", "ai_execution_note"]},
             engagement_id=self.project_id,
             offset=offset,
             limit=51,

@@ -1255,6 +1255,64 @@ test("assistant upgrade Butler creates edits and deletes project Notes on produc
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
+test("assistant upgrade manual harness notes require review and remain visible after reload on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(180_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), startupTimeoutMs: 90_000,
+    fixtureScript: path.resolve(import.meta.dirname, "fixtures/manual_note_review_core.py")});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projects = await (await api.get("engagements")).json() as {id: string; name: string}[];
+    const project = projects.find(item => item.name === "Manual note review fixture")!;
+    expect(project).toBeTruthy();
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; dirty: boolean; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"))!;
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry]);
+    const requests: Record<string, unknown>[] = [];
+    page.on("request", request => {
+      if (request.method() === "POST" && new URL(request.url()).pathname.endsWith("/draft-notes")) requests.push(request.postDataJSON());
+    });
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
+    await pairRealCoreBrowser(page, core, "Manual review LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=activity`);
+    await page.getByRole("complementary", {name: "Execution records"}).getByRole("button", {name: /python · completed/}).click();
+    await page.getByRole("button", {name: "Draft note", exact: true}).click();
+    const dialog = page.getByRole("dialog", {name: "Draft execution note"});
+    await expect(dialog.getByRole("option", {name: /Inert local note harness/})).toBeAttached();
+    await dialog.getByRole("button", {name: "Generate draft", exact: true}).click();
+    await expect(dialog.getByRole("textbox", {name: "Title", exact: true})).toHaveValue("Reviewed synthetic explanation", {timeout: 30_000});
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({backend_kind: "harness", model: "fixture-note-model", automatic: false, cloud_confirmed: false});
+    const drafts = await (await api.get(`engagements/${project.id}/post-tool-results`)).json() as {id: string; status: string; observation_id: string | null}[];
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({status: "ready", observation_id: null});
+    expect(await (await api.get(`observations?engagement_id=${project.id}`)).json()).toEqual([]);
+    await dialog.getByRole("textbox", {name: "Summary", exact: true}).fill("Operator-reviewed synthetic explanation.");
+    await dialog.getByRole("button", {name: "Accept as observation"}).click();
+    await expect(dialog).toBeHidden();
+    const accepted = await (await api.get(`generated-drafts/${drafts[0].id}`)).json() as {status: string; observation_id: string};
+    expect(accepted.status).toBe("accepted");
+    const note = await (await api.get(`observations/${accepted.observation_id}`)).json() as {id: string; observation_type: string; body: string; source: string; metadata: Record<string, unknown>};
+    expect(note.observation_type).toBe("ai_execution_note");
+    expect(note.source).toBe("operator-accepted-ai-draft");
+    expect(note.metadata).toMatchObject({generated_draft_id: drafts[0].id, provenance: "ai-generated/operator-edited/operator-accepted"});
+    expect(note.body).toContain("Operator-reviewed synthetic explanation.");
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
+    await page.getByRole("complementary", {name: "Project notes"}).getByRole("button", {name: /Reviewed synthetic explanation/}).click();
+    await expect(page.getByRole("textbox", {name: "Note body"})).toHaveValue(note.body);
+    await expect(page.getByText(/AI-generated · Operator accepted/)).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("textbox", {name: "Note body"})).toHaveValue(note.body);
+    await expect(page.getByText(/AI-generated · Operator accepted/)).toBeVisible();
+    expect((await (await api.get(`observations?engagement_id=${project.id}`)).json() as unknown[])).toHaveLength(1);
+    expect((await new AxeBuilder({page}).include(".notes-panel").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("manual-note-review-lan", {body: JSON.stringify({origin: core.origin, build: "production", commit: build.commit,
+      dirty: build.dirty, project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry],
+      result: "Manual harness generation stayed ready without an observation; explicit acceptance saved one provenance-preserving note, selectable after reload. Inert harness; no command or external model ran."}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
 test("assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(240_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});

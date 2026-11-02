@@ -50,6 +50,24 @@ function apiFor(config: PostToolAssistantConfig) {
 }
 
 describe("PostToolAssistant", () => {
+  it.each(["execution", "mission"])("explicitly requests automatic notes for a completed %s", async kind => {
+    const config: PostToolAssistantConfig = {suggestNextSteps: false, takeNotes: true, backendKind: "harness",
+      harnessProfileId: harness.id, model: harness.defaultModel, cloudConfirmed: false};
+    const {api} = apiFor(config);
+    vi.mocked(api.listExecutions).mockResolvedValue({items: kind === "execution" ? [{id: "finished", status: "completed",
+      queuedAt: "2026-11-02T00:00:00Z"}] : [], total: kind === "execution" ? 1 : 0} as Awaited<ReturnType<ApiClient["listExecutions"]>>);
+    vi.mocked(api.listRuns).mockResolvedValue({items: kind === "mission" ? [{id: "finished", status: "complete",
+      updatedAt: "2026-11-02T00:00:00Z"}] : [], total: kind === "mission" ? 1 : 0} as Awaited<ReturnType<ApiClient["listRuns"]>>);
+    const generateExecutionDraft = vi.fn().mockResolvedValue({id: "saved", status: "accepted"});
+    const generateMissionDraft = vi.fn().mockResolvedValue({id: "saved", status: "accepted"});
+    Object.assign(api, {generateExecutionDraft, generateMissionDraft});
+    const view = render(<PostToolAssistant api={api} engagementId="project-1" providers={[]} harnesses={[harness]} onRun={vi.fn()} />);
+    await waitFor(() => expect(kind === "execution" ? generateExecutionDraft : generateMissionDraft).toHaveBeenCalledWith(
+      "finished", "harness", harness.defaultModel, false, config, true));
+    expect(kind === "execution" ? generateMissionDraft : generateExecutionDraft).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
   it("keeps runtime selection out of the Workbench and enables the saved harness", async () => {
     const user = userEvent.setup();
     const config: PostToolAssistantConfig = {
