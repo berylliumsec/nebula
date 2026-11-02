@@ -470,6 +470,19 @@ def test_product_search_finds_butler_integration_profile_lifecycle(monkeypatch):
     )
 
 
+def test_product_search_finds_butler_project_sources_lifecycle(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler add a project source URL, reindex it or remove it at its current revision?"
+    )
+    assert any(
+        "nebula.sources" in str(item["text"]).lower()
+        and "browser" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_project_notes_lifecycle(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

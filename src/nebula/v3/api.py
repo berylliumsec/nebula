@@ -10038,7 +10038,11 @@ def create_app(
         tags=["knowledge"],
         dependencies=[Depends(require_auth)],
     )
-    async def reindex_knowledge(knowledge_id: str) -> KnowledgeSource:
+    async def reindex_knowledge(
+        knowledge_id: str,
+        engagement_id: str | None = None,
+        if_match: int | None = Header(default=None, alias="If-Match", ge=1),
+    ) -> KnowledgeSource:
         if artifact_store is None:
             raise HTTPException(
                 status_code=503,
@@ -10051,6 +10055,8 @@ def create_app(
                 artifact_store=artifact_store,
                 source_id=knowledge_id,
                 knowledge_index=knowledge_index,
+                expected_revision=if_match,
+                engagement_id=engagement_id,
             )
             return knowledge_summary(updated)
         except DocumentTooLargeError as exc:
@@ -10092,10 +10098,19 @@ def create_app(
         tags=["knowledge"],
         dependencies=[Depends(require_auth)],
     )
-    async def delete_knowledge(knowledge_id: str) -> Response:
+    async def delete_knowledge(
+        knowledge_id: str,
+        engagement_id: str | None = None,
+        if_match: int | None = Header(default=None, alias="If-Match", ge=1),
+    ) -> Response:
         """Remove a retrieval source while retaining its immutable artifact."""
 
-        store.delete(KnowledgeSource, knowledge_id)
+        source = store.get(KnowledgeSource, knowledge_id)
+        if engagement_id is not None and source.engagement_id != engagement_id:
+            raise HTTPException(
+                status_code=404, detail="source is not in the selected project"
+            )
+        store.delete(KnowledgeSource, knowledge_id, expected_revision=if_match)
         if knowledge_index is not None:
             try:
                 await asyncio.to_thread(knowledge_index.delete_source, knowledge_id)

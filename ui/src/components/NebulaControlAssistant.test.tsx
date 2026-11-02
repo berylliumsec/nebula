@@ -1649,6 +1649,34 @@ describe("NebulaControlAssistant", () => {
     expect(await screen.findByText("Removed Shared note from Core's shared Library. Its original artifact was retained.")).toBeVisible();
   });
 
+  it("opens private project source input from a saved scoped receipt and records cancellation", async () => {
+    const user = userEvent.setup();
+    const streamChat = vi.fn().mockImplementation(async (_body: unknown, event: (value: ChatStreamEvent) => void) => {
+      event({type: "tool_completed", turnId: "turn", toolCallId: "source-call", capability: "nebula.capabilities.change",
+        status: "complete", summary: "Pending browser input", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.sources.add", butler_project_id: "project", state: "pending_browser_apply",
+          client_action: {kind: "source_add", project_id: "project", input_kind: "url"}}});
+      return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model",
+        message: {id: "source-message", role: "assistant", content: "Choose source input."}};
+    });
+    const ingestKnowledgeUrlSource = vi.fn();
+    vi.mocked(useWorkspace).mockReturnValue({coreState: "online", engagement: {id: "project", name: "Project"}, providers: [],
+      api: {getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(savedButler), getControlAssistantSession: vi.fn().mockResolvedValue(null), streamChat, ingestKnowledgeUrlSource},
+      harnesses: [{id: "local", name: "Local", enabled: true, healthy: true, localOnly: true,
+        permitsSensitiveData: true, models: ["model"], modelOptions: [], defaultModel: "model"}],
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", {name: "Open Butler"}));
+    await user.type(screen.getByRole("textbox", {name: "Ask Butler a question"}), "Add a source URL{enter}");
+    const input = await screen.findByRole("region", {name: "Add project source"});
+    await user.type(within(input).getByRole("textbox", {name: "Source URL"}), "https://private.invalid/?key=PRIVATE_URL");
+    await user.click(within(input).getByRole("button", {name: "Cancel"}));
+    expect(await screen.findByText("No source was added.")).toBeVisible();
+    expect(ingestKnowledgeUrlSource).not.toHaveBeenCalled();
+    expect(JSON.stringify(streamChat.mock.calls)).not.toContain("PRIVATE_URL");
+    expect(screen.queryByRole("region", {name: "Add project source"})).not.toBeInTheDocument();
+  });
+
   it("keeps shared Library file bytes in the requesting browser and confirms Core's saved item", async () => {
     const user = userEvent.setup();
     const item = {id: "9482d86e-2ddc-436b-90be-30b878f68537", name: "note.txt", revision: 1,

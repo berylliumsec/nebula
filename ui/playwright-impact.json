@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"butler-sources","patterns":["src/nebula/v3/butler_sources.py","ui/src/components/ButlerSourceAdd.tsx","ui/src/components/butlerSourceAction.ts"],"areas":["butler-sources"]},
     {"name":"butler-records","patterns":["src/nebula/v3/butler_records.py"],"areas":["butler-records"]},
     {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts"],"areas":["butler-notes"]},
     {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
@@ -116,6 +117,16 @@
       {"area":"butler-settings-catalog","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-settings-catalog","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-settings-catalog","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-sources": [
+      {"area":"butler-sources","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-sources","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler manages project Sources through the requesting LAN browser","runtime":"real-core","shard":"1/1"}
     ],
     "butler-records": [
       {"area":"butler-records","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler creates inventory and edits candidate findings on production LAN Core","runtime":"real-core","shard":"1/1"},

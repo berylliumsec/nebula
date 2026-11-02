@@ -126,7 +126,7 @@ function main() {
     throw new Error(`UI API calls changed; review operator workflows and refresh the inventory:\n${changed.slice(0, 30).map((key) => `${key}: ${before.get(key) ?? 0} -> ${after.get(key) ?? 0}`).join("\n")}${changed.length > 30 ? `\n... ${changed.length - 30} more` : ""}`);
   }
   const available = new Set(current.map(({ key }) => key));
-  const catalogs = ["settings_assistant_tools.py", "butler_capabilities.py", "control_assistant_work.py", "butler_projects.py", "butler_chat_export.py", "butler_workspace.py", "butler_library.py", "butler_reports.py", "butler_terminal.py", "butler_storage.py", "butler_devices.py", "butler_credentials.py", "butler_providers.py", "butler_harnesses.py", "butler_mcp.py", "butler_notes.py", "butler_records.py", "butler_diagnostics.py"]
+  const catalogs = ["settings_assistant_tools.py", "butler_capabilities.py", "control_assistant_work.py", "butler_projects.py", "butler_chat_export.py", "butler_workspace.py", "butler_library.py", "butler_reports.py", "butler_terminal.py", "butler_storage.py", "butler_devices.py", "butler_credentials.py", "butler_providers.py", "butler_harnesses.py", "butler_mcp.py", "butler_notes.py", "butler_records.py", "butler_sources.py", "butler_diagnostics.py"]
     .map((name) => readFileSync(resolve(repoRoot, "src/nebula/v3", name), "utf8"))
     .join("\n");
   const ids = new Set();
@@ -199,7 +199,7 @@ function main() {
       if (!testName || !existsSync(absoluteTest) || !readFileSync(absoluteTest, "utf8").includes(testName)) {
         throw new Error(`${action.id}: observed-result test is missing: ${action.observed_result_test}`);
       }
-      for (const operation of Object.values(action.butler).flatMap((value) => value.match(/nebula\.(?:work|projects|chats|workspace|library|reports|terminal|storage|devices|credentials|providers|harnesses|mcp|memory|notes|assets|findings|settings|diagnostics|navigate)\.[a-z_]+/g) ?? [])) {
+      for (const operation of Object.values(action.butler).flatMap((value) => value.match(/nebula\.(?:work|projects|chats|workspace|library|reports|terminal|storage|devices|credentials|providers|harnesses|mcp|memory|notes|assets|findings|sources|settings|diagnostics|navigate)\.[a-z_]+/g) ?? [])) {
         if (!catalogs.includes(`"${operation}"`)) throw new Error(`${action.id}: Butler operation is not in the Core catalog: ${operation}`);
       }
     }

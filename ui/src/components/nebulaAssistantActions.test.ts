@@ -164,6 +164,16 @@ describe("settings assistant actions", () => {
       client_action: {kind: "credential_create", project_id: "project"}}}, "project"))
       .toEqual({kind: "credential_create", projectId: "project"});
   });
+  it("accepts only scoped source receipts with exact identity and revision", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "source-call",
+      capability: "nebula.capabilities.change", status: "complete", summary: "Pending", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.sources.reindex", butler_project_id: "project", state: "pending_browser_apply",
+        client_action: {kind: "source_reindex", project_id: "project", source_id: "12345678-1234-1234-1234-123456789abc", name: "source.txt", expected_revision: 2}}};
+    expect(settingClientAction(event, "project")).toMatchObject({kind: "source_reindex", expectedRevision: 2});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.settings.api_request"}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {kind: "source_remove", source_id: "invalid", expected_revision: 0}}}, "project")).toBeUndefined();
+  });
   it("refreshes records only for scoped exact Core-verified record operations", () => {
     const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "record-call",
       capability: "nebula.capabilities.change", status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,

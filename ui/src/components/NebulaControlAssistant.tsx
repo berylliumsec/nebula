@@ -43,6 +43,8 @@ import { applyButlerNoteAction } from "./butlerNoteAction";
 import { applyButlerDiagnosticsExport } from "./butlerDiagnosticsAction";
 import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
+import { ButlerSourceAdd } from "./ButlerSourceAdd";
+import { applyButlerSourceAction } from "./butlerSourceAction";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
@@ -112,6 +114,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
   const [issuedStorageToken, setIssuedStorageToken] = useState<IssuedStorageToken>();
   const [uploadingLibrary, setUploadingLibrary] = useState(false);
   const [pendingEvidenceUpload, setPendingEvidenceUpload] = useState<(Extract<SettingClientAction, {kind: "evidence_upload"}> & {sourceMessageId?: string})>();
+  const [pendingSourceAdd, setPendingSourceAdd] = useState<(Extract<SettingClientAction, {kind: "source_add"}> & {sourceMessageId?: string})>();
   const [pendingCredentialCreate, setPendingCredentialCreate] = useState<(Extract<SettingClientAction, {kind: "credential_create"}> & {sourceMessageId?: string})>();
   const [pendingWorkspaceUpload, setPendingWorkspaceUpload] = useState<Extract<SettingClientAction, {kind: "workspace_upload"}>>();
   const [uploadingWorkspace, setUploadingWorkspace] = useState(false);
@@ -266,6 +269,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setPendingLibraryAdd(undefined);
     setIssuedStorageToken(undefined);
     setPendingEvidenceUpload(undefined);
+    setPendingSourceAdd(undefined);
     setPendingCredentialCreate(undefined);
     setUploadingLibrary(false);
     workspaceUploadAbort.current?.abort();
@@ -1668,6 +1672,24 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_delete" || action.kind === "report_signoff"
         || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
+    if (action.kind === "source_add") {
+      if (!api || coreState !== "online" || activeImageProject.current !== action.projectId) throw new Error("Reconnect and select the original project before adding a source.");
+      setPendingSourceAdd(action);
+      setView("chat");
+      return "Choose source input in Butler's project control. This pending action has not saved a source.";
+    }
+    if (action.kind === "source_download" || action.kind === "source_reindex" || action.kind === "source_remove") {
+      if (!api || coreState !== "online") throw new Error("Reconnect to Core before using this source.");
+      const result = await applyButlerSourceAction(api, action, () => activeImageProject.current, confirm);
+      if (result.refresh && activeImageProject.current === action.projectId) {
+        try { await retryResource("sources"); }
+        catch {
+          // diagnostic-expected: WorkspaceContext records the failure and exposes Retry Sources.
+          return `${result.message} Sources could not refresh; use Retry Sources.`;
+        }
+      }
+      return result.message;
+    }
     if (action.kind === "library_download" || action.kind === "library_reindex" || action.kind === "library_remove") return applyLibraryAction(action);
     if (action.kind === "evidence_upload") return applyEvidenceUpload(action);
     if (action.kind === "evidence_download") return applyEvidenceDownload(action);
@@ -2080,6 +2102,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     let reportTransformRequested = false;
     let projectRelinkRequested = false;
     let evidenceUploadRequested = false;
+    let sourceAddRequested = false;
     let credentialCreateRequested = false;
     let actionQueue = Promise.resolve();
     try {
@@ -2124,6 +2147,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           if (action.kind === "report_transform_note") reportTransformRequested = true;
           if (action.kind === "project_relink") projectRelinkRequested = true;
           if (action.kind === "evidence_upload") evidenceUploadRequested = true;
+          if (action.kind === "source_add") sourceAddRequested = true;
           if (action.kind === "credential_create") credentialCreateRequested = true;
           actionQueue = actionQueue.then(async () => {
             if (!controller.signal.aborted) confirmations.push(await applyClientAction(action));
@@ -2176,6 +2200,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
           setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
             ? {...current, sourceMessageId: result.message!.id} : undefined);
           if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
+        }
+        if (sourceAddRequested) {
+          setPendingSourceAdd(current => current?.projectId === engagement.id && result.message!.id
+            ? {...current, sourceMessageId: result.message!.id} : undefined);
+          if (!result.message.id) setError("Butler's saved reply is unavailable. Inspect Sources before adding a document.");
         }
         if (credentialCreateRequested) {
           setPendingCredentialCreate((current) => current?.projectId === engagement.id && result.message!.id
@@ -2274,6 +2303,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     let reportTransformRequested = false;
     let projectRelinkRequested = false;
     let evidenceUploadRequested = false;
+    let sourceAddRequested = false;
     let actionQueue = Promise.resolve();
     setMessages((current) => [...current, { role: "user", content: prompt }]);
     const result = await api.streamChat({
@@ -2312,6 +2342,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         if (action.kind === "report_transform_note") reportTransformRequested = true;
         if (action.kind === "project_relink") projectRelinkRequested = true;
         if (action.kind === "evidence_upload") evidenceUploadRequested = true;
+        if (action.kind === "source_add") sourceAddRequested = true;
         actionQueue = actionQueue.then(async () => { confirmations.push(await applyClientAction(action)); });
       }
       const receipt = assistantWorkReceipt(event, engagement.id);
@@ -2351,6 +2382,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       setPendingEvidenceUpload((current) => current?.projectId === engagement.id && result.message!.id
         ? {...current, sourceMessageId: result.message!.id} : undefined);
       if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect Evidence before choosing a file.");
+    }
+    if (sourceAddRequested) {
+      setPendingSourceAdd(current => current?.projectId === engagement.id && result.message!.id
+        ? {...current, sourceMessageId: result.message!.id} : undefined);
+      if (!result.message.id) throw new Error("Butler's saved reply is unavailable. Inspect Sources before adding a document.");
     }
     confirmations.push(...workReceipts.filter(({ url }) => !result.message!.content.includes(url)).map(({ content }) => content));
     if (result.message.id && confirmations.length && actionOutcomesKey) {
@@ -2512,6 +2548,24 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
         <button className="button quiet" type="button" disabled={uploadingLibrary} onClick={() => { setPendingLibraryAdd(undefined); setMessages((current) => [...current, {role: "assistant", content: "No file was added to the shared Library."}]); }}>Cancel</button>
       </div>
     </section>}
+    {pendingSourceAdd && pendingSourceAdd.projectId === engagement?.id && pendingSourceAdd.sourceMessageId && <ButlerSourceAdd
+      key={pendingSourceAdd.sourceMessageId}
+      projectId={pendingSourceAdd.projectId} inputKind={pendingSourceAdd.inputKind}
+      currentProjectId={() => activeImageProject.current}
+      onSaved={(source, refreshFailed) => {
+        if (!pendingSourceAdd || activeImageProject.current !== source.engagementId) return;
+        appendBrowserActionOutcome(pendingSourceAdd, `Core saved source “${source.name}” at revision ${source.revision}; index status: ${source.status}. [Open source](${resourcePath(source.engagementId, "source", source.id)}).${refreshFailed ? " The Sources list could not refresh; use Retry Sources." : ""}`);
+        setPendingSourceAdd(undefined);
+      }}
+      onCancel={() => {
+        if (pendingSourceAdd) appendBrowserActionOutcome(pendingSourceAdd, "No source was added.");
+        setPendingSourceAdd(undefined);
+      }}
+      onUncertain={message => {
+        if (pendingSourceAdd) appendBrowserActionOutcome(pendingSourceAdd, message);
+        setPendingSourceAdd(undefined);
+      }}
+    />}
     {pendingEvidenceUpload && pendingEvidenceUpload.projectId === engagement?.id && pendingEvidenceUpload.sourceMessageId && <ButlerEvidenceUpload
       key={pendingEvidenceUpload.sourceMessageId}
       projectId={pendingEvidenceUpload.projectId}

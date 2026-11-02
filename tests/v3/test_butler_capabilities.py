@@ -1016,6 +1016,9 @@ def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path
             "nebula.assets.create",
             "nebula.findings.create",
             "nebula.findings.update",
+            "nebula.sources.add",
+            "nebula.sources.reindex",
+            "nebula.sources.remove",
         ):
             with pytest.raises(CapabilityInputError, match="listed operation"):
                 await capabilities.invoke(

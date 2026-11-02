@@ -420,7 +420,7 @@ async function clickAssistantSettings(page: Page) {
   await trigger.click();
 }
 
-async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string>; tls?: boolean; startupTimeoutMs?: number } = {}): Promise<RealCore> {
+async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string>; tls?: boolean; startupTimeoutMs?: number; fixtureScript?: string } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   // Match the production-test override used by the shared real-Core harness.
   const coreCandidates = [
@@ -459,8 +459,8 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
   }
   const embedded = process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1";
   const child = spawn(
-    coreBinary,
-    embedded ? [
+    options.fixtureScript ? path.join(path.dirname(coreBinary), "python") : coreBinary,
+    [...(options.fixtureScript ? [options.fixtureScript] : []), ...(embedded ? [
       // `serve` is intentionally API-only unless a static directory is given.
       // The packaged product's `ui` entry point resolves its embedded assets.
       "ui", "--no-browser", "--host", bindHost, "--port", "0",
@@ -477,7 +477,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
       ...(tlsCert && tlsKey ? ["--tls-cert", tlsCert, "--tls-key", tlsKey] : []),
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
-    ],
+    ])],
     {
       cwd: repository,
       env: {
@@ -1430,6 +1430,142 @@ test("assistant upgrade Butler opens private TypeSafe VPN and MCP entry on produ
     await testInfo.attach("butler-private-settings-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Opened exact TypeSafe, VPN and MCP import forms; private entries stayed on the device, cancellation cleared them, and Core received no private writes. Opening did not claim a saved mutation."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
+test("assistant upgrade Butler manages project Sources through the requesting LAN browser", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  let instruction: {prompt: string; operation: string; arguments: Record<string, unknown>; read?: boolean};
+  let sequence = 0;
+  const stub = await startLocalModelStub({responseContent: "Core prepared the source action.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (!instruction || !String(messages[lastUser]?.content ?? "").startsWith(instruction.prompt)) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    return [
+      {name: "nebula_capabilities_search", arguments: {query: "selected project sources documents"}},
+      {name: "nebula_capabilities_describe", arguments: {operation: instruction.operation}},
+      {name: instruction.read ? "nebula_capabilities_read" : "nebula_capabilities_change", arguments: {operation: instruction.operation, arguments: instruction.arguments}},
+    ][replies];
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    fixtureScript: path.resolve(import.meta.dirname, "fixtures/butler_sources_core.py")});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectResponse = await api.post("engagements", {data: {name: "Source control fixture", status: "active", metadata: {}}});
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const projectId = (await projectResponse.json() as {id: string}).id;
+    const modelResponse = await api.post("providers", {data: {name: "Source model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}}}});
+    expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+    const model = await modelResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${model.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: model.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Source LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/sources`);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const ask = async (operation: string, arguments_: Record<string, unknown> = {}, read = false) => {
+      instruction = {prompt: `Source workflow step ${++sequence}: ${operation}.`, operation: `nebula.sources.${operation}`, arguments: arguments_, read};
+      stub.responseContent = `Core inspected source workflow step ${sequence}.`;
+      if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction.prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      if (read || operation === "add") {
+        await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      } else {
+        const verb = operation === "remove" ? "Remove" : operation === "download" ? "Download" : "Reindex";
+        await expect(page.getByRole("dialog", {name: `${verb} project source?`})).toBeVisible({timeout: 60_000});
+      }
+    };
+    const list = async () => (await (await api.get(`knowledge?engagement_id=${projectId}`)).json()) as Array<{id: string; name: string; revision: number; artifact_id: string; status: string}>;
+    await ask("list", {}, true);
+    await ask("add", {input_kind: "url"});
+    let form = assistant.getByRole("region", {name: "Add project source"});
+    await expect(form).toBeVisible();
+    await form.getByRole("textbox", {name: "Source URL"}).fill("https://source-fixture.invalid/document.txt?key=PRIVATE_SOURCE_URL");
+    await form.getByRole("button", {name: "Cancel", exact: true}).click();
+    expect(await list()).toHaveLength(0);
+    await ask("add", {input_kind: "url"});
+    form = assistant.getByRole("region", {name: "Add project source"});
+    await expect(form.getByRole("textbox", {name: "Source URL"})).toHaveValue("");
+    await form.getByRole("textbox", {name: "Source URL"}).fill("https://source-fixture.invalid/unavailable.txt");
+    await form.getByRole("button", {name: "Add source", exact: true}).click();
+    await expect(assistant.getByText(/Core did not confirm this source/)).toBeVisible();
+    expect(await list()).toHaveLength(0);
+    await ask("add", {input_kind: "url"});
+    form = assistant.getByRole("region", {name: "Add project source"});
+    await form.getByRole("textbox", {name: "Source URL"}).fill("https://source-fixture.invalid/document.txt?key=PRIVATE_SOURCE_URL");
+    await form.getByRole("button", {name: "Add source", exact: true}).click();
+    await expect(assistant.getByText(/Core saved source “url-document.txt”/)).toBeVisible({timeout: 30_000});
+    await ask("add", {input_kind: "file"});
+    form = assistant.getByRole("region", {name: "Add project source"});
+    const bytes = Buffer.from("Private source file transfer marker: SOURCE_FILE_BYTES.");
+    await form.getByLabel("Choose project source file").setInputFiles({name: "source-proof.txt", mimeType: "text/plain", buffer: bytes});
+    await form.getByRole("button", {name: "Add source", exact: true}).click();
+    await expect(assistant.getByText(/Core saved source “source-proof.txt”/)).toBeVisible({timeout: 30_000});
+    let source = (await list()).find(row => row.name === "source-proof.txt")!;
+    expect(source).toBeTruthy();
+    expect((await list()).length).toBe(2);
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await expect(page.getByRole("heading", {name: "source-proof.txt", exact: true})).toBeVisible();
+    const target = () => ({source_id: source.id, expected_revision: source.revision});
+    await ask("download", target());
+    let confirmation = page.getByRole("dialog", {name: "Download project source?"});
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole("button", {name: "Cancel", exact: true}).click();
+    await ask("download", target());
+    confirmation = page.getByRole("dialog", {name: "Download project source?"});
+    const downloading = page.waitForEvent("download");
+    await confirmation.getByRole("button", {name: "Download source", exact: true}).click();
+    const download = await downloading;
+    expect(await readFile(await download.path())).toEqual(bytes);
+    await expect(assistant.getByText(/Started a verified original download/)).toBeVisible();
+    await ask("reindex", target());
+    confirmation = page.getByRole("dialog", {name: "Reindex project source?"});
+    await expect(confirmation).toBeVisible();
+    // A concurrent operator reindex advances the revision without inventing a
+    // generic source-edit endpoint; Knowledge records intentionally reject PATCH.
+    const changed = await api.post(`knowledge/${source.id}/reindex?engagement_id=${projectId}`, {headers: {"If-Match": String(source.revision)}});
+    expect(changed.ok(), await changed.text()).toBe(true);
+    const previousRevision = source.revision;
+    source = await changed.json() as typeof source;
+    expect(source.revision).toBeGreaterThan(previousRevision);
+    await confirmation.getByRole("button", {name: "Reindex source", exact: true}).click();
+    await expect(assistant.getByText(/The source changed/)).toBeVisible();
+    await ask("reindex", target());
+    await page.getByRole("dialog", {name: "Reindex project source?"}).getByRole("button", {name: "Reindex source", exact: true}).click();
+    await expect(assistant.getByText(/Reindexed source-proof.txt in Core/)).toBeVisible({timeout: 30_000});
+    source = (await list()).find(row => row.id === source.id)!;
+    expect(source.status).toBe("ready");
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await expect(page.getByRole("heading", {name: source.name, exact: true})).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("heading", {name: source.name, exact: true})).toBeVisible({timeout: 20_000});
+    await page.context().setOffline(true);
+    await page.context().setOffline(false);
+    await page.reload();
+    await expect(page.getByRole("heading", {name: source.name, exact: true})).toBeVisible({timeout: 20_000});
+    await ask("remove", target());
+    await page.getByRole("dialog", {name: "Remove project source?"}).getByRole("button", {name: "Remove source", exact: true}).click();
+    await expect(assistant.getByText(/Removed source-proof.txt from this project's Sources/)).toBeVisible();
+    expect((await api.get(`knowledge/${source.id}`)).status()).toBe(404);
+    expect(await (await api.get(`artifacts/${source.artifact_id}/content`)).body()).toEqual(bytes);
+    expect((await list()).map(row => row.name)).toEqual(["url-document.txt"]);
+    expect(JSON.stringify(stub.requests)).not.toContain("PRIVATE_SOURCE_URL");
+    const toolMessages = stub.requests.flatMap(body => Array.isArray(body.messages) ? body.messages : []).filter((message: {role?: string}) => message.role === "tool");
+    expect(JSON.stringify(toolMessages)).not.toContain("SOURCE_FILE_BYTES");
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-sources-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], urlTransport: "inert synthetic document fixture",
+      result: "Private URL cancel, failed capture and fresh retry; exact file/URL saved list; confirmed hash-verified original download; concurrent edit refusal and fresh revision recovery; paired reload and network transition; revision-fenced removal retained the original."}), contentType: "application/json"});
+    await testInfo.attach("butler-sources-final-screen", {body: await page.screenshot(), contentType: "image/png"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
 test("assistant upgrade Butler manages nonsecret integration profiles on production LAN Core", async ({page}, testInfo) => {

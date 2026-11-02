@@ -44,6 +44,8 @@ export type SettingClientAction =
   | { kind: "workspace_delete_directory"; projectId: string; path: string; expectedEntryIdentity: string }
   | { kind: "notebook_index_connect" | "notebook_index_remove"; projectId: string; expectedProjectRevision: number }
   | { kind: "library_add"; projectId: string }
+  | { kind: "source_add"; projectId: string; inputKind: "file" | "url" }
+  | { kind: "source_download" | "source_reindex" | "source_remove"; projectId: string; sourceId: string; expectedRevision: number; name: string }
   | { kind: "library_download" | "library_reindex" | "library_remove"; projectId: string; itemId: string; expectedRevision: number; name: string }
   | { kind: "evidence_upload"; projectId: string }
   | { kind: "evidence_download"; projectId: string; evidenceId: string; expectedRevision: number; title: string; expectedSha256: string }
@@ -189,6 +191,18 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
           ...(validNoteReferences(value.asset_ids) ? {assetIds: value.asset_ids} : {}),
           ...(validNoteReferences(value.evidence_ids) ? {evidenceIds: value.evidence_ids} : {})};
       }
+    }
+    if (operation === "nebula.sources.add" && value.kind === "source_add"
+        && ["file", "url"].includes(String(value.input_kind))) {
+      return {kind: "source_add", projectId, inputKind: value.input_kind as "file" | "url"};
+    }
+    const sourceKind = operation === "nebula.sources.download" ? "source_download"
+      : operation === "nebula.sources.reindex" ? "source_reindex"
+      : operation === "nebula.sources.remove" ? "source_remove" : undefined;
+    if (sourceKind && value.kind === sourceKind && typeof value.source_id === "string" && uuidPattern.test(value.source_id)
+        && typeof value.name === "string" && value.name.length > 0 && value.name.length <= 500
+        && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1) {
+      return {kind: sourceKind, projectId, sourceId: value.source_id, name: value.name, expectedRevision: Number(value.expected_revision)};
     }
     if (operation === "nebula.diagnostics.export" && value.kind === "diagnostics_export") {
       return {kind: "diagnostics_export", projectId};

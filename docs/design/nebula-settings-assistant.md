@@ -592,6 +592,33 @@ the visible owner of profile selection and health results.
 | Refresh/reconnect | Owner lists refresh after readback and exact details survive reload | Core plus project URL | Component and paired browser |
 | Failure/recovery | Stale edits leave saved state intact; a fresh revision can recover | Core revision guard | Core and paired browser |
 | Verification | Candidates never imply independent confirmation or launch testing | Operator evidence and attribution | Core refusal and visible review control |
+
+### Project Sources
+
+Butler discovers project Sources with `nebula.sources.list`, reads an exact
+source's current metadata with `nebula.sources.detail`, and reads local index
+preparation with `nebula.sources.index_status`. These controls expose neither
+original bytes nor private source URLs or stored index chunks.
+
+`nebula.sources.add` opens file selection or URL entry on the requesting browser.
+Core records and indexes the source; the browser verifies the exact new identity,
+file digest and list membership before refreshing Sources. Knowledge retrieval
+can separately supply matching passages after ingestion. An uncertain result
+closes private input and tells the operator to inspect Sources before retrying.
+
+`nebula.sources.download`, `reindex` and `remove` prepare exact browser-owned
+actions at the observed revision. The browser confirms, rereads Core, and uses
+project-bound revision guards. Downloads verify the original size and digest.
+Reindexing requires a newer ready revision; removal requires exact absence and
+retains the immutable artifact. A concurrent edit refuses the stale action and
+can recover after a fresh read. Saved lists survive reload and reconnect.
+
+The acceptance journey uses the production bundle, paired Core, synthetic local
+files and an inert URL-document transport. It covers private input cancellation,
+capture failure and retry, creation, selection, download, concurrent-edit refusal,
+reindex recovery, refresh/reconnect and removal. Public URL validation and
+redirect pinning retain their separate focused Core regressions; the fixture
+does not relax production network policy.
 | Delete/stream | These record UI paths expose no deletion or streaming lifecycle | Existing UI contract | Not applicable to this slice |
 
 

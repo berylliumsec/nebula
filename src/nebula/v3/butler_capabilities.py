@@ -69,6 +69,10 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.settings.set_device_theme",
         "nebula.settings.set_project_mode",
         "nebula.settings.set_project_scope",
+        "nebula.sources.add",
+        "nebula.sources.download",
+        "nebula.sources.reindex",
+        "nebula.sources.remove",
         "nebula.settings.headless_session",
         "nebula.chats.export",
         "nebula.storage.enroll",
@@ -168,6 +172,10 @@ _CATEGORIES = (
     {
         "id": "library",
         "description": "Bounded shared Library item discovery and requesting-browser upload, download, reindex or removal",
+    },
+    {
+        "id": "sources",
+        "description": "Selected-project Sources metadata and browser-owned file or URL ingestion, verified original download, revision-fenced reindex and removal",
     },
     {
         "id": "reports",
@@ -304,11 +312,26 @@ class ButlerCapabilities:
             from .butler_records import ButlerRecords
             from .butler_reports import ButlerReports
             from .butler_storage import ButlerStorage
+            from .butler_sources import ButlerSources
             from .butler_terminal import ButlerTerminal
             from .butler_workspace import ButlerWorkspace
 
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in ButlerProjects(store).plugins()}
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerSources(
+                        store,
+                        project_id,
+                        getattr(
+                            getattr(getattr(settings_api, "app", None), "state", None),
+                            "knowledge_index",
+                            None,
+                        ),
+                    ).actions()
+                }
             )
             self._actions.update(
                 {

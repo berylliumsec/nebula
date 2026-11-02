@@ -2133,6 +2133,87 @@
         "reason": "Trusting a local MCP program and changing its trusted launch definition belong to the operator control. Generic model-driven profile edits preserve this trust and definition.",
         "observed_result": "opened"
       }
+    },
+    {
+      "id": "sources.add",
+      "entry_point": "Sources upload or public URL capture",
+      "ui_calls": [
+        "ui/src/components/ChatAttachments.tsx::ingestKnowledgeSource",
+        "ui/src/components/ChatAttachments.tsx::listKnowledgeSources",
+        "ui/src/state/WorkspaceContext.tsx::ingestKnowledgeSource",
+        "ui/src/state/WorkspaceContext.tsx::ingestKnowledgeUrlSource",
+        "ui/src/state/WorkspaceContext.tsx::listKnowledgeSources",
+        "ui/src/pages/KnowledgePage.tsx::getKnowledgeIndexStatus",
+        "ui/src/components/ButlerSourceAdd.tsx::getKnowledgeSource",
+        "ui/src/components/ButlerSourceAdd.tsx::ingestKnowledgeSource",
+        "ui/src/components/ButlerSourceAdd.tsx::ingestKnowledgeUrlSource",
+        "ui/src/components/ButlerSourceAdd.tsx::listKnowledgeSources"
+      ],
+      "core_owner": "Selected-project KnowledgeSource and immutable Artifact, Core ingestion/index services, scoped revision-fenced reindex/removal and exact readback",
+      "butler": {
+        "discover": "nebula.sources.list and nebula.sources.index_status",
+        "read": "nebula.sources.detail",
+        "change": "nebula.sources.add"
+      },
+      "authority": "Interactive operator request; original file and URL entry, transfer and confirmation stay in the requesting browser. Another project and stale revisions are refused. Indexing supports later separate Knowledge retrieval.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages project Sources through the requesting LAN browser",
+      "result": "A pending receipt alone proves no mutation. Browser ingestion checks exact identity, file digest and list membership; reindex checks a newer ready revision; removal verifies exact absence and retains the artifact. Confirmed downloads verify original size/digest. Private URL input and original bytes are absent from model control messages.",
+      "status": "supported"
+    },
+    {
+      "id": "sources.download",
+      "entry_point": "Sources original-file download",
+      "ui_calls": [
+        "ui/src/pages/KnowledgePage.tsx::getArtifactContent",
+        "ui/src/components/butlerSourceAction.ts::getArtifactContent",
+        "ui/src/components/butlerSourceAction.ts::getKnowledgeSource"
+      ],
+      "core_owner": "Selected-project KnowledgeSource and immutable Artifact, Core ingestion/index services, scoped revision-fenced reindex/removal and exact readback",
+      "butler": {
+        "discover": "nebula.sources.list and nebula.sources.index_status",
+        "read": "nebula.sources.detail",
+        "change": "nebula.sources.download"
+      },
+      "authority": "Interactive operator request; original file and URL entry, transfer and confirmation stay in the requesting browser. Another project and stale revisions are refused. Indexing supports later separate Knowledge retrieval.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages project Sources through the requesting LAN browser",
+      "result": "A pending receipt alone proves no mutation. Browser ingestion checks exact identity, file digest and list membership; reindex checks a newer ready revision; removal verifies exact absence and retains the artifact. Confirmed downloads verify original size/digest. Private URL input and original bytes are absent from model control messages.",
+      "status": "supported"
+    },
+    {
+      "id": "sources.reindex",
+      "entry_point": "Sources exact-source reindex",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::reindexKnowledgeSource",
+        "ui/src/components/butlerSourceAction.ts::reindexKnowledgeSourceAtRevision"
+      ],
+      "core_owner": "Selected-project KnowledgeSource and immutable Artifact, Core ingestion/index services, scoped revision-fenced reindex/removal and exact readback",
+      "butler": {
+        "discover": "nebula.sources.list and nebula.sources.index_status",
+        "read": "nebula.sources.detail",
+        "change": "nebula.sources.reindex"
+      },
+      "authority": "Interactive operator request; original file and URL entry, transfer and confirmation stay in the requesting browser. Another project and stale revisions are refused. Indexing supports later separate Knowledge retrieval.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages project Sources through the requesting LAN browser",
+      "result": "A pending receipt alone proves no mutation. Browser ingestion checks exact identity, file digest and list membership; reindex checks a newer ready revision; removal verifies exact absence and retains the artifact. Confirmed downloads verify original size/digest. Private URL input and original bytes are absent from model control messages.",
+      "status": "supported"
+    },
+    {
+      "id": "sources.remove",
+      "entry_point": "Sources exact-source removal",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::deleteKnowledgeSource",
+        "ui/src/components/butlerSourceAction.ts::deleteKnowledgeSourceAtRevision"
+      ],
+      "core_owner": "Selected-project KnowledgeSource and immutable Artifact, Core ingestion/index services, scoped revision-fenced reindex/removal and exact readback",
+      "butler": {
+        "discover": "nebula.sources.list and nebula.sources.index_status",
+        "read": "nebula.sources.detail",
+        "change": "nebula.sources.remove"
+      },
+      "authority": "Interactive operator request; original file and URL entry, transfer and confirmation stay in the requesting browser. Another project and stale revisions are refused. Indexing supports later separate Knowledge retrieval.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages project Sources through the requesting LAN browser",
+      "result": "A pending receipt alone proves no mutation. Browser ingestion checks exact identity, file digest and list membership; reindex checks a newer ready revision; removal verifies exact absence and retains the artifact. Confirmed downloads verify original size/digest. Private URL input and original bytes are absent from model control messages.",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -2415,6 +2496,22 @@
     {
       "key": "ui/src/components/ButlerScheduledTranscript.tsx::getHarnessTurnEvents",
       "count": 2
+    },
+    {
+      "key": "ui/src/components/ButlerSourceAdd.tsx::getKnowledgeSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerSourceAdd.tsx::ingestKnowledgeSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerSourceAdd.tsx::ingestKnowledgeUrlSource",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/ButlerSourceAdd.tsx::listKnowledgeSources",
+      "count": 1
     },
     {
       "key": "ui/src/components/ChatAttachments.tsx::ingestKnowledgeSource",
@@ -3618,6 +3715,22 @@
     },
     {
       "key": "ui/src/components/butlerReportTransform.ts::updateReport",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerSourceAction.ts::deleteKnowledgeSourceAtRevision",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerSourceAction.ts::getArtifactContent",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerSourceAction.ts::getKnowledgeSource",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/butlerSourceAction.ts::reindexKnowledgeSourceAtRevision",
       "count": 1
     },
     {

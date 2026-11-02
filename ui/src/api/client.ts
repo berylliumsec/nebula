@@ -8528,6 +8528,23 @@ export class ApiClient {
     ).then(mapKnowledgeSource);
   }
 
+  getKnowledgeSource(id: string): Promise<KnowledgeSource & {revision: number}> {
+    return this.request<WireKnowledgeSource>(`knowledge/${encodeURIComponent(id)}`)
+      .then(value => ({...mapKnowledgeSource(value), revision: value.revision}));
+  }
+
+  reindexKnowledgeSourceAtRevision(id: string, projectId: string, revision: number): Promise<KnowledgeSource> {
+    return this.request<WireKnowledgeSource>(`knowledge/${encodeURIComponent(id)}/reindex?engagement_id=${encodeURIComponent(projectId)}`, {
+      method: "POST", headers: {"If-Match": String(revision)},
+    }).then(mapKnowledgeSource);
+  }
+
+  async deleteKnowledgeSourceAtRevision(id: string, projectId: string, revision: number): Promise<void> {
+    await this.request(`knowledge/${encodeURIComponent(id)}?engagement_id=${encodeURIComponent(projectId)}`, {
+      method: "DELETE", headers: {"If-Match": String(revision)},
+    });
+  }
+
   async deleteKnowledgeSource(id: string, signal?: AbortSignal): Promise<void> {
     await this.request<void>(`knowledge/${encodeURIComponent(id)}`, {
       method: "DELETE",

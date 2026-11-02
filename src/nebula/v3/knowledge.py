@@ -740,10 +740,18 @@ def reindex_document(
     artifact_store: ArtifactStore,
     source_id: str,
     knowledge_index: KnowledgeIndex | None = None,
+    expected_revision: int | None = None,
+    engagement_id: str | None = None,
 ) -> KnowledgeSource:
     """Rebuild a knowledge index exclusively from its immutable artifact."""
 
     source = store.get(KnowledgeSource, source_id)
+    if engagement_id is not None and source.engagement_id != engagement_id:
+        raise InvalidDocumentError("knowledge source is not in the selected project")
+    if expected_revision is not None and source.revision != expected_revision:
+        raise ConflictError(
+            f"revision conflict: expected {expected_revision}, found {source.revision}"
+        )
     if not source.artifact_id:
         raise InvalidDocumentError("knowledge source has no authoritative artifact")
     artifact = store.get(Artifact, source.artifact_id)
