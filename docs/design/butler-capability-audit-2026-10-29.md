@@ -566,11 +566,11 @@ state the missing action or evidence. The source guard is a review alarm, not a
 proof that every click has been catalogued.
 
 The current registry lives in `docs/design/butler-workflow-registry.json` and is
-checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 101
-reviewed entries: 77 supported workflows, fifteen operator-owned handoffs and
+checked by `ui/scripts/check-butler-workflow-registry.mjs`. It records 104
+reviewed entries: 80 supported workflows, fifteen operator-owned handoffs and
 nine supporting UI protocols that grant no model operation. Its
-source inventory contains 586 distinct API call signatures in production UI
-TypeScript, of which 435 are linked to reviewed entries; 151 still require
+source inventory contains 588 distinct API call signatures in production UI
+TypeScript, of which 443 are linked to reviewed entries; 145 still require
 action-level review. An additional 37 call sites reuse the already reviewed workspace, Notebook, private credential, integration-profile, report export, chat-setting and Work services. Global Work pages retain their existing UI aggregate; Butler reads and changes only the selected project through its typed roster and Work board operations. These mappings add no operation or wider authority. Workbench bulk chat calls map to the existing per-chat
 archive, priority and deletion actions; Butler can page and apply those actions
 to exact chats one at a time. Direct `ApiClient.request` calls are keyed by route
@@ -629,4 +629,32 @@ Interactive Butler pages source metadata and index status, opens private file or
 
 ## Branch slice: policy consent and existing Settings bindings
 
-The generic Settings gateway preserves first Host access as a requesting-browser acknowledgment. It evaluates booleans with Core-compatible validation, refuses initial consent in every execution mode, requires the observed body revision and forwards it through the existing Core update guard. Already-recorded consent remains available to later nonsecret edits. Policy, Voice timeout and headless-session wrappers map to their existing scoped actions; private conversation cleanup remains browser-owned protocol. These 22 additional signature links grant no new execution or microphone capability. Local validation passed 39 focused Settings/API/product-help cases and nine command-preference/history cases. The extended paired production Chromium loopback profile journey passed first-consent refusal, a saved Docker policy edit, visible Settings reload, MCP privacy and ordinary CRUD, and later Butler requests without command-runtime admission. Core now persists the explicit command choice separately from aggregate tool routing; resumed and settling turns preserve newer operator choices. Canonical LAN/device matrix evidence for this head remains pending CI.
+The generic Settings gateway preserves first Host access as a requesting-browser acknowledgment. It evaluates booleans with Core-compatible validation, refuses initial consent in every execution mode, requires the observed body revision and forwards it through the existing Core update guard. Already-recorded consent remains available to later nonsecret edits. Policy, Voice timeout and headless-session wrappers map to their existing scoped actions; private conversation cleanup remains browser-owned protocol. These 22 additional signature links grant no new execution or microphone capability. Local validation passed 39 focused Settings/API/product-help cases and nine command-preference/history cases. The extended paired production Chromium loopback profile journey passed first-consent refusal, a saved Docker policy edit, visible Settings reload, MCP privacy and ordinary CRUD, and later Butler requests without command-runtime admission. Core now persists the explicit command choice separately from aggregate tool routing; resumed and settling turns preserve newer operator choices. The canonical LAN/device matrix passed at a100c58b with 230 successful checks and four skips.
+
+
+## Branch slice: saved Results and conversation navigation
+
+Interactive Butler pages selected-project saved Result summaries, reads exact JSON
+or separate presentation hints in 4,096-character ASCII chunks, searches visible
+project conversation messages, and reads or revision-saves message bookmarks. Core
+search excludes Butler, temporary and side conversations in SQL before pagination.
+The requesting chat refreshes bookmark controls after verified Core writes; saved
+state survives reload and stale writes preserve newer choices. Permanent result
+removal is browser-confirmed with fresh identity/revision checks and Core's atomic
+delete guard, followed by exact absence and list refresh. An uncertain response
+is reconciled through Core before retry. Existing app destinations include these
+actions; no new Settings control is added.
+
+Validation passed 35 focused Core, SQL privacy, registry and product-help cases;
+119 affected frontend cases; the production build; mypy for 223 Core files; Ruff
+formatting for 495 Core/test files; Python/frontend diagnostic audits; and bundled
+product-help verification and Chroma source synchronization (331 passages). The
+paired production Chromium 1024×768 loopback journey passed bounded result reads,
+bookmark creation and visible reload, bookmarked search, removal and stale-write
+refusal, result-deletion cancellation and confirmed absence, retained item refresh,
+network transition, accessibility and clipping checks. Its final saved screen was
+inspected. This is local loopback evidence; the eight permanent LAN/browser entries
+are committed and await CI for this head. Physical devices were not exercised.
+The reviewed selection now collects 250 Python, 415 frontend and 230 Playwright
+cases, with no native tests. The 145 remaining signatures still need review and
+implementation where appropriate before this PR can be called complete or merged.

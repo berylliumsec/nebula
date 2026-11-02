@@ -45,6 +45,8 @@ import { AIWritingDialog } from "./AIWritingDialog";
 import { ButlerEvidenceUpload } from "./ButlerEvidenceUpload";
 import { ButlerSourceAdd } from "./ButlerSourceAdd";
 import { applyButlerSourceAction } from "./butlerSourceAction";
+import { applyButlerResultDelete } from "./butlerResultAction";
+import { notifyProjectDataChanged } from "../api/projectDataEvents";
 import { readButlerReportTransform, settleButlerReportTransform, type ButlerReportTransformAction } from "./butlerReportTransform";
 import { useButlerOverview } from "./useButlerOverview";
 import { beginButlerFeedback, feedbackFromButlerEvent, feedbackFromPendingTurn, formatButlerDuration, type ButlerTurnFeedback } from "./butlerTurnFeedback";
@@ -1672,6 +1674,20 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "report_create" || action.kind === "report_update" || action.kind === "report_delete" || action.kind === "report_signoff"
         || action.kind === "report_export_pdf" || action.kind === "report_export_bundle") return applyReportAction(action);
     if (action.kind === "library_add") return applyLibraryAdd(action);
+    if (action.kind === "bookmarks_refresh") {
+      if (activeImageProject.current !== action.projectId) return "Core confirmed the bookmark. Select its original project to refresh the chat.";
+      notifyProjectDataChanged({projectId: action.projectId, resource: "bookmarks", sessionId: action.sessionId});
+      return "Core confirmed the saved bookmark state and requested a refresh of its conversation controls.";
+    }
+    if (action.kind === "result_delete") {
+      if (!api || coreState !== "online") throw new Error("Reconnect to Core before deleting a saved result.");
+      const result = await applyButlerResultDelete(api, action, () => activeImageProject.current, confirm);
+      if (result.deleted) {
+        notifyProjectDataChanged({projectId: action.projectId, resource: "results", resultId: action.resultId});
+        onNavigate(`/projects/${encodeURIComponent(action.projectId)}/results`);
+      }
+      return result.message;
+    }
     if (action.kind === "source_add") {
       if (!api || coreState !== "online" || activeImageProject.current !== action.projectId) throw new Error("Reconnect and select the original project before adding a source.");
       setPendingSourceAdd(action);

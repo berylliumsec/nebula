@@ -656,3 +656,24 @@ restored before record changes. Scheduled Butler does not receive these record
 controls. Asset editing/deletion and finding deletion are not operator actions
 on these UI paths; this slice adds the create/edit controls already visible
 there.
+
+
+### Saved Results and message bookmarks
+
+Butler can inspect selected-project saved Results with `nebula.data.results`
+and `nebula.data.result`, then read the exact result or its separate presentation
+hints with `nebula.data.read_result`. Content is ASCII JSON in 4,096-character
+chunks with a current revision and `next_offset`; Butler never executes it.
+`nebula.data.delete_result` prepares exact title/revision removal on the requesting
+browser. Cancellation sends no write. The browser rechecks after confirmation,
+uses Core's atomic revision guard, and requires exact absence before reporting
+removal and refreshing Results. A lost response is reconciled through Core;
+failed readback requires inspection before any retry.
+
+`nebula.data.search_chats` searches visible saved project messages, optionally
+one chat or bookmarks only. `nebula.data.bookmarks` pages saved bookmark states.
+`nebula.data.set_bookmark` sets or clears one exact message bookmark using its
+current revision, or zero when no bookmark record exists. Core owns revisions
+and confirms the saved value; the requesting chat rereads its controls. Private
+Butler, side, temporary and other-project conversations are excluded. These
+interactive controls do not run agents or enable command execution.

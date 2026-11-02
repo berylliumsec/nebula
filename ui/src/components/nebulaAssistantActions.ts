@@ -8,6 +8,8 @@ export type ProjectMode = "docker" | "host";
 export type ProjectScopeMode = "bounded" | "all_destinations" | "allow_all";
 type NoteChanges = {title?: string; body?: string; assetIds?: string[]; evidenceIds?: string[]};
 export type SettingClientAction =
+  | { kind: "result_delete"; projectId: string; resultId: string; expectedRevision: number; title: string }
+  | { kind: "bookmarks_refresh"; projectId: string; sessionId: string }
   | { kind: "records_refresh"; projectId: string; resource: "assets" | "findings" }
   | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
   | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
@@ -130,7 +132,7 @@ export function validScopeChanges(value: unknown): value is Record<string, unkno
 export function settingClientAction(event: ChatStreamEvent, projectId?: string): SettingClientAction | undefined {
   if (event.type !== "tool_completed" || !["complete", "completed", "succeeded"].includes(event.status)) return undefined;
   const receipt = event.receipt;
-  if (receipt?.state !== "pending_browser_apply" && receipt?.state !== "core_settings_saved" && receipt?.state !== "core_records_saved") return undefined;
+  if (receipt?.state !== "pending_browser_apply" && receipt?.state !== "core_settings_saved" && receipt?.state !== "core_records_saved" && receipt?.state !== "core_project_data_saved") return undefined;
   if ((event.capability === "nebula.capabilities.change" || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability))
     && !butlerGatewayOperation(event, projectId)) return undefined;
@@ -141,6 +143,14 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   const projectAction = event.capability === "nebula.capabilities.change"
     || event.capability === "nebula_capabilities_change"
     || /^nebula_capabilities_change_[0-9a-f]{10,}$/.test(event.capability);
+  if (receipt.state === "core_project_data_saved") {
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && operation === "nebula.data.set_bookmark" && receipt.read_back === true
+        && value.kind === "bookmarks_refresh" && validNoteReferences([value.session_id])) {
+      return {kind: "bookmarks_refresh", projectId, sessionId: value.session_id as string};
+    }
+    return undefined;
+  }
   if (receipt.state === "core_records_saved") {
     const resource = value.resource;
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
@@ -166,6 +176,11 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     return undefined;
   }
   if (projectAction && typeof projectId === "string" && value.project_id === projectId) {
+    if (operation === "nebula.data.delete_result" && value.kind === "result_delete"
+        && validNoteReferences([value.result_id]) && Number.isInteger(value.expected_revision) && Number(value.expected_revision) >= 1
+        && typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 200) {
+      return {kind: "result_delete", projectId, resultId: value.result_id as string, title: value.title, expectedRevision: Number(value.expected_revision)};
+    }
     const noteId = typeof value.note_id === "string" && value.note_id.length > 0 && value.note_id.length <= 200
       && !/[\x00-\x1f]/.test(value.note_id) ? value.note_id : undefined;
     const validNoteFields = (value.title === undefined || (typeof value.title === "string" && value.title.trim().length > 0 && value.title.length <= 500))

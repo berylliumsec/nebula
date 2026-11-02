@@ -2284,6 +2284,62 @@
       "observed_result_test": "tests/v3/test_settings_assistant_api.py::test_headless_session_start_and_status_use_selected_project",
       "result": "The browser applies the requested start/stop and reads Core status before reporting it. Service availability is conditional; an active session is not a mission, target interaction or assessment result.",
       "status": "supported"
+    },
+    {
+      "id": "results.inspect",
+      "entry_point": "Results explorer and saved conversation message search/bookmark controls",
+      "ui_calls": [
+        "ui/src/components/structured-result/useStructuredResults.ts::getStructuredResult",
+        "ui/src/components/structured-result/useStructuredResults.ts::listStructuredResultsIfChanged"
+      ],
+      "core_owner": "Core StructuredResult and ChatBookmark records, project-scoped search routes and atomic revision guards",
+      "butler": {
+        "discover": "nebula.capabilities.search",
+        "read": "nebula.data.results, nebula.data.result and nebula.data.read_result",
+        "change": "nebula.data.delete_result"
+      },
+      "authority": "Interactive selected project; visible saved chats only; exact record identity and current revision; requesting-browser confirmation for permanent result removal",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core",
+      "result": "Core result metadata and bounded revision-bound JSON match the saved payload; private project results stay excluded.",
+      "status": "supported"
+    },
+    {
+      "id": "results.remove",
+      "entry_point": "Results explorer and saved conversation message search/bookmark controls",
+      "ui_calls": [
+        "ui/src/components/butlerResultAction.ts::deleteStructuredResultAtRevision",
+        "ui/src/components/butlerResultAction.ts::getStructuredResult",
+        "ui/src/pages/ResultsPage.tsx::deleteStructuredResult"
+      ],
+      "core_owner": "Core StructuredResult and ChatBookmark records, project-scoped search routes and atomic revision guards",
+      "butler": {
+        "discover": "nebula.capabilities.search",
+        "read": "nebula.data.result",
+        "change": "nebula.data.delete_result"
+      },
+      "authority": "Interactive selected project; visible saved chats only; exact record identity and current revision; requesting-browser confirmation for permanent result removal",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core",
+      "result": "Cancellation sends no write; browser confirmation rechecks exact identity and revision, then Core absence and retained list are visible after reload.",
+      "status": "supported"
+    },
+    {
+      "id": "chat.search_and_bookmarks",
+      "entry_point": "Results explorer and saved conversation message search/bookmark controls",
+      "ui_calls": [
+        "ui/src/pages/useChatNavigation.ts::request::\"PUT\" `chat/sessions/${encodeURIComponent(sessionId)}/bookmarks/${encodeURIComponent(messageId)}`",
+        "ui/src/pages/useChatNavigation.ts::request::GET `chat/projects/${encodeURIComponent(projectId)}/search?${params}`",
+        "ui/src/pages/useChatNavigation.ts::request::GET `chat/sessions/${encodeURIComponent(sessionId)}/bookmarks`"
+      ],
+      "core_owner": "Core StructuredResult and ChatBookmark records, project-scoped search routes and atomic revision guards",
+      "butler": {
+        "discover": "nebula.capabilities.search",
+        "read": "nebula.data.search_chats and nebula.data.bookmarks",
+        "change": "nebula.data.set_bookmark"
+      },
+      "authority": "Interactive selected project; visible saved chats only; exact record identity and current revision; requesting-browser confirmation for permanent result removal",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core",
+      "result": "Core saves exact bookmark state at the observed revision, the visible message button refreshes, and bookmarked search and paired reload agree; stale writes preserve newer state.",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -3786,6 +3842,14 @@
     {
       "key": "ui/src/components/butlerReportTransform.ts::updateReport",
       "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerResultAction.ts::deleteStructuredResultAtRevision",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/butlerResultAction.ts::getStructuredResult",
+      "count": 2
     },
     {
       "key": "ui/src/components/butlerSourceAction.ts::deleteKnowledgeSourceAtRevision",

@@ -718,3 +718,16 @@ def test_product_search_finds_butler_inventory_and_candidate_records(monkeypatch
         and "verification" in str(item["text"])
         for item in matches
     )
+
+
+def test_product_search_finds_butler_saved_results_and_bookmarks(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can Butler read saved Results JSON and set a message bookmark?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.data.read_result" in text
+    assert "nebula.data.delete_result" in text
+    assert "nebula.data.set_bookmark" in text
+    assert "4,096" in text
+    assert "requesting" in text

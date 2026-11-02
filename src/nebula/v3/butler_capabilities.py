@@ -73,6 +73,7 @@ _BROWSER_ACTIONS = frozenset(
         "nebula.sources.download",
         "nebula.sources.reindex",
         "nebula.sources.remove",
+        "nebula.data.delete_result",
         "nebula.settings.headless_session",
         "nebula.chats.export",
         "nebula.storage.enroll",
@@ -149,6 +150,10 @@ _BACKGROUND_CHANGES = frozenset(
     }
 )
 _CATEGORIES = (
+    {
+        "id": "data",
+        "description": "Bounded saved structured Results, project conversation search and revision-checked message bookmarks",
+    },
     {
         "id": "work",
         "description": "Project chats, main agents, subagents, missions, goals, queues, schedules, and approvals",
@@ -302,6 +307,7 @@ class ButlerCapabilities:
             from .butler_credentials import ButlerCredentials
             from .butler_diagnostics import ButlerDiagnostics
             from .butler_devices import ButlerDevices
+            from .butler_data import ButlerData
             from .butler_evidence import ButlerEvidence
             from .butler_library import ButlerLibrary
             from .butler_projects import ButlerProjects
@@ -318,6 +324,12 @@ class ButlerCapabilities:
 
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in ButlerProjects(store).plugins()}
+            )
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in ButlerData(store, project_id, settings_api).actions()
+                }
             )
             self._actions.update(
                 {

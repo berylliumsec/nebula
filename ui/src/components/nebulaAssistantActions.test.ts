@@ -3,6 +3,21 @@ import type { ChatStreamEvent, HarnessProfile } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("accepts result deletion only through the selected project's exact operation", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Prepared", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "pending_browser_apply", butler_project_id: "selected", butler_operation: "nebula.data.delete_result", client_action: {kind: "result_delete", project_id: "selected", result_id: "result", title: "Result", expected_revision: 2}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "result_delete", projectId: "selected", resultId: "result", title: "Result", expectedRevision: 2});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.sources.remove"}}, "selected")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, client_action: {...(event.receipt!.client_action as object), expected_revision: 0}}}, "selected")).toBeUndefined();
+  });
+  it("refreshes bookmarks only after a verified Core write receipt", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "core_project_data_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.data.set_bookmark", client_action: {kind: "bookmarks_refresh", project_id: "selected", session_id: "chat"}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "bookmarks_refresh", projectId: "selected", sessionId: "chat"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "selected")).toBeUndefined();
+    expect(settingClientAction(event, "other")).toBeUndefined();
+  });
   it("keeps model API-key questions distinct from private TypeSafe entry", () => {
     expect(settingToOpen("which setting holds API keys for models?")?.id).toBe("settings.providers");
     expect(settingToOpen("where can I enter the TypeSafe API key?")?.id).toBe("settings.typesafe");

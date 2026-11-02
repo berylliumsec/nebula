@@ -8409,6 +8409,13 @@ export class ApiClient {
     );
   }
 
+  async deleteStructuredResultAtRevision(projectId: string, resultId: string, expectedRevision: number): Promise<void> {
+    await this.request<void>(
+      `projects/${encodeURIComponent(projectId)}/structured-results/${encodeURIComponent(resultId)}?expected_revision=${expectedRevision}`,
+      {method: "DELETE"},
+    );
+  }
+
   listLibraryItems(signal?: AbortSignal): Promise<Page<LibraryItem>> {
     return this.listAll<WireLibraryItem>("library/items", signal)
       .then((items) => page(items.map(mapLibraryItem)));

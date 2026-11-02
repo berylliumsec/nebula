@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import pytest
 from fastapi.testclient import TestClient
 from nebula.v3.chat_workspace import workspace_router
 from nebula.v3.chat_naming import substantive_prompt, should_name
@@ -60,6 +61,55 @@ def test_search_is_project_scoped_paginated_and_literal(tmp_path):
     assert data["items"][0]["session_id"] == "s"
     assert (
         client.get("/chat/projects/p/search", params={"q": "%"}).json()["items"] == []
+    )
+
+
+@pytest.mark.parametrize(
+    "private_kind", ["control_assistant", "temporary_assistant", "side_chat"]
+)
+def test_search_excludes_private_conversations_before_pagination(
+    tmp_path, private_kind
+):
+    store, client = workspace(tmp_path)
+    private = store.create(
+        ChatSession(
+            engagement_id="p",
+            title="Private title",
+            provider_profile_id="provider",
+            model="m",
+            metadata={private_kind: True},
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id="p",
+            session_id=private.id,
+            sequence=1,
+            role="user",
+            content="Document private sentinel",
+        )
+    )
+    first = client.get(
+        "/chat/projects/p/search", params={"q": "document", "limit": 1}
+    ).json()
+    second = client.get(
+        "/chat/projects/p/search", params={"q": "document", "limit": 1, "offset": 1}
+    ).json()
+    last = client.get(
+        "/chat/projects/p/search", params={"q": "document", "limit": 1, "offset": 2}
+    ).json()
+    assert len(first["items"]) == len(second["items"]) == 1
+    assert all(
+        row["session_id"] == "s" for page in [first, second] for row in page["items"]
+    )
+    assert first["next_offset"] == 1 and second["next_offset"] is None
+    assert last == {"items": [], "next_offset": None}
+    assert "private sentinel" not in str(first) + str(second)
+    assert (
+        client.get("/chat/projects/p/search", params={"session_id": private.id}).json()[
+            "items"
+        ]
+        == []
     )
 
 

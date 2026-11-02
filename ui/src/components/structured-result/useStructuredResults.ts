@@ -3,6 +3,7 @@ import type { ApiClient } from "../../api/client";
 import type { StructuredResultRecord, StructuredResultSummary } from "../../api/types";
 import { sameJson, startVisiblePoll, type PollOutcome } from "../../api/visiblePoll";
 import { logCaughtDiagnostic } from "../../diagnostics";
+import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../../api/projectDataEvents";
 
 /** How often an open, following surface asks Core for newly published results. */
 const POLL_MS = 4_000;
@@ -47,6 +48,14 @@ export function useStructuredResults(
   const errorShown = useRef(false);
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<ProjectDataChange>).detail;
+      if (detail?.resource === "results" && detail.projectId === projectId) refresh();
+    };
+    window.addEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+  }, [projectId, refresh]);
 
   useEffect(() => {
     if (!api || !projectId) {

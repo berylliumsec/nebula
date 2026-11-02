@@ -1568,6 +1568,127 @@ test("assistant upgrade Butler manages project Sources through the requesting LA
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
+test("assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  let instruction: {prompt: string; operation: string; arguments: Record<string, unknown>; change: boolean};
+  let sequence = 0;
+  const stub = await startLocalModelStub({responseContent: "Saved document analysis.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    if (!instruction || !String(messages[lastUser]?.content ?? "").startsWith(instruction.prompt)) return undefined;
+    const replies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
+    return [
+      {name: "nebula_capabilities_search", arguments: {query: "saved results project messages bookmarks"}},
+      {name: "nebula_capabilities_describe", arguments: {operation: instruction.operation}},
+      {name: instruction.change ? "nebula_capabilities_change" : "nebula_capabilities_read", arguments: {operation: instruction.operation, arguments: instruction.arguments}},
+    ][replies];
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const project = await api.post("engagements", {data: {name: "Saved data fixture", status: "active", metadata: {}}});
+    expect(project.ok(), await project.text()).toBe(true);
+    const projectId = (await project.json() as {id: string}).id;
+    const other = await (await api.post("engagements", {data: {name: "Other data fixture", status: "active", metadata: {}}})).json() as {id: string};
+    const modelResponse = await api.post("providers", {data: {name: "Data model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}}}});
+    expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+    const model = await modelResponse.json() as {id: string; revision: number};
+    const verified = await api.post(`providers/${model.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: model.revision}});
+    expect(verified.ok(), await verified.text()).toBe(true);
+    const chatResponse = await api.post("chat/completions", {data: {engagement_id: projectId, provider_id: model.id, model: "security-model",
+      tools_enabled: false, include_knowledge: false, allow_agent_messaging: false, messages: [{role: "user", content: "Document bookmark target"}], stream: false}});
+    expect(chatResponse.ok(), await chatResponse.text()).toBe(true);
+    const chat = await chatResponse.json() as {session_id: string};
+    const messages = await (await api.get(`chat/sessions/${chat.session_id}/messages`)).json() as Array<{id: string; role: string}>;
+    const messageId = messages.find(message => message.role === "user")!.id;
+    const publish = async (owner: string, title: string, result: unknown) => {
+      const response = await api.post(`projects/${owner}/structured-results`, {data: {title, result, origin: "operator"}});
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {result: {id: string; revision: number; title: string}}).result;
+    };
+    const result = await publish(projectId, "Document review result", {notes: "x".repeat(6000), verified: true});
+    const retained = await publish(projectId, "Retained result", {state: "retained"});
+    await publish(other.id, "PRIVATE_FOREIGN_RESULT", {private: "PRIVATE_FOREIGN_PAYLOAD"});
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(asset => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Saved data LAN browser", {requireReady: false});
+    const chatUrl = `${core.origin}/projects/${projectId}/workbench?view=chat&session=${chat.session_id}`;
+    await page.goto(chatUrl);
+    const assistant = page.getByRole("dialog", {name: "Butler"});
+    const outcomes = (start: number): Array<Record<string, unknown>> => stub.requests.slice(start).flatMap(body => {
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+      const lastUser = messages.map(message => message.role).lastIndexOf("user");
+      return messages.slice(lastUser + 1).filter(message => message.role === "tool").map(message => JSON.parse(String(message.content)) as Record<string, unknown>);
+    });
+    const ask = async (operation: string, arguments_: Record<string, unknown> = {}, change = false) => {
+      instruction = {prompt: `Saved data workflow step ${++sequence}: ${operation}.`, operation: `nebula.data.${operation}`, arguments: arguments_, change};
+      stub.responseContent = `Core finished saved data step ${sequence}.`;
+      const start = stub.requests.length;
+      if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(instruction.prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      if (operation === "delete_result") await expect(page.getByRole("dialog", {name: "Delete published result?"})).toBeVisible({timeout: 60_000});
+      else await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      return outcomes(start);
+    };
+    let replies = await ask("results");
+    expect(replies.some(reply => Array.isArray(reply.results) && reply.results.length === 2)).toBe(true);
+    replies = await ask("read_result", {result_id: result.id, expected_revision: result.revision});
+    const chunk = replies.find(reply => reply.butler_operation === "nebula.data.read_result")!;
+    expect(String(chunk.text)).toHaveLength(4096);
+    expect(chunk.next_offset).toBe(4096);
+    replies = await ask("search_chats", {query: "Document bookmark target"});
+    expect(replies.some(reply => Array.isArray(reply.items) && reply.items.some((item: {message_id?: string}) => item.message_id === messageId))).toBe(true);
+    const bookmark = page.locator(".chat-message.operator").filter({hasText: "Document bookmark target"}).getByRole("button", {name: "Bookmark", exact: true});
+    await ask("set_bookmark", {session_id: chat.session_id, message_id: messageId, active: true, expected_revision: 0}, true);
+    await expect(bookmark).toHaveAttribute("aria-pressed", "true");
+    const bookmarks = await (await api.get(`chat/sessions/${chat.session_id}/bookmarks`)).json() as Array<{message_id: string; revision: number; active: boolean}>;
+    expect(bookmarks).toHaveLength(1);
+    expect(bookmarks[0].active).toBe(true);
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await page.reload();
+    await expect(bookmark).toHaveAttribute("aria-pressed", "true");
+    replies = await ask("search_chats", {bookmarked: true});
+    expect(replies.some(reply => Array.isArray(reply.items) && reply.items.some((item: {message_id?: string}) => item.message_id === messageId))).toBe(true);
+    await ask("set_bookmark", {session_id: chat.session_id, message_id: messageId, active: false, expected_revision: bookmarks[0].revision}, true);
+    await expect(bookmark).toHaveAttribute("aria-pressed", "false");
+    replies = await ask("set_bookmark", {session_id: chat.session_id, message_id: messageId, active: true, expected_revision: bookmarks[0].revision}, true);
+    expect(replies.some(reply => reply.error_code === "conversation_data_conflict")).toBe(true);
+    expect((await (await api.get(`chat/sessions/${chat.session_id}/bookmarks`)).json() as Array<{active: boolean}>)[0].active).toBe(false);
+    await ask("delete_result", {result_id: result.id, expected_revision: result.revision}, true);
+    await page.getByRole("dialog", {name: "Delete published result?"}).getByRole("button", {name: "Cancel", exact: true}).click();
+    await expect(assistant.getByText(/Result “Document review result” was not deleted/)).toBeVisible();
+    expect((await api.get(`projects/${projectId}/structured-results/${result.id}`)).ok()).toBe(true);
+    await ask("delete_result", {result_id: result.id, expected_revision: result.revision}, true);
+    await page.getByRole("dialog", {name: "Delete published result?"}).getByRole("button", {name: "Delete result", exact: true}).click();
+    await expect(assistant.getByText(/Deleted result “Document review result”. Core confirms its absence/)).toBeVisible();
+    expect((await api.get(`projects/${projectId}/structured-results/${result.id}`)).status()).toBe(404);
+    expect((await (await api.get(`projects/${projectId}/structured-results`)).json() as Array<{id: string}>).map(row => row.id)).toEqual([retained.id]);
+    await assistant.getByRole("button", {name: "Hide Butler"}).click();
+    await expect(page.getByRole("heading", {name: "Results", exact: true})).toBeVisible();
+    await expect(page.locator(".structured-timeline")).toContainText(retained.title);
+    await page.reload();
+    await expect(page.locator(".structured-timeline")).not.toContainText(result.title);
+    await expect(page.locator(".structured-timeline")).toContainText(retained.title);
+    await page.context().setOffline(true);
+    await page.context().setOffline(false);
+    await page.reload();
+    await expect(page.locator(".structured-timeline")).toContainText(retained.title);
+    await openNebulaAssistantFromShell(page);
+    expect(JSON.stringify(stub.requests)).not.toContain("PRIVATE_FOREIGN");
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-saved-data-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Bounded result JSON read; private project data excluded; bookmark set, visible reload, filtered search, clear and stale-write refusal; result deletion cancellation and exact confirmed absence, retained item visible after paired reload and network transition."}), contentType: "application/json"});
+    await testInfo.attach("butler-saved-data-final-screen", {body: await page.screenshot(), contentType: "image/png"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
 test("assistant upgrade Butler manages nonsecret integration profiles on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(480_000);
   const profiles = [

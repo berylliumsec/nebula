@@ -70,6 +70,7 @@ def test_registry_rejects_unsupported_action_marked_supported(
         "nebula.assets.unlisted_action",
         "nebula.findings.unlisted_action",
         "nebula.sources.unlisted_action",
+        "nebula.data.unlisted_action",
     ],
 )
 def test_registry_rejects_operation_missing_from_core_catalog(
