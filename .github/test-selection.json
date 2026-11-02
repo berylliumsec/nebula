@@ -1,26 +1,29 @@
 {
-  "change_digest": "204ef7d230062de2087ecab059950ef8b8d2ef7d9e3bd9d6c0adf767c5aa1ac4",
-  "reviewed_by": "Codex focused review for harness catalog refresh",
-  "reason": "The two selected component files cover harness mutation persistence, independent MCP failures, shared catalog recovery, and out-of-order refreshes. One production LAN Core journey in eight permanent browser profiles covers Settings and Workbench mounted together, create/check/enable/disable, preserved draft and selected chat, retained choices on a failed catalog read, and keyboard retry.",
-  "exclusions": "No backend or native product behavior changes, so Python and native unit suites are excluded. The real-Core browser journey uses an existing inert adapter and synthetic data, executes no tools or provider turns, and includes deliberate browser-side read failure injection. Existing settings destinations and actions are unchanged; no new setting or assistant action is introduced. Unrelated UI suites, simulation deployment, physical devices, streaming, and provider execution are outside this catalog-refresh change.",
+  "change_digest": "b06fe21c175707f32da0ad6004dfc6de68dcf5d2d8bacaa7c369e82d8ccbfe86",
+  "reviewed_by": "Codex focused review for entity lookup stalls",
+  "reason": "Verify exact artifact/recovery seeks, stable pages, all write projections, atomic legacy migration and thread-owned Sessions. The worker cases cover 2 and 40 AnyIO tokens and bursts of 20 reads, proving shared four-listing admission leaves DB capacity for an authenticated request. Existing horizon, payload-filter and two exact recovery cases cover affected integrations. Scale scripts prove query speedups, restored-backup migration, and delayed-SQL HTTP behavior. Other layers remain excluded as documented.",
+  "exclusions": "No UI controls, settings, browser-specific behavior, native code, provider execution or harness behavior changes. Frontend, native and Playwright layers are excluded. The user explicitly replaced LAN/VPN validation with an isolated local Core. No full suites; no production or simulation database migration. PostgreSQL runtime validation is not available in this SQLite production incident.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 40,
+    "python": 47,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+  "python": [
+    "tests/v3/test_session_record_lookups.py",
+    "tests/v3/test_entity_hot_lookups.py",
+    "tests/v3/test_entity_hot_lookup_migration.py",
+    "tests/v3/test_entity_listing_workers.py",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_approved_call_whose_turn_ended_is_settled_without_running",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_recovery_tick_reads_only_turns_that_can_need_recovery",
+    "tests/v3/test_storage.py::test_find_entities_filters_payload_fields_in_sql_and_pages_in_order"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:harness-catalog-refresh"
-  ]
+  "playwright": []
 }

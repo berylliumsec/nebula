@@ -99,6 +99,29 @@ class EntityRow(Base):
     __tablename__ = "entities"
     __table_args__ = (
         Index("ix_entities_kind_engagement", "kind", "engagement_id"),
+        Index(
+            "ix_entities_kind_engagement_created_id",
+            "kind",
+            "engagement_id",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_entities_artifact_tool_call_created",
+            "kind",
+            "engagement_id",
+            "artifact_tool_call_id",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_entities_tool_call_recovery_created",
+            "kind",
+            "tool_call_status",
+            "tool_call_origin",
+            "created_at",
+            "id",
+        ),
         Index("ix_entities_engagement_updated", "engagement_id", "updated_at"),
         Index(
             "ix_entities_kind_engagement_updated_id",
@@ -148,6 +171,11 @@ class EntityRow(Base):
     # The JSON envelope remains authoritative. This nullable projection only
     # makes exact-conversation reads indexable for chat-owned entity families.
     chat_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Exact result and recovery lookups must not parse settled project history.
+    # The JSON envelope remains authoritative; storage maintains these on writes.
+    artifact_tool_call_id: Mapped[str | None] = mapped_column(String(200))
+    tool_call_status: Mapped[str | None] = mapped_column(String(40))
+    tool_call_origin: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
