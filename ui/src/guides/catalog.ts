@@ -530,7 +530,7 @@ export const guideCatalog: GuideDefinition[] = [
           "The variable must exist in Nebula Core’s environment on the host, not in this browser. For `nebula-core serve` or `nebula-core ui`, export it in the same shell:",
         ],
         command: "export OPENROUTER_API_KEY=…",
-        callout: "The desktop app passes Core only known provider variables (OpenAI, Anthropic, Gemini, Azure, Mistral, Cohere, xAI, DeepSeek, Groq, Together, Fireworks, OpenRouter, OrcaRouter, AWS, Google, Hugging Face). Launch the app from a shell where the variable is set.",
+        callout: "The desktop app passes Core only known provider variables (OpenAI, Anthropic, Gemini, Azure, Mistral, Cohere, xAI, DeepSeek, Groq, Together, Fireworks, OpenRouter, OrcaRouter, Cheaper Inference, AWS, Google, Hugging Face). Launch the app from a shell where the variable is set.",
       },
     ],
   },

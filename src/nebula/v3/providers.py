@@ -212,6 +212,7 @@ class ProviderFlavor(str, Enum):
     FIREWORKS = "fireworks"
     OPENROUTER = "openrouter"
     ORCAROUTER = "orcarouter"
+    CHEAPER_INFERENCE = "cheaper_inference"
     LITELLM = "litellm"
     OLLAMA = "ollama"
     VLLM = "vllm"
@@ -6426,6 +6427,14 @@ PROVIDER_CATALOG: dict[ProviderFlavor, ProviderCatalogEntry] = {
             display_name="OrcaRouter",
             default_base_url="https://api.orcarouter.ai/v1",
             suggested_key_env="ORCAROUTER_API_KEY",
+            support_tier="standard",
+        ),
+        ProviderCatalogEntry(
+            flavor=ProviderFlavor.CHEAPER_INFERENCE,
+            adapter=ProviderKind.OPENAI_COMPATIBLE,
+            display_name="Cheaper Inference",
+            default_base_url="https://api.cheaperinference.com/v1",
+            suggested_key_env="CHEAPER_INFERENCE_API_KEY",
             support_tier="standard",
         ),
         ProviderCatalogEntry(

@@ -808,6 +808,60 @@ def test_orcarouter_openai_compatible_chat_round_trip():
     assert result.text == "ok"
 
 
+def test_cheaper_inference_catalog_entry_maps_to_openai_compatible_wire():
+    config = config_from_catalog(
+        provider_id="cheaper-inference",
+        flavor=ProviderFlavor.CHEAPER_INFERENCE,
+        default_model="gpt-5.4-mini",
+        capabilities=ModelCapabilities(),
+    )
+
+    assert config.kind == ProviderKind.OPENAI_COMPATIBLE
+    assert config.flavor == ProviderFlavor.CHEAPER_INFERENCE
+    assert config.base_url == "https://api.cheaperinference.com/v1"
+    assert config.api_key_env == "CHEAPER_INFERENCE_API_KEY"
+    assert config.local is False
+
+
+def test_cheaper_inference_openai_compatible_chat_round_trip():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.cheaperinference.com"
+        assert request.url.path == "/v1/chat/completions"
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cheaper-inference",
+                "object": "chat.completion",
+                "model": "gpt-5.4-mini",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="cheaper-inference",
+            flavor=ProviderFlavor.CHEAPER_INFERENCE,
+            default_model="gpt-5.4-mini",
+            capabilities=ModelCapabilities(),
+            api_key_value="test-cheaper-inference-key",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = asyncio.run(
+        provider.complete(
+            ModelRequest(messages=[ModelMessage(role="user", content="hello")])
+        )
+    )
+
+    assert result.text == "ok"
+
+
 def test_vllm_discovers_served_models_from_the_runtime():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"
