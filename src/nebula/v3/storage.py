@@ -223,7 +223,16 @@ def _chat_lookup_fields(entity: Entity) -> dict[str, Any]:
 def _entity_lookup_fields(entity: Entity) -> dict[str, Any]:
     """Return every denormalized lookup field maintained for an entity row."""
 
-    return {**_automation_lookup_fields(entity), **_chat_lookup_fields(entity)}
+    fields = {**_automation_lookup_fields(entity), **_chat_lookup_fields(entity)}
+    if isinstance(entity, Artifact):
+        call_id = entity.metadata.get("tool_call_id")
+        fields["artifact_tool_call_id"] = call_id if isinstance(call_id, str) else None
+    elif isinstance(entity, ToolCall):
+        fields.update(
+            tool_call_status=entity.status.value,
+            tool_call_origin=entity.origin.value,
+        )
+    return fields
 
 
 PayloadFilterValue = str | int | Sequence[str] | None
@@ -821,8 +830,7 @@ class NebulaStore:
             .where(
                 EntityRow.kind == Artifact.entity_kind,
                 EntityRow.engagement_id == engagement_id,
-                EntityRow.payload["metadata"]["tool_call_id"].as_string()
-                == tool_call_id,
+                EntityRow.artifact_tool_call_id == tool_call_id,
             )
             .order_by(EntityRow.created_at, EntityRow.id)
         )
@@ -1259,12 +1267,26 @@ class NebulaStore:
                 raise ValueError(f"{model.entity_kind} has no conversation lookup")
             statement = statement.where(EntityRow.chat_session_id == session_id)
         for field, value in filters.items():
-            column: Any = EntityRow.payload
-            for part in field.split("."):
-                column = column[part]
+            projected = {
+                (
+                    Artifact.entity_kind,
+                    "metadata.tool_call_id",
+                ): EntityRow.artifact_tool_call_id,
+                (ToolCall.entity_kind, "status"): EntityRow.tool_call_status,
+                (ToolCall.entity_kind, "origin"): EntityRow.tool_call_origin,
+            }.get((model.entity_kind, field))
+            # Keep JSON's type/null semantics for arbitrary metadata values.
+            # These string-only projections accelerate exact string lookups.
+            if value is None or isinstance(value, int):
+                projected = None
+            column: Any = projected
+            if projected is None:
+                column = EntityRow.payload
+                for part in field.split("."):
+                    column = column[part]
+                column = column.as_string()
             if isinstance(value, bool):
                 raise TypeError(f"boolean payload filters are not supported: {field}")
-            column = column.as_string()
             if isinstance(value, int):
                 # Compare the text form. Casting the field to an integer would
                 # make PostgreSQL fail the query on any non-numeric value.

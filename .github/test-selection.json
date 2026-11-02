@@ -1,26 +1,29 @@
 {
-  "change_digest": "204ef7d230062de2087ecab059950ef8b8d2ef7d9e3bd9d6c0adf767c5aa1ac4",
-  "reviewed_by": "Codex focused review for harness catalog refresh",
-  "reason": "The two selected component files cover harness mutation persistence, independent MCP failures, shared catalog recovery, and out-of-order refreshes. One production LAN Core journey in eight permanent browser profiles covers Settings and Workbench mounted together, create/check/enable/disable, preserved draft and selected chat, retained choices on a failed catalog read, and keyboard retry.",
-  "exclusions": "No backend or native product behavior changes, so Python and native unit suites are excluded. The real-Core browser journey uses an existing inert adapter and synthetic data, executes no tools or provider turns, and includes deliberate browser-side read failure injection. Existing settings destinations and actions are unchanged; no new setting or assistant action is introduced. Unrelated UI suites, simulation deployment, physical devices, streaming, and provider execution are outside this catalog-refresh change.",
+  "change_digest": "713b5a69e96ca62ffa9c195964f051304aa577ec5be3d587a86c60ce24868ded",
+  "reviewed_by": "Codex focused review for entity lookup stalls",
+  "reason": "Verify exact artifact and recovery seeks, stable project pages, all entity write projections, legacy migration preservation/rollback/retry, and bounded worker-owned Sessions. Existing horizon, payload-filter and two exact recovery cases exercise the affected integrations. Query plans allow an exact primary-key recovery-page seek. Synthetic benchmark scripts are exercised directly against baseline and candidate code, including restored-backup migration and delayed SQL. No product behavior changed after the passing 44-test run; final additions are benchmark assertions, evidence, and a migration typing annotation.",
+  "exclusions": "No UI controls, settings, browser-specific behavior, native code, provider execution or harness behavior changes. Frontend, native and Playwright layers are excluded. The user explicitly replaced LAN/VPN validation with an isolated local Core. No full suites; no production or simulation database migration. PostgreSQL runtime validation is not available in this SQLite production incident.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 40,
+    "python": 44,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+  "python": [
+    "tests/v3/test_session_record_lookups.py",
+    "tests/v3/test_entity_hot_lookups.py",
+    "tests/v3/test_entity_hot_lookup_migration.py",
+    "tests/v3/test_entity_listing_workers.py",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_approved_call_whose_turn_ended_is_settled_without_running",
+    "tests/v3/test_restart_recovery_lifecycle.py::test_recovery_tick_reads_only_turns_that_can_need_recovery",
+    "tests/v3/test_storage.py::test_find_entities_filters_payload_fields_in_sql_and_pages_in_order"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:harness-catalog-refresh"
-  ]
+  "playwright": []
 }

@@ -12972,7 +12972,9 @@ def create_app(
             tags=["artifacts"],
             dependencies=[Depends(require_auth)],
         )
-        async def tool_call_artifacts(tool_call_id: str) -> list[Artifact]:
+        def tool_call_artifacts(tool_call_id: str) -> list[Artifact]:
+            # FastAPI's capacity-limited worker pool owns the entire sync read,
+            # including Session creation/use/close inside each store method.
             call = store.get(ToolCall, tool_call_id)
             return store.list_tool_call_artifacts(call.engagement_id, call.id)
 
@@ -15280,7 +15282,9 @@ def _register_crud_routes(
         return create_entity
 
     def make_list() -> Callable[..., Any]:
-        async def list_entities(
+        # Keep all synchronous reads and enrichment in FastAPI's bounded AnyIO
+        # worker pool. Sessions are opened and closed by storage in that worker.
+        def list_entities(
             engagement_id: str | None = None,
             offset: int = Query(default=0, ge=0),
             limit: int = Query(default=100, ge=1, le=1000),

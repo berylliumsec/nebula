@@ -1,0 +1,401 @@
+{
+  "baseline_commit": "c0f303c0cea75d65962eb6fa9476e63133ef4c22",
+  "reported_production_commit": "aa797c9",
+  "fixture": {
+    "synthetic": true,
+    "artifacts": 1100000,
+    "tool_calls": 350001
+  },
+  "python": "3.12.14",
+  "sqlite": "3.53.1",
+  "before": {
+    "artifact_hit": {
+      "samples_ms": [
+        1640.329329999986,
+        1815.8701259999361,
+        1727.528297000049,
+        1395.560549000038,
+        1624.2971489999718
+      ],
+      "median_ms": 1640.329329999986,
+      "rows": 3
+    },
+    "artifact_miss": {
+      "samples_ms": [
+        1448.8031190001038,
+        1492.0796850000215,
+        1665.8439029999954,
+        1666.8859379999503,
+        1659.7257429999672
+      ],
+      "median_ms": 1659.7257429999672,
+      "rows": 0
+    },
+    "recovery_candidates": {
+      "samples_ms": [
+        1195.6965979999268,
+        1198.6878010000055,
+        1185.917623000023,
+        1170.8675599999196,
+        1233.2612779999863
+      ],
+      "median_ms": 1195.6965979999268,
+      "rows": 3
+    },
+    "recovery_pass": {
+      "samples_ms": [
+        1247.2284259999924,
+        1370.872965999979,
+        1169.1231109999762,
+        1185.5232589999787,
+        1197.8970050000726
+      ],
+      "median_ms": 1197.8970050000726,
+      "rows": 0
+    },
+    "project_list": {
+      "samples_ms": [
+        311.63821199993436,
+        311.1290510000799,
+        328.9284449999741,
+        308.4273659999326,
+        488.12929500002156
+      ],
+      "median_ms": 311.63821199993436,
+      "rows": 1000
+    },
+    "queries": [
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.engagement_id = ? AND JSON_EXTRACT(JSON_QUOTE(JSON_EXTRACT(entities.payload, ?)), ?) = ? ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "artifacts",
+          "bench-project",
+          "$.\"metadata\"",
+          "$.\"tool_call_id\"",
+          "needle"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_engagement (kind=? AND engagement_id=?)"
+          ],
+          [
+            33,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      {
+        "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND JSON_EXTRACT(entities.payload, ?) = ? AND JSON_EXTRACT(entities.payload, ?) = ? ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "tool_calls",
+          "$.\"status\"",
+          "approved",
+          "$.\"origin\"",
+          "chat"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_updated (kind=?)"
+          ],
+          [
+            22,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      },
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND JSON_EXTRACT(entities.payload, ?) = ? AND JSON_EXTRACT(entities.payload, ?) = ? AND entities.id IN (?, ?, ?)",
+        "parameters": [
+          "tool_calls",
+          "$.\"status\"",
+          "approved",
+          "$.\"origin\"",
+          "chat",
+          "tool_calls-000349997",
+          "tool_calls-000349998",
+          "tool_calls-000349999"
+        ],
+        "plan": [
+          [
+            3,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_updated (kind=?)"
+          ]
+        ]
+      },
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.engagement_id = ? ORDER BY entities.created_at, entities.id\n LIMIT ? OFFSET ?",
+        "parameters": [
+          "artifacts",
+          "bench-project",
+          1000,
+          0
+        ],
+        "plan": [
+          [
+            8,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_engagement (kind=? AND engagement_id=?)"
+          ],
+          [
+            37,
+            0,
+            0,
+            "USE TEMP B-TREE FOR ORDER BY"
+          ]
+        ]
+      }
+    ],
+    "code_root": "/workspace/nebula-entity-baseline/src/nebula/v3/database.py"
+  },
+  "after": {
+    "artifact_hit": {
+      "samples_ms": [
+        7.908042999815734,
+        0.8147219998591027,
+        0.366590999874461,
+        0.36847399996986496,
+        0.33783899993977684
+      ],
+      "median_ms": 0.36847399996986496,
+      "rows": 3
+    },
+    "artifact_miss": {
+      "samples_ms": [
+        0.23940300002323056,
+        0.21831200001543039,
+        0.24556300013500731,
+        0.2048530000138271,
+        0.2227889999630861
+      ],
+      "median_ms": 0.2227889999630861,
+      "rows": 0
+    },
+    "recovery_candidates": {
+      "samples_ms": [
+        1.8660640000689455,
+        1.054285999998683,
+        0.8438150000529276,
+        0.7441779998771381,
+        0.581168000053367
+      ],
+      "median_ms": 0.8438150000529276,
+      "rows": 3
+    },
+    "recovery_pass": {
+      "samples_ms": [
+        0.8075719999851572,
+        0.9878280000066297,
+        0.6532039999456174,
+        1.0989119998612296,
+        0.6014780001351028
+      ],
+      "median_ms": 0.8075719999851572,
+      "rows": 0
+    },
+    "project_list": {
+      "samples_ms": [
+        20.88131000004978,
+        19.23364699996455,
+        20.103020000078686,
+        19.587800999943283,
+        181.55612300006396
+      ],
+      "median_ms": 20.103020000078686,
+      "rows": 1000
+    },
+    "queries": [
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.engagement_id = ? AND entities.artifact_tool_call_id = ? ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "artifacts",
+          "bench-project",
+          "needle"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_artifact_tool_call_created (kind=? AND engagement_id=? AND artifact_tool_call_id=?)"
+          ]
+        ]
+      },
+      {
+        "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_status = ? AND entities.tool_call_origin = ? ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "tool_calls",
+          "approved",
+          "chat"
+        ],
+        "plan": [
+          [
+            3,
+            0,
+            53,
+            "SEARCH entities USING COVERING INDEX ix_entities_tool_call_recovery_created (kind=? AND tool_call_status=? AND tool_call_origin=?)"
+          ]
+        ]
+      },
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_status = ? AND entities.tool_call_origin = ? AND entities.id IN (?, ?, ?)",
+        "parameters": [
+          "tool_calls",
+          "approved",
+          "chat",
+          "tool_calls-000349997",
+          "tool_calls-000349998",
+          "tool_calls-000349999"
+        ],
+        "plan": [
+          [
+            3,
+            0,
+            60,
+            "SEARCH entities USING INDEX ix_entities_tool_call_recovery_created (kind=? AND tool_call_status=? AND tool_call_origin=?)"
+          ]
+        ]
+      },
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.engagement_id = ? ORDER BY entities.created_at, entities.id\n LIMIT ? OFFSET ?",
+        "parameters": [
+          "artifacts",
+          "bench-project",
+          1000,
+          0
+        ],
+        "plan": [
+          [
+            8,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_engagement_created_id (kind=? AND engagement_id=?)"
+          ]
+        ]
+      }
+    ],
+    "code_root": "/workspace/nebula/src/nebula/v3/database.py",
+    "speedups": {
+      "artifact_hit": 4451.682697107904,
+      "artifact_miss": 7449.765218547447,
+      "recovery_candidates": 1417.0127313746825,
+      "recovery_pass": 1483.3315234085499,
+      "project_list": 15.502059491495038
+    }
+  },
+  "http_before": {
+    "origin": "http://127.0.0.1:35079",
+    "latencies": {
+      "listing": {
+        "count": 24,
+        "median_ms": 2787.198864000004,
+        "p95_ms": 3132.159435999938,
+        "max_ms": 3136.1422069999207
+      },
+      "lightweight_http": {
+        "count": 60,
+        "median_ms": 3.3230470000376044,
+        "p95_ms": 1539.4248379999453,
+        "max_ms": 3040.264125000135
+      },
+      "recovery": {
+        "count": 3,
+        "median_ms": 3820.1494040000625,
+        "p95_ms": 3842.2368280000683,
+        "max_ms": 3842.2368280000683
+      }
+    },
+    "loop_lag": {
+      "count": 275,
+      "median_ms": 0.1804329999595209,
+      "p95_ms": 0.7533240000066141,
+      "max_ms": 2691.9731540000294
+    }
+  },
+  "http_after": {
+    "origin": "http://127.0.0.1:34921",
+    "latencies": {
+      "listing": {
+        "count": 24,
+        "median_ms": 317.7403019999474,
+        "p95_ms": 621.308972000179,
+        "max_ms": 624.477670000033
+      },
+      "lightweight_http": {
+        "count": 60,
+        "median_ms": 4.78108599997995,
+        "p95_ms": 39.9845719998666,
+        "max_ms": 271.844511999916
+      },
+      "recovery": {
+        "count": 3,
+        "median_ms": 22.16133699994316,
+        "p95_ms": 37.11382199981017,
+        "max_ms": 37.11382199981017
+      }
+    },
+    "loop_lag": {
+      "count": 110,
+      "median_ms": 0.48316200001408993,
+      "p95_ms": 20.74313399997663,
+      "max_ms": 266.52852500000336
+    }
+  },
+  "http_after_slow": {
+    "origin": "http://127.0.0.1:54793",
+    "latencies": {
+      "listing": {
+        "count": 24,
+        "median_ms": 2825.343285000031,
+        "p95_ms": 3252.9018449999967,
+        "max_ms": 3269.5572860000084
+      },
+      "lightweight_http": {
+        "count": 60,
+        "median_ms": 2.629955999964295,
+        "p95_ms": 5.530442999997831,
+        "max_ms": 8.44051700005366
+      },
+      "recovery": {
+        "count": 3,
+        "median_ms": 19.722312999874703,
+        "p95_ms": 22.567001000197706,
+        "max_ms": 22.567001000197706
+      }
+    },
+    "loop_lag": {
+      "count": 852,
+      "median_ms": 0.1649895000264221,
+      "p95_ms": 1.203345000012632,
+      "max_ms": 319.2696729999989
+    }
+  },
+  "migration": {
+    "migration_seconds": 12.088565061000054,
+    "legacy_bytes": 1638883328,
+    "restored_bytes": 1989644288,
+    "peak_database_and_wal_bytes": 3388936944,
+    "counts": {
+      "artifacts": 1100000,
+      "engagements": 1,
+      "mcp_servers": 1,
+      "tool_calls": 350001
+    },
+    "authoritative_sha256": "2da540ee8cdd7c51ba1aab5b26722504a425f8d92d8bf37d5bfd1e1142530b15",
+    "backup_verified": true,
+    "restored_integrity": "ok",
+    "authoritative_envelopes_unchanged": true
+  }
+}
