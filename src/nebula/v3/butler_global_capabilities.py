@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
 from pathlib import Path
@@ -103,6 +104,7 @@ class ButlerGlobalActions:
         self.instructions_root = instructions_root
         self.case_id = case_id
         self.runtime_local = runtime_local
+        self._settings_read_limit = asyncio.Semaphore(1)
 
     def _case(self) -> ButlerRecoveryCase:
         case = self.store.get(ButlerRecoveryCase, self.case_id)
@@ -232,7 +234,21 @@ class ButlerGlobalActions:
 
     async def chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._project(arguments["project_id"])
-        return self.work.chat_settings(arguments["project_id"], arguments["session_id"])
+        async with self._settings_read_limit:
+            return await asyncio.to_thread(
+                self.work.chat_settings,
+                arguments["project_id"],
+                arguments["session_id"],
+            )
+
+    async def chat_settings_many(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        self._project(arguments["project_id"])
+        async with self._settings_read_limit:
+            return await asyncio.to_thread(
+                self.work.chat_settings_many,
+                arguments["project_id"],
+                arguments["session_ids"],
+            )
 
     async def work_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
@@ -862,6 +878,27 @@ class ButlerGlobalActions:
                 },
                 RiskClass.LOCAL_READ,
                 self.chat_settings,
+            ),
+            (
+                "nebula.global.chat_settings_many",
+                "Read saved next-turn Assistant choices and revisions for up to 100 main chats in one Act project. Use this for roster reviews; use chat_settings for the full runtime catalog before edits that need it.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "project_id": _ID,
+                        "session_ids": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 100,
+                            "uniqueItems": True,
+                            "items": _ID,
+                        },
+                    },
+                    "required": ["project_id", "session_ids"],
+                },
+                RiskClass.LOCAL_READ,
+                self.chat_settings_many,
             ),
             (
                 "nebula.global.set_chat_settings",

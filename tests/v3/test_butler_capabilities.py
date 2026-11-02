@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import timedelta
 
 import pytest
@@ -200,6 +201,87 @@ def test_global_create_goal_exposes_and_saves_harness_max_effort(tmp_path):
         session = store.get(ChatSession, created["session_id"])
         harness = store.get(HarnessSession, session.harness_session_id)
         assert harness.metadata["runtime_options"]["reasoning_effort"] == "max"
+
+    asyncio.run(scenario())
+
+
+def test_global_chat_settings_batch_avoids_catalog_and_stays_project_bound(
+    tmp_path, monkeypatch
+):
+    store, project, chat, foreign_chat, _, _, scheduled = _scheduled_capabilities(
+        tmp_path
+    )
+    second = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Second agent",
+            provider_profile_id=chat.provider_profile_id,
+            model=chat.model,
+        )
+    )
+    original = store.find_entities
+
+    def without_catalog(model, *args, **kwargs):
+        if model is McpServerProfile:
+            raise AssertionError("batch read must not load the global MCP catalog")
+        return original(model, *args, **kwargs)
+
+    monkeypatch.setattr(store, "find_entities", without_catalog)
+
+    async def scenario():
+        result = await scheduled.invoke(
+            {
+                "operation": "nebula.global.chat_settings_many",
+                "arguments": {
+                    "project_id": project.id,
+                    "session_ids": [chat.id, second.id],
+                },
+            },
+            change=False,
+        )
+        assert [item["session_id"] for item in result["chats"]] == [
+            chat.id,
+            second.id,
+        ]
+        assert result["chats"][0]["revision"] == chat.revision
+        assert result["chats"][0]["settings"]["model"] == chat.model
+        assert all("available" not in item for item in result["chats"])
+        with pytest.raises(ValueError, match="work roster"):
+            await scheduled.invoke(
+                {
+                    "operation": "nebula.global.chat_settings_many",
+                    "arguments": {
+                        "project_id": project.id,
+                        "session_ids": [foreign_chat.id],
+                    },
+                },
+                change=False,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_global_chat_settings_read_runs_outside_event_loop(tmp_path, monkeypatch):
+    _, project, chat, _, _, _, scheduled = _scheduled_capabilities(tmp_path)
+    read_threads = []
+
+    def read_settings(project_id, session_id):
+        read_threads.append(threading.get_ident())
+        return {"session_id": session_id}
+
+    monkeypatch.setattr(scheduled._work, "chat_settings", read_settings)
+
+    async def scenario():
+        loop_thread = threading.get_ident()
+        result = await scheduled.invoke(
+            {
+                "operation": "nebula.global.chat_settings",
+                "arguments": {"project_id": project.id, "session_id": chat.id},
+            },
+            change=False,
+        )
+        assert result["session_id"] == chat.id
+        assert read_threads and read_threads[0] != loop_thread
 
     asyncio.run(scenario())
 

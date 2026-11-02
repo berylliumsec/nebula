@@ -1,16 +1,18 @@
 {
-  "change_digest": "e837cbbe1f85e7cd0ee0bf7603ad51310e393de0d6a92e741b34733c39986ab8",
-  "reviewed_by": "Codex emergency Butler goal creation review with independent root cause validation, 2026-11-02",
-  "reason": "Expose the harness effort field in Butler's goal creation catalog and reject unsupported provider effort values at the tool boundary. The selected Python case checks the advertised schema and a saved Codex harness goal with max effort in a synthetic Core.",
-  "exclusions": "No frontend, native, or browser code changes. The affected entry point is Butler's Core tool catalog and the selected Python case exercises its create route and persistence. The user directed that Core tests on simulation be skipped for this emergency deployment; that deployment exception will be recorded separately.",
+  "change_digest": "c52fc0d6483d6e6dc7187af0b7eb205841d0253c5a4c5b1a0c78f31b8c0063bd",
+  "reviewed_by": "Codex emergency Butler latency review with independent root-cause validation, 2026-11-02",
+  "reason": "The scheduled global Butler settings sweep repeatedly loaded and validated every MCP profile on the Core event loop. Check that bounded batch reads preserve project scope without rebuilding the catalog, that detailed reads run off the event loop, and that the global check instructions still load.",
+  "exclusions": "The operator explicitly waived all Core tests on simulation for this emergency deployment. No frontend, native, or browser code changed, so those layers and full suites are excluded. The unrelated existing Butler work-tool allowlist test fails before exercising settings and is outside this patch.",
   "expected_tests": {
-    "python": 1,
+    "python": 3,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_capabilities.py::test_global_create_goal_exposes_and_saves_harness_max_effort"
+    "tests/v3/test_butler_capabilities.py::test_global_chat_settings_batch_avoids_catalog_and_stays_project_bound",
+    "tests/v3/test_butler_capabilities.py::test_global_chat_settings_read_runs_outside_event_loop",
+    "tests/v3/test_butler_instructions.py::test_one_global_check_wakes_idle_projects_and_persists_across_restart"
   ],
   "frontend": [],
   "native": [],

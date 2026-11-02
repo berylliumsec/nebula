@@ -1004,6 +1004,36 @@ class ControlAssistantWork:
             "applies_to": "next message; queued and running turns keep their submitted settings",
         }
 
+    def chat_settings_many(
+        self, project_id: str, session_ids: list[str]
+    ) -> dict[str, Any]:
+        """Read saved choices without rebuilding the global runtime catalog per chat."""
+
+        if not 1 <= len(session_ids) <= 100 or len(set(session_ids)) != len(
+            session_ids
+        ):
+            raise ValueError("choose 1 to 100 distinct chat session IDs")
+        chats = []
+        for session_id in session_ids:
+            session = self._chat(project_id, session_id)
+            chats.append(
+                {
+                    "session_id": session.id,
+                    "title": session.title,
+                    "url": _chat_url(project_id, session.id),
+                    "revision": session.revision,
+                    "settings": chat_assistant_config(self.store, session),
+                    "bound_runtime": {
+                        "backend": session.backend.value,
+                        "profile_id": session.provider_profile_id
+                        if session.backend == ChatBackend.PROVIDER
+                        else session.harness_profile_id,
+                        "model": session.model,
+                    },
+                }
+            )
+        return {"chats": chats}
+
     def assistant_defaults(self, project_id: str) -> dict[str, Any]:
         project = self._project(project_id)
         return {
