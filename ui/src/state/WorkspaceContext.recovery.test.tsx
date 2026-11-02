@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { WorkspaceProvider, useWorkspace, useWorkspaceEvents, useWorkspaceMissions } from "./WorkspaceContext";
 
 const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined, coreCommits: 0, errors: [] as string[] }));
@@ -45,6 +45,17 @@ const state = () => JSON.parse(screen.getByTestId("state").textContent!);
 function CoreOnlyProbe() {
   useWorkspace();
   useLayoutEffect(() => { fixture.coreCommits += 1; });
+  return null;
+}
+function ImmediateHarnessRetry() {
+  const value = useWorkspace();
+  const started = useRef(false);
+  useLayoutEffect(() => {
+    if (started.current || value.workspaceState !== "ready") return;
+    started.current = true;
+    fixture.methods.listHarnesses.mockRejectedValueOnce(new Error("Catalog temporarily unavailable"));
+    void value.refreshHarnesses().catch(() => {});
+  }, [value.workspaceState, value.refreshHarnesses]);
   return null;
 }
 const mount = async () => {
@@ -286,6 +297,16 @@ describe("workspace resource recovery", () => {
     await waitFor(() => expect(state().status.harnesses.state).toBe("ready"));
     expect(state().harnesses).toEqual([{ ...enabled, enabled: false }]);
     expect(fixture.methods.listEngagements).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles a harness failure when refresh starts in the ready commit", async () => {
+    const enabled = { id: "codex", enabled: true };
+    fixture.methods.listHarnesses.mockResolvedValue([enabled]);
+
+    render(<WorkspaceProvider><Probe /><ImmediateHarnessRetry /></WorkspaceProvider>);
+    await waitFor(() => expect(state().status.harnesses.state).toBe("failed"));
+    expect(state().harnesses).toEqual([enabled]);
+    expect(fixture.methods.listHarnesses).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the newest harness catalog when overlapping refreshes finish out of order", async () => {
