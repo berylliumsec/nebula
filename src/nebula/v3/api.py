@@ -4286,7 +4286,8 @@ def create_app(
         limit: int = Query(default=30, ge=1, le=100),
     ) -> SearchResponse:
         try:
-            return federated_search.search(
+            return await read_in_worker(
+                federated_search.search,
                 query=query,
                 active_project=active_project,
                 scope=scope,
@@ -8105,8 +8106,8 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=500, ge=1, le=500),
     ) -> list[WorkItem]:
-        return store.list_entities(
-            WorkItem, offset=offset, limit=limit, newest_first=True
+        return await read_in_worker(
+            store.list_entities, WorkItem, offset=offset, limit=limit, newest_first=True
         )
 
     @app.get(
@@ -8123,15 +8124,20 @@ def create_app(
         ),
     ) -> list[WorkUpdate]:
         if source_session_id is not None:
-            return store.find_entities(
+            return await read_in_worker(
+                store.find_entities,
                 WorkUpdate,
                 {"source_session_id": source_session_id},
                 offset=offset,
                 limit=limit,
                 newest_first=True,
             )
-        return store.list_entities(
-            WorkUpdate, offset=offset, limit=limit, newest_first=True
+        return await read_in_worker(
+            store.list_entities,
+            WorkUpdate,
+            offset=offset,
+            limit=limit,
+            newest_first=True,
         )
 
     @app.get(
@@ -8211,7 +8217,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_work(engagement_id: str) -> list[WorkItem]:
-        return work_service.list(engagement_id)
+        return await read_in_worker(work_service.list, engagement_id)
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/setting",
@@ -8260,7 +8266,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_work_updates(engagement_id: str, item_id: str) -> list[WorkUpdate]:
-        return work_service.updates(engagement_id, item_id)
+        return await read_in_worker(work_service.updates, engagement_id, item_id)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}/updates",

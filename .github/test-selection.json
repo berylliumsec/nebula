@@ -1,9 +1,9 @@
 {
-  "reviewed_by": "Codex focused review for MCP catalog filtering and worker boundaries",
-  "reason": "Validate SQL exclusion before hydration, catalogs beyond 1000 rows, fresh permissions and project ownership, async provider/harness capability entry points, inherited and explicit child selections, IPC behavior, and existing delegation cancellation/message/wait contracts. A paired disposable LAN Core benchmark exercises 34 concurrent authenticated gateway connections and unrelated HTTP reads. Concurrent explicit selections must recheck child idempotency after the worker read. The capability gateway preflight and receipt boundary is worker-owned; test its disabled, analysis-only, planning-only, invalid-argument and enforced-plan guards.",
-  "exclusions": "Backend query/scheduling only. No interface controls, settings schemas, origin behavior, native runtime or live vendor changes; frontend, native and Playwright layers are excluded. Source Core with synthetic static assets validates HTTP responsiveness. No full suites, production data or deployment.",
+  "reviewed_by": "Codex focused review of search and Work read admission; independent root-cause validation by validate_load_cause",
+  "reason": "Search and Work read-only HTTP handlers must not block unrelated operator requests under concurrent load. Validate six read/filter entry points, mixed 24-request cancellation retaining physical reader capacity, worker failure recovery, existing search scope/pagination/privacy/stale-index/cursor behavior, and Work ownership/auth/durable refresh and source-chat filters. Disposable paired LAN Core load compares 1/8/32/64 clients against 12000 synthetic notes and 2000 tasks. Extended selection: search action lookup cost must stay constant with page size and batch guards must retain ownership, existence, revision and device capability checks. Concurrent HTTP and separate Butler search services must repair once, preserve newer edits and deletions, and keep private chat filtering and digest-bound chunks. Candidate projection fields are read as scalar rows to avoid ORM hydration while retaining the same 2000-candidate bound and sorting.",
+  "exclusions": "Backend scheduling and search projection/action lookup only; response schemas, search ranking/query semantics, mutation API contracts, interface controls, native code, provider/harness execution and origin policy are unchanged. No frontend/native/Playwright tests apply to this read boundary; browser/layout/device matrix excluded. No full suites, live external services, production data or running Core replacement.",
   "expected_tests": {
-    "python": 49,
+    "python": 25,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -14,20 +14,17 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_mcp_catalog_reads.py",
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_mcp_gateway.py",
-    "tests/v3/test_tool_catalog.py::test_catalog_offers_every_other_usable_server_in_name_order",
-    "tests/v3/test_tool_catalog.py::test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation",
-    "tests/v3/test_tool_catalog.py::test_prepare_defers_by_default_and_ranks_locally",
-    "tests/v3/test_notebooks.py::test_notebook_mcp_is_project_scoped_and_revocation_is_immediate",
-    "tests/v3/test_chat_subagents.py::test_capability_selection_refuses_unselected_mcp_and_keeps_launch_optional",
-    "tests/v3/test_chat_subagents.py::test_supervisor_assigns_named_tools_and_a_skill_to_one_child",
-    "tests/v3/test_chat_subagents.py::test_supervisor_discovers_and_assigns_a_lifecycle_hook_to_one_child",
-    "tests/v3/test_chat_subagents.py::test_supervisor_can_enable_ready_command_runtime_for_one_child"
+    "tests/v3/test_load_read_responsiveness.py",
+    "tests/v3/test_federated_search.py",
+    "tests/v3/test_work_snapshot_api.py",
+    "tests/v3/test_work.py::test_work_api_auth_scope_and_refresh",
+    "tests/v3/test_control_plane_reads.py::test_worker_retains_context_and_recovers_from_a_failed_read",
+    "tests/v3/test_action_registry.py",
+    "tests/v3/test_butler_administration.py::test_butler_search_excludes_private_and_foreign_chats_before_pagination",
+    "tests/v3/test_butler_administration.py::test_butler_search_chunks_are_digest_bound_and_do_not_execute_actions"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
-  "change_digest": "dc540b723e4024a62367454703d6b312070b2d2c974c0b5f649a2bbc37703a6e"
+  "change_digest": "cadd496b67418989bcc0cc4d552d9d8c19ee1cc7b8d21d9325f2435444a85476"
 }

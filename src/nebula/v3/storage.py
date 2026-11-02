@@ -7,6 +7,7 @@ from .diagnostics import record_caught_exception
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -688,6 +689,9 @@ class NebulaStore:
         self.database = (
             database if isinstance(database, Database) else Database(database)
         )
+        # HTTP and Butler construct separate search services over this store.
+        # Hold through the repair transaction, including its freshness decision.
+        self.search_projection_lock = Lock()
         # Removes a deleted record's event history off the deleting thread.
         self.event_history = EventHistoryPurger(self.database)
         self._chat_activity_listeners: list[Callable[[], None]] = []
