@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from sqlalchemy import select
+from sqlalchemy.orm import load_only
+
 from .database import EntityRow
 from .domain import (
     ActionAuthority,
@@ -139,29 +142,74 @@ class ActionRegistry:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def _resource_error(self, request: ActionResolutionRequest) -> str | None:
+    @staticmethod
+    def _resource_error(
+        request: ActionResolutionRequest, rows: dict[str, EntityRow]
+    ) -> str | None:
         project_ids = {ref.project_id for ref in request.resources if ref.project_id}
         if len(project_ids) > 1:
             return "Selected resources belong to different projects."
-        with self.store.database.session() as session:
-            for ref in request.resources:
-                entity_kind = RESOURCE_ENTITY_KINDS.get(ref.kind)
-                if entity_kind is None:
-                    continue
-                row = session.get(EntityRow, ref.id)
-                if row is None or row.kind != entity_kind:
-                    return f"The selected {ref.kind.value.replace('_', ' ')} no longer exists."
-                actual_project_id = (
-                    row.id if ref.kind == ResourceKind.PROJECT else row.engagement_id
+        for ref in request.resources:
+            entity_kind = RESOURCE_ENTITY_KINDS.get(ref.kind)
+            if entity_kind is None:
+                continue
+            row = rows.get(ref.id)
+            if row is None or row.kind != entity_kind:
+                return (
+                    f"The selected {ref.kind.value.replace('_', ' ')} no longer exists."
                 )
-                if ref.project_id != actual_project_id:
-                    return "The selected resource belongs to a different project."
-                if ref.revision is not None and ref.revision != row.revision:
-                    return "The selected resource changed. Refresh it before using this action."
+            actual_project_id = (
+                row.id if ref.kind == ResourceKind.PROJECT else row.engagement_id
+            )
+            if ref.project_id != actual_project_id:
+                return "The selected resource belongs to a different project."
+            if ref.revision is not None and ref.revision != row.revision:
+                return "The selected resource changed. Refresh it before using this action."
         return None
 
     def resolve(self, request: ActionResolutionRequest) -> list[ActionDescriptor]:
-        resource_error = self._resource_error(request)
+        return self.resolve_many([request])[0]
+
+    def resolve_many(
+        self, requests: list[ActionResolutionRequest]
+    ) -> list[list[ActionDescriptor]]:
+        """Resolve independent result actions from one fresh, bounded metadata read."""
+
+        ids = sorted(
+            {
+                ref.id
+                for request in requests
+                for ref in request.resources
+                if ref.kind in RESOURCE_ENTITY_KINDS
+            }
+        )
+        rows: dict[str, EntityRow] = {}
+        with self.store.database.session() as session:
+            for offset in range(0, len(ids), 100):
+                rows.update(
+                    (row.id, row)
+                    for row in session.scalars(
+                        select(EntityRow)
+                        .where(EntityRow.id.in_(ids[offset : offset + 100]))
+                        .options(
+                            load_only(
+                                EntityRow.id,
+                                EntityRow.kind,
+                                EntityRow.engagement_id,
+                                EntityRow.revision,
+                            )
+                        )
+                    )
+                )
+            return [
+                self._resolve(request, self._resource_error(request, rows))
+                for request in requests
+            ]
+
+    @staticmethod
+    def _resolve(
+        request: ActionResolutionRequest, resource_error: str | None
+    ) -> list[ActionDescriptor]:
         kinds = {ref.kind for ref in request.resources}
         available_capabilities = set(request.device_capabilities)
         resolved: list[ActionDescriptor] = []

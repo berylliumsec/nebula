@@ -4,9 +4,22 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import (
+    ColumnElement,
+    Row,
+    and_,
+    delete,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+)
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .action_registry import ActionRegistry
@@ -297,12 +310,51 @@ def project_search_document(
     return None
 
 
+def _current_source(row: EntityRow) -> ColumnElement[bool]:
+    return exists(
+        select(EntityRow.id).where(
+            EntityRow.id == row.id, EntityRow.revision == row.revision
+        )
+    )
+
+
+def _write_search_document(
+    session: Session, row: EntityRow, document_id: str, values: dict[str, Any]
+) -> None:
+    """An older repair cannot insert over a newer edit or resurrect a deleted row."""
+
+    dialect = session.get_bind().dialect.name
+    insert = postgresql_insert if dialect == "postgresql" else sqlite_insert
+    fields = {"id": document_id, **values}
+    statement = insert(SearchDocumentRow).from_select(
+        list(fields),
+        select(
+            *[
+                literal(value, type_=SearchDocumentRow.__table__.c[key].type)
+                for key, value in fields.items()
+            ]
+        ).where(_current_source(row)),
+    )
+    session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[SearchDocumentRow.id],
+            set_={key: getattr(statement.excluded, key) for key in values},
+            where=SearchDocumentRow.revision <= statement.excluded.revision,
+        )
+    )
+
+
 def upsert_search_document(session: Session, row: EntityRow) -> None:
     projection = project_search_document(row.kind, row.payload)
-    current = session.get(SearchDocumentRow, row.id)
     if projection is None:
-        if current is not None:
-            session.delete(current)
+        if row.kind in INDEXED_ENTITY_KINDS:
+            session.execute(
+                delete(SearchDocumentRow).where(
+                    SearchDocumentRow.id == row.id,
+                    SearchDocumentRow.revision <= row.revision,
+                    _current_source(row),
+                )
+            )
         return
     values = dict(
         project_id=row.id if row.kind == "engagements" else row.engagement_id,
@@ -315,21 +367,9 @@ def upsert_search_document(session: Session, row: EntityRow) -> None:
         content=projection.content,
         updated_at=row.updated_at,
     )
-    if current is None:
-        session.add(SearchDocumentRow(id=row.id, **values))
-    else:
-        for key, value in values.items():
-            setattr(current, key, value)
+    _write_search_document(session, row, row.id, values)
     if row.kind == "browser_sessions":
         tab_prefix = f"{row.id}::tab::"
-        existing_tabs = {
-            item.id: item
-            for item in session.scalars(
-                select(SearchDocumentRow).where(
-                    SearchDocumentRow.id.like(f"{tab_prefix}%")
-                )
-            )
-        }
         raw_tabs = row.payload.get("tabs")
         tabs: list[object] = raw_tabs if isinstance(raw_tabs, list) else []
         desired: set[str] = set()
@@ -350,15 +390,15 @@ def upsert_search_document(session: Session, row: EntityRow) -> None:
                 content=_safe_url(tab.get("url")),
                 updated_at=row.updated_at,
             )
-            tab_document = existing_tabs.get(document_id)
-            if tab_document is None:
-                session.add(SearchDocumentRow(id=document_id, **tab_values))
-            else:
-                for key, value in tab_values.items():
-                    setattr(tab_document, key, value)
-        for document_id, tab_document in existing_tabs.items():
-            if document_id not in desired:
-                session.delete(tab_document)
+            _write_search_document(session, row, document_id, tab_values)
+        session.execute(
+            delete(SearchDocumentRow).where(
+                SearchDocumentRow.id.like(f"{tab_prefix}%"),
+                SearchDocumentRow.id.not_in(desired),
+                SearchDocumentRow.revision <= row.revision,
+                _current_source(row),
+            )
+        )
 
 
 def projected_entity_rows() -> ColumnElement[bool]:
@@ -404,6 +444,10 @@ class FederatedSearch:
         self.actions = actions
 
     def repair_stale_projection(self) -> bool:
+        with self.store.search_projection_lock:
+            return self._repair_stale_projection()
+
+    def _repair_stale_projection(self) -> bool:
         repaired = False
         with self.store.database.session() as session:
             entity_signature = session.execute(
@@ -429,6 +473,7 @@ class FederatedSearch:
                 item.id: item for item in session.scalars(select(SearchDocumentRow))
             }
             row_ids = {row.id for row in rows}
+            source_revisions = {row.id: row.revision for row in rows}
             for row in rows:
                 if row.kind == "browser_sessions":
                     raw_tabs = row.payload.get("tabs")
@@ -445,7 +490,24 @@ class FederatedSearch:
                     repaired = True
             for document in documents.values():
                 if document.id not in row_ids:
-                    session.delete(document)
+                    owner_id = document.id.split("::tab::", 1)[0]
+                    source = select(EntityRow.id).where(EntityRow.id == owner_id)
+                    snapshot_revision = source_revisions.get(owner_id)
+                    # New owners or tabs can commit after the repair's source
+                    # scan. Delete only while that scan still describes the owner.
+                    if snapshot_revision is None:
+                        still_orphaned = ~exists(source.where(projected_entity_rows()))
+                    else:
+                        still_orphaned = exists(
+                            source.where(EntityRow.revision == snapshot_revision)
+                        )
+                    session.execute(
+                        delete(SearchDocumentRow).where(
+                            SearchDocumentRow.id == document.id,
+                            SearchDocumentRow.revision <= document.revision,
+                            still_orphaned,
+                        )
+                    )
                     repaired = True
         return repaired
 
@@ -464,7 +526,9 @@ class FederatedSearch:
         repaired = self.repair_stale_projection()
         terms = [term.casefold() for term in query.split() if term]
         with self.store.database.session() as session:
-            statement = select(SearchDocumentRow)
+            # Ranking needs these scalar projection fields, not 2,000 ORM
+            # identities per request. Keep the same candidate bound and order.
+            statement = select(SearchDocumentRow.__table__)
             if exclude_private_chats:
                 visible_chats = select(EntityRow.id).where(
                     EntityRow.kind == "chat_sessions",
@@ -501,7 +565,7 @@ class FederatedSearch:
                         func.lower(SearchDocumentRow.content).like(pattern),
                     )
                 )
-            candidates = list(session.scalars(statement.limit(2000)))
+            candidates = list(session.execute(statement.limit(2000)))
             project_names = {
                 row.id: _text(row.payload.get("name"), 500)
                 for row in session.scalars(
@@ -509,7 +573,7 @@ class FederatedSearch:
                 )
             }
 
-        def score(row: SearchDocumentRow) -> float:
+        def score(row: Row[Any]) -> float:
             label = row.label.casefold()
             exact = 1000 if query.casefold() == label else 0
             prefix = 300 if label.startswith(query.casefold()) else 0
@@ -525,15 +589,20 @@ class FederatedSearch:
             key=lambda row: (-score(row), -row.updated_at.timestamp(), row.id)
         )
         page = candidates[offset : offset + limit]
-        results: list[SearchResult] = []
-        for row in page:
-            ref = ResourceRef(
+        refs = [
+            ResourceRef(
                 project_id=row.project_id,
                 kind=ResourceKind(row.resource_kind),
                 id=row.resource_id,
                 revision=row.revision,
             )
-            actions = self.actions.resolve(ActionResolutionRequest(resources=[ref]))
+            for row in page
+        ]
+        page_actions = self.actions.resolve_many(
+            [ActionResolutionRequest(resources=[ref]) for ref in refs]
+        )
+        results: list[SearchResult] = []
+        for row, ref, actions in zip(page, refs, page_actions, strict=True):
             results.append(
                 SearchResult(
                     ref=ref,

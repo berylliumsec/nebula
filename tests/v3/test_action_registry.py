@@ -97,3 +97,59 @@ def test_registry_fails_closed_for_stale_deleted_and_cross_project_refs(tmp_path
     )
     assert all(not item.available for item in deleted)
     assert all("no longer exists" in (item.disabled_reason or "") for item in deleted)
+
+
+def test_batched_resource_actions_keep_independent_guards_and_fresh_revisions(tmp_path):
+    store = NebulaStore(tmp_path / "batched-actions.db")
+    project = store.create(Engagement(name="Actions"))
+    other = store.create(Engagement(name="Other"))
+    asset = store.create(Asset(engagement_id=project.id, name="Gateway"))
+    ref = ResourceRef(
+        project_id=project.id, kind=ResourceKind.ASSET, id=asset.id, revision=1
+    )
+    requests = [
+        ActionResolutionRequest(
+            resources=[ref], device_capabilities=["clipboard.write"]
+        ),
+        ActionResolutionRequest(resources=[ref.model_copy(update={"revision": 2})]),
+        ActionResolutionRequest(
+            resources=[ref.model_copy(update={"project_id": other.id})]
+        ),
+        ActionResolutionRequest(resources=[ref.model_copy(update={"id": "missing"})]),
+        ActionResolutionRequest(
+            resources=[ref.model_copy(update={"kind": ResourceKind.NOTE})]
+        ),
+        ActionResolutionRequest(
+            resources=[ref, ref.model_copy(update={"project_id": other.id})]
+        ),
+    ]
+    registry = ActionRegistry(store)
+    results = registry.resolve_many(requests)
+    assert all(action.available for action in results[0])
+    for actions, reason in zip(
+        results[1:],
+        (
+            "changed",
+            "different project",
+            "no longer exists",
+            "no longer exists",
+            "different projects",
+        ),
+        strict=True,
+    ):
+        assert actions and all(not action.available for action in actions)
+        assert all(reason in action.disabled_reason for action in actions)
+    saved = store.update(Asset, asset.id, {"name": "Updated"}, expected_revision=1)
+    refreshed = registry.resolve_many(
+        [
+            requests[0],
+            requests[0].model_copy(
+                update={
+                    "resources": [ref.model_copy(update={"revision": saved.revision})]
+                }
+            ),
+        ]
+    )
+    assert all(not action.available for action in refreshed[0])
+    assert all(action.available for action in refreshed[1])
+    assert registry.resolve_many([]) == []
