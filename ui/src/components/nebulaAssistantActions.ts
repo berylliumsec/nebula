@@ -16,7 +16,8 @@ export type SettingClientAction =
   | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
   | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
   | { kind: "note_delete"; projectId: string; noteId: string; name: string; expectedRevision: number }
-  | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" | "runner-profiles" | "ssh-environments" }
+  | { kind: "settings_profile_refresh"; projectId: string; resource: "providers" | "harnesses" | "mcp-servers" | "runner-profiles" | "ssh-environments" | "operator-profiles" }
+  | { kind: "runtime_settings_refresh"; projectId: string; resource: "web-search" | "setup" | "automation-runtime" }
   | { kind: "post_tool_refresh"; projectId: string }
   | { kind: "butler_interval_refresh"; projectId: string }
   | { kind: "open_setting"; setting: SettingCatalogEntry }
@@ -174,6 +175,12 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
   }
   if (receipt.state === "core_settings_saved") {
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && operation === "nebula.settings.api_request" && receipt.read_back === true
+        && value.kind === "runtime_settings_refresh"
+        && (value.resource === "web-search" || value.resource === "setup" || value.resource === "automation-runtime")) {
+      return {kind: "runtime_settings_refresh", projectId, resource: value.resource};
+    }
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && (operation === "nebula.settings.api_request" || operation === "nebula.settings.set_post_tool") && receipt.read_back === true
         && value.kind === "post_tool_refresh") return {kind: "post_tool_refresh", projectId};
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
@@ -185,7 +192,7 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
         && operation === "nebula.settings.api_request" && receipt.read_back === true
         && value.kind === "settings_profile_refresh"
         && (value.resource === "providers" || value.resource === "harnesses" || value.resource === "mcp-servers"
-          || value.resource === "runner-profiles" || value.resource === "ssh-environments")) {
+          || value.resource === "runner-profiles" || value.resource === "ssh-environments" || value.resource === "operator-profiles")) {
       return {kind: "settings_profile_refresh", projectId, resource: value.resource};
     }
     return undefined;

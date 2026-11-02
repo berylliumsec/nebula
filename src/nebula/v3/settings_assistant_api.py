@@ -36,10 +36,10 @@ _PROJECT_SETTING = re.compile(
 )
 _GLOBAL_SETTINGS = re.compile(
     r"^/api/v1/(?:"
-    r"providers|harnesses|mcp-servers|ssh-environments|"
+    r"providers|provider-catalog|harnesses|mcp-servers|ssh-environments|"
     r"runner-profiles|vpn-profiles|operator-profiles|credentials/(?:vault|[A-Za-z0-9_.~:-]+/status)|skills|"
     r"integrations|automation/runtime|diagnostics/settings|voice/settings|butler/(?:instructions|check-interval)|"
-    r"setup|release"
+    r"hooks|project-instructions|runtime-usage|setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -535,6 +535,34 @@ async def _check_runtime_mutation(
     return body
 
 
+def _action_readback(method: str, path: str) -> str | None:
+    if method == "POST":
+        if re.fullmatch(
+            r"/api/v1/setup/(?:runtime/(?:select|refresh)|image/(?:prepare|retry|cancel))",
+            path,
+        ):
+            return "/api/v1/setup/status"
+        if path == "/api/v1/automation/runtime/prepare":
+            return "/api/v1/automation/runtime"
+        profile = re.fullmatch(
+            r"(/api/v1/(?:providers|harnesses)/[^/]+)/(?:health|capabilities/verify)",
+            path,
+        )
+        if profile:
+            return profile[1]
+        mcp = re.fullmatch(r"(/api/v1/mcp-servers/[^/]+)/probe", path)
+        if mcp:
+            return mcp[1]
+        if re.fullmatch(r"/api/v1/operator-profiles/[^/]+/activate", path):
+            return "/api/v1/operator-profiles/active"
+    if method in {"POST", "PUT", "DELETE"} and re.fullmatch(
+        r"/api/v1/integrations/web-search(?:/(?:install|start|stop|test|engines))?",
+        path,
+    ):
+        return "/api/v1/integrations/web-search"
+    return None
+
+
 async def _settings_request(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -585,11 +613,35 @@ async def _settings_request(
             body = {**body, "engagement_id": project_id}
     await _check_host_policy(client, headers, method, path, body, expected_revision)
     await _check_post_tool_consent(client, headers, method, path, body)
+    operator = re.fullmatch(r"(/api/v1/operator-profiles/[^/]+)(/activate)?", path)
+    if operator and (method == "PATCH" or (method == "POST" and operator[2])):
+        revision = body.get("expected_revision") if isinstance(body, dict) else None
+        if type(revision) is not int or revision < 1:
+            raise ValueError(
+                "read the exact operator profile and supply body.expected_revision"
+            )
+        current_operator = await client.get(operator[1], headers=headers)
+        if (
+            not current_operator.is_success
+            or current_operator.json()["revision"] != revision
+        ):
+            raise ValueError(
+                "operator profile revision conflict (409): read the current profile before retrying"
+            )
     await _check_profile_mutation(
         client, headers, method, path, body, expected_revision, project_id
     )
     body = await _check_runtime_mutation(app, client, headers, method, path, body)
     params: dict[str, Any] = {}
+    if method == "GET" and path in {
+        "/api/v1/skills",
+        "/api/v1/skills/catalog",
+        "/api/v1/hooks",
+        "/api/v1/project-instructions",
+    }:
+        params["engagement_id"] = project_id
+    if method == "GET" and path == "/api/v1/automation/runtime" and before_execution:
+        params["engagement_id"] = project_id
     if method == "GET" and path == "/api/v1/ssh-environments":
         params["resolve"] = "false"
     if method == "DELETE" and re.fullmatch(r"/api/v1/ssh-environments/[^/]+", path):
@@ -765,10 +817,12 @@ async def execute_settings_api(
         result = response.json() if response.content else None
         observed = None
         runtime_route = re.fullmatch(
-            r"/api/v1/(runner-profiles|ssh-environments)/([^/]+)", candidate
+            r"/api/v1/(runner-profiles|ssh-environments)/([^/]+)(/probe)?", candidate
         )
-        if runtime_route and selected in {"PUT", "DELETE"}:
-            family, identity = runtime_route.groups()
+        if runtime_route and (
+            selected in {"PUT", "DELETE"} or (selected == "POST" and runtime_route[3])
+        ):
+            family, identity = runtime_route[1], runtime_route[2]
             readback = await _settings_request(
                 app,
                 client,
@@ -805,7 +859,7 @@ async def execute_settings_api(
                 )
                 if selected == "DELETE" and saved is None:
                     observed = {"deleted": True}
-                elif selected == "PUT" and saved is not None:
+                elif selected in {"PUT", "POST"} and saved is not None:
                     observed = saved
         readback_path: str | None = candidate
         if selected == "POST" and isinstance(result, dict) and "id" in result:
@@ -821,6 +875,15 @@ async def execute_settings_api(
                 exact = f"{candidate}/{created_id}"
                 if _route_exists(app, "GET", exact):
                     readback_path = exact
+        action_readback = _action_readback(selected, candidate)
+        if action_readback is not None:
+            readback_path = action_readback
+        if selected == "POST" and re.fullmatch(
+            r"/api/v1/(?:providers/[^/]+/openrouter/credits/refresh|harnesses/[^/]+/quota/refresh)",
+            candidate,
+        ):
+            # These fixed POSTs are authoritative account reads, not profile saves.
+            observed = result
         if (
             selected != "GET"
             and readback_path is not None
@@ -844,7 +907,14 @@ async def execute_settings_api(
             elif selected == "DELETE" and readback.status_code == 404:
                 observed = {"deleted": True}
         rendered = json.dumps(
-            _safe_result(observed if observed is not None else result), default=str
+            _safe_result(
+                result
+                if action_readback is not None
+                else observed
+                if observed is not None
+                else result
+            ),
+            default=str,
         )
         if len(rendered) > 30_000:
             outcome: dict[str, Any] = {
@@ -860,8 +930,9 @@ async def execute_settings_api(
                 "result": json.loads(rendered),
             }
         profile_route = re.fullmatch(
-            r"/api/v1/(providers|harnesses|mcp-servers|runner-profiles|ssh-environments)(?:/[^/]+)?",
-            candidate,
+            r"/api/v1/(providers|harnesses|mcp-servers|runner-profiles|ssh-environments|operator-profiles)(?:/[^/]+)?",
+            action_readback
+            or (candidate.removesuffix("/probe") if runtime_route else candidate),
         )
         if selected != "GET" and observed is not None and profile_route:
             outcome.update(
@@ -893,6 +964,33 @@ async def execute_settings_api(
                 state="core_settings_saved",
                 client_action={"kind": "post_tool_refresh", "project_id": project_id},
             )
+        if action_readback is not None:
+            observed_text = json.dumps(_safe_result(observed), default=str)
+            if len(observed_text) <= 4096:
+                outcome["observed_settings"] = json.loads(observed_text)
+            else:
+                outcome["observed_settings_excerpt"] = observed_text[:4096]
+        if selected != "GET" and observed is not None:
+            runtime_resource = (
+                "web-search"
+                if candidate.startswith("/api/v1/integrations/web-search")
+                else "setup"
+                if candidate.startswith("/api/v1/setup/")
+                else "automation-runtime"
+                if candidate == "/api/v1/automation/runtime/prepare"
+                else None
+            )
+            if runtime_resource:
+                outcome.update(
+                    state="core_settings_saved",
+                    client_action={
+                        "kind": "runtime_settings_refresh",
+                        "project_id": project_id,
+                        "resource": runtime_resource,
+                    },
+                    operation_accepted=response.status_code == 202
+                    or (isinstance(result, dict) and result.get("accepted") is True),
+                )
         return outcome
 
 

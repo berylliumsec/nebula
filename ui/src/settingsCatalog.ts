@@ -99,7 +99,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.web-search",
     label: "Web search runtime",
-    description: "Run the local metasearch container agents use to research the public web",
+    description: "Install, start, stop and refresh local Web search and choose its engines",
     category: "Integrations",
     scope: "Workspace",
     target: "web-search-runtime-settings",
@@ -198,7 +198,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.operators",
     label: "Operator profiles",
-    description: "Manage the local identity used for activity attribution",
+    description: "Choose and manage local activity attribution profiles",
     category: "Identity & Security",
     scope: "Security",
     target: "operator-settings",

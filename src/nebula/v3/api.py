@@ -7776,6 +7776,15 @@ def create_app(
     async def active_operator_profile() -> OperatorProfile:
         return operators.active_profile()
 
+    @app.get(
+        f"{API_PREFIX}/operator-profiles/{{profile_id}}",
+        response_model=OperatorProfile,
+        tags=["operator-profiles"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_operator_profile(profile_id: str) -> OperatorProfile:
+        return operators.get_profile(profile_id)
+
     @app.post(
         f"{API_PREFIX}/operator-profiles",
         response_model=OperatorProfile,
@@ -9495,7 +9504,9 @@ def create_app(
                 stage="api",
             )
             if request.expected_revision is not None:
-                raise ConflictError("Runner profile changed; read it again") from caught_error
+                raise ConflictError(
+                    "Runner profile changed; read it again"
+                ) from caught_error
             profile = store.create(RunnerProfile(id=profile_id, **payload))
         else:
             profile = store.update(

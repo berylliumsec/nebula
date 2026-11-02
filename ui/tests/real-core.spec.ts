@@ -1815,6 +1815,170 @@ test("assistant upgrade Butler inspects project history and confirms original do
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 
+test("assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(480_000);
+  let request: {prompt: string; method: string; path: string; body?: Record<string, unknown>; expected_revision?: number} | undefined;
+  const stub = await startLocalModelStub({responseContent: "Core returned the metadata observation.", toolCall: body => {
+    const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string; content?: unknown}> : [];
+    const last = messages.map(item => item.role).lastIndexOf("user");
+    if (!request || !String(messages[last]?.content ?? "").startsWith(request.prompt)) return undefined;
+    const count = messages.slice(last + 1).filter(item => item.role === "tool").length;
+    if (count === 0) return {name: "nebula_capabilities_search", arguments: {query: "Core Settings API runtime metadata"}};
+    if (count === 1) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_schema"}};
+    if (count === 2) return {name: "nebula_capabilities_read", arguments: {operation: "nebula.settings.api_schema", arguments: {path: request.path, method: request.method}}};
+    if (count === 3) return {name: "nebula_capabilities_describe", arguments: {operation: "nebula.settings.api_request"}};
+    if (count === 4) return {name: "nebula_capabilities_change", arguments: {operation: "nebula.settings.api_request", arguments: {
+      method: request.method, path: request.path, ...(request.body ? {body: request.body} : {}),
+      ...(request.expected_revision ? {expected_revision: request.expected_revision} : {}),
+    }}};
+    return undefined;
+  }});
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    fixtureScript: path.resolve(import.meta.dirname, "fixtures/butler_runtime_settings_core.py")});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  await withOwnedCleanup(async () => {
+    const projectsResponse = await api.get("engagements");
+    expect(projectsResponse.ok(), await projectsResponse.text()).toBe(true);
+    const projectId = (await projectsResponse.json() as Array<{id: string; name: string}>).find(item => item.name === "Runtime administration fixture")!.id;
+    const modelResponse = await api.post("providers", {data: {name: "Administration fixture model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+      is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model", options: {context_window: 32768}}}});
+    expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+    const model = await modelResponse.json() as {id: string; revision: number};
+    const verification = await api.post(`providers/${model.id}/capabilities/verify`, {data: {model: "security-model", expected_revision: model.revision}});
+    expect(verification.ok(), await verification.text()).toBe(true);
+    const anchor = await api.post("operator-profiles", {data: {display_name: "Anchor metadata operator"}});
+    expect(anchor.ok(), await anchor.text()).toBe(true);
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find(item => item.startsWith("assets/index-") && item.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(build.assets[entry!]);
+    await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Runtime administration LAN browser", {requireReady: false});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+    const ask = async (method: string, path: string, body?: Record<string, unknown>, expectedRevision?: number) => {
+      request = {prompt: `Inspect ${method} ${path} request ${stub.requests.length}.`, method, path, body, expected_revision: expectedRevision};
+      const start = stub.requests.length;
+      stub.responseContent = path === "skills" ? "Core lists fixture-selected-skill in the selected project."
+        : path === "project-instructions" ? "Core reports saved project instructions."
+        : path === "providers/discover-local" ? "Core found the synthetic localhost service."
+        : path === "providers/openrouter/upstream-providers" ? "Core lists Fixture vendor."
+        : path.endsWith("/openrouter/credits/refresh") ? "Core reports account credits unavailable because the fixture provider is disabled."
+        : `Core inspected ${method} ${path}.`;
+      stub.responseContent += ` Observation ${start}.`;
+      if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+      const assistant = page.getByRole("dialog", {name: "Butler"});
+      await assistant.getByRole("textbox", {name: "Ask Butler a question"}).fill(request.prompt);
+      await assistant.getByRole("button", {name: "Send to Butler"}).click();
+      await expect(assistant.getByText(stub.responseContent, {exact: true})).toBeVisible({timeout: 60_000});
+      await assistant.getByRole("button", {name: "Hide Butler"}).click();
+      const trace = JSON.stringify(stub.requests.slice(start).flatMap(item => Array.isArray(item.messages) ? item.messages : []).filter(message => message.role === "tool"));
+      expect(trace).toContain('read_back');
+      return trace;
+    };
+    for (const route of ["provider-catalog", "providers/discover-local", "providers/openrouter/upstream-providers", "skills", "skills/catalog", "hooks", "project-instructions"]) {
+      const trace = await ask("GET", route);
+      if (route === "skills") expect(trace).toContain("fixture-selected-skill");
+      if (route === "providers/discover-local") expect(trace).toContain("Fixture localhost service");
+      if (route === "providers/openrouter/upstream-providers") expect(trace).toContain("Fixture vendor");
+      if (route === "project-instructions") expect(trace).toContain("size_bytes");
+    }
+    await page.goto(`${core.origin}/settings#web-search-runtime-settings`);
+    const search = page.locator("#web-search-runtime-settings");
+    const refresh = search.getByRole("button", {name: "Refresh Web search status"});
+    await expect(refresh).toBeVisible();
+    const bounds = await refresh.boundingBox();
+    expect(bounds!.width).toBeGreaterThanOrEqual(44);
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    await refresh.focus();
+    await expect(refresh).toBeFocused();
+    await page.keyboard.press("Enter");
+    expect((await new AxeBuilder({page}).include("#web-search-runtime-settings").analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    for (const action of [
+      {method: "POST", suffix: "/install", state: "absent", label: "Not installed"},
+      {method: "POST", suffix: "/start", state: "ready", label: "Ready"},
+      {method: "POST", suffix: "/test", state: "ready", label: "Ready"},
+      {method: "PUT", suffix: "/engines", body: {engines: ["wikipedia"]}, state: "ready", label: "Ready"},
+      {method: "POST", suffix: "/stop", state: "stopped", label: "Stopped"},
+      {method: "DELETE", suffix: "", state: "absent", label: "Not installed"},
+    ]) {
+      const trace = await ask(action.method, "integrations/web-search" + action.suffix, action.body);
+      expect(trace).toContain("runtime_settings_refresh");
+      const current = await (await api.get("integrations/web-search")).json() as {container_state: string; image_digest?: string; engines: string[]; last_test?: {ok: boolean}};
+      expect(current.container_state).toBe(action.state);
+      expect(current.image_digest).toBe("sha256:" + "a".repeat(64));
+      await expect(search.getByRole("status")).toHaveText(action.label);
+      if (action.suffix === "/engines") {
+        expect(current.engines).toEqual(["wikipedia"]);
+        expect(current.last_test?.ok).toBe(true);
+        await expect(search.getByRole("checkbox", {name: "Wikipedia"})).toBeChecked();
+        await expect(search.getByRole("checkbox", {name: "Brave"})).not.toBeChecked();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      }
+    }
+    await page.reload();
+    await expect(search.getByRole("status")).toHaveText("Not installed");
+    await expect(search.getByRole("checkbox", {name: "Wikipedia"})).toBeChecked();
+    await search.getByRole("button", {name: "Refresh Web search status"}).click();
+    await expect(search.getByRole("status")).toHaveText("Not installed");
+    await page.goto(`${core.origin}/settings#operator-settings`);
+    await ask("POST", "operator-profiles", {display_name: "Butler metadata operator"});
+    const profiles = await (await api.get("operator-profiles")).json() as Array<{id: string; display_name: string; revision: number}>;
+    let operator = profiles.find(item => item.display_name === "Butler metadata operator")!;
+    expect(operator).toBeTruthy();
+    await expect(page.getByRole("heading", {name: operator.display_name, exact: true})).toBeVisible();
+    await ask("PATCH", `operator-profiles/${operator.id}`, {display_name: "Renamed metadata operator", expected_revision: operator.revision});
+    operator = await (await api.get(`operator-profiles/${operator.id}`)).json() as typeof operator;
+    await expect(page.getByRole("heading", {name: operator.display_name, exact: true})).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("heading", {name: operator.display_name, exact: true})).toBeVisible();
+    await ask("DELETE", `operator-profiles/${operator.id}`, undefined, operator.revision);
+    expect((await api.get(`operator-profiles/${operator.id}`)).status()).toBe(404);
+    await expect(page.getByRole("heading", {name: operator.display_name, exact: true})).toHaveCount(0);
+    await ask("POST", "operator-profiles", {display_name: "Selected metadata operator"});
+    operator = (await (await api.get("operator-profiles")).json() as typeof profiles).find(item => item.display_name === "Selected metadata operator")!;
+    await ask("POST", `operator-profiles/${operator.id}/activate`, {expected_revision: operator.revision});
+    expect((await (await api.get("operator-profiles/active")).json() as {id: string}).id).toBe(operator.id);
+    const active = page.locator(".operator-profile-list article").filter({has: page.getByRole("heading", {name: operator.display_name, exact: true})});
+    await expect(active.getByText("Active", {exact: true})).toBeVisible();
+    await page.reload();
+    await expect(active.getByText("Active", {exact: true})).toBeVisible();
+    await page.goto(`${core.origin}/settings#ssh-environment-settings`);
+    const probe = await ask("POST", "ssh-environments/fixture-ask/probe");
+    expect(probe).toContain("core_settings_saved");
+    await expect(page.getByText("Reachable · 1 ms", {exact: true})).toBeVisible();
+    await page.reload();
+    await expect(page.getByText("Reachable · 1 ms", {exact: true})).toBeVisible();
+    const providerHealth = await ask("POST", `providers/${model.id}/health`);
+    expect(providerHealth).toContain("observed_settings");
+    const freshModel = await (await api.get(`providers/${model.id}`)).json() as {revision: number};
+    const capability = await ask("POST", `providers/${model.id}/capabilities/verify`, {model: "security-model", expected_revision: freshModel.revision});
+    expect(capability).toContain("observed_settings");
+    const creditsResponse = await api.post("providers", {data: {name: "Disabled credits fixture", provider_type: "openrouter", enabled: false}});
+    expect(creditsResponse.ok(), await creditsResponse.text()).toBe(true);
+    const credits = await creditsResponse.json() as {id: string};
+    const creditTrace = await ask("POST", `providers/${credits.id}/openrouter/credits/refresh`);
+    expect(creditTrace).toContain("provider_disabled");
+    const harnessResponse = await api.post("harnesses", {data: {name: "Inert metadata harness", kind: "codex_app_server", connection_mode: "endpoint", transport: "websocket", endpoint: "ws://127.0.0.1:9999", enabled: false}});
+    expect(harnessResponse.ok(), await harnessResponse.text()).toBe(true);
+    const harness = await harnessResponse.json() as {id: string};
+    await page.goto(`${core.origin}/settings#harness-settings`);
+    const health = await ask("POST", `harnesses/${harness.id}/health`);
+    expect(health).toContain("observed_settings");
+    expect((await (await api.get(`harnesses/${harness.id}`)).json() as {default_model: string}).default_model).toBe("fixture-model");
+    await expect(page.locator(".harness-settings-card").filter({has: page.getByRole("heading", {name: "Inert metadata harness"})}).getByText("fixture-model", {exact: true})).toBeVisible();
+    await page.reload();
+    await expect(page.locator(".harness-settings-card").filter({has: page.getByRole("heading", {name: "Inert metadata harness"})}).getByText("fixture-model", {exact: true})).toBeVisible();
+    if (!await page.getByRole("dialog", {name: "Butler"}).isVisible()) await openNebulaAssistantFromShell(page);
+    expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-administration-screen", {body: await page.screenshot(), contentType: "image/png"});
+    await testInfo.attach("butler-administration-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
+      result: "Catalog reads used selected-project skills/instructions; real Core web-search lifecycle and engine changes persisted with inert container/HTTP I/O, refreshed live Settings and survived reload. Operator profile create/edit/delete/activate read exact Core revisions and refreshed local attribution. Synthetic SSH and harness health updated durable metadata and reloaded visibly; no program, SSH connection, container or vendor call ran."}), contentType: "application/json"});
+  }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
+});
+
 test("assistant upgrade Butler manages nonsecret integration profiles on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(480_000);
   const profiles = [

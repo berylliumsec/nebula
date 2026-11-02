@@ -1788,14 +1788,25 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       }
       if (action.resource !== "mcp-servers") {
         try {
-          await retryResource(action.resource);
+          await retryResource(action.resource === "operator-profiles" ? "operators" : action.resource);
         } catch {
           // diagnostic-expected: WorkspaceContext records the failed catalog read and provides its Retry control.
           return "Core confirmed the profile change. The catalog could not refresh; use its Retry control in Settings.";
         }
       }
-      if (action.resource !== "providers") window.dispatchEvent(new Event("nebula:mcp-profiles-changed"));
+      if (action.resource === "mcp-servers" || action.resource === "harnesses") window.dispatchEvent(new Event("nebula:mcp-profiles-changed"));
       return "Core confirmed the profile change. Settings catalogs have been asked to refresh.";
+    }
+    if (action.kind === "runtime_settings_refresh") {
+      if (!api || coreState !== "online") return "Core returned runtime state. Reconnect and refresh its Settings control.";
+      if (action.resource === "setup") {
+        try { await retryResource("setup"); }
+        catch {
+          // diagnostic-expected: WorkspaceContext records the failed read and exposes its Retry control.
+          return "Core returned setup state, but its catalog could not refresh. Use Retry in Settings.";
+        }
+      } else notifyRuntimeSettingsChanged(action.resource);
+      return "Core returned current runtime state. Its Settings control has been asked to refresh; accepted setup work may still be running.";
     }
     if (action.kind === "post_tool_refresh") {
       notifyProjectDataChanged({projectId: action.projectId, resource: "post-tool-settings"});

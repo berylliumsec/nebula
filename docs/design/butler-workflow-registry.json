@@ -1280,7 +1280,8 @@
         "ui/src/components/HarnessSettings.tsx::updateMcpServer",
         "ui/src/components/HarnessSettings.tsx::deleteMcpServer",
         "ui/src/components/HarnessSettings.tsx::listMcpServers",
-        "ui/src/components/ButlerIssues.tsx::listMcpServers"
+        "ui/src/components/ButlerIssues.tsx::listMcpServers",
+        "ui/src/components/HarnessSettings.tsx::probeMcpServer"
       ],
       "core_owner": "Core profile validator, revision guard, dependency-aware delete and exact resource GET; shared and selected-project metadata ownership, authenticated pre-serialization export filtering and probe-time scope checks",
       "butler": {
@@ -2748,6 +2749,161 @@
       "authority": "Interactive explicit operator request; first or rebound cloud confirmation remains in the requesting browser. Configuration changes alone do not run analysis.",
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
       "result": "Core readback reports the saved configuration and revision. Workbench rereads it; open Settings retains unsaved input until explicit Reload. Saved runtime selection survives browser reload.",
+      "status": "supported"
+    },
+    {
+      "id": "settings.web_search_lifecycle",
+      "entry_point": "Install, start, test, choose engines, stop and remove the local Web search runtime",
+      "ui_calls": [
+        "ui/src/components/EngagementPolicySettings.tsx::getWebSearchRuntime",
+        "ui/src/components/WebSearchRuntimeSettings.tsx::getWebSearchRuntime",
+        "ui/src/components/WebSearchRuntimeSettings.tsx::installWebSearchRuntime",
+        "ui/src/components/WebSearchRuntimeSettings.tsx::removeWebSearchRuntime",
+        "ui/src/components/WebSearchRuntimeSettings.tsx::setWebSearchEngines",
+        "ui/src/components/WebSearchRuntimeSettings.tsx::startWebSearchRuntime",
+        "ui/src/components/WebSearchRuntimeSettings.tsx::stopWebSearchRuntime",
+        "ui/src/components/WebSearchRuntimeSettings.tsx::testWebSearchRuntime"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request GET, POST, PUT or DELETE through the listed Web search Settings schema"
+      },
+      "authority": "Core fixed official image, loopback container lifecycle and validated engine enum; per-project search privacy remains separate",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "Actual Core lifecycle/storage logic runs with inert process and HTTP boundaries. Related status readback refreshes live Settings and project policy; saved engine/state metadata survives browser reload. Nonzero stop/remove results do not record success; status refresh is read-only.",
+      "status": "supported"
+    },
+    {
+      "id": "settings.operator_profiles",
+      "entry_point": "Manage local activity-attribution profiles",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::activateOperatorProfile",
+        "ui/src/state/WorkspaceContext.tsx::createOperatorProfile",
+        "ui/src/state/WorkspaceContext.tsx::deleteOperatorProfile",
+        "ui/src/state/WorkspaceContext.tsx::listOperatorProfiles",
+        "ui/src/state/WorkspaceContext.tsx::updateOperatorProfile"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request POST, PATCH and DELETE for local operator profiles"
+      },
+      "authority": "Core atomic one-active-profile invariant, exact identity reads, observed revisions and deletion reference guards; descriptive roles grant no paired-device permissions",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "Exact created and activated identities are read back; stale writes and active/last/referenced deletion are refused by Core. Live local catalogs and reload show the observed metadata and selection.",
+      "status": "supported"
+    },
+    {
+      "id": "settings.native_catalogs",
+      "entry_point": "Read current project skill/hook catalogs and instruction-file status",
+      "ui_calls": [
+        "ui/src/guides/catalog.ts::getProjectInstructionsStatus",
+        "ui/src/guides/catalog.ts::listNativeHooks",
+        "ui/src/guides/catalog.ts::listSkills",
+        "ui/src/pages/SessionsPage.tsx::listNativeHooks",
+        "ui/src/pages/SettingsPage.tsx::getSkillCatalog",
+        "ui/src/pages/SettingsPage.tsx::listSkills"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request GET skills, skills/catalog, hooks or project-instructions"
+      },
+      "authority": "Core injects the selected project into fixed metadata queries; existing native workspace/managed-root and instruction safety checks apply",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "Selected-project synthetic skill and instruction metadata reaches Butler; foreign-root data stays excluded and query-string project overrides are rejected. No hook runs and no catalog entry is enabled by a read.",
+      "status": "supported"
+    },
+    {
+      "id": "providers.catalog_and_discovery",
+      "entry_point": "Discover supported provider kinds, fixed host-loopback services and the public upstream directory",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::listProviderCatalog",
+        "ui/src/pages/SettingsPage.tsx::discoverLocalProviders",
+        "ui/src/pages/SettingsPage.tsx::listOpenRouterUpstreamProviders"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request GET provider-catalog, providers/discover-local or providers/openrouter/upstream-providers"
+      },
+      "authority": "Core fixed public catalog/URL and fixed loopback provider probes; no arbitrary discovery target or credential forwarding",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "Butler receives Core catalog/directory observations through its listed schema. Synthetic directory and loopback I/O avoid external calls; existing Core tests verify exact public URL, caching, no authorization header and fixed discovery services.",
+      "status": "supported"
+    },
+    {
+      "id": "providers.health_and_verification",
+      "entry_point": "Check a configured provider and verify exact-model capabilities",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::refreshProviderHealth",
+        "ui/src/state/WorkspaceContext.tsx::verifyProviderCapabilities"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request POST provider health or capabilities/verify"
+      },
+      "authority": "Core configured provider identity, fixed benign capability probe and observed verification revision; no secret or sharing grant",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "The original health/verification result remains available alongside exact profile readback; live catalogs refresh. Disabled providers fail closed and Settings-only Butler remains independent of command runtime.",
+      "status": "supported"
+    },
+    {
+      "id": "harnesses.health",
+      "entry_point": "Check an existing configured Assistant harness",
+      "ui_calls": [
+        "ui/src/components/HarnessSettings.tsx::checkHarness"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request POST harness health"
+      },
+      "authority": "Core adapter and operator-trusted saved program/connection configuration; a health check does not run a project agent turn",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "The original Core health result and exact saved capability metadata are read back; Settings shows discovered default model after refresh and reload. Browser fixture uses an inert adapter, not an actual account or program.",
+      "status": "supported"
+    },
+    {
+      "id": "providers.account_credits",
+      "entry_point": "Read authoritative OpenRouter account credits with its separate management credential",
+      "ui_calls": [
+        "ui/src/components/OpenRouterCreditsPanel.tsx::request::\"POST\" `providers/${encodeURIComponent(providerId)}/openrouter/credits/refresh`"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request POST provider openrouter/credits/refresh"
+      },
+      "authority": "Core management credential and fixed vendor account endpoint; inference limits are not account balances and keys remain server-side",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "Core returns observed amounts/timestamp or an explicit unavailable reason. An account read is not claimed as a profile save; browser journey observes disabled-provider status and existing Core transport coverage verifies management-key separation.",
+      "status": "supported"
+    },
+    {
+      "id": "ssh.connection_probe",
+      "entry_point": "Test a configured SSH environment and read its saved facts",
+      "ui_calls": [
+        "ui/src/components/EnvironmentSettings.tsx::probeSshEnvironment"
+      ],
+      "core_owner": "Existing Core Settings route/service, authenticated gateway and authoritative metadata readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request using the listed metadata/status route",
+        "change": "nebula.settings.api_request POST SSH environment probe"
+      },
+      "authority": "Core configured canonical alias and existing trusted SSH configuration; a probe grants no standing command approval",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core",
+      "result": "Exact saved probe metadata is read back without SSH resolution, refreshes the host row and survives reload. The fixture supplies inert probe facts and makes no SSH connection.",
       "status": "supported"
     }
   ],

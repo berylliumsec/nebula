@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Globe } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import type { WebSearchEngine, WebSearchRuntime } from "../api/types";
+import {RUNTIME_SETTINGS_CHANGED_EVENT} from "../api/runtimeSettingsEvents";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -55,7 +56,9 @@ export function WebSearchRuntimeSettings() {
   const load = useCallback(async () => {
     if (!api || coreState !== "online") return;
     try {
-      setStatus(await api.getWebSearchRuntime());
+      const next = await api.getWebSearchRuntime();
+      setStatus(next);
+      publish(next);
       setError(undefined);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.web_search.load_failed", "The web search runtime status could not be loaded.", loadError, "integrations");
@@ -64,6 +67,14 @@ export function WebSearchRuntimeSettings() {
   }, [api, coreState]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent).detail === "web-search") void load();
+    };
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+  }, [load]);
 
   const run = async (kind: Busy, action: () => Promise<WebSearchRuntime>, saved?: string) => {
     setBusy(kind);
@@ -111,7 +122,7 @@ export function WebSearchRuntimeSettings() {
   const digest = shortDigest(status?.imageDigest);
 
   return <section className="settings-section" id="web-search-runtime-settings">
-    <div className="section-heading"><div><h2>Web search</h2><p>A metasearch container Nebula runs on this host so agents can research the public web.</p></div><Globe size={20} /></div>
+    <div className="section-heading"><div><h2>Web search</h2><p>A metasearch container Nebula runs on this host so agents can research the public web.</p></div><button className="icon-button" type="button" aria-label="Refresh Web search status" title="Refresh Web search status" disabled={!api || coreState !== "online" || Boolean(busy)} onClick={() => void load()}><RefreshCw size={16} aria-hidden="true" /></button></div>
     {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The web search runtime operation failed." compact />}
     <div className="panel web-search-panel">
       <header className="panel-header compact web-search-header">

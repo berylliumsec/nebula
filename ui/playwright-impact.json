@@ -130,6 +130,17 @@
       {"area":"butler-saved-data","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-saved-data","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler reads saved Results and manages bookmarks on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
+    "butler-administration": [
+      {"area":"butler-administration","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-administration","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler administers runtime metadata and local profiles on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+
     "butler-inspection": [
       {"area":"butler-inspection","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-inspection","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Butler inspects project history and confirms original downloads on production LAN Core","runtime":"real-core","shard":"1/1"},

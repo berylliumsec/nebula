@@ -226,7 +226,7 @@ describe("settings assistant actions", () => {
         client_action: {kind: "settings_profile_refresh", project_id: "project", resource: "providers"}},
     };
     expect(settingClientAction(event, "project")).toEqual({kind: "settings_profile_refresh", projectId: "project", resource: "providers"});
-    for (const resource of ["runner-profiles", "ssh-environments"] as const) {
+    for (const resource of ["runner-profiles", "ssh-environments", "operator-profiles"] as const) {
       const runtime = {...event, receipt: {...event.receipt, client_action: {
         kind: "settings_profile_refresh", project_id: "project", resource,
       }}};
@@ -237,6 +237,18 @@ describe("settings assistant actions", () => {
     expect(settingClientAction(event, "other")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
+  });
+  it("refreshes only named runtime owners from scoped observed Core state", () => {
+    for (const resource of ["web-search", "setup", "automation-runtime"] as const) {
+      const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "runtime-call",
+        capability: "nebula.capabilities.change", status: "complete", summary: "Core state", evidenceIds: [], artifacts: [], step: 0,
+        receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project", state: "core_settings_saved", read_back: true,
+          client_action: {kind: "runtime_settings_refresh", project_id: "project", resource}}};
+      expect(settingClientAction(event, "project")).toEqual({kind: "runtime_settings_refresh", projectId: "project", resource});
+      expect(settingClientAction(event, "other")).toBeUndefined();
+      expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+      expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
+    }
   });
   it("refreshes project follow-up settings only from scoped Core readback", () => {
     const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "settings-call",

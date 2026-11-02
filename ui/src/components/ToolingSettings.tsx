@@ -77,6 +77,14 @@ export function AutomationRuntimeSettings() {
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent).detail === "automation-runtime") void load();
+    };
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+  }, [load]);
+
   const prepare = async () => {
     if (!api) return;
     setPreparing(true);

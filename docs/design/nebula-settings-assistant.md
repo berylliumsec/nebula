@@ -113,6 +113,27 @@ restore revoked consent. Workbench rereads verified changes; an open Settings
 form retains its draft and offers Reload before replacement. Runtime selection
 alone does not run analysis or validate backend health.
 
+The Settings API also discovers the Web search lifecycle, local attribution
+profiles, public provider directory, fixed host-loopback provider discovery,
+provider and harness health, model verification and account observations.
+Web search actions read current runtime status after the operation; their
+verified receipt refreshes the mounted runtime and project-policy controls.
+Failed stop/remove commands preserve the last saved state and require a fresh
+status read before an explicit retry. The status refresh icon only reads Core.
+Local profile creation and activation read their exact saved identity; edits,
+activation and deletion use observed revisions and Core's one-active-profile and
+attribution dependency guards. Profile changes refresh the local catalog.
+
+Skills, native hook metadata and project instruction status use the selected
+project supplied by Core, including a linked workspace and the existing managed
+skill root. The model supplies no query-string project override. Account refresh
+POSTs return an observed balance/quota or explicit unavailable reason without
+exposing keys or claiming a profile write. Runtime actions retain their original
+API response and add bounded `observed_settings` from the related status route.
+An accepted setup operation remains pending until its observed phase is ready.
+Metadata validation uses inert container, SSH and harness I/O; it does not attest
+to an actual host runtime or vendor account.
+
 The Notebook destination opens the selected project's Workbench Notebook view.
 Project Policy contains execution mode, Host consent acknowledgement, and package
 network access. The MCP server catalog owns the Notebook grant. Butler's

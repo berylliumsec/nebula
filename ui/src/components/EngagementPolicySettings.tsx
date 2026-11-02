@@ -9,6 +9,7 @@ import { InlineValidationNotice } from "./InlineValidationNotice";
 import { useConfirmation } from "./DialogSystem";
 import { TYPESAFE_CHANGED_EVENT } from "./TypeSafeIntegrationSettings";
 import { WEB_SEARCH_CHANGED_EVENT, runtimeHealth } from "./WebSearchRuntimeSettings";
+import {RUNTIME_SETTINGS_CHANGED_EVENT} from "../api/runtimeSettingsEvents";
 
 function lines(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
@@ -217,13 +218,21 @@ export function EngagementPolicySettings() {
   useEffect(() => {
     if (!api || coreState !== "online") return;
     // The panel's own settings must render even when this optional read fails.
-    void (async () => {
+    let active = true;
+    const load = async () => {
       try {
-        setWebSearchRuntime(await api.getWebSearchRuntime());
+        const next = await api.getWebSearchRuntime();
+        if (active) setWebSearchRuntime(next);
       } catch (loadError) {
         void logCaughtDiagnostic("interface.engagement_policy.web_search_status_failed", "The web search runtime status could not be read.", loadError, "engagement_policy");
       }
-    })();
+    };
+    void load();
+    const refresh = (event: Event) => {
+      if ((event as CustomEvent).detail === "web-search") void load();
+    };
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+    return () => { active = false; window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh); };
   }, [api, coreState]);
 
   const pinTool = (name: string, pinned: boolean) => setAlwaysLoadedTools((current) => pinned

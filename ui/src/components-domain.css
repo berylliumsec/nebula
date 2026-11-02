@@ -789,6 +789,14 @@ body:has(.settings-lens-backdrop) > .dialog-backdrop { z-index: 120; }
   .typesafe-actions .button { flex: 1 1 0; min-height: var(--touch-target); }
 }
 /* Local metasearch runtime: same shell as the TypeSafe panel, no key fields. */
+#web-search-runtime-settings > .section-heading > .icon-button {
+  flex: 0 0 var(--touch-target);
+  width: var(--touch-target);
+  min-width: var(--touch-target);
+  height: var(--touch-target);
+  min-height: var(--touch-target);
+}
+
 .web-search-panel { display: grid; gap: 16px; padding: 18px 20px; }
 .web-search-header { align-items: flex-start; gap: 12px; }
 .web-search-header p { max-width: 62ch; }
