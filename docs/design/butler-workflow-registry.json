@@ -1117,6 +1117,8 @@
         "ui/src/pages/SessionsPage.tsx::listHarnessSkills",
         "ui/src/pages/SessionsPage.tsx::listMcpServers",
         "ui/src/pages/SessionsPage.tsx::listSkills",
+        "ui/src/pages/SessionsPage.tsx::applyChatRuntimeSwitch",
+        "ui/src/pages/SessionsPage.tsx::preflightChatRuntimeSwitch",
         "ui/src/components/McpServerChoices.tsx::getEngagementScope",
         "ui/src/components/NebulaControlAssistant.tsx::getChatAssistantConfig",
         "ui/src/components/NebulaControlAssistant.tsx::updateChatAssistantConfig"
@@ -1789,7 +1791,8 @@
         "ui/src/components/NebulaControlAssistant.tsx::streamChat",
         "ui/src/components/NebulaControlAssistant.tsx::cancelChatTurn",
         "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn",
-        "ui/src/pages/SessionsPage.tsx::getControlAssistantSession"
+        "ui/src/pages/SessionsPage.tsx::getControlAssistantSession",
+        "ui/src/pages/SessionsPage.tsx::resumeChatTurn"
       ],
       "core_owner": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
       "butler": {
@@ -3144,6 +3147,425 @@
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler stops a selected project terminal on paired LAN Core",
       "result": "Synthetic running process reports reserved example address through real Core; foreign project and ended-terminal reads are refused",
       "status": "supported"
+    },
+    {
+      "id": "issues.operator_review",
+      "entry_point": "Butler activity: configure publication destinations, browse a credential-bound repository and revise held improvement drafts",
+      "ui_calls": [
+        "ui/src/components/ButlerIssues.tsx::request::\"PATCH\" `${endpoint(projectId)}/candidates/${encodeURIComponent(revising.id)}`",
+        "ui/src/components/ButlerIssues.tsx::request::GET `${endpoint(projectId)}/github-repositories?credential_ref=${encodeURIComponent(ref)}&page=${page}`",
+        "ui/src/components/ButlerIssues.tsx::request::editing ? \"PUT\" : \"POST\" path"
+      ],
+      "core_owner": "ButlerImprovementService issue destinations and candidates; the requesting browser owns credential entry, private repository selection and public-independence attestation",
+      "butler": {
+        "discover": "nebula.data.system kind=issues",
+        "read": "nebula.data.system kind=issues",
+        "change": "nebula.settings.open setting_id=butler-activity"
+      },
+      "authority": "The operator reviews destination trust, private repository visibility and whether a reproduction stands independently before saving; opening Butler activity grants no publication or attestation",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "The requesting browser opens Butler activity. Repository browsing, destination changes and candidate revision remain in the visible operator form, and no issue publication is claimed.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "butler-activity",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Credential-bound repository selection, destination trust and public-independence attestation require operator review in the requesting browser.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "workspace.preserve_evidence",
+      "entry_point": "Files or Code: preserve one exact saved workspace file as immutable Evidence",
+      "ui_calls": [
+        "ui/src/components/CodeEditorPanel.tsx::promoteWorkspaceFile",
+        "ui/src/components/WorkspacePanel.tsx::promoteWorkspaceFile"
+      ],
+      "core_owner": "WorkspaceService and ArtifactStore promotion with selected-project ownership, full-file SHA-256 precondition and Evidence readback",
+      "butler": {
+        "discover": "nebula.workspace.list",
+        "read": "nebula.workspace.read",
+        "change": "nebula.workspace.preserve_evidence"
+      },
+      "authority": "Explicit operator request, selected-project regular file and its current full-file SHA-256; symlinks and changed files are refused",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages a workspace text file on production LAN Core",
+      "result": "Core verifies immutable artifact integrity, reads back the same project/path/hash from saved Evidence and asks the requesting project to refresh Evidence.",
+      "status": "supported"
+    },
+    {
+      "id": "workspace.reset_readiness",
+      "entry_point": "Files: inspect whether the selected managed workspace is eligible for reset",
+      "ui_calls": [
+        "ui/src/components/WorkspacePanel.tsx::workspaceResetStatus"
+      ],
+      "core_owner": "WorkspaceService reset-status route plus active terminal and reviewed-execution counts",
+      "butler": {
+        "discover": "nebula.data.system",
+        "read": "nebula.data.system kind=workspace_reset_status",
+        "change": "nebula.data.system kind=workspace_reset_status"
+      },
+      "authority": "Selected project, fixed read-only Core route; linked host folders remain ineligible and no file is removed",
+      "observed_result_test": "tests/v3/test_butler_administration.py::test_butler_reads_fixed_core_metadata_without_process_or_account_actions",
+      "result": "Core reports current reset eligibility, active owner counts and the blocking reason without changing the workspace.",
+      "status": "supported"
+    },
+    {
+      "id": "workspace.reset_operator_handoff",
+      "entry_point": "Files: permanently reset all contents of a managed project workspace",
+      "ui_calls": [
+        "ui/src/components/WorkspacePanel.tsx::resetWorkspace"
+      ],
+      "core_owner": "WorkspaceService guarded bulk reset and the requesting browser confirmation",
+      "butler": {
+        "discover": "nebula.data.system kind=workspace_reset_status",
+        "read": "nebula.data.system kind=workspace_reset_status",
+        "change": "nebula.navigate.open destination_id=files"
+      },
+      "authority": "The operator must inspect current blockers and type the exact project name in Files; linked host folders can never be reset",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Files. No workspace entry is removed until its destructive confirmation and Core guard complete.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "files",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "A bulk workspace reset is destructive and requires the visible project-name confirmation after a fresh readiness check.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "execution.generated_draft_review",
+      "entry_point": "Activity: generate, edit, accept or reject an execution note draft, or open a discussion chat",
+      "ui_calls": [
+        "ui/src/components/ExecutionInsightDialog.tsx::attachExecutionToChat",
+        "ui/src/components/ExecutionInsightDialog.tsx::editGeneratedDraft",
+        "ui/src/components/ExecutionInsightDialog.tsx::generateExecutionDraft",
+        "ui/src/components/ExecutionInsightDialog.tsx::getGeneratedDraft",
+        "ui/src/components/ExecutionInsightDialog.tsx::transitionGeneratedDraft"
+      ],
+      "core_owner": "ExecutionAIService generated-draft state, provider privacy checks and operator-accepted Observation provenance",
+      "butler": {
+        "discover": "nebula.inspect.executions",
+        "read": "nebula.inspect.execution",
+        "change": "nebula.navigate.open destination_id=activity"
+      },
+      "authority": "The requesting operator selects a permitted runtime, grants any one-request cloud consent, reviews exact generated content and explicitly accepts or rejects it",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Activity. Generation, chat attachment and note transitions remain in the mandatory visible review control; opening alone saves no draft or note.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "activity",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Generated execution notes and context sharing require exact content review and runtime-specific consent in the requesting browser.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "post_tool.generated_review",
+      "entry_point": "Chat follow-up assistant: review generated execution or mission notes and next-step suggestions",
+      "ui_calls": [
+        "ui/src/components/PostToolAssistant.tsx::dismissPostToolSuggestion",
+        "ui/src/components/PostToolAssistant.tsx::generateExecutionDraft",
+        "ui/src/components/PostToolAssistant.tsx::generateMissionDraft",
+        "ui/src/components/PostToolAssistant.tsx::getGeneratedDraft",
+        "ui/src/components/PostToolAssistant.tsx::listPostToolResults"
+      ],
+      "core_owner": "ExecutionAIService post-tool results and the requesting chat's reviewed follow-up controls",
+      "butler": {
+        "discover": "nebula.settings.catalog and nebula.inspect.executions",
+        "read": "nebula.inspect.execution",
+        "change": "nebula.navigate.open destination_id=chat"
+      },
+      "authority": "The operator reviews generated content and any cloud disclosure before creating or dismissing a result; automatic preferences remain separately revision-bound",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Chat and its follow-up control. No draft generation, acceptance or dismissal is claimed from navigation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "chat",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Post-tool result generation and review may disclose project output and therefore stay in the visible requesting-browser control.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "harnesses.test_turn_operator_handoff",
+      "entry_point": "Assistant harness Settings: run one configured test turn",
+      "ui_calls": [
+        "ui/src/components/HarnessSettings.tsx::testHarnessTurn"
+      ],
+      "core_owner": "HarnessRuntimeService and the operator-trusted saved program or endpoint",
+      "butler": {
+        "discover": "nebula.harnesses.list",
+        "read": "nebula.harnesses.harness",
+        "change": "nebula.settings.open setting_id=harnesses"
+      },
+      "authority": "The requesting operator reviews the exact trusted harness and starts the test turn from Settings; opening grants no program execution",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "The requesting browser opens Assistant harnesses. No test turn is started until the operator uses the visible control.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "harnesses",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "A test turn invokes an operator-trusted harness program or account and must start from its visible Settings control.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "chat.goal_skill_review",
+      "entry_point": "Chat goal: replace immutable project skill snapshots",
+      "ui_calls": [
+        "ui/src/components/ProviderGoalPanel.tsx::replaceChatGoalSkills"
+      ],
+      "core_owner": "ChatGoalService safe-boundary revision guard and immutable skill snapshot resolver",
+      "butler": {
+        "discover": "nebula.work.goal and nebula.settings.api_request GET skills",
+        "read": "nebula.work.goal",
+        "change": "nebula.navigate.open destination_id=chat"
+      },
+      "authority": "The operator chooses exact discovered skill versions while goal work is idle and confirms the current goal revision",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Chat. No goal instruction snapshot changes until the operator reviews and saves the selected skills.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "chat",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Replacing a goal's immutable instruction snapshots changes future work and requires visible operator selection at a safe boundary.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "scope.import_operator_review",
+      "entry_point": "Network scope Settings: privately select, extract, review and apply targets from a document",
+      "ui_calls": [
+        "ui/src/components/ScopeImportDialog.tsx::applyScopeImport",
+        "ui/src/components/ScopeImportDialog.tsx::createScopeImport",
+        "ui/src/components/ScopeImportDialog.tsx::discardScopeImport"
+      ],
+      "core_owner": "ScopeImportService, private device file bytes, runtime consent and revision-fenced additive ScopePolicy application",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.help.project_context",
+        "change": "nebula.settings.open setting_id=network-scope"
+      },
+      "authority": "The requesting browser owns the document bytes and cloud consent; the operator reviews each untrusted proposal before a current scope revision can change",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "The requesting browser opens Project policy and network scope. No document is uploaded and no target is authorized by the handoff alone.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "network-scope",
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "Scope-document bytes, runtime disclosure consent and candidate authorization belong to the requesting browser and explicit operator review.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "storage.incident_actions",
+      "entry_point": "Storage or linked Chat: preview, approve, reconcile or retry a source-proposed remote action",
+      "ui_calls": [
+        "ui/src/components/StorageActions.tsx::storageAction",
+        "ui/src/components/StorageActions.tsx::storageDashboard",
+        "ui/src/pages/StoragePage.tsx::retryStorageDispatch",
+        "ui/src/pages/StoragePage.tsx::storageDashboard"
+      ],
+      "core_owner": "StorageIntegrationService untrusted action plans, exact digests, dispatch state and the requesting browser approval",
+      "butler": {
+        "discover": "nebula.storage.sources",
+        "read": "nebula.storage.source",
+        "change": "nebula.navigate.open destination_id=storage"
+      },
+      "authority": "The operator reviews exact effects and digest in Storage before approving remote changes or retrying an outbound dispatch; navigation grants no approval",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Storage. Source proposals remain untrusted and no action, reconciliation or dispatch retry is claimed until the visible control and Core receipt complete.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "storage",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Source-proposed remote effects and dispatch retries require exact visible plan review and operator approval.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "diagnostics.sensitive_remediation",
+      "entry_point": "Diagnostics: reveal or copy sensitive detail and run an incident remediation action",
+      "ui_calls": [
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::diagnosticSensitiveDetail",
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::runDiagnosticAction"
+      ],
+      "core_owner": "DiagnosticManager incident registry, sensitive-detail store and requesting-browser confirmation",
+      "butler": {
+        "discover": "nebula.data.system kind=diagnostic_incidents",
+        "read": "nebula.data.system kind=diagnostic_errors",
+        "change": "nebula.settings.open setting_id=diagnostics"
+      },
+      "authority": "The operator reviews the exact incident, sensitive disclosure and remediation effects in Diagnostics; opening exposes no sensitive detail and runs no action",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "The requesting browser opens Diagnostics. Sensitive detail and remediation stay behind their existing visible confirmation and Core result.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "diagnostics",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Sensitive diagnostic disclosure and remediation effects require operator review in the requesting browser.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "settings.diagnostics",
+      "entry_point": "Diagnostics Settings: change public logging levels and sensitive-detail capture preference",
+      "ui_calls": [
+        "ui/src/diagnostics/DiagnosticsPanel.tsx::updateDiagnosticsSettings"
+      ],
+      "core_owner": "DiagnosticManager settings file and authenticated Settings gateway readback",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET diagnostics/settings",
+        "change": "nebula.settings.api_request PUT diagnostics/settings"
+      },
+      "authority": "Explicit operator request and the complete listed diagnostics settings schema; incident detail retrieval remains a separate browser-owned action",
+      "observed_result_test": "tests/v3/test_settings_assistant_api.py::test_settings_api_saves_and_reads_back_diagnostic_settings",
+      "result": "Core saves the bounded diagnostics settings and a fresh authenticated GET returns the same values.",
+      "status": "supported"
+    },
+    {
+      "id": "mission.discuss_operator_handoff",
+      "entry_point": "Mission detail: create a durable discussion chat with saved mission context",
+      "ui_calls": [
+        "ui/src/pages/AgentsPage.tsx::discussRun"
+      ],
+      "core_owner": "Mission service context projection, ChatService session creation and the requesting browser runtime choice",
+      "butler": {
+        "discover": "nebula.work.overview",
+        "read": "nebula.work.mission",
+        "change": "nebula.navigate.open destination_id=missions"
+      },
+      "authority": "The operator opens an exact mission and chooses to create its discussion chat; navigation alone shares no mission context with a new model",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Missions. A discussion chat is not created until the visible mission control completes and Core returns its saved chat.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "missions",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Creating a new conversation with mission context is a visible operator decision and may select a different runtime.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "chat.external_session_import",
+      "entry_point": "Chat: browse and import an external Assistant harness account session",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::importExternalHarnessSession",
+        "ui/src/pages/SessionsPage.tsx::listExternalHarnessSessions"
+      ],
+      "core_owner": "HarnessRuntimeService external account-session discovery and one-time imported ChatSession lineage",
+      "butler": {
+        "discover": "nebula.harnesses.list",
+        "read": "nebula.harnesses.harness",
+        "change": "nebula.navigate.open destination_id=chat"
+      },
+      "authority": "The operator chooses the configured harness account and exact external history in Chat; private account history is excluded from Butler's generic Settings gateway",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Chat. No external session metadata is listed to Butler and no history is imported by navigation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "chat",
+        "owner": "requesting_browser",
+        "boundary": "device_interaction",
+        "reason": "External account history and import selection are private requesting-browser interactions.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "chat.notebook_pin_operator_handoff",
+      "entry_point": "Chat: pin or clear one selected-project Notebook path for the conversation",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::pinChatNotebook"
+      ],
+      "core_owner": "ChatSession revision and Notebook path validation in the selected project",
+      "butler": {
+        "discover": "nebula.notebook.list",
+        "read": "nebula.work.chat and nebula.notebook.list",
+        "change": "nebula.navigate.open destination_id=chat"
+      },
+      "authority": "The operator chooses the exact listed Notebook and current chat revision in the visible conversation control",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Chat. No Notebook is pinned or cleared by navigation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "chat",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Pinning conversation context changes future prompt context and requires visible selection of an exact project Notebook.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "chat.checkpoint_rewind_operator_handoff",
+      "entry_point": "Chat activity: rewind tracked harness files to an exact idle checkpoint",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::rewindHarnessCheckpoint"
+      ],
+      "core_owner": "HarnessRuntimeService checkpoint restore, idle-session guard and requesting-browser destructive confirmation",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat and nebula.work.timeline",
+        "change": "nebula.navigate.open destination_id=chat"
+      },
+      "authority": "The operator reviews the exact checkpoint and confirms file replacement while the harness session is idle",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Chat. No tracked file is rewound until its destructive confirmation and Core idle guard complete.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "chat",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Checkpoint rewind replaces tracked files and requires exact visible checkpoint review and confirmation.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "mission.delete_operator_handoff",
+      "entry_point": "Missions: permanently delete one saved mission and clear its selected URL state",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::deleteRun"
+      ],
+      "core_owner": "NebulaStore mission dependency deletion and the requesting browser selection cleanup",
+      "butler": {
+        "discover": "nebula.work.overview",
+        "read": "nebula.work.mission",
+        "change": "nebula.navigate.open destination_id=missions"
+      },
+      "authority": "The operator chooses and confirms the exact saved mission in Missions; active work must be settled separately",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode assistant navigates every app destination on production LAN Core",
+      "result": "The requesting browser opens Missions. No mission or dependent record is deleted by navigation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.navigate.open",
+        "target_id": "missions",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Permanent mission deletion and selected-URL cleanup require the visible destructive operator control.",
+        "observed_result": "opened"
+      }
     }
   ],
   "ui_api_calls": [

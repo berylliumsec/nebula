@@ -153,14 +153,27 @@ describe("settings page section routing", () => {
     expect(screen.getByLabelText("Router hash")).toHaveTextContent("#automation-settings");
   });
 
-  it("focuses its own deep-link target when another settings page is mounted behind it", async () => {
-    render(<MemoryRouter initialEntries={["/settings"]}><DialogProvider>
-      <SettingsPage />
-      <div role="dialog" aria-label="Setting lens"><SettingsPage embeddedTarget="operator-settings" /></div>
-    </DialogProvider></MemoryRouter>);
+  it("focuses its own deep-link target after the containing lens takes focus", () => {
+    const frames: FrameRequestCallback[] = [];
+    const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    try {
+      render(<MemoryRouter initialEntries={["/settings"]}><DialogProvider>
+        <SettingsPage />
+        <div role="dialog" aria-label="Setting lens" tabIndex={-1}><SettingsPage embeddedTarget="operator-settings" /></div>
+      </DialogProvider></MemoryRouter>);
 
-    const lens = screen.getByRole("dialog", { name: "Setting lens" });
-    await waitFor(() => expect(within(lens).getByRole("heading", { name: "Operator profiles" })).toHaveFocus());
+      const lens = screen.getByRole("dialog", { name: "Setting lens" });
+      lens.focus();
+      act(() => { for (const callback of [...frames]) callback(0); });
+      expect(within(lens).getByRole("heading", { name: "Operator profiles" })).toHaveFocus();
+    } finally {
+      request.mockRestore();
+      cancel.mockRestore();
+    }
   });
 });
 

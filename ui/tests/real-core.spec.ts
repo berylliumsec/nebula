@@ -9484,6 +9484,7 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
     create: "Create a workspace text file named research.txt.",
     edit: "Replace research.txt with the revised text.",
     rename: "Rename research.txt to final.txt.",
+    preserve: "Preserve final.txt as immutable project Evidence.",
     download: "Download final.txt to this browser.",
     delete: "Delete final.txt from the workspace.",
     createFolder: "Create a workspace folder named captures.",
@@ -9514,6 +9515,11 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
     if (instruction === prompts.rename) return [
       read("nebula.workspace.read", {path: "research.txt"}), describe("nebula.workspace.rename_file"),
       change("nebula.workspace.rename_file", {path: "research.txt", new_name: "final.txt", expected_sha256: revisedHash}),
+    ][replies];
+    if (instruction === prompts.preserve) return [
+      read("nebula.workspace.read", {path: "final.txt"}), describe("nebula.workspace.preserve_evidence"),
+      change("nebula.workspace.preserve_evidence", {path: "final.txt", expected_sha256: revisedHash,
+        title: "Final workspace result", description: "Exact bytes preserved through Butler."}),
     ][replies];
     if (instruction === prompts.download) return [
       describe("nebula.workspace.download_file"), change("nebula.workspace.download_file", {path: "final.txt"}),
@@ -9589,6 +9595,17 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
     await send(prompts.rename);
     expect((await api.get(`engagements/${projectId}/workspace/download?path=research.txt`)).status()).toBe(404);
     expect(await saved("final.txt")).toBe(revised);
+    await send(prompts.preserve);
+    await expect(assistant.getByText("Core confirmed the record change and refreshed evidence.", {exact: true})).toBeVisible();
+    const evidenceRecords = await (await api.get("evidence", {params: {engagement_id: projectId}})).json() as Array<{
+      id: string; artifact_id: string; title: string; sha256: string; metadata: {workspace_path?: string};
+    }>;
+    expect(evidenceRecords).toHaveLength(1);
+    const workspaceEvidence = evidenceRecords[0];
+    expect(workspaceEvidence).toMatchObject({
+      title: "Final workspace result", sha256: revisedHash, metadata: {workspace_path: "final.txt"},
+    });
+    expect(await (await api.get(`artifacts/${workspaceEvidence.artifact_id}/content`)).body()).toEqual(Buffer.from(revised));
     const downloading = page.waitForEvent("download");
     await send(prompts.download);
     const download = await downloading;
@@ -9667,7 +9684,8 @@ test("assistant upgrade Butler manages a workspace text file on production LAN C
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await testInfo.attach("butler-workspace-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
       viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], projectId,
-      result: "Butler created, replaced and renamed Core text; downloaded verified bytes; browser selected binary bytes, Core confirmed SHA-256; folder create, rename and confirmed empty delete read back; cancellations preserved state; refresh cleared deleted entries"}), contentType: "application/json"});
+      evidenceId: workspaceEvidence.id, evidenceSha256: workspaceEvidence.sha256,
+      result: "Butler created, replaced and renamed Core text; exact workspace bytes became immutable Evidence and refreshed the browser list; downloaded verified bytes; browser selected binary bytes, Core confirmed SHA-256; folder create, rename and confirmed empty delete read back; cancellations preserved state; refresh cleared deleted entries"}), contentType: "application/json"});
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(stub)},

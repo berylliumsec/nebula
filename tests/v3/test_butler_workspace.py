@@ -11,7 +11,7 @@ import pytest
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_capabilities import ButlerCapabilities
-from nebula.v3.domain import ButlerRecoveryCase, Engagement
+from nebula.v3.domain import ButlerRecoveryCase, Engagement, Evidence
 from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
 
@@ -37,7 +37,7 @@ def _fixture(tmp_path):
 
 
 def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path):
-    _store, _artifacts, _workspace, runtime, selected, foreign, capabilities = _fixture(
+    store, _artifacts, _workspace, runtime, selected, foreign, capabilities = _fixture(
         tmp_path
     )
     root = runtime.workspace_for(selected.id)
@@ -59,6 +59,13 @@ def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path
         assert any(
             item["operation"] == "nebula.workspace.delete_file"
             for item in found["matches"]
+        )
+        preservation = await capabilities.search(
+            {"query": "workspace preserve exact file Evidence"}
+        )
+        assert any(
+            item["operation"] == "nebula.workspace.preserve_evidence"
+            for item in preservation["matches"]
         )
         assert (await capabilities.describe({"operation": "nebula.workspace.read"}))[
             "invoke_with"
@@ -141,6 +148,39 @@ def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path
         )
         assert renamed["path"] == "notes/renamed.txt"
         assert (root / "notes/renamed.txt").read_text() == "Current notes\n"
+        with pytest.raises(ValueError, match="changed"):
+            await invoke(
+                "preserve_evidence",
+                {
+                    "path": "notes/renamed.txt",
+                    "expected_sha256": first["sha256"],
+                    "title": "Stale result",
+                },
+                change=True,
+            )
+        assert store.count(Evidence, engagement_id=selected.id) == 0
+        preserved = await invoke(
+            "preserve_evidence",
+            {
+                "path": "notes/renamed.txt",
+                "expected_sha256": renamed["sha256"],
+                "title": "Reviewed result",
+                "description": "Exact saved workspace bytes.",
+            },
+            change=True,
+        )
+        assert preserved["state"] == "core_records_saved"
+        assert preserved["read_back"] is True
+        assert preserved["evidence"]["sha256"] == renamed["sha256"]
+        assert preserved["client_action"] == {
+            "kind": "records_refresh",
+            "project_id": selected.id,
+            "resource": "evidence",
+        }
+        saved_evidence = store.get(Evidence, preserved["evidence"]["id"])
+        assert saved_evidence.title == "Reviewed result"
+        assert saved_evidence.metadata["workspace_path"] == "notes/renamed.txt"
+        assert store.count(Evidence, engagement_id=selected.id) == 1
         with pytest.raises(ValueError, match="changed"):
             await invoke(
                 "delete_file",

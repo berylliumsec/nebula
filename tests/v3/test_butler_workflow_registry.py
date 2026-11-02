@@ -29,7 +29,7 @@ def _check(registry: Path = REGISTRY) -> subprocess.CompletedProcess[str]:
 def test_reviewed_workflow_registry_matches_ui_api_calls() -> None:
     result = _check()
     assert result.returncode == 0, result.stderr
-    assert "unreviewed signatures" in result.stdout
+    assert "0 unreviewed signatures" in result.stdout
 
 
 def test_registry_rejects_new_ui_api_call_without_review(tmp_path: Path) -> None:

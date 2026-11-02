@@ -1428,10 +1428,15 @@ describe("NebulaControlAssistant", () => {
     const retryResource = vi.fn().mockResolvedValue(undefined);
     let calls = 0;
     const streamChat = vi.fn().mockImplementation(async (_body: unknown, onEvent: (event: ChatStreamEvent) => void) => {
-      const resource = ++calls === 1 ? "assets" : "findings";
+      const records = [
+        {resource: "assets", operation: "nebula.assets.create"},
+        {resource: "findings", operation: "nebula.findings.update"},
+        {resource: "evidence", operation: "nebula.workspace.preserve_evidence"},
+      ] as const;
+      const {resource, operation} = records[calls++] ?? records[2];
       onEvent({type: "tool_completed", turnId: "turn", toolCallId: `record-${calls}`, capability: "nebula.capabilities.change",
         status: "complete", summary: "Core saved the record", evidenceIds: [], artifacts: [], step: 0,
-        receipt: {butler_operation: `nebula.${resource}.${resource === "assets" ? "create" : "update"}`, butler_project_id: "project",
+        receipt: {butler_operation: operation, butler_project_id: "project",
           state: "core_records_saved", read_back: true, client_action: {kind: "records_refresh", project_id: "project", resource}}});
       return {sessionId: "control", backend: "harness", harnessProfileId: "local", model: "model", message: {role: "assistant", content: `Stored fixture result ${calls}.`}};
     });
@@ -1453,6 +1458,10 @@ describe("NebulaControlAssistant", () => {
     await user.type(composer, "Revise the synthetic candidate record{enter}");
     await waitFor(() => expect(retryResource).toHaveBeenCalledWith("findings"));
     expect(await screen.findByText("Core confirmed the record change. The findings list could not refresh; use Retry.")).toBeVisible();
+    await waitFor(() => expect(composer).toBeEnabled());
+    await user.type(composer, "Preserve the exact workspace result as Evidence{enter}");
+    await waitFor(() => expect(retryResource).toHaveBeenCalledWith("evidence"));
+    expect(await screen.findByText("Core confirmed the record change and refreshed evidence.")).toBeVisible();
   });
 
   it("lets the requesting browser upload binary workspace bytes after a scoped Butler handoff", async () => {

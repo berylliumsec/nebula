@@ -13,7 +13,7 @@ export type SettingClientAction =
   | { kind: "result_delete"; projectId: string; resultId: string; expectedRevision: number; title: string }
   | { kind: "bookmarks_refresh"; projectId: string; sessionId: string }
   | { kind: "guides_refresh"; projectId: string }
-  | { kind: "records_refresh"; projectId: string; resource: "assets" | "findings" }
+  | { kind: "records_refresh"; projectId: string; resource: "assets" | "findings" | "evidence" }
   | { kind: "note_create"; projectId: string; noteId: string; title: string; body: string; assetIds: string[]; evidenceIds: string[] }
   | ({ kind: "note_update"; projectId: string; noteId: string; name: string; expectedRevision: number } & NoteChanges)
   | { kind: "note_delete"; projectId: string; noteId: string; name: string; expectedRevision: number }
@@ -172,7 +172,8 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && receipt.read_back === true && value.kind === "records_refresh"
         && ((resource === "assets" && operation === "nebula.assets.create")
-          || (resource === "findings" && ["nebula.findings.create", "nebula.findings.update"].includes(operation)))) {
+          || (resource === "findings" && ["nebula.findings.create", "nebula.findings.update"].includes(operation))
+          || (resource === "evidence" && operation === "nebula.workspace.preserve_evidence"))) {
       return {kind: "records_refresh", projectId, resource};
     }
     return undefined;
@@ -564,9 +565,13 @@ const NAVIGATION_WORDS = new Set([
 
 export function isSettingNavigationRequest(prompt: string): boolean {
   const text = normalized(prompt);
+  const asksForRetryLocation = /\b(?:retry|retries)\b/.test(text)
+    && /\b(?:where|which setting|setting for|controls for|page for)\b/.test(text);
   // A question about a failure needs an explanation grounded in Core state,
-  // even when it also contains a word such as "where" or "find".
-  if (/\b(?:why|how|cannot|cant|doesnt|failed|failure|error|troubleshoot|unable|permission|not working)\b/.test(text)) return false;
+  // even when it also contains a word such as "where" or "find". An explicit
+  // request for the retry location names a browser control rather than a cause.
+  if (!asksForRetryLocation
+      && /\b(?:why|how|cannot|cant|doesnt|failed|failure|error|troubleshoot|unable|permission|not working)\b/.test(text)) return false;
   // An action on another resource may mention Butler incidentally. Let the
   // model handle it unless the operator explicitly asked for settings.
   if (!/\b(?:setting|settings|controls)\b/.test(text)

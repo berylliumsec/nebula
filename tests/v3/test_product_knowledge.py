@@ -624,6 +624,30 @@ def test_product_search_finds_butler_workspace_file_guidance(monkeypatch):
     assert "file picker" in text
 
 
+def test_product_search_finds_workspace_preservation_and_reset_boundary(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Can Butler preserve an exact workspace file as Evidence and reset the workspace?"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.workspace.preserve_evidence" in text
+    assert "workspace_reset_status" in text
+    assert "types the exact project name" in text
+
+
+def test_product_search_finds_operator_owned_workflow_reviews(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler scope document import storage plan dispatch retry sensitive diagnostic remediation checkpoint rewind"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "private scope-document import" in text
+    assert "source-plan approval" in text
+    assert "sensitive detail and remediation" in text
+    assert "destructive checkpoint rewind" in text
+    assert "does not report" in text
+
+
 def test_product_search_finds_butler_device_upload_and_folder_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

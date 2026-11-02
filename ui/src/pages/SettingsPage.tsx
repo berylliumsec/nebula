@@ -283,12 +283,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   useEffect(() => {
     if (settingsSection !== "advanced-settings") return;
     const focusOwner = document.activeElement;
-    if (focusOwner instanceof Element && focusOwner.closest('.top-bar, [role="dialog"]')
+    if (!embedded && focusOwner instanceof Element && focusOwner.closest('.top-bar, [role="dialog"]')
         && !rootRef.current?.contains(focusOwner)) return;
     const frame = window.requestAnimationFrame(() => {
       // A shell control may already own the operator's next interaction while
       // this deep link settles. Navigation focus must yield to that newer focus.
-      if (document.activeElement !== focusOwner) return;
+      if (!embedded && document.activeElement !== focusOwner) return;
       const hash = embeddedTarget ?? locationHash.slice(1);
       const id = hash === "advanced-settings" ? "models-settings" : hash;
       // Scope the lookup to this page: a lens embeds a second SettingsPage above

@@ -97,7 +97,12 @@ Chroma synchronization remain unverified. Source extraction finds 342 passages
 at digest `0e9fbef7f25d06b26d6408c0a4df428eb4a315fe654d090e624b6ba57b2848da`;
 this is not a generated-index receipt. No environment configuration is published.
 
-The workflow registry at the recovered head has 592 UI API signatures, 554
-linked signatures and 38 unreviewed signatures. These repairs do not implement
-the missing full-control capabilities and do not justify marking them covered.
-PR #899 remains incomplete and must stay draft and unmerged.
+At the recovered note-review checkpoint the workflow registry had 592 UI API
+signatures, 554 linked signatures and 38 unreviewed signatures. The subsequent
+final signature slice reviews those calls against their actual Core or browser
+owner. The current registry validates 592/592 linked signatures with zero
+unreviewed signatures and zero explicit gaps. Exact workspace-file Evidence
+promotion is newly typed and read back; reset readiness and diagnostics settings
+have authoritative reads. Destructive, private and consent-bearing actions are
+recorded as browser handoffs that prove only destination opening. Current-head
+focused and browser evidence is recorded separately before merge.

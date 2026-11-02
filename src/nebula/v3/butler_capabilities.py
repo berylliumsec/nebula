@@ -177,7 +177,7 @@ _CATEGORIES = (
     },
     {
         "id": "workspace",
-        "description": "Selected-project file listing, bounded text reads, hash-checked changes, and requesting-device downloads",
+        "description": "Selected-project file listing, bounded text reads, hash-checked changes, exact Evidence preservation, and requesting-device downloads",
     },
     {
         "id": "library",
@@ -225,7 +225,7 @@ _CATEGORIES = (
     },
     {
         "id": "diagnostics",
-        "description": "Confirmed sensitive diagnostics ZIP export on the requesting browser",
+        "description": "Public diagnostics settings and confirmed sensitive review or ZIP export on the requesting browser",
     },
     {"id": "help", "description": "Source-linked Nebula help and live project context"},
     {

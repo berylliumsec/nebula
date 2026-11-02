@@ -12,6 +12,7 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.automation_runtime import AutomationRuntimeManager
 from nebula.v3.butler_capabilities import ButlerCapabilities
+from nebula.v3.diagnostics import DiagnosticManager, SETTINGS_SCHEMA
 from nebula.v3.domain import (
     BrowserSessionStatus,
     AutomationProjectPolicy,
@@ -192,6 +193,52 @@ def test_settings_api_discovers_and_reads_back_nebula_wide_butler_file(tmp_path)
         assert saved["result"]["content"] == "Check Act projects."
 
     asyncio.run(journey())
+
+
+def test_settings_api_saves_and_reads_back_diagnostic_settings(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Selected"))
+    manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
+    gateway = SettingsAssistantApi(
+        create_app(
+            store,
+            auth_token="test-token",
+            diagnostic_manager=manager,
+        ),
+        "test-token",
+    )
+    try:
+        schema = gateway.schema(path="diagnostics/settings", method="PUT")
+        assert schema["path"] == "/api/v1/diagnostics/settings"
+        assert schema["request_body"]
+
+        async def journey():
+            current = await gateway.request(
+                project.id, method="GET", path="diagnostics/settings"
+            )
+            assert current["result"]["schema"] == SETTINGS_SCHEMA
+            saved = await gateway.request(
+                project.id,
+                method="PUT",
+                path="diagnostics/settings",
+                body={
+                    "schema": SETTINGS_SCHEMA,
+                    "global_level": "debug",
+                    "feature_levels": {"storage": "debug"},
+                    "sensitive_detail_capture": False,
+                },
+            )
+            assert saved["read_back"] is True
+            assert saved["result"]["global_level"] == "debug"
+            assert saved["result"]["feature_levels"] == {"storage": "debug"}
+            observed = await gateway.request(
+                project.id, method="GET", path="diagnostics/settings"
+            )
+            assert observed["result"] == saved["result"]
+
+        asyncio.run(journey())
+    finally:
+        manager.close()
 
 
 def test_butler_discovers_and_revision_saves_its_check_interval(tmp_path):

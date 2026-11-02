@@ -11,6 +11,7 @@ from .domain import RiskClass
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 from .workspace import (
     WorkspaceCreateDirectoryRequest,
+    WorkspacePromotionRequest,
     WorkspaceRenameRequest,
     WorkspaceService,
 )
@@ -98,6 +99,16 @@ _SCHEMAS = {
         "path",
         "expected_entry_identity",
     ),
+    "nebula.workspace.preserve_evidence": _schema(
+        {
+            "path": _PATH,
+            "expected_sha256": _SHA256,
+            "title": {"type": "string", "maxLength": 500},
+            "description": {"type": "string", "maxLength": 20_000},
+        },
+        "path",
+        "expected_sha256",
+    ),
 }
 
 _DESCRIPTIONS = {
@@ -112,6 +123,7 @@ _DESCRIPTIONS = {
     "create_directory": "Create a selected-project directory after listing its parent and supplying that parent identity. Core refuses a stale parent or an existing path and reads the new directory back.",
     "rename_directory": "Rename a selected-project directory within its parent using its current identity from workspace.list. Core refuses stale or replaced directories and reads the new path back.",
     "delete_directory": "Ask the requesting browser to confirm empty-directory deletion. Core checks the selected directory identity and reads back its absence.",
+    "preserve_evidence": "Preserve one exact selected-project workspace file as immutable Evidence after reading its full SHA-256. Core verifies the promoted artifact and returns the saved Evidence identity; a changed file is refused.",
 }
 
 _READS = frozenset({"list", "read", "download_file"})
@@ -209,6 +221,47 @@ class ButlerWorkspace:
             return await self._write(
                 path, arguments["content"], arguments.get("expected_sha256")
             )
+        if name == "preserve_evidence":
+            observed = await asyncio.to_thread(self._file_digest, path)
+            if not hmac.compare_digest(
+                observed["sha256"], arguments["expected_sha256"]
+            ):
+                raise ValueError(
+                    "file changed; read its current hash before preserving Evidence"
+                )
+            evidence = await asyncio.to_thread(
+                self.workspace.promote,
+                self.project_id,
+                WorkspacePromotionRequest(
+                    path=path,
+                    title=arguments.get("title"),
+                    description=arguments.get("description", ""),
+                ),
+            )
+            if (
+                evidence.engagement_id != self.project_id
+                or evidence.sha256 != observed["sha256"]
+                or evidence.metadata.get("workspace_path") != path
+            ):
+                raise ValueError(
+                    "workspace Evidence was created but its read-back did not match; inspect Evidence before retrying"
+                )
+            return {
+                "state": "core_records_saved",
+                "read_back": True,
+                "evidence": {
+                    "id": evidence.id,
+                    "revision": evidence.revision,
+                    "title": evidence.title,
+                    "sha256": evidence.sha256,
+                    "workspace_path": path,
+                },
+                "client_action": {
+                    "kind": "records_refresh",
+                    "project_id": self.project_id,
+                    "resource": "evidence",
+                },
+            }
         if name == "rename_file":
             result = await asyncio.to_thread(
                 self.workspace.rename,

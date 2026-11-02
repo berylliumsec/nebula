@@ -66,6 +66,7 @@ async def invoke(capabilities, name, arguments=None, *, change=False):
         "diagnostic_errors",
         "diagnostic_incidents",
         "issues",
+        "workspace_reset_status",
     ],
 )
 def test_butler_reads_fixed_core_metadata_without_process_or_account_actions(

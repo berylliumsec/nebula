@@ -720,3 +720,29 @@ inspection head 925b45f3 passed all 246 selected CI checks with four skips,
 including its eight canonical LAN/device entries. The inventory now links
 482/592 signatures through 113 reviewed entries (83 supported, 17 operator
 handoffs, 13 UI protocols); 110 signatures still require review or implementation.
+
+## Branch slice: final workflow-signature review
+
+The remaining 38 production UI API signatures now resolve to their real owners.
+Exact workspace-file promotion is a typed `nebula.workspace.preserve_evidence`
+operation with a full-file SHA-256 precondition, immutable artifact verification,
+saved Evidence readback and requesting-project refresh. Workspace reset readiness
+is a closed `nebula.data.system` observation. Diagnostics settings reuse the
+schema-discovered authenticated Settings gateway and fresh Core readback. Compatible
+chat runtime switches reuse the existing revision-bound next-turn settings action,
+and provider final-answer resume is classified as browser-owned conversation
+transport rather than a model grant.
+
+Destructive, private or consent-bearing controls open their existing catalogued
+browser destination: workspace reset, generated-draft review, post-tool review,
+harness test turns, goal skill replacement, scope-document import, storage plan
+approval/reconciliation/dispatch retry, sensitive diagnostics and remediation,
+mission discussion/deletion, external harness-session import, Notebook pinning and
+checkpoint rewind. These rows prove only that the destination opened. They do not
+claim the downstream action ran or saved.
+
+The registry now contains 158 reviewed actions and links all 592/592 production
+UI API signatures: 110 supported workflows, 35 requesting-browser handoffs and
+13 supporting UI protocols, with zero unreviewed signatures and zero explicit
+gaps. The source guard still treats any future call-site change as a new review
+event; a registry row does not grant a Core capability by itself.

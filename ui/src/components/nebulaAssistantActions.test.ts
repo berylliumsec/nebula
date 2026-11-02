@@ -222,6 +222,12 @@ describe("settings assistant actions", () => {
         client_action: {kind: "records_refresh", project_id: "project", resource: "findings"}}};
       expect(settingClientAction(finding, "project")).toEqual({kind: "records_refresh", projectId: "project", resource: "findings"});
     }
+    const evidence = {...event, receipt: {...event.receipt, butler_operation: "nebula.workspace.preserve_evidence",
+      client_action: {kind: "records_refresh", project_id: "project", resource: "evidence"}}};
+    expect(settingClientAction(evidence, "project"))
+      .toEqual({kind: "records_refresh", projectId: "project", resource: "evidence"});
+    expect(settingClientAction({...evidence, receipt: {...evidence.receipt,
+      butler_operation: "nebula.workspace.create_text"}}, "project")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.findings.update"}}, "project")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_mission"}}, "project")).toBeUndefined();
   });
@@ -691,10 +697,14 @@ describe("settings assistant actions", () => {
       ["where do I upload an OpenVPN tunnel profile?", "settings.vpn-egress"],
       ["where is the Podman runner config?", "settings.runners"],
       ["where is project scope for CIDR ports?", "settings.network-scope"],
+      ["where do I review targets from a scope document import?", "settings.network-scope"],
       ["where can I set operator identity?", "settings.operators"],
       ["where can I pair my phone?", "settings.devices"],
       ["where are release channel updates?", "settings.release"],
       ["where do I inspect logs?", "settings.diagnostics"],
+      ["where do I review sensitive diagnostic remediation?", "settings.diagnostics"],
+      ["where can I retry a failed storage dispatch?", "settings.storage"],
+      ["where can I review a held improvement issue draft?", "settings.butler-activity"],
       ["where can I check Core readiness?", "settings.setup"],
     ];
     for (const [prompt, expected] of cases) expect(settingToOpen(prompt)?.id, prompt).toBe(expected);

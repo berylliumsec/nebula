@@ -45,11 +45,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-activity",
     label: "Butler scheduled activity",
-    description: "Read Butler's saved scheduled-check conversations and linked recovery reports in Oversight",
+    description: "Read Butler's saved checks and recovery reports, and review improvement-issue destinations and held drafts in Oversight",
     category: "Automation",
     scope: "Project",
     target: "butler-oversight",
-    keywords: ["butler", "scheduled", "checks", "transcript", "history", "blocked goal", "check-in", "agent reply", "conversation", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings"],
+    keywords: ["butler", "scheduled", "checks", "transcript", "history", "blocked goal", "check-in", "agent reply", "conversation", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings", "improvement issues", "held draft", "issue destination", "repository review"],
   },
   {
     id: "settings.butler-voice",
@@ -108,11 +108,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.storage",
     label: "Storage sources",
-    description: "Enroll storage sources, rotate or revoke webhook tokens, and edit reporting intervals and optional callbacks",
+    description: "Manage storage sources and review source-proposed plans, reconciliation, and failed dispatch retries",
     category: "Integrations",
     scope: "Workspace",
     target: "storage-integration-settings",
-    keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "reporting interval", "callback settings", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage"],
+    keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "reporting interval", "callback settings", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage", "source action", "preview effects", "approve plan", "reconcile action", "retry dispatch"],
   },
   {
     id: "settings.typesafe",
@@ -139,7 +139,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "plan only", "safe handoff", "provider goal", "main agent switch"],
+    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "plan only", "safe handoff", "provider goal", "main agent switch", "test turn", "external session", "import session history"],
   },
   {
     id: "settings.mcp",
@@ -189,11 +189,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.network-scope",
     label: "Project policy and network scope",
-    description: "Control targets, ports, URLs, approvals, privacy, and execution limits",
+    description: "Control targets, ports, URLs, approvals and limits, or review targets extracted from a private scope document",
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
-    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools", "notebook", "notebook host consent", "notebook package downloads", "notebook package installation", "restart notebook kernel", "notebook file index", "connect notebook index", "remove notebook index"],
+    keywords: ["project scope", "host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools", "notebook", "notebook host consent", "notebook package downloads", "notebook package installation", "restart notebook kernel", "notebook file index", "connect notebook index", "remove notebook index", "scope import", "scope document", "review targets", "discard import"],
   },
   {
     id: "settings.operators",
@@ -225,11 +225,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.diagnostics",
     label: "Diagnostics and logging",
-    description: "Configure logs and inspect recoverable interface failures",
+    description: "Configure logs, inspect failures, and review sensitive detail or remediation actions in the browser",
     category: "Diagnostics",
     scope: "Device",
     target: "diagnostics-settings",
-    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry", "public incidents", "Core health"],
+    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry", "public incidents", "Core health", "sensitive detail", "reveal detail", "copy detail", "remediation", "recovery action", "log level"],
   },
   {
     id: "settings.setup",
