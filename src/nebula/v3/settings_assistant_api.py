@@ -51,7 +51,7 @@ _PROFILE_MODELS: dict[str, type[BaseModel]] = {
 }
 _PROFILE_PRIVATE_FIELDS = {
     "providers": ("secret_ref", "openrouter_management_secret_ref"),
-    "harnesses": ("auth_mode", "secret_ref"),
+    "harnesses": ("auth_mode", "secret_ref", "permission_mode"),
     "mcp-servers": (
         "auth_mode",
         "bearer_secret_ref",
@@ -264,6 +264,35 @@ async def _check_profile_mutation(
             f"belong in the requesting browser; use nebula.settings.open setting_id={destination}. "
             "Preserve their current values for a nonsecret profile edit."
         )
+    if (
+        family == "harnesses"
+        and (
+            candidate.get("connection_mode") == "spawn"
+            or (current is not None and current.get("connection_mode") == "spawn")
+        )
+        and (
+            current is None
+            or any(
+                candidate.get(field) != current.get(field)
+                for field in (
+                    "kind",
+                    "connection_mode",
+                    "transport",
+                    "executable",
+                    "home_directory",
+                    "endpoint",
+                )
+            )
+        )
+    ):
+        raise GuidedToolError(
+            "harness program trust belongs in the requesting browser",
+            code="harness_trust_required",
+            category="policy_denied",
+            problem="A spawned Assistant harness or its launch configuration needs operator review.",
+            next_action="Use nebula.settings.open setting_id=harnesses. Preserve the existing program, account home and connection configuration for metadata edits. Endpoint profiles remain subject to Core validation and existing credential controls.",
+            before_execution=True,
+        )
 
 
 def _require_mcp_scope(
@@ -338,6 +367,59 @@ async def _check_host_policy(
             problem="Host access needs the operator's one-time browser acknowledgment.",
             next_action="Use nebula.settings.open setting_id=network-scope. The operator must acknowledge Host access in the requesting browser; then read the policy again before another edit.",
             field="body.host_access_acknowledged",
+            before_execution=True,
+        )
+
+
+async def _check_post_tool_consent(
+    client: httpx.AsyncClient,
+    headers: dict[str, str],
+    method: str,
+    path: str,
+    body: dict[str, Any] | list[Any] | None,
+) -> None:
+    if method != "PUT" or not re.fullmatch(
+        r"/api/v1/engagements/[^/]+/post-tool-assistant", path
+    ):
+        return
+    if not isinstance(body, dict) or type(body.get("expected_revision")) is not int:
+        raise ValueError(
+            "read the post-tool settings and supply body.expected_revision"
+        )
+    from .execution_ai import PostToolAssistantRequest
+
+    try:
+        candidate = PostToolAssistantRequest.model_validate(body)
+    except ValidationError as exc:
+        # diagnostic-expected: do not echo configuration values in model errors.
+        raise ValueError("invalid post-tool settings; read the current schema") from exc
+    response = await client.get(path, headers=headers)
+    if not response.is_success:
+        raise ValueError("read the current post-tool settings before changing them")
+    current = response.json()
+    if candidate.expected_revision != current["revision"]:
+        raise ValueError(
+            "post-tool settings revision conflict (409): read current settings before retrying"
+        )
+    identity = (
+        candidate.harness_profile_id
+        if candidate.backend_kind == "harness"
+        else candidate.provider_id
+    )
+    previous_identity = current.get(
+        "harness_profile_id" if current["backend_kind"] == "harness" else "provider_id"
+    )
+    if candidate.cloud_confirmed and (
+        not current["cloud_confirmed"]
+        or candidate.backend_kind != current["backend_kind"]
+        or identity != previous_identity
+    ):
+        raise GuidedToolError(
+            "post-tool cloud consent belongs in the requesting browser",
+            code="post_tool_consent_required",
+            category="policy_denied",
+            problem="Project data use needs the operator's consent for this follow-up backend.",
+            next_action="Use nebula.settings.open setting_id=follow-up. Preserve existing consent only for the same backend, or revoke it; changing the backend requires fresh browser consent.",
             before_execution=True,
         )
 
@@ -502,6 +584,7 @@ async def _settings_request(
                 raise ValueError("probe MCP servers only in the selected project")
             body = {**body, "engagement_id": project_id}
     await _check_host_policy(client, headers, method, path, body, expected_revision)
+    await _check_post_tool_consent(client, headers, method, path, body)
     await _check_profile_mutation(
         client, headers, method, path, body, expected_revision, project_id
     )
@@ -800,6 +883,15 @@ async def execute_settings_api(
                     "kind": "butler_interval_refresh",
                     "project_id": project_id,
                 },
+            )
+        if (
+            selected == "PUT"
+            and observed is not None
+            and candidate.endswith("/post-tool-assistant")
+        ):
+            outcome.update(
+                state="core_settings_saved",
+                client_action={"kind": "post_tool_refresh", "project_id": project_id},
             )
         return outcome
 

@@ -232,6 +232,9 @@ def test_post_tool_change_reads_back_from_core(tmp_path):
         "project_id": project.id,
         "project_name": "Bounded project",
         "saved": True,
+        "state": "core_settings_saved",
+        "read_back": True,
+        "client_action": {"kind": "post_tool_refresh", "project_id": project.id},
     }
     with pytest.raises(Exception):
         set_post_tool_preference(

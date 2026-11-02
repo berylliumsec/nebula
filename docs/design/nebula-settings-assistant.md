@@ -97,6 +97,22 @@ absence; an existing revision cannot recreate deleted settings. Core readback
 refreshes the relevant catalog while open forms retain their original revisions
 and unsaved values. Saving metadata does not establish runtime or SSH health.
 
+Spawned Assistant harness creation and changes to its program, account home,
+kind or connection configuration require `setting_id=harnesses`, even while the
+profile is disabled. Health and quota reads can start that saved host program.
+Butler can preserve an existing program while renaming the profile; constrained
+Codex endpoint profiles can still use nonsecret Settings CRUD. Unrestricted
+permission mode remains operator-owned.
+
+Follow-up preferences use `body.expected_revision` from the current project
+settings. Butler may preserve an existing cloud confirmation for the same backend
+identity or revoke it. First consent, or consent after changing backend identity,
+requires `setting_id=follow-up` in the requesting browser. Core atomically checks
+the project revision, including direct preference changes, so a stale write cannot
+restore revoked consent. Workbench rereads verified changes; an open Settings
+form retains its draft and offers Reload before replacement. Runtime selection
+alone does not run analysis or validate backend health.
+
 The Notebook destination opens the selected project's Workbench Notebook view.
 Project Policy contains execution mode, Host consent acknowledgement, and package
 network access. The MCP server catalog owns the Notebook grant. Butler's

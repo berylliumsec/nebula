@@ -568,7 +568,9 @@ def set_post_tool_preference(
     service = ExecutionAIService(store=store, artifact_store=artifact_store)
     current = service.get_config(engagement.id)
     saved = service.set_config(
-        engagement.id, current.model_copy(update={setting: enabled})
+        engagement.id,
+        current.model_copy(update={setting: enabled}),
+        expected_revision=engagement.revision,
     )
     observed = service.get_config(engagement.id)
     if observed != saved:
@@ -579,6 +581,9 @@ def set_post_tool_preference(
         "project_id": engagement.id,
         "project_name": engagement.name,
         "saved": True,
+        "state": "core_settings_saved",
+        "read_back": True,
+        "client_action": {"kind": "post_tool_refresh", "project_id": engagement.id},
     }
 
 

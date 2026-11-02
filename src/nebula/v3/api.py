@@ -427,6 +427,8 @@ from .execution_ai import (
     ExecutionChatAttachRequest,
     ExecutionChatAttachment,
     PostToolAssistantConfig,
+    PostToolAssistantRead,
+    PostToolAssistantRequest,
 )
 from .knowledge import (
     MAX_DOCUMENT_BYTES,
@@ -6487,23 +6489,31 @@ def create_app(
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
-        response_model=PostToolAssistantConfig,
+        response_model=PostToolAssistantRead,
         tags=["execution-ai"],
         dependencies=[Depends(require_auth)],
     )
-    async def get_post_tool_assistant(engagement_id: str) -> PostToolAssistantConfig:
-        return require_execution_ai_service().get_config(engagement_id)
+    async def get_post_tool_assistant(engagement_id: str) -> PostToolAssistantRead:
+        return require_execution_ai_service().read_config(engagement_id)
 
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
-        response_model=PostToolAssistantConfig,
+        response_model=PostToolAssistantRead,
         tags=["execution-ai"],
         dependencies=[Depends(require_auth)],
     )
     async def put_post_tool_assistant(
-        engagement_id: str, request: PostToolAssistantConfig
-    ) -> PostToolAssistantConfig:
-        return require_execution_ai_service().set_config(engagement_id, request)
+        engagement_id: str, request: PostToolAssistantRequest
+    ) -> PostToolAssistantRead:
+        service = require_execution_ai_service()
+        service.set_config(
+            engagement_id,
+            PostToolAssistantConfig.model_validate(
+                request.model_dump(exclude={"expected_revision"})
+            ),
+            expected_revision=request.expected_revision,
+        )
+        return service.read_config(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-results",

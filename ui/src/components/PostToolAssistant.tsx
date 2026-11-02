@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, CircleAlert, Clipboard, LoaderCircle, Play, Sparkles, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import {PROJECT_DATA_CHANGED_EVENT, type ProjectDataChange} from "../api/projectDataEvents";
 import type { GeneratedDraft, HarnessProfile, PostToolAssistantConfig, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { logCaughtDiagnostic } from "../diagnostics";
@@ -83,6 +84,19 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     void logCaughtDiagnostic("interface.post_tool_assistant.load_failed", "Post-tool assistance could not be loaded.", caught, "post_tool_assistant");
     setFeedback({ kind: "error", title: "Tool assistance unavailable", message: caught instanceof Error ? caught.message : "Could not load tool assistance." });
   }); }, [refresh]);
+
+  useEffect(() => {
+    const changed = (event: Event) => {
+      const detail = (event as CustomEvent<ProjectDataChange>).detail;
+      if (detail?.projectId !== engagementId || detail.resource !== "post-tool-settings") return;
+      void refresh().catch((caught) => {
+        void logCaughtDiagnostic("interface.post_tool_assistant.refresh_failed", "Saved follow-up settings could not refresh.", caught, "post_tool_assistant");
+        setFeedback({kind: "error", title: "Follow-up settings changed", message: "Reload this view to read Core's saved settings."});
+      });
+    };
+    window.addEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(PROJECT_DATA_CHANGED_EVENT, changed);
+  }, [engagementId, refresh]);
 
   useEffect(() => {
     if (!feedback) return;

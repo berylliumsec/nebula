@@ -1402,6 +1402,7 @@ export interface GeneratedDraftContent {
 }
 
 export interface PostToolAssistantConfig {
+  revision?: number;
   suggestNextSteps: boolean;
   takeNotes: boolean;
   providerId?: Identifier;

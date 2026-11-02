@@ -1144,7 +1144,8 @@
         "ui/src/components/MissionControls.tsx::getAutomationRuntime",
         "ui/src/components/MissionControls.tsx::listHarnessSessions",
         "ui/src/components/MissionControls.tsx::listHarnesses",
-        "ui/src/components/MissionControls.tsx::listMcpServers"
+        "ui/src/components/MissionControls.tsx::listMcpServers",
+        "ui/src/components/PostToolAssistant.tsx::listRuns"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1250,7 +1251,7 @@
     },
     {
       "id": "harnesses.profile_lifecycle",
-      "entry_point": "Settings or Butler: discover, create, edit, enable, disable or delete a nonsecret Assistant harness profile",
+      "entry_point": "Settings or Butler: manage a constrained endpoint profile, or metadata of an existing trusted spawned harness",
       "ui_calls": [
         "ui/src/components/HarnessSettings.tsx::createHarness",
         "ui/src/components/HarnessSettings.tsx::updateHarness",
@@ -1266,7 +1267,7 @@
         "read": "nebula.settings.api_request GET collection and exact profile",
         "change": "nebula.settings.api_request POST, PATCH or DELETE with the current revision"
       },
-      "authority": "Interactive explicit operator request; listed Settings route/schema; current revision for changes and deletion; credentials stay on their browser handoff; saved configuration does not attest to runtime health",
+      "authority": "Interactive explicit operator request; listed Settings route/schema; current revision for changes and deletion; credentials stay on their browser handoff; saved configuration does not attest to runtime health; spawned creation and effective launch configuration changes require browser program review, regardless of enabled; unrestricted mode remains operator-owned",
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
       "result": "Exact created identity is returned after Core readback; stale edits/deletes fail; live Settings catalogs and reload show saved profile state; confirmed deletion returns exact absence",
       "status": "supported"
@@ -2390,7 +2391,8 @@
       "ui_calls": [
         "ui/src/components/ExecutionHistory.tsx::cancelExecution",
         "ui/src/components/ExecutionHistory.tsx::executionOutput",
-        "ui/src/components/ExecutionHistory.tsx::listExecutions"
+        "ui/src/components/ExecutionHistory.tsx::listExecutions",
+        "ui/src/components/PostToolAssistant.tsx::listExecutions"
       ],
       "core_owner": "Core visible-chat records, ToolOutputService and ExecutionService; immutable ArtifactStore identities",
       "butler": {
@@ -2675,6 +2677,78 @@
         "reason": "Granting standing Allow approval to SSH commands requires the operator; ordinary metadata edits preserve or tighten the saved approval.",
         "observed_result": "opened"
       }
+    },
+    {
+      "id": "harnesses.operator_program_trust",
+      "entry_point": "Creating a spawned harness, changing its program/account home/connection configuration, or granting unrestricted mode requires operator program review. Disabled programs can still be invoked by explicit health/quota reads.",
+      "ui_calls": [
+        "ui/src/components/HarnessSettings.tsx::createHarness",
+        "ui/src/components/HarnessSettings.tsx::updateHarness"
+      ],
+      "core_owner": "Requesting browser operator consent control",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "Nonsecret current settings via nebula.settings.api_request",
+        "change": "nebula.settings.open setting_id=harnesses"
+      },
+      "authority": "Creating a spawned harness, changing its program/account home/connection configuration, or granting unrestricted mode requires operator program review. Disabled programs can still be invoked by explicit health/quota reads.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "Exact Settings control opens for review; no browser-opening receipt claims a program trust or cloud consent grant.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "harnesses",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "Creating a spawned harness, changing its program/account home/connection configuration, or granting unrestricted mode requires operator program review. Disabled programs can still be invoked by explicit health/quota reads.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "settings.follow_up_cloud_consent",
+      "entry_point": "First project cloud data consent, or consent for a different follow-up backend identity, requires personal browser approval. Butler preserves existing consent for the same backend or revokes it at the observed project revision.",
+      "ui_calls": [
+        "ui/src/components/PostToolAssistantSettings.tsx::setPostToolAssistant",
+        "ui/src/components/PostToolAssistant.tsx::setPostToolAssistant"
+      ],
+      "core_owner": "Requesting browser operator consent control",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "Nonsecret current settings via nebula.settings.api_request",
+        "change": "nebula.settings.open setting_id=follow-up"
+      },
+      "authority": "First project cloud data consent, or consent for a different follow-up backend identity, requires personal browser approval. Butler preserves existing consent for the same backend or revokes it at the observed project revision.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core",
+      "result": "Exact Settings control opens for review; no browser-opening receipt claims a program trust or cloud consent grant.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "follow-up",
+        "owner": "requesting_browser",
+        "boundary": "operator_authority",
+        "reason": "First project cloud data consent, or consent for a different follow-up backend identity, requires personal browser approval. Butler preserves existing consent for the same backend or revokes it at the observed project revision.",
+        "observed_result": "opened"
+      }
+    },
+    {
+      "id": "settings.follow_up_preferences",
+      "entry_point": "Butler or Workbench: select follow-up backend/model and save ordinary notes/suggestions preferences",
+      "ui_calls": [
+        "ui/src/components/PostToolAssistantSettings.tsx::getPostToolAssistant",
+        "ui/src/components/PostToolAssistantSettings.tsx::setPostToolAssistant",
+        "ui/src/components/PostToolAssistant.tsx::getPostToolAssistant",
+        "ui/src/components/PostToolAssistant.tsx::setPostToolAssistant"
+      ],
+      "core_owner": "Core project metadata and atomic project revision guard; browser owns first and backend-bound cloud consent",
+      "butler": {
+        "discover": "nebula.settings.api_schema",
+        "read": "nebula.settings.api_request GET selected-project post-tool-assistant",
+        "change": "nebula.settings.api_request PUT at body.expected_revision and nebula.settings.set_post_tool"
+      },
+      "authority": "Interactive explicit operator request; first or rebound cloud confirmation remains in the requesting browser. Configuration changes alone do not run analysis.",
+      "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade Butler manages nonsecret integration profiles on production LAN Core",
+      "result": "Core readback reports the saved configuration and revision. Workbench rereads it; open Settings retains unsaved input until explicit Reload. Saved runtime selection survives browser reload.",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [

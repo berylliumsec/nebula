@@ -126,7 +126,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.follow-up",
     label: "Post-tool assistant",
-    description: "Configure automatic follow-up after terminal and tool results",
+    description: "Choose follow-up analysis and review project cloud data consent",
     category: "Automation",
     scope: "Project",
     target: "post-tool-assistant-settings",

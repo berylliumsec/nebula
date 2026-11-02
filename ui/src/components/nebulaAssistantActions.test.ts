@@ -238,6 +238,17 @@ describe("settings assistant actions", () => {
     expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
     expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
   });
+  it("refreshes project follow-up settings only from scoped Core readback", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "settings-call",
+      capability: "nebula.capabilities.change", status: "complete", summary: "Saved by Core", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {butler_operation: "nebula.settings.api_request", butler_project_id: "project", state: "core_settings_saved", read_back: true,
+        client_action: {kind: "post_tool_refresh", project_id: "project"}}};
+    expect(settingClientAction(event, "project")).toEqual({kind: "post_tool_refresh", projectId: "project"});
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.settings.set_post_tool"}}, "project")).toEqual({kind: "post_tool_refresh", projectId: "project"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "project")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, butler_operation: "nebula.work.start_chat"}}, "project")).toBeUndefined();
+  });
   it("refreshes the Butler interval only after scoped Core readback", () => {
     const event: ChatStreamEvent = {
       type: "tool_completed", turnId: "turn", toolCallId: "interval-call", capability: "nebula.capabilities.change",

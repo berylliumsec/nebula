@@ -1797,6 +1797,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       if (action.resource !== "providers") window.dispatchEvent(new Event("nebula:mcp-profiles-changed"));
       return "Core confirmed the profile change. Settings catalogs have been asked to refresh.";
     }
+    if (action.kind === "post_tool_refresh") {
+      notifyProjectDataChanged({projectId: action.projectId, resource: "post-tool-settings"});
+      return "Core confirmed the follow-up settings. Workbench was asked to refresh; open Settings forms retain drafts and offer Reload.";
+    }
     if (action.kind === "butler_interval_refresh") {
       window.dispatchEvent(new Event(BUTLER_INTERVAL_CHANGED_EVENT));
       return "Core confirmed the Butler check interval. Its Settings control has been asked to refresh.";

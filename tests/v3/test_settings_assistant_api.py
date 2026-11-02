@@ -362,7 +362,12 @@ def test_settings_api_confirms_provider_deletion_by_readback(tmp_path):
         (
             "harnesses",
             HarnessProfile,
-            {"kind": "codex_app_server", "executable": "/bin/true"},
+            {
+                "kind": "codex_app_server",
+                "connection_mode": "endpoint",
+                "transport": "websocket",
+                "endpoint": "ws://127.0.0.1:9999",
+            },
         ),
         (
             "mcp-servers",
@@ -458,12 +463,18 @@ def test_settings_api_create_keeps_identity_when_exact_readback_fails(
         create_app(store, auth_token="test-token"), "test-token"
     )
 
-    async def unavailable(client, path, **kwargs):
-        return httpx.Response(
-            503, request=httpx.Request("GET", f"http://127.0.0.1{path}")
-        )
+    original_request = httpx.AsyncClient.request
+    failed_paths: list[str] = []
 
-    monkeypatch.setattr(httpx.AsyncClient, "get", unavailable)
+    async def unavailable(client, method, path, **kwargs):
+        if method == "GET" and path.startswith("/api/v1/providers/"):
+            failed_paths.append(path)
+            return httpx.Response(
+                503, request=httpx.Request("GET", f"http://127.0.0.1{path}")
+            )
+        return await original_request(client, method, path, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", unavailable)
 
     async def journey():
         created = await gateway.request(
@@ -480,6 +491,7 @@ def test_settings_api_create_keeps_identity_when_exact_readback_fails(
         assert created["read_back"] is False
         assert "client_action" not in created
         assert created["result"]["name"] == "saved-unverified"
+        assert failed_paths == [f"/api/v1/providers/{created['result']['id']}"]
         assert (
             store.get(ProviderProfile, created["result"]["id"]).name
             == "saved-unverified"

@@ -481,6 +481,15 @@ def test_product_search_finds_butler_runtime_trust_boundaries(monkeypatch):
         and "revision" in str(item["text"]).lower()
         for item in matches
     )
+    consent = search_product_knowledge(
+        "Butler follow-up cloud consent backend identity body expected_revision requesting browser"
+    )
+    assert any(
+        "consent" in str(item["text"]).lower()
+        and "backend" in str(item["text"]).lower()
+        and "revision" in str(item["text"]).lower()
+        for item in consent
+    )
 
 
 def test_product_search_finds_butler_project_sources_lifecycle(monkeypatch):

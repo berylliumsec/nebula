@@ -1819,7 +1819,7 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
   test.setTimeout(480_000);
   const profiles = [
     {family: "providers", target: "provider-settings", payload: {provider_type: "ollama", is_local: true}, privatePayload: {secret_ref: "session:" + "a".repeat(32)}},
-    {family: "harnesses", target: "harness-settings", payload: {kind: "codex_app_server", executable: "/bin/true"}, privatePayload: {auth_mode: "secret_ref", secret_ref: "session:" + "a".repeat(32)}},
+    {family: "harnesses", target: "harness-settings", payload: {kind: "codex_app_server", connection_mode: "endpoint", transport: "websocket", endpoint: "ws://127.0.0.1:9999"}, privatePayload: {auth_mode: "endpoint_bearer", secret_ref: "session:" + "a".repeat(32)}},
     {family: "mcp-servers", target: "mcp-settings", payload: {transport: "streamable_http", url: "https://example.test/mcp"}, privatePayload: {auth_mode: "bearer", bearer_secret_ref: "session:" + "a".repeat(32)}},
   ];
   let request: {prompt: string; path: string; method: string; body?: Record<string, unknown>; expected_revision?: number; readPath?: string} | undefined;
@@ -2016,6 +2016,29 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     await expect(page.getByRole("button", {name: `${renamedSsh} details`, exact: true})).toHaveCount(0);
     await page.reload();
     expect((await (await api.get("ssh-environments?resolve=false")).json() as typeof ssh).hosts.find(row => row.alias === "fixture-ask")?.environment).toBeFalsy();
+    const untrustedHarnessTrace = await runRuntimeRequest({prompt: "Review a new local harness program.", path: "harnesses", method: "POST",
+      body: {name: "Untrusted harness fixture", kind: "codex_app_server", executable: "/fixture/not-executed", enabled: false}});
+    expect(untrustedHarnessTrace).toContain("harness_trust_required");
+    expect((await (await api.get("harnesses")).json() as Array<{name: string}>).some(item => item.name === "Untrusted harness fixture")).toBe(false);
+    await page.goto(`${core.origin}/settings#post-tool-assistant-settings`);
+    const followUp = page.locator("#post-tool-assistant-settings");
+    await followUp.getByRole("combobox", {name: "Tool follow-up runtime"}).selectOption(`provider:${model.id}`);
+    await followUp.getByRole("combobox", {name: "Tool follow-up model"}).fill("Unsaved follow-up model");
+    const followUpPath = "engagements/{project}/post-tool-assistant";
+    const currentFollowUp = await (await api.get(`engagements/${projectId}/post-tool-assistant`)).json() as Record<string, unknown> & {revision: number};
+    const followUpBody = {suggest_next_steps: false, take_notes: false, backend_kind: "provider", provider_id: model.id, model: "security-model", expected_revision: currentFollowUp.revision};
+    const cloudTrace = await runRuntimeRequest({prompt: "Review first follow-up cloud consent.", path: followUpPath, method: "PUT", body: {...followUpBody, cloud_confirmed: true}});
+    expect(cloudTrace).toContain("post_tool_consent_required");
+    expect((await (await api.get(`engagements/${projectId}/post-tool-assistant`)).json() as typeof currentFollowUp).revision).toBe(currentFollowUp.revision);
+    const followUpTrace = await runRuntimeRequest({prompt: "Save the local follow-up runtime without cloud consent.", path: followUpPath, method: "PUT", body: {...followUpBody, cloud_confirmed: false}});
+    expect(followUpTrace).toContain("core_settings_saved");
+    await expect(followUp.getByText(/Saved follow-up settings changed/)).toBeVisible();
+    await expect(followUp.getByRole("combobox", {name: "Tool follow-up model"})).toHaveValue("Unsaved follow-up model");
+    await followUp.getByRole("button", {name: "Reload tool follow-up"}).click();
+    await expect(followUp.getByRole("combobox", {name: "Tool follow-up model"})).toHaveValue("security-model");
+    await page.reload();
+    await expect(followUp.getByRole("combobox", {name: "Tool follow-up runtime"})).toHaveValue(`provider:${model.id}`);
+    await expect(followUp.getByRole("combobox", {name: "Tool follow-up model"})).toHaveValue("security-model");
     for (const profile of profiles) {
       let saved: {id: string; revision: number} | undefined;
       const name = `butler-profile-${profile.family}`;
@@ -2075,8 +2098,9 @@ test("assistant upgrade Butler manages nonsecret integration profiles on product
     if (!await assistant.isVisible()) await openNebulaAssistantFromShell(page);
     expect((await new AxeBuilder({page}).include('[role="dialog"][aria-label="Butler"]').analyze()).violations).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await testInfo.attach("butler-runtime-settings-screen", {body: await page.screenshot(), contentType: "image/png"});
     await testInfo.attach("butler-integration-profiles-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
-      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "Runner trust and first SSH standing approval refused without persistence; trusted runner rename and SSH metadata edit/forget read back Core, refreshed Settings and survived reload; runner draft input preserved during catalog refresh. First-time Host consent refused; ordinary Docker policy edit visible after paired reload, and later Settings-only Butler turns retained commands disabled without a Kali runtime. Foreign MCP data omitted from collection/export and exact reads, edits and probes refused without changing the profile. Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
+      viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!], result: "New spawned harness trust and first follow-up cloud consent refused; local follow-up configuration persisted at its revision and Settings retained draft input until explicit Reload. Runner trust and first SSH standing approval refused without persistence; trusted runner rename and SSH metadata edit/forget read back Core, refreshed Settings and survived reload; runner draft input preserved during catalog refresh. First-time Host consent refused; ordinary Docker policy edit visible after paired reload, and later Settings-only Butler turns retained commands disabled without a Kali runtime. Foreign MCP data omitted from collection/export and exact reads, edits and probes refused without changing the profile. Three generic private-reference creates refused; subsequent disabled nonsecret profiles created, revision-renamed, shown after live catalog refresh and reload, and deleted with exact Core checks; typed interval change persisted in its visible Settings control."}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "model stub", dispose: () => stopLocalModelStub(stub)}, {name: "Core fixture", dispose: () => stopRealCore(core)}]);
 });
 

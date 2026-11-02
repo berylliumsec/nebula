@@ -100,6 +100,14 @@ class PostToolAssistantConfig(NebulaModel):
     cloud_confirmed: bool = False
 
 
+class PostToolAssistantRead(PostToolAssistantConfig):
+    revision: int = Field(ge=1)
+
+
+class PostToolAssistantRequest(PostToolAssistantConfig):
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
 class DraftEditRequest(NebulaModel):
     content: GeneratedDraftContent
     expected_revision: int = Field(ge=1)
@@ -390,14 +398,26 @@ class ExecutionAIService:
             return draft
 
     def get_config(self, engagement_id: str) -> PostToolAssistantConfig:
+        return PostToolAssistantConfig.model_validate(
+            self.read_config(engagement_id).model_dump(exclude={"revision"})
+        )
+
+    def read_config(self, engagement_id: str) -> PostToolAssistantRead:
         engagement = self.store.get(Engagement, engagement_id)
         value = engagement.metadata.get("post_tool_assistant", {})
-        return PostToolAssistantConfig.model_validate(
+        config = PostToolAssistantConfig.model_validate(
             value if isinstance(value, dict) else {}
+        )
+        return PostToolAssistantRead(
+            **config.model_dump(), revision=engagement.revision
         )
 
     def set_config(
-        self, engagement_id: str, config: PostToolAssistantConfig
+        self,
+        engagement_id: str,
+        config: PostToolAssistantConfig,
+        *,
+        expected_revision: int | None = None,
     ) -> PostToolAssistantConfig:
         engagement = self.store.get(Engagement, engagement_id)
         if config.suggest_next_steps or config.take_notes:
@@ -419,7 +439,7 @@ class ExecutionAIService:
             Engagement,
             engagement.id,
             {"metadata": metadata},
-            expected_revision=engagement.revision,
+            expected_revision=expected_revision or engagement.revision,
         )
         return config
 

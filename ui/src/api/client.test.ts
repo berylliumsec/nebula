@@ -9,6 +9,18 @@ vi.mock("../diagnostics", async (importOriginal) => ({
 }));
 
 describe("ApiClient", () => {
+  it("keeps the observed project revision when saving follow-up settings", async () => {
+    const wire = {suggest_next_steps: false, take_notes: false, backend_kind: "provider", cloud_confirmed: false, revision: 7};
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(wire), {status: 200}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({...wire, revision: 8}), {status: 200}));
+    const client = new ApiClient({baseUrl: "http://127.0.0.1:8765", fetch: fetchMock});
+    const current = await client.getPostToolAssistant("project");
+    expect(current.revision).toBe(7);
+    const saved = await client.setPostToolAssistant("project", current);
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).expected_revision).toBe(7);
+    expect(saved.revision).toBe(8);
+  });
   it("creates Butler notes with the browser-owned ID and exact Core link fields", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({id: "note", engagement_id: "project",
       observation_type: "note", title: "Note", body: "Body", revision: 1}), {status: 201}));
