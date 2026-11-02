@@ -8507,8 +8507,13 @@ reliabilityTest("assistant upgrade harness catalog refresh preserves mounted Wor
     const pairingPage = await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     expect(pairingPage?.ok(), await pairingPage?.text()).toBe(true);
     await page.getByLabel("Device name").fill("Catalog regression");
-    await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page).toHaveURL(`${core.origin}/`, {timeout: 20_000});
+    // The pairing gate clears the fragment before redemption, so the URL is
+    // already "/" here. Wait for the successful full-page pairing reload.
+    const [pairedPage] = await Promise.all([
+      page.waitForNavigation({url: `${core.origin}/`, waitUntil: "load", timeout: 20_000}),
+      page.getByRole("button", {name: "Pair device", exact: true}).click(),
+    ]);
+    expect(pairedPage?.ok()).toBe(true);
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=catalog-chat`);
     await expect(page.getByText("Saved catalog regression context.")).toBeVisible();
     const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});

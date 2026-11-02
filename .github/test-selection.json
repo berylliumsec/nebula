@@ -1,29 +1,18 @@
 {
-  "change_digest": "b06fe21c175707f32da0ad6004dfc6de68dcf5d2d8bacaa7c369e82d8ccbfe86",
-  "reviewed_by": "Codex focused review for entity lookup stalls",
-  "reason": "Verify exact artifact/recovery seeks, stable pages, all write projections, atomic legacy migration and thread-owned Sessions. The worker cases cover 2 and 40 AnyIO tokens and bursts of 20 reads, proving shared four-listing admission leaves DB capacity for an authenticated request. Existing horizon, payload-filter and two exact recovery cases cover affected integrations. Scale scripts prove query speedups, restored-backup migration, and delayed-SQL HTTP behavior. Other layers remain excluded as documented.",
-  "exclusions": "No UI controls, settings, browser-specific behavior, native code, provider execution or harness behavior changes. Frontend, native and Playwright layers are excluded. The user explicitly replaced LAN/VPN validation with an isolated local Core. No full suites; no production or simulation database migration. PostgreSQL runtime validation is not available in this SQLite production incident.",
+  "change_digest": "bd3cd9740ce180a447d81d9d84bebe9ccb6c3c933e8c4d574ff31be3eff11c3c",
+  "reviewed_by": "Codex focused review for pairing navigation synchronization",
+  "reason": "The only change waits for the actual post-redemption page reload in the real-Core harness catalog journey. Run that exact existing journey on the eight registered desktop Chromium, mobile Chromium, and mobile WebKit profiles. The case covers LAN pairing, persisted chat and draft state, harness catalog mutation, and refresh or retry in one continuous synthetic session.",
+  "exclusions": "No product implementation, Python, frontend unit, or native code changes. The selected real-Core browser journey directly exercises the changed test setup and the relevant interface workflow. Unrelated Playwright journeys and full suites are excluded.",
   "expected_tests": {
-    "python": 47,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_session_record_lookups.py",
-    "tests/v3/test_entity_hot_lookups.py",
-    "tests/v3/test_entity_hot_lookup_migration.py",
-    "tests/v3/test_entity_listing_workers.py",
-    "tests/v3/test_restart_recovery_lifecycle.py::test_approved_call_whose_turn_ended_is_settled_without_running",
-    "tests/v3/test_restart_recovery_lifecycle.py::test_recovery_tick_reads_only_turns_that_can_need_recovery",
-    "tests/v3/test_storage.py::test_find_entities_filters_payload_fields_in_sql_and_pages_in_order"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:harness-catalog-refresh"
+  ]
 }
