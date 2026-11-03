@@ -1259,6 +1259,13 @@ class ControlAssistantWork:
         return {
             "project_id": project_id,
             "runtimes": model_choices(self.store),
+            "host_admission": {
+                "policy": "New chats and missions wait for host capacity. Queued means saved, not running. Work starts automatically when load recovers.",
+                "status_route": "/api/v1/host-load",
+                "calibration": self.app.state.host_load.monitor.sample().public()
+                if getattr(self.app.state, "host_load", None) is not None
+                else None,
+            },
             "actions": [
                 name for name, *_ in _ALL_WORK_TOOLS if name != "nebula.work.catalog"
             ],
@@ -3011,8 +3018,8 @@ class ControlAssistantWork:
             "url": _chat_url(project_id, saved.id),
             "turn_id": turn_id,
             "backend": saved.backend.value,
-            "status": "started",
-            "result": "work continues in Core",
+            "status": "queued",
+            "result": "chat is saved; Core starts it when runtime and host capacity are available",
         }
 
     async def message_chat(
@@ -3740,7 +3747,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.start_chat",
-        "Start a separate Core-owned assistant chat for this project. Use a listed runtime. For provider chats, tools_enabled grants the usual project tools; use only when the operator requested work. Peer messaging starts off. The result means started, not finished.",
+        "Queue a separate Core-owned assistant chat for this project. Use a listed runtime. Core shares host-load calibration with missions and defers execution while CPU or memory capacity is low. Queued work starts automatically after recovery. For provider chats, tools_enabled grants the usual project tools; use only when the operator requested work. Peer messaging starts off. Read saved status before claiming work has started or finished.",
         START_CHAT_SCHEMA,
         False,
     ),

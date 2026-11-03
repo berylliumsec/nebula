@@ -6,6 +6,7 @@ import workspaceQuota from "./playwright.workspace-quota.config";
 import workspaceRecovery from "./playwright.workspace-recovery.config";
 import reconnection from "./playwright.reconnection.config";
 import thinking from "./playwright.thinking.config";
+import hostLoad from "./playwright.host-load.config";
 import { defineConfig, devices } from "@playwright/test";
 import { assertPlaywrightInvocation } from "../scripts/test_scope_guard.mjs";
 
@@ -32,6 +33,7 @@ const fixtureConfigs = {
   "tests/workspace-recovery.spec.ts": workspaceRecovery,
   "tests/chat-reconnection.spec.ts": reconnection,
   "tests/thinking.spec.ts": thinking,
+  "tests/host-load.spec.ts": hostLoad,
 };
 const selectedFiles = selectedArgs.filter(arg => /^tests\/.*\.spec\.tsx?$/.test(arg));
 const selectedFixtures = selectedFiles.map(file => fixtureConfigs[file as keyof typeof fixtureConfigs]);

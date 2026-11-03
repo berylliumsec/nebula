@@ -4272,7 +4272,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           citations: [],
           state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : ["interrupted", "failed"].includes(pendingTurn.status) ? "error" : "streaming",
           detail: pendingTurn.status === "queued"
-            ? `Waiting for Core capacity${pendingTurn.queuePosition ? ` · position ${pendingTurn.queuePosition}` : ""}`
+            ? `${pendingTurn.admissionReason ?? "Waiting for Core capacity"}${pendingTurn.queuePosition ? ` · position ${pendingTurn.queuePosition}` : ""}`
             : ["interrupted", "failed"].includes(pendingTurn.status) ? pendingTurn.error : undefined,
           durable: false,
         }]);
@@ -6223,6 +6223,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setHarnessProgress(undefined);
     setMessages((current) => cancelActiveAssistantMessage(current));
     setSending(false);
+    refreshSessionState();
     if (runtimeKind === "harness" && reloadSessionId) {
       await selectSession(reloadSessionId, false);
     } else if (api && reloadSessionId) {

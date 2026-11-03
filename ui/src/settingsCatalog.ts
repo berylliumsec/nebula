@@ -234,11 +234,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.setup",
     label: "Terminal and Core setup",
-    description: "Choose a verified runtime, prepare or retry its image, and inspect Core readiness",
+    description: "Choose a verified runtime, prepare or retry its image, inspect Core readiness, or ask Butler about automatic host-capacity deferrals",
     category: "Setup",
     scope: "Workspace",
     target: "setup-settings",
-    keywords: ["setup", "terminal", "core", "remote core", "connection", "readiness", "kali"],
+    keywords: ["setup", "terminal", "core", "remote core", "connection", "readiness", "kali", "host load", "CPU", "memory", "capacity", "deferred jobs", "queued chats"],
   },
 ];
 

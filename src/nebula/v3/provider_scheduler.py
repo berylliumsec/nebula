@@ -13,6 +13,8 @@ from sqlalchemy import ColumnElement, case, exists, func, or_, select, update
 from .database import EntityRow, ProviderTurnQueueRow
 from .domain import ChatTurn, ChatTurnStatus, utc_now
 from .storage import ConflictError, NebulaStore
+from .host_load import HostLoadGate
+from .host_admission import save_host_wait
 
 # A turn waiting in one of these states resumes through admission again, so
 # its admission stays parked until it does.
@@ -131,6 +133,7 @@ class ProviderScheduler:
         *,
         worker_id: str,
         config: ProviderSchedulerConfig | None = None,
+        host_load: HostLoadGate | None = None,
     ) -> None:
         self.store = store
         self.worker_id = worker_id
@@ -138,6 +141,11 @@ class ProviderScheduler:
         self._provider = asyncio.Semaphore(self.config.provider_limit)
         self._background = asyncio.Semaphore(self.config.background_limit)
         self._active: dict[str, str] = {}
+        self.host_load = host_load
+        self._host_reasons: dict[str, str] = {}
+
+    def queue_detail(self, turn_id: str) -> str:
+        return self._host_reasons.get(turn_id, "Waiting for Core capacity")
 
     def enqueue(self, turn: ChatTurn) -> None:
         now = turn.queued_at or utc_now()
@@ -172,11 +180,26 @@ class ProviderScheduler:
                 self._background.release()
             raise
         try:
+            if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
+
+                async def deferred(reason: str | None) -> None:
+                    if reason is None:
+                        self._host_reasons.pop(turn_id, None)
+                    else:
+                        self._host_reasons[turn_id] = reason
+                    await asyncio.to_thread(
+                        save_host_wait, self.store, ChatTurn, turn_id, reason
+                    )
+
+                await self.host_load.wait(deferred)
             latest = self.store.get(ChatTurn, turn_id)
             if latest.status == ChatTurnStatus.CANCELLED:
                 raise asyncio.CancelledError
             admitted_at = utc_now()
-            changes: dict[str, Any] = {"admitted_at": admitted_at}
+            changes: dict[str, Any] = {
+                "admitted_at": admitted_at,
+                "admission_reason": None,
+            }
             # Only a new turn starts routing here. A resumed turn keeps the
             # state it parked in (waiting for an approval or a callback, or
             # finalizing a retried answer): that state selects how it resumes.
@@ -199,8 +222,10 @@ class ProviderScheduler:
                 transaction.session.flush()
             self._active[turn_id] = lane
             del updated
+            self._host_reasons.pop(turn_id, None)
             return ProviderAdmission(self, lane)
         except BaseException:
+            self._host_reasons.pop(turn_id, None)
             self._provider.release()
             if lane == "background":
                 self._background.release()

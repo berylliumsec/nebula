@@ -331,7 +331,9 @@ class ResourceRelationService:
             ]
 
     @staticmethod
-    def _controlled_relation_filter(entity: Entity):
+    def _controlled_relation_filter(
+        entity: Entity, entity_ids: list[str] | None = None
+    ):
         """Match exactly the edges the entity's compatibility arrays project.
 
         Edges outside this set (for example a note referencing a knowledge
@@ -340,16 +342,17 @@ class ResourceRelationService:
         """
 
         project_id = getattr(entity, "engagement_id")
+        ids = [entity.id] if entity_ids is None else entity_ids
         if isinstance(entity, Finding):
             return or_(
                 (ResourceRelationRow.project_id == project_id)
                 & (ResourceRelationRow.source_kind == ResourceKind.FINDING.value)
-                & (ResourceRelationRow.source_id == entity.id)
+                & (ResourceRelationRow.source_id.in_(ids))
                 & (ResourceRelationRow.predicate == RelationPredicate.AFFECTS.value)
                 & (ResourceRelationRow.target_kind == ResourceKind.ASSET.value),
                 (ResourceRelationRow.project_id == project_id)
                 & (ResourceRelationRow.target_kind == ResourceKind.FINDING.value)
-                & (ResourceRelationRow.target_id == entity.id)
+                & (ResourceRelationRow.target_id.in_(ids))
                 & (ResourceRelationRow.predicate == RelationPredicate.SUPPORTS.value)
                 & (ResourceRelationRow.source_kind == ResourceKind.EVIDENCE.value),
             )
@@ -374,7 +377,7 @@ class ResourceRelationService:
         return (
             (ResourceRelationRow.project_id == project_id)
             & (ResourceRelationRow.source_kind == kind.value)
-            & (ResourceRelationRow.source_id == entity.id)
+            & (ResourceRelationRow.source_id.in_(ids))
             & (ResourceRelationRow.predicate == predicate.value)
             & (ResourceRelationRow.target_kind.in_(target_kinds))
         )
@@ -666,8 +669,54 @@ class ResourceRelationService:
     def project_legacy(self, entity: Entity) -> Entity:
         """Project compatibility arrays from edges so they cannot be stale authority."""
 
-        if not isinstance(entity, LEGACY_RELATION_MODELS):
-            return entity
+        return self.project_legacy_many([entity])[0]
+
+    def project_legacy_many(self, entities: list[Entity]) -> list[Entity]:
+        """Enrich a page with bounded queries instead of a Session per result.
+
+        Group by owner and type so reciprocal finding edges and unrelated
+        projects retain exactly the single-record projection rules. Chunk IDs
+        below SQLite's parameter limit; stream every matching edge without the
+        public relation-list cap. Ordering within each entity stays unchanged.
+        """
+
+        groups: dict[tuple[str, str], list[Entity]] = {}
+        for entity in entities:
+            if isinstance(entity, LEGACY_RELATION_MODELS):
+                groups.setdefault(
+                    (entity.engagement_id, entity.entity_kind), []
+                ).append(entity)
+        if not groups:
+            return entities
+        projected: dict[str, Entity] = {}
         with self.store.database.session() as session:
-            rows = self._controlled_edge_rows(session, entity)
-        return entity.model_copy(update=self._legacy_projection(entity, rows))
+            for group in groups.values():
+                for start in range(0, len(group), 250):
+                    batch = group[start : start + 250]
+                    rows_by_id: dict[str, list[ResourceRelationRow]] = {
+                        entity.id: [] for entity in batch
+                    }
+                    statement = (
+                        select(ResourceRelationRow)
+                        .where(
+                            self._controlled_relation_filter(batch[0], list(rows_by_id))
+                        )
+                        .order_by(
+                            ResourceRelationRow.created_at, ResourceRelationRow.id
+                        )
+                    )
+                    for row in session.scalars(statement).yield_per(LEGACY_EDGE_PAGE):
+                        identity = (
+                            row.target_id
+                            if isinstance(batch[0], Finding)
+                            and row.predicate == RelationPredicate.SUPPORTS.value
+                            else row.source_id
+                        )
+                        rows_by_id[identity].append(row)
+                    for entity in batch:
+                        projected[entity.id] = entity.model_copy(
+                            update=self._legacy_projection(
+                                entity, rows_by_id[entity.id]
+                            )
+                        )
+        return [projected.get(entity.id, entity) for entity in entities]

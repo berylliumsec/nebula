@@ -2370,6 +2370,7 @@ export interface ChatTurn {
   admittedAt?: string;
   queuePosition?: number;
   capacityLane?: "direct" | "background";
+  admissionReason?: string;
   /** Saved partial output while a provider turn is paused. */
   content: string;
   reasoning: string;

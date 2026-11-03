@@ -396,3 +396,21 @@ date. Where applicable, offer only an implemented adjacent workflow documented i
 another article, such as importing a complete Nebula 2 engagement, using one active
 Terminal per Project, uploading knowledge documents, or exporting an
 integrity-manifested record.
+
+## host-capacity | Automatic host capacity
+
+Keywords: host capacity, CPU load, memory, queued chat, deferred job, Butler, admission
+
+Sources: src/nebula/v3/host_load.py, src/nebula/v3/provider_scheduler.py, src/nebula/v3/harnesses.py, src/nebula/v3/missions.py
+
+New chat responses and missions, including jobs created by Butler, wait when
+host CPU or available memory is under pressure. Core samples lightweight OS
+counters at most once per second and shares calibration across runtimes. CPU
+quota and memory limits are considered where available. Hysteresis and a shared
+start budget prevent repeated bursts. Existing jobs continue.
+
+Queued work is saved and starts automatically after recovery; it can be cancelled
+while waiting. Butler can inspect `/api/v1/host-load` through
+`nebula.settings.api_schema` and `nebula.settings.api_request`, or read the policy
+in `nebula.work.catalog`. A saved or queued chat is not proof its runtime started.
+Missing optional counters remain unknown and do not permanently strand work.

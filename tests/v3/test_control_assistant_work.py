@@ -2351,7 +2351,7 @@ def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypa
         result = await work.start_chat(
             project.id, {"prompt": "Investigate the project state"}
         )
-        assert result["status"] == "started"
+        assert result["status"] == "queued"
         assert result["url"].endswith(f"session={result['session_id']}")
         assert starts == [result["turn_id"]]
         saved = store.get(ChatSession, result["session_id"])

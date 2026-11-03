@@ -1,0 +1,44 @@
+import {expect, test} from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+
+test("host capacity defers, survives reload, recovers once and cancels saved work", async ({page, request}, info) => {
+  const origin = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
+  const headers = {Authorization: "Bearer host-load-test-token"};
+  const pressure = async (busy: boolean, reset_calls = false) => {
+    const response = await request.post(`${origin}/__host_fixture/load`, {headers, data: {busy, reset_calls}});
+    expect(response.ok(), await response.text()).toBeTruthy();
+    return response.json();
+  };
+  const fixture = await pressure(true, true);
+  const pairing = await (await request.post(`${origin}/api/v1/auth/pairings`, {headers, data: {name: "Synthetic capacity device"}})).json();
+  await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill("Synthetic capacity device");
+  await page.getByRole("button", {name: "Pair device", exact: true}).click();
+  await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20000});
+  const project = "capacity-" + info.project.name;
+  const chat = "chat-" + info.project.name;
+  await page.goto(`/projects/${project}/workbench?view=chat&session=${chat}`);
+  const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
+  await composer.fill("Synthetic host capacity first request");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  await expect(page.getByText(/Waiting for host CPU capacity/).first()).toBeVisible({timeout: 20000});
+  expect((await pressure(true)).calls).toBe(0);
+  await page.reload();
+  await expect(page.getByText(/Waiting for host CPU capacity/).first()).toBeVisible({timeout: 20000});
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({page}).include(".chat-composer").analyze()).violations).toEqual([]);
+  await page.screenshot({path: info.outputPath("host-deferred.png"), fullPage: true});
+  await pressure(false);
+  await expect(page.getByText("Synthetic host capacity answer.", {exact: true}).first()).toBeVisible({timeout: 20000});
+  await page.reload();
+  await expect(page.getByText("Synthetic host capacity answer.", {exact: true}).first()).toBeVisible();
+  expect((await pressure(true)).calls).toBe(1);
+  await composer.fill("Synthetic host capacity cancelled request");
+  await page.getByRole("button", {name: "Send message", exact: true}).click();
+  await expect(page.getByText(/Waiting for host CPU capacity/).first()).toBeVisible({timeout: 20000});
+  await page.locator(".chat-composer").getByRole("button", {name: "Stop response", exact: true}).click();
+  await expect(page.locator(".chat-composer").getByRole("button", {name: "Send message", exact: true})).toBeVisible();
+  expect((await pressure(false)).calls).toBe(1);
+  await expect.poll(async () => (await (await request.get(`${origin}/api/v1/chat/sessions/${chat}/pending-turn`, {headers})).json())).toBeNull();
+  await info.attach("candidate-build", {body: JSON.stringify({origin: info.project.use.baseURL, bundleSha256: fixture.bundle_sha256, profile: info.project.name, viewport: page.viewportSize(), assets: await page.locator("script[src]").evaluateAll(nodes => nodes.map(node => node.getAttribute("src")))}), contentType: "application/json"});
+});

@@ -39,7 +39,7 @@ _GLOBAL_SETTINGS = re.compile(
     r"providers|provider-catalog|harnesses|mcp-servers|ssh-environments|"
     r"runner-profiles|vpn-profiles|operator-profiles|credentials/(?:vault|[A-Za-z0-9_.~:-]+/status)|skills|"
     r"integrations|automation/runtime|diagnostics/settings|voice/settings|butler/(?:instructions|check-interval)|"
-    r"hooks|project-instructions|runtime-usage|setup|release"
+    r"hooks|project-instructions|runtime-usage|host-load|setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}

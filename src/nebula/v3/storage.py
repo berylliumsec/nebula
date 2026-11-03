@@ -31,6 +31,8 @@ from sqlalchemy import (
     Select,
     String,
     and_,
+    case,
+    cast as sql_cast,
     delete,
     exists,
     func,
@@ -1592,6 +1594,58 @@ class NebulaStore:
         )
         if statement is None:
             return
+        yield from self._iter_readable_statement(model, statement, page_size)
+
+    def iter_reference_candidates(
+        self,
+        model: type[EntityT],
+        references: Sequence[tuple[str, str, bool]],
+        *,
+        engagement_id: str | None = None,
+    ) -> Iterator[EntityT]:
+        """Hydrate only potential references; callers still validate each match.
+
+        A scalar compares exactly; an array uses JSON element equality. Never
+        limit by owner unless the caller's contract explicitly allows it:
+        legacy cross-project references must still protect their targets.
+        """
+
+        statement = self._entity_statement(model, {}, engagement_id=engagement_id)
+        assert statement is not None
+        predicates: list[ColumnElement[bool]] = []
+        for field, target_id, many in references:
+            value = EntityRow.payload[field]
+            if not many:
+                predicates.append(value.as_string() == target_id)
+                continue
+            if self.database.engine.dialect.name == "postgresql":
+                from sqlalchemy.dialects.postgresql import JSONB
+
+                array = sql_cast(value, JSONB)
+                safe_array = case(
+                    (func.jsonb_typeof(array) == "array", array),
+                    else_=sql_cast([], JSONB),
+                )
+                members = (
+                    func.jsonb_array_elements_text(safe_array)
+                    .table_valued("value")
+                    .render_derived()
+                )
+            else:
+                members = func.json_each(value).table_valued("value")
+            predicates.append(
+                exists(
+                    select(1).select_from(members).where(members.c.value == target_id)
+                )
+            )
+        if predicates:
+            yield from self._iter_readable_statement(
+                model, statement.where(or_(*predicates)), 1000
+            )
+
+    def _iter_readable_statement(
+        self, model: type[EntityT], statement: Select[tuple[EntityRow]], page_size: int
+    ) -> Iterator[EntityT]:
         with self.database.session() as session:
             ids = list(
                 session.scalars(
@@ -2574,7 +2628,7 @@ class NebulaStore:
         # Temporary popup and side-chat sessions are hidden from the conversation list,
         # so the conversation count must leave them out as well.
         statement = (
-            select(EntityRow.kind, func.count(EntityRow.id))
+            select(EntityRow.kind, func.count())
             .where(or_(EntityRow.kind != "chat_sessions", not_temporary_chat_session()))
             .group_by(EntityRow.kind)
         )

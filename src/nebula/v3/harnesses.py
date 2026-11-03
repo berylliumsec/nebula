@@ -6,6 +6,9 @@ records contain only normalized, bounded events and credential-free snapshots.
 
 from __future__ import annotations
 
+from .host_load import HostLoadGate
+from .host_admission import save_host_wait
+
 from .application_model.workflow import (
     BROWSER_MODEL_WORKFLOW,
     DIRECT_REQUEST_WORKFLOW,
@@ -8787,6 +8790,7 @@ class HarnessRuntimeService:
         shutdown_timeout_seconds: float = 5.0,
     ) -> None:
         self.store = store
+        self.host_load: HostLoadGate | None = None
         self.plans = ChatPlanService(store)
         self.work = WorkService(store)
         self.credential_store = credential_store
@@ -12425,6 +12429,33 @@ class HarnessRuntimeService:
         turn = self.store.get(HarnessTurn, turn_id)
         if turn.status != HarnessTurnStatus.QUEUED:
             raise HarnessStateError(f"harness turn is not queued ({turn.status.value})")
+        if self.host_load is not None:
+
+            async def deferred(reason: str | None) -> None:
+                await asyncio.to_thread(
+                    save_host_wait, self.store, HarnessTurn, turn_id, reason
+                )
+                if reason is not None:
+                    waiting = self.store.get(HarnessTurn, turn_id)
+                    owner = self.store.get(HarnessSession, waiting.harness_session_id)
+                    self._persist_activity(
+                        waiting,
+                        owner,
+                        HarnessEvent(
+                            type="status",
+                            origin=waiting.origin,
+                            harness_profile_id=owner.harness_profile_id,
+                            harness_session_id=owner.id,
+                            harness_turn_id=turn_id,
+                            model=owner.model,
+                            payload={"phase": "queued", "detail": reason},
+                        ),
+                    )
+
+            await self.host_load.wait(deferred)
+            turn = self.store.get(HarnessTurn, turn_id)
+            if turn.status != HarnessTurnStatus.QUEUED:
+                return
         session = self.store.get(HarnessSession, turn.harness_session_id)
         lock = self._locks.setdefault(session.id, asyncio.Lock())
         if lock.locked() or session.id in self._active:
