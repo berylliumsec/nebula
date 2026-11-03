@@ -237,9 +237,11 @@ def _entity_lookup_fields(entity: Entity) -> dict[str, Any]:
         call_id = entity.metadata.get("tool_call_id")
         fields["artifact_tool_call_id"] = call_id if isinstance(call_id, str) else None
     elif isinstance(entity, ToolCall):
+        turn_id = entity.metadata.get("harness_turn_id")
         fields.update(
             tool_call_status=entity.status.value,
             tool_call_origin=entity.origin.value,
+            tool_call_harness_turn_id=turn_id if isinstance(turn_id, str) else None,
         )
     return fields
 
@@ -834,6 +836,35 @@ class NebulaStore:
             return [
                 model.model_validate(row.payload) for row in session.scalars(statement)
             ]
+
+    def list_harness_turn_tool_calls(
+        self,
+        turn_id: str,
+        *,
+        engagement_id: str,
+        statuses: Sequence[str],
+    ) -> list[ToolCall]:
+        """Seek to a turn's matching calls, then order only that small result.
+
+        Ordering the SQL query by creation time across several statuses lets
+        SQLite prefer an ordered project-history scan over the turn/status
+        index. Sort the matching calls after the indexed read instead.
+        """
+
+        if not statuses:
+            return []
+        statement = select(EntityRow).where(
+            EntityRow.kind == ToolCall.entity_kind,
+            EntityRow.tool_call_harness_turn_id == turn_id,
+            EntityRow.engagement_id == engagement_id,
+            EntityRow.tool_call_status.in_(list(statuses)),
+        )
+        with self.database.session() as session:
+            calls = [
+                ToolCall.model_validate(row.payload)
+                for row in session.scalars(statement)
+            ]
+        return sorted(calls, key=lambda call: (call.created_at, call.id))
 
     def recent_chat_messages(
         self, session_id: str, *, limit: int = 8
@@ -1431,6 +1462,10 @@ class NebulaStore:
                 ): EntityRow.artifact_tool_call_id,
                 (ToolCall.entity_kind, "status"): EntityRow.tool_call_status,
                 (ToolCall.entity_kind, "origin"): EntityRow.tool_call_origin,
+                (
+                    ToolCall.entity_kind,
+                    "metadata.harness_turn_id",
+                ): EntityRow.tool_call_harness_turn_id,
             }.get((model.entity_kind, field))
             # Keep JSON's type/null semantics for arbitrary metadata values.
             # These string-only projections accelerate exact string lookups.

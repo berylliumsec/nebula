@@ -18402,30 +18402,17 @@ class HarnessRuntimeService:
     ) -> list[ToolCall]:
         """Return this turn's tool calls in ``statuses``, oldest first.
 
-        Filtered in SQL: a scan of the project's first 1,000 tool calls stops
-        seeing the current turn once a project holds more, so every native or
-        MCP event would open a second ledger row. A chat turn's calls carry
-        its conversation id, which is indexed; a mission turn falls back to
-        the project's rows filtered by the turn id.
+        Seek by the indexed turn and status projections for both chats and
+        missions. Filtering a conversation's JSON statuses reads every historical
+        payload on each event, even when only a handful of calls remain active.
         """
 
         wanted = [status.value for status in statuses]
-        candidates = (
-            self.store.list_session_entities(
-                ToolCall, turn.chat_session_id, statuses=wanted
-            )
-            if turn.chat_session_id
-            else self.store.find_entities(
-                ToolCall,
-                {"metadata.harness_turn_id": turn.id, "status": wanted},
-                engagement_id=turn.engagement_id,
-            )
+        return self.store.list_harness_turn_tool_calls(
+            turn.id,
+            engagement_id=turn.engagement_id,
+            statuses=wanted,
         )
-        return [
-            call
-            for call in candidates
-            if call.metadata.get("harness_turn_id") == turn.id
-        ]
 
     def _record_tool_event(
         self, turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
