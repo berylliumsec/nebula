@@ -159,8 +159,10 @@ PYTHONPATH=src .venv/bin/python scripts/benchmarks/core_cpu_workers.py --host 17
 PYTHONPATH=src .venv/bin/python scripts/benchmarks/core_cpu_workers.py --host 172.26.91.252 --workers 3 --rounds 2 --jobs 8 --burst 32 --faults 3 --output /tmp/core-cpu-process-3.json
 ```
 
-The diff-bound test receipt selects 72 Python cases and one frontend metadata
-case. Python selectors cover pool/report/harness contracts and Butler host-load,
+The initial CPU-worker validation selected 72 Python cases and one frontend
+metadata case. The [shared-resource follow-up](core-resource-budget.md) adds 13
+model-boundary cases; the current diff-bound receipt therefore selects 85 Python
+cases. Python selectors cover pool/report/harness contracts and Butler host-load,
 catalog/help and product-index integration; CI selects Python 3.11/3.12/3.13.
 Frontend collection/execution uses only `src/settingsCatalog.hostLoad.test.ts`.
 The final local selection passes all 72 Python cases in 58.72 seconds and the

@@ -1,9 +1,9 @@
 {
-  "reviewed_by": "Codex scoped process-worker experiment review; independent causal validation by validate_cpu_scaling",
-  "reason": "One Core coordinator delegates pure PDF layout to an explicitly injected bounded process pool. The selected cases cover exact process/loop/request-context ownership, FIFO and count/byte admission, queued/running cancellation, startup/exit/replacement/shutdown, PDF equivalence/artifact integrity/cache/revision/auth and preserved harness ledgers. Butler adds fresh authenticated project/global/managed host-load reads, unknown values, shared off-loop sampling, discovery/help/catalog, packaged source digest and Chroma synchronization including actual Core startup. One frontend metadata case covers current host-load discovery terms. The committed owned-LAN driver and raw matrix/overload/fault/soak evidence exercise these boundaries separately; no full suite is selected.",
+  "reviewed_by": "Codex shared-budget coverage review; independent causal checks by validate_cpu_scaling, validate_budget_chat_identity and validate_budget_poll_failure",
+  "reason": "One Core coordinator delegates pure PDF layout to an explicitly injected bounded process pool. The selected cases cover exact process/loop/request-context ownership, FIFO and count/byte admission, queued/running cancellation, startup/exit/replacement/shutdown, PDF equivalence/artifact integrity/cache/revision/auth and preserved harness ledgers. Butler adds fresh authenticated project/global/managed host-load reads, unknown values, shared off-loop sampling, discovery/help/catalog, packaged source digest and Chroma synchronization including actual Core startup. Thirteen new benchmark-model boundary cases cover shared global/per-owner/byte admission, round-robin fairness, cancellation, request callbacks, failure recovery, shutdown, RPC framing and current chat ownership through harness rollover, recorded bounded retries for report-status GETs and unretried ordinary latency probes. The owned-LAN resource-budget matrix separately exercises fifty real synthetic Core chat turns, ordinary HTTP reads, live Butler reads, actual aggregate Docker CPU/memory/PID limits and controlled resource failure. One frontend metadata case covers current host-load discovery terms. No full suite is selected.",
   "exclusions": "No full suites. The CPU prototype is constructor-injected and leaves the shipped default unchanged. Butler adds read-only live host-capacity discovery and one focused frontend catalog metadata case; no new controls, geometry, browser-origin or authentication behavior. Native/Playwright suites are outside these boundaries. No production data, live providers or security tools. Local Python3.12; focused CI coverage selects3.11/3.12/3.13 for spawned-process lifecycle. Frozen/native packaging, Windows/macOS execution and whole-Core horizontal scaling remain outside the prototype.",
   "expected_tests": {
-    "python": 72,
+    "python": 85,
     "frontend": 1,
     "native": 0,
     "playwright": 0
@@ -16,6 +16,7 @@
   "python_browser": false,
   "python_node": false,
   "python": [
+    "tests/v3/test_core_budget_model.py",
     "tests/v3/test_cpu_workers.py",
     "tests/v3/test_report_cpu_workers.py",
     "tests/v3/test_reporting.py",
@@ -35,5 +36,5 @@
   ],
   "native": [],
   "playwright": [],
-  "change_digest": "a4b9b72901ca428e1e48c24277616cedac4ad28ff673151355a5bfab8c0c3766"
+  "change_digest": "a53395945a19269846cbf3cd893ba9601150a4523a7e470688cfc88f63f701c7"
 }
