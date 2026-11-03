@@ -22,8 +22,11 @@ from tests.v3.test_butler_capabilities import _scheduled_capabilities
 
 
 def test_core_startup_syncs_current_host_load_guidance_into_chroma(tmp_path):
-    from scripts.build_product_knowledge import source_digest, source_paths
+    from scripts.build_product_knowledge import ensure, source_digest, source_paths
 
+    # Poetry's source install does not run the package build hook. This test
+    # must prepare its resource without depending on another module's fixture.
+    ensure()
     store = NebulaStore(tmp_path / "core.db")
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     index._product_collection.modify(metadata={"source_digest": "stale"})

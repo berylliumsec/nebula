@@ -141,6 +141,11 @@ build hook. The local resource verifies 346 passages at source digest
 `86db445c8a6ec67b68f4fb9fae3d827e60104921ab106b068f2bbbda46ba8895`.
 Focused verification includes packaged digest, help search and Chroma mirror
 sync, plus an actual Core startup that replaces stale Chroma guidance metadata.
+The startup regression prepares its generated resource explicitly: CI's Poetry
+source install does not invoke the package build hook. An independent clean
+checkout reproduced stale Chroma metadata with a missing-resource diagnostic;
+restoring the generated resource synchronized all 346 passages. Preparing the
+resource in this test removes its dependency on a later module's build fixture.
 
 ## Commands and gates
 
