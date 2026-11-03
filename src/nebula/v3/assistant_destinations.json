@@ -20,5 +20,5 @@
   {"id":"notes","label":"Notes","path":"/projects/{project_id}/workbench?view=notes","aliases":["notes","project notes"]},
   {"id":"library","label":"Library","path":"/library","aliases":["library","shared library","documents library"]},
   {"id":"storage","label":"Storage","path":"/storage","aliases":["storage","storage dashboard","storage devices","storage incidents","disk capacity"]},
-  {"id":"settings","label":"Settings","path":"/settings","aliases":["settings","preferences","configuration"]}
+  {"id":"settings","label":"Settings","path":"/settings","aliases":["settings","preferences","configuration","host load","host capacity","CPU pressure","memory pressure","fresh host load"],"guide":"Open Settings. For current Core CPU and available-memory pressure or queued-work reasons, interactive Butler discovers nebula.work.host_load; scheduled Nebula-wide Butler uses nebula.global.host_load. Each read calls authenticated /api/v1/host-load and reports sample_age_seconds from Core’s one-second shared sampler. Re-read after load changes; unavailable measurements remain unknown."}
 ]

@@ -284,6 +284,12 @@ def catalog() -> dict[str, Any]:
         ],
         "capability_families": [
             {
+                "id": "host-capacity",
+                "discover_with": "nebula.capabilities.search",
+                "operations": ["nebula.work.host_load", "nebula.global.host_load"],
+                "effect": "Read /api/v1/host-load through Core authentication on every invocation. Report CPU and available-memory pressure, busy reason, measurement availability and sample age from Core's shared one-second sampler; global host_load is for scheduled Nebula-wide Butler.",
+            },
+            {
                 "id": "notebook",
                 "discover_with": "nebula.capabilities.search",
                 "operations": [
@@ -305,7 +311,7 @@ def catalog() -> dict[str, Any]:
                     "nebula.notebook.search_package",
                 ],
                 "effect": "interactive Butler delegates selected-project Notebook actions to Core under the current grant and project revision; the requesting browser selects host index paths",
-            }
+            },
         ],
         "settings": [
             {

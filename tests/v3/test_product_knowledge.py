@@ -752,6 +752,14 @@ def test_product_search_explains_harness_to_provider_chat_switch(monkeypatch):
     )
 
 
+def test_product_search_finds_fresh_butler_host_load_reads(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler fresh current host-load CPU memory sample age nebula.work.host_load"
+    )
+    assert any("nebula.work.host_load" in item.text for item in matches)
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

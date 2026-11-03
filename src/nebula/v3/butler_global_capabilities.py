@@ -314,6 +314,9 @@ class ButlerGlobalActions:
             },
         )
 
+    async def host_load(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.work.host_load(self._case().engagement_id, {})
+
     async def harness_quota(self, arguments: dict[str, Any]) -> dict[str, Any]:
         self._project(arguments["project_id"])
         return await self.work.harness_quota(arguments["project_id"], arguments)
@@ -770,6 +773,13 @@ class ButlerGlobalActions:
 
         goal_fields = START_GOAL_CONVERSATION_SCHEMA["properties"]
         operations = (
+            (
+                "nebula.global.host_load",
+                "Read current Core host CPU and memory pressure, capacity, busy/deferred reason and sample age through a fresh authenticated /api/v1/host-load request before planning work across projects. Core shares its bounded one-second sampler cache; unknown measurements remain unknown. This read starts no work.",
+                {"type": "object", "additionalProperties": False, "properties": {}},
+                RiskClass.LOCAL_READ,
+                self.host_load,
+            ),
             (
                 "nebula.global.projects",
                 "List Nebula projects, their Act authority and available runtimes before choosing work.",

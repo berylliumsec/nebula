@@ -59,6 +59,9 @@ def test_host_capacity_help_explains_saved_deferral_and_recovery():
     )
     assert "starts automatically" in article.body
     assert "nebula.settings.api_request" in article.body
+    assert "nebula.work.host_load" in article.body
+    assert "nebula.global.host_load" in article.body
+    assert "sample age" in article.body
 
 
 def test_operator_help_search_requires_product_or_failure_intent_and_ranks_details():

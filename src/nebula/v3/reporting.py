@@ -14,6 +14,7 @@ import io
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -40,6 +41,7 @@ from reportlab.platypus import (
 )
 
 from .artifacts import ArtifactStore
+from .cpu_workers import CpuWorkerPool
 from .domain import (
     Artifact,
     Asset,
@@ -92,43 +94,25 @@ class ReportRenderService:
         artifact_store: ArtifactStore,
         operator_id: Callable[[], str] | None = None,
         font_root: str | Path | None = None,
+        cpu_workers: CpuWorkerPool | None = None,
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store
         self.operator_id = operator_id or (lambda: "system")
-        self.font_root = Path(
-            font_root or Path(__file__).parent / "report_assets" / "fonts"
-        )
-        self.font_paths = {
-            key: self.font_root / name for key, name in FONT_FILES.items()
-        }
-        missing = [str(path) for path in self.font_paths.values() if not path.is_file()]
-        if missing:
-            raise ReportRenderError(
-                "renderer_unavailable",
-                "bundled report fonts are missing: " + ", ".join(missing),
-                status_code=503,
-            )
-        self.font_hashes = {
-            key: _file_sha256(path) for key, path in self.font_paths.items()
-        }
-        suffix = self.font_hashes["regular"][:12]
-        self.font_names = {
-            "regular": f"NebulaNotoSans-{suffix}",
-            "bold": f"NebulaNotoSansBold-{suffix}",
-            "mono": f"NebulaNotoSansMono-{suffix}",
-            "mono_bold": f"NebulaNotoSansMonoBold-{suffix}",
-        }
-        for key, name in self.font_names.items():
-            if name not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont(name, str(self.font_paths[key])))
-        regular_font = pdfmetrics.getFont(self.font_names["regular"])
-        self.supported_codepoints = set(regular_font.face.charToGlyph)
+        self.cpu_workers = cpu_workers
+        self._pdf_renderer = _PdfRenderer(font_root)
+        self.font_root = self._pdf_renderer.font_root
+        self.font_paths = self._pdf_renderer.font_paths
+        self.font_hashes = self._pdf_renderer.font_hashes
+        self.font_names = self._pdf_renderer.font_names
+        self.supported_codepoints = self._pdf_renderer.supported_codepoints
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
         self._shutting_down = False
 
     async def startup(self) -> None:
+        if self.cpu_workers is not None:
+            await self.cpu_workers.start()
         # Only readable records: one unreadable row must not keep Core from
         # starting and settling the others.
         for render in self.store.iter_readable_entities(
@@ -165,6 +149,8 @@ class ReportRenderService:
                 stage="shutdown",
             )
         self._tasks.clear()
+        if self.cpu_workers is not None:
+            await self.cpu_workers.shutdown()
 
     async def request_render(
         self, report_id: str, *, report_revision: int
@@ -226,7 +212,9 @@ class ReportRenderService:
                 },
             )
             task = create_diagnostic_task(
-                self._render(render.id, snapshot),
+                self._render(
+                    render.id, snapshot, input_bytes=len(prepared.snapshot_bytes)
+                ),
                 feature="reports",
                 event_code="reports.pdf_render",
                 failure_message="The report renderer stopped unexpectedly.",
@@ -284,9 +272,13 @@ class ReportRenderService:
             )
         return artifact, self.artifact_store.path_for(artifact)
 
-    async def _render(self, render_id: str, snapshot: dict[str, Any]) -> None:
+    async def _render(
+        self, render_id: str, snapshot: dict[str, Any], *, input_bytes: int = 0
+    ) -> None:
         render = self.store.get(ReportRender, render_id)
-        try:
+
+        def mark_rendering() -> None:
+            nonlocal render
             render = self.store.update(
                 ReportRender,
                 render.id,
@@ -294,7 +286,20 @@ class ReportRenderService:
                 expected_revision=render.revision,
             )
             self._event(render, "report_render.rendering", {"status": "rendering"})
-            pdf_bytes, warnings = await asyncio.to_thread(self._build_pdf, snapshot)
+
+        try:
+            if self.cpu_workers is None:
+                mark_rendering()
+                pdf_bytes, warnings = await asyncio.to_thread(self._build_pdf, snapshot)
+            else:
+                pdf_bytes, warnings = await self.cpu_workers.run(
+                    render_pdf_snapshot,
+                    snapshot,
+                    str(self.font_root),
+                    tuple(sorted(self.font_hashes.items())),
+                    input_bytes=input_bytes,
+                    on_start=mark_rendering,
+                )
             stored = self.artifact_store.put_bytes_with_status(
                 pdf_bytes,
                 engagement_id=render.engagement_id,
@@ -515,6 +520,75 @@ class ReportRenderService:
         return entity
 
     def _build_pdf(self, snapshot: dict[str, Any]) -> tuple[bytes, list[str]]:
+        return self._pdf_renderer.build(snapshot)
+
+    def _event(
+        self, render: ReportRender, event_type: str, payload: dict[str, Any]
+    ) -> None:
+        self.store.append_operation_event(
+            render.id,
+            "report_render",
+            render.engagement_id,
+            event_type,
+            payload,
+            actor_id=self.operator_id(),
+            idempotency_key=(
+                f"report-render:{render.id}:{event_type}"
+                if event_type not in {"report_render.failed"}
+                else None
+            ),
+        )
+
+    def _all_renders(self, engagement_id: str | None = None) -> list[ReportRender]:
+        result: list[ReportRender] = []
+        offset = 0
+        while True:
+            page = self.store.list_entities(
+                ReportRender,
+                engagement_id=engagement_id,
+                offset=offset,
+                limit=1000,
+            )
+            result.extend(page)
+            if len(page) < 1000:
+                return result
+            offset += len(page)
+
+
+class _PdfRenderer:
+    """Process-local fonts and pure snapshot-to-PDF layout; no Core services."""
+
+    def __init__(self, font_root: str | Path | None = None) -> None:
+        self.font_root = Path(
+            font_root or Path(__file__).parent / "report_assets" / "fonts"
+        )
+        self.font_paths = {
+            key: self.font_root / name for key, name in FONT_FILES.items()
+        }
+        missing = [str(path) for path in self.font_paths.values() if not path.is_file()]
+        if missing:
+            raise ReportRenderError(
+                "renderer_unavailable",
+                "bundled report fonts are missing: " + ", ".join(missing),
+                status_code=503,
+            )
+        self.font_hashes = {
+            key: _file_sha256(path) for key, path in self.font_paths.items()
+        }
+        suffix = self.font_hashes["regular"][:12]
+        self.font_names = {
+            "regular": f"NebulaNotoSans-{suffix}",
+            "bold": f"NebulaNotoSansBold-{suffix}",
+            "mono": f"NebulaNotoSansMono-{suffix}",
+            "mono_bold": f"NebulaNotoSansMonoBold-{suffix}",
+        }
+        for key, name in self.font_names.items():
+            if name not in pdfmetrics.getRegisteredFontNames():
+                pdfmetrics.registerFont(TTFont(name, str(self.font_paths[key])))
+        regular_font = pdfmetrics.getFont(self.font_names["regular"])
+        self.supported_codepoints = set(regular_font.face.charToGlyph)
+
+    def build(self, snapshot: dict[str, Any]) -> tuple[bytes, list[str]]:
         warnings: list[str] = []
         unsupported_codepoints: set[int] = set()
         unsupported_fields = 0
@@ -825,37 +899,27 @@ class ReportRenderService:
             warnings.append(_glyph_warning(unsupported_codepoints, unsupported_fields))
         return output.getvalue(), warnings
 
-    def _event(
-        self, render: ReportRender, event_type: str, payload: dict[str, Any]
-    ) -> None:
-        self.store.append_operation_event(
-            render.id,
-            "report_render",
-            render.engagement_id,
-            event_type,
-            payload,
-            actor_id=self.operator_id(),
-            idempotency_key=(
-                f"report-render:{render.id}:{event_type}"
-                if event_type not in {"report_render.failed"}
-                else None
-            ),
-        )
 
-    def _all_renders(self, engagement_id: str | None = None) -> list[ReportRender]:
-        result: list[ReportRender] = []
-        offset = 0
-        while True:
-            page = self.store.list_entities(
-                ReportRender,
-                engagement_id=engagement_id,
-                offset=offset,
-                limit=1000,
-            )
-            result.extend(page)
-            if len(page) < 1000:
-                return result
-            offset += len(page)
+@lru_cache(maxsize=4)
+def _worker_pdf_renderer(
+    font_root: str, expected_hashes: tuple[tuple[str, str], ...]
+) -> _PdfRenderer:
+    renderer = _PdfRenderer(font_root)
+    if renderer.font_hashes != dict(expected_hashes):
+        raise ReportRenderError(
+            "renderer_changed", "Report font files changed before rendering"
+        )
+    return renderer
+
+
+def render_pdf_snapshot(
+    snapshot: dict[str, Any],
+    font_root: str,
+    expected_hashes: tuple[tuple[str, str], ...],
+) -> tuple[bytes, list[str]]:
+    """Importable worker entry: only plain data in and PDF/warnings out."""
+
+    return _worker_pdf_renderer(font_root, expected_hashes).build(snapshot)
 
 
 def _fact_table(rows: list[list[Any]]) -> Table:

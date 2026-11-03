@@ -1262,6 +1262,7 @@ class ControlAssistantWork:
             "host_admission": {
                 "policy": "New chats and missions wait for host capacity. Queued means saved, not running. Work starts automatically when load recovers.",
                 "status_route": "/api/v1/host-load",
+                "read_operation": "nebula.work.host_load",
                 "calibration": self.app.state.host_load.monitor.sample().public()
                 if getattr(self.app.state, "host_load", None) is not None
                 else None,
@@ -1528,6 +1529,14 @@ class ControlAssistantWork:
             "url": _work_item_url(project_id, item_id),
             "saved": True,
         }
+
+    async def host_load(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Fetch current Core host calibration on every invocation."""
+
+        self._project(project_id)
+        return await self._request("GET", "/api/v1/host-load", {})
 
     async def harness_quota(
         self, project_id: str, arguments: dict[str, Any]
@@ -3500,6 +3509,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.host_load",
+        "Read current Core CPU capacity and pressure, available-memory ratio, busy/deferred reason, measurement availability and sample age from /api/v1/host-load. Each invocation makes a fresh authenticated Core request; Core shares a bounded one-second sampler cache. Read this before diagnosing queued chats or missions; queued means saved, not running, and missing measurements remain unknown.",
+        EMPTY_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.overview",
         "List this project's main chats, delegated subagents, and missions with current status and IDs. Call before choosing a target.",
         EMPTY_SCHEMA,
@@ -3897,6 +3912,8 @@ async def dispatch_work_tool(
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
         return await read_in_worker(work.overview, project_id)
+    if name == "nebula.work.host_load":
+        return await work.host_load(project_id, arguments)
     if name == "nebula.work.browser_sessions":
         return await read_in_worker(
             work.browser_sessions, project_id, arguments.get("offset", 0)
