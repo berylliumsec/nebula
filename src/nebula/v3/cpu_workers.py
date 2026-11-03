@@ -9,14 +9,16 @@ jobs keep their capacity until the child finishes; their results are discarded.
 from __future__ import annotations
 
 import asyncio
+from _thread import LockType
 from collections import deque
 from contextvars import Context, copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import multiprocessing
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 import os
 import pickle
+from threading import Lock
 import time
 from typing import Any, Callable, TypeVar
 
@@ -96,24 +98,29 @@ class _Worker:
     running: bool = False
     cpu_seconds: float = 0.0
     completed: int = 0
+    stop_lock: LockType = field(default_factory=Lock, repr=False, compare=False)
 
 
 def _stop_worker(worker: _Worker, *, force: bool = False) -> None:
-    process = worker.process
-    if process.is_alive() and not force:
-        try:
-            worker.connection.send(None)
-        except (EOFError, OSError):
-            # diagnostic-expected: a worker may already have exited.
-            pass
-        process.join(timeout=0.5)
-    if process.is_alive():
-        process.terminate()
-        process.join(timeout=0.5)
-    if process.is_alive():
-        process.kill()
-        process.join(timeout=0.5)
-    worker.connection.close()
+    # Shutdown can terminate a child while its dispatcher observes the exit.
+    # Both owners must serialize process teardown and Connection.close(), whose
+    # idempotent handle check is not safe across concurrent threads.
+    with worker.stop_lock:
+        process = worker.process
+        if process.is_alive() and not force:
+            try:
+                worker.connection.send(None)
+            except (EOFError, OSError):
+                # diagnostic-expected: a worker may already have exited.
+                pass
+            process.join(timeout=0.5)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=0.5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=0.5)
+        worker.connection.close()
 
 
 class CpuWorkerPool:

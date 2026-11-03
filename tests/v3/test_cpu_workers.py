@@ -287,6 +287,51 @@ def test_shutdown_cancels_queue_and_stops_running_children(tmp_path):
     asyncio.run(scenario())
 
 
+def test_concurrent_teardown_waits_for_the_owned_pipe_close():
+    async def scenario():
+        closing = threading.Event()
+        release = threading.Event()
+        second_entered = threading.Event()
+
+        class StoppedProcess:
+            def is_alive(self):
+                return False
+
+        class HeldConnection:
+            closed = False
+
+            def close(self):
+                if self.closed:
+                    return
+                assert not closing.is_set(), "Two owners closed the same pipe together"
+                closing.set()
+                assert release.wait(5), "The test did not release the held close"
+                self.closed = True
+
+        connection = HeldConnection()
+        worker = cpu_workers._Worker(StoppedProcess(), connection, 0)
+        first = asyncio.create_task(
+            asyncio.to_thread(cpu_workers._stop_worker, worker, force=True)
+        )
+        assert await asyncio.to_thread(closing.wait, 5)
+
+        def second_stop():
+            second_entered.set()
+            cpu_workers._stop_worker(worker, force=True)
+
+        second = asyncio.create_task(asyncio.to_thread(second_stop))
+        try:
+            assert await asyncio.to_thread(second_entered.wait, 5)
+            done, _ = await asyncio.wait({second}, timeout=0.05)
+            assert not done, "A competing teardown finished before the held close"
+        finally:
+            release.set()
+            outcomes = await asyncio.gather(first, second, return_exceptions=True)
+        assert outcomes == [None, None] and connection.closed
+
+    asyncio.run(scenario())
+
+
 def test_startup_timeout_cleans_up_owned_child(monkeypatch):
     monkeypatch.setattr(cpu_workers, "_worker_main", no_startup_ack)
 

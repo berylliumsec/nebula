@@ -47,11 +47,12 @@ has no executor applier and explicitly reports `inactive`.
 
 ## Selected validation
 
-The reviewed branch selection collects exactly 105 Python cases, 62 frontend
+The reviewed branch selection collects exactly 106 Python cases, 62 frontend
 cases and one CPU Settings browser journey in each of eight permanent profiles.
 The Python matrix is 3.11/3.12/3.13. No full suites, real providers, security tools,
 GPU work or production deployment are selected. The policy adds 16 API/service/
 Butler cases; the model adds held-job grow/drain and two startup-boundary cases.
+One additional held-close case covers concurrent worker teardown.
 
 Local feature checks passed: 29 initial API/model cases, the added minimum-limit
 case, both startup regressions and all 62 frontend cases. Ruff lint/format,
@@ -146,3 +147,13 @@ Separate fresh-context validators checked each failure before its repair:
   clients. The test now creates it through loopback, checks the response, and
   retains the real LAN browser redemption and Settings journey. Product pairing
   policy was not changed.
+- `validate_cpu_worker_shutdown`: the subsequent documentation/receipt candidate
+  `7e7e3660` passed all eight browser profiles and 105 Python cases on 3.11/3.13,
+  but 3.12 exposed a shutdown race (104 passed, one failed). A barrier immediately
+  before `os.close` in the exact failing test reproduced two cleanup threads
+  closing the same worker descriptor. Shutdown termination wakes the dispatcher,
+  whose loss cleanup also stops that worker. A per-worker lock now serializes
+  the complete teardown; errors are not suppressed and the exchange remains
+  independently terminable. The new held-close regression and existing real-child
+  shutdown/replacement cases pass locally: three cases in 2.25 seconds. The
+  reviewed final Python selection is 106 cases after adding this regression.
