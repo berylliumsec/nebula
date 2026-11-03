@@ -7,6 +7,7 @@ import time
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -14,9 +15,38 @@ from nebula.v3.butler_capabilities import ButlerCapabilities
 from nebula.v3.control_assistant_work import dispatch_work_tool
 from nebula.v3.domain import Engagement
 from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
+from nebula.v3.knowledge_index import ChromaKnowledgeIndex
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError
 from tests.v3.test_butler_capabilities import _scheduled_capabilities
+
+
+def test_core_startup_syncs_current_host_load_guidance_into_chroma(tmp_path):
+    from scripts.build_product_knowledge import source_digest, source_paths
+
+    store = NebulaStore(tmp_path / "core.db")
+    index = ChromaKnowledgeIndex(tmp_path / "chroma")
+    index._product_collection.modify(metadata={"source_digest": "stale"})
+    app = create_app(
+        store,
+        knowledge_index=index,
+        auth_token="synthetic-core-guidance",
+        execution_data_root=tmp_path / "execution",
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/host-load",
+                headers={"Authorization": "Bearer synthetic-core-guidance"},
+            )
+            assert response.status_code == 200
+            assert index._product_collection.metadata["source_digest"] == source_digest(
+                source_paths()
+            )
+            documents = index._product_collection.get()["documents"]
+            assert any("nebula.work.host_load" in text for text in documents)
+    finally:
+        store.database.dispose()
 
 
 class MutableMonitor(HostLoadMonitor):

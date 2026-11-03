@@ -757,7 +757,7 @@ def test_product_search_finds_fresh_butler_host_load_reads(monkeypatch):
     matches = search_product_knowledge(
         "Butler fresh current host-load CPU memory sample age nebula.work.host_load"
     )
-    assert any("nebula.work.host_load" in item.text for item in matches)
+    assert any("nebula.work.host_load" in str(item["text"]) for item in matches)
 
 
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):

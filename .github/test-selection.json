@@ -1,9 +1,9 @@
 {
   "reviewed_by": "Codex scoped process-worker experiment review; independent causal validation by validate_cpu_scaling",
-  "reason": "Explicitly injected CPU worker prototype keeps one Core coordinator and isolates pure PDF layout. Selected cases prove process identity, coordinator callbacks, FIFO/count/byte admission, queued/running cancellation, ordinary job errors, worker replacement without replay, startup/loop ownership, shutdown cleanup, real report PDF equivalence/cache/authorization/retry/durable state, preserved report contracts and harness bookkeeping. Synthetic LAN stress and soak run separately on only these integration boundaries. User added live Butler host-load capability: include fresh authenticated project/global/managed reads, shared off-loop sampling, discovery/authorization and existing admission, plus help/catalog and product source-digest/Chroma sync gates. UI metadata has one focused catalog test. A branch-scoped temporary CI builder regenerates the model-backed help index because local model egress is denied; it runs no suites and will be removed after the generated resource is fetched.",
+  "reason": "One Core coordinator delegates pure PDF layout to an explicitly injected bounded process pool. The selected cases cover exact process/loop/request-context ownership, FIFO and count/byte admission, queued/running cancellation, startup/exit/replacement/shutdown, PDF equivalence/artifact integrity/cache/revision/auth and preserved harness ledgers. Butler adds fresh authenticated project/global/managed host-load reads, unknown values, shared off-loop sampling, discovery/help/catalog, packaged source digest and Chroma synchronization including actual Core startup. One frontend metadata case covers current host-load discovery terms. The committed owned-LAN driver and raw matrix/overload/fault/soak evidence exercise these boundaries separately; no full suite is selected.",
   "exclusions": "No full suites. The CPU prototype is constructor-injected and leaves the shipped default unchanged. Butler adds read-only live host-capacity discovery and one focused frontend catalog metadata case; no new controls, geometry, browser-origin or authentication behavior. Native/Playwright suites are outside these boundaries. No production data, live providers or security tools. Local Python3.12; focused CI coverage selects3.11/3.12/3.13 for spawned-process lifecycle. Frozen/native packaging, Windows/macOS execution and whole-Core horizontal scaling remain outside the prototype.",
   "expected_tests": {
-    "python": 71,
+    "python": 72,
     "frontend": 1,
     "native": 0,
     "playwright": 0
@@ -35,5 +35,5 @@
   ],
   "native": [],
   "playwright": [],
-  "change_digest": "8d9142b8c9de9fc09d474efaece61dbf849e99cf2c52636e6fbf825af270c99a"
+  "change_digest": "cd0efcf00f8e7f4f94a10ecd77bd31d849c090667c3ab2353620726e8b1f963e"
 }
