@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"host-load-admission","patterns":["src/nebula/v3/host_load.py","src/nebula/v3/host_admission.py","src/nebula/v3/provider_scheduler.py","tests/v3/host_load_fixture.py"],"areas":["host-load-admission"]},
     {"name":"butler-saved-data","patterns":["src/nebula/v3/butler_data.py","ui/src/components/butlerResultAction*","ui/src/pages/useChatNavigation*","ui/src/api/projectDataEvents.ts"],"areas":["butler-saved-data"]},
     {"name":"butler-inspection","patterns":["src/nebula/v3/butler_inspection.py","src/nebula/v3/executions.py","ui/src/components/butlerArtifactAction*","ui/src/components/ExecutionHistory*","ui/tests/fixtures/butler_inspection_core.py"],"areas":["butler-inspection"]},
     {"name":"butler-sources","patterns":["src/nebula/v3/butler_sources.py","ui/src/components/ButlerSourceAdd.tsx","ui/src/components/butlerSourceAction.ts"],"areas":["butler-sources"]},
@@ -111,6 +112,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "host-load-admission": [
+      {"area":"host-load-admission","project":"model-desktop","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-load-admission","project":"model-compact","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-load-admission","project":"model-chromium-320","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-load-admission","project":"model-webkit-320","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-load-admission","project":"model-chromium-390","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-load-admission","project":"model-webkit-390","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-load-admission","project":"model-chromium-430","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-load-admission","project":"model-webkit-430","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"}
+    ],
     "butler-settings-catalog": [
       {"area":"butler-settings-catalog","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-settings-catalog","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"project execution mode settings assistant opens every catalog setting from a prompt on production LAN Core","runtime":"real-core","shard":"1/1"},

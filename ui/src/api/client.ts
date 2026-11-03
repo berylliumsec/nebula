@@ -1716,6 +1716,7 @@ interface WireChatTurn extends WireEntity {
   admitted_at?: string | null;
   queue_position?: number | null;
   capacity_lane?: "direct" | "background" | null;
+  admission_reason?: string | null;
   content?: string;
   reasoning?: string;
   approval_id?: string | null;
@@ -4171,6 +4172,7 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     admittedAt: value.admitted_at ?? undefined,
     queuePosition: value.queue_position ?? undefined,
     capacityLane: value.capacity_lane ?? undefined,
+    admissionReason: value.admission_reason ?? undefined,
     content: value.content ?? "",
     reasoning: value.reasoning ?? "",
     approvalId: value.approval_id ?? undefined,

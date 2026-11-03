@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .host_load import HostLoadGate
+
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .code_completion import complete as complete_code
 import asyncio
@@ -1004,26 +1006,16 @@ def _observation_dependencies(
 ) -> ObservationDependencies:
     observation = store.get(Observation, observation_id)
     reports: list[ObservationReportDependency] = []
-    offset = 0
-    while True:
-        page = store.list_entities(
+    reports = [
+        ObservationReportDependency(
+            id=report.id, title=report.title, status=report.status
+        )
+        for report in store.iter_reference_candidates(
             Report,
+            [("observation_ids", observation_id, True)],
             engagement_id=observation.engagement_id,
-            offset=offset,
-            limit=1_000,
         )
-        reports.extend(
-            ObservationReportDependency(
-                id=report.id,
-                title=report.title,
-                status=report.status,
-            )
-            for report in page
-            if observation_id in report.observation_ids
-        )
-        if len(page) < 1_000:
-            break
-        offset += len(page)
+    ]
     reports.sort(key=lambda report: (report.status != ReportStatus.FINAL, report.title))
     return ObservationDependencies(
         observation_id=observation_id,
@@ -1230,6 +1222,7 @@ class ChatTurnSummary(NebulaModel):
     admitted_at: datetime | None = None
     queue_position: int | None = None
     capacity_lane: str | None = None
+    admission_reason: str | None = None
     content: str = ""
     reasoning: str = ""
     approval_id: str | None = None
@@ -1810,6 +1803,7 @@ def create_app(
     runtime_usage_transport: httpx.AsyncBaseTransport | None = None,
     ssh_environment_service: SshEnvironmentService | None = None,
     butler_memory_service: ButlerMemoryService | None = None,
+    host_load_gate: HostLoadGate | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -2777,6 +2771,11 @@ def create_app(
     app.state.butler_oversight = butler_oversight
     app.state.butler_authority = butler_authority
     app.state.butler_improvements = butler_improvements
+    host_load = host_load_gate or HostLoadGate()
+    provider_chat.provider_scheduler.host_load = host_load
+    harness_runtime.host_load = host_load
+    missions.host_load = host_load
+    app.state.host_load = host_load
     app.state.openrouter_credit_observer = openrouter_credit_observer
     app.state.harness_quota_observer = harness_quota_observer
     app.state.butler_memory_service = butler_memory_service
@@ -4175,6 +4174,12 @@ def create_app(
             filename="nebula-diagnostics.zip",
             background=BackgroundTask(remove_temporary_export),
         )
+
+    @app.get(
+        f"{API_PREFIX}/host-load", tags=["system"], dependencies=[Depends(require_auth)]
+    )
+    async def host_load_status() -> dict[str, object]:
+        return (await host_load.snapshot()).public()
 
     @app.get(f"{API_PREFIX}/health", tags=["system"])
     async def health(_: str = Depends(require_auth)) -> dict[str, Any]:
@@ -7358,7 +7363,7 @@ def create_app(
     async def observation_dependencies(
         observation_id: str,
     ) -> ObservationDependencies:
-        return _observation_dependencies(store, observation_id)
+        return await read_in_worker(_observation_dependencies, store, observation_id)
 
     @app.post(
         f"{API_PREFIX}/observations/butler-drafts",
@@ -7758,7 +7763,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def global_overview() -> dict[str, Any]:
-        return store.overview()
+        return await read_in_worker(store.overview)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/overview",
@@ -7766,8 +7771,11 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def engagement_overview(engagement_id: str) -> dict[str, Any]:
-        store.get(Engagement, engagement_id)
-        return store.overview(engagement_id)
+        def read_overview() -> dict[str, Any]:
+            store.get(Engagement, engagement_id)
+            return store.overview(engagement_id)
+
+        return await read_in_worker(read_overview)
 
     @app.get(
         f"{API_PREFIX}/operator-profiles",
@@ -13017,12 +13025,15 @@ def create_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=1000, ge=1, le=10_000),
     ) -> EventList:
-        store.get(AgentRun, run_id)
-        events = store.replay_events(run_id, after_sequence=after, limit=limit)
-        return EventList(
-            events=events,
-            next_sequence=events[-1].sequence if events else after,
-        )
+        def read_events() -> EventList:
+            store.get(AgentRun, run_id)
+            events = store.replay_events(run_id, after_sequence=after, limit=limit)
+            return EventList(
+                events=events,
+                next_sequence=events[-1].sequence if events else after,
+            )
+
+        return await read_in_worker(read_events)
 
     @app.websocket(f"{API_PREFIX}/runs/{{run_id}}/events/ws")
     async def run_event_socket(
@@ -13333,7 +13344,7 @@ def create_app(
             tags=["artifacts"],
             dependencies=[Depends(require_auth)],
         )
-        async def artifact_content(
+        def artifact_content(
             artifact_id: str,
             sensitive_data_acknowledged: str | None = Header(
                 default=None,
@@ -14904,6 +14915,7 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
         admitted_at=turn.admitted_at,
         queue_position=service.provider_scheduler.position(turn.id),
         capacity_lane=turn.capacity_lane,
+        admission_reason=turn.admission_reason,
         content=turn.content,
         reasoning=service.turn_reasoning(turn),
         approval_id=turn.approval_id,
@@ -15696,8 +15708,8 @@ def _register_crud_routes(
                     if isinstance(entity, KnowledgeSource)
                 ]
             return [
-                _public_entity(relation_service.project_legacy(entity))
-                for entity in entities
+                _public_entity(entity)
+                for entity in relation_service.project_legacy_many(entities)
             ]
 
         list_entities.__name__ = f"list_{resource.replace('-', '_')}"
@@ -15912,7 +15924,9 @@ def _register_crud_routes(
                         "history references it"
                     )
             if model is Observation:
-                dependencies = _observation_dependencies(store, entity_id)
+                dependencies = await read_in_worker(
+                    _observation_dependencies, store, entity_id
+                )
                 if dependencies.reports:
                     final_reports = [
                         report

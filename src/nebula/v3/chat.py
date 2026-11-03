@@ -4042,7 +4042,7 @@ class ChatService:
                         "queued_at": (turn.queued_at or turn.created_at).isoformat(),
                         "queue_position": self.provider_scheduler.position(turn.id),
                         "capacity_lane": turn.capacity_lane,
-                        "detail": "Waiting for Core capacity",
+                        "detail": turn.admission_reason or "Waiting for Core capacity",
                     },
                 )
             ]
@@ -4087,14 +4087,17 @@ class ChatService:
                 name=f"nebula-provider-admission-{prepared.turn.id}",
             )
             last_position = self.provider_scheduler.position(prepared.turn.id)
+            last_reason = self.provider_scheduler.queue_detail(prepared.turn.id)
             while not admission_task.done():
                 done, _ = await asyncio.wait({admission_task}, timeout=1.0)
                 if done:
                     break
                 position = self.provider_scheduler.position(prepared.turn.id)
-                if position == last_position:
+                detail = self.provider_scheduler.queue_detail(prepared.turn.id)
+                if position == last_position and detail == last_reason:
                     continue
                 last_position = position
+                last_reason = detail
                 async with runtime.condition:
                     runtime.events.append(
                         (
@@ -4107,7 +4110,7 @@ class ChatService:
                                 ).isoformat(),
                                 "queue_position": position,
                                 "capacity_lane": prepared.turn.capacity_lane,
-                                "detail": "Waiting for Core capacity",
+                                "detail": detail,
                             },
                         )
                     )

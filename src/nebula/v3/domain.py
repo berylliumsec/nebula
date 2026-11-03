@@ -4420,6 +4420,7 @@ class ChatTurn(Entity):
     queued_at: datetime | None = None
     admitted_at: datetime | None = None
     capacity_lane: Literal["direct", "background"] = "direct"
+    admission_reason: str | None = Field(default=None, max_length=500)
     ledger_sequence: int = Field(default=0, ge=0)
     # No longer written: the turn ledger's checkpoint rows are the authority.
     # Kept so turns that recorded it still validate.

@@ -34,6 +34,7 @@ def test_bundled_operator_help_is_complete_auditable_and_documented():
         "migration-import-export",
         "mcp-servers",
         "release-boundary",
+        "host-capacity",
     ]
     assert len({article.source_id for article in articles}) == len(articles)
     assert len({article.chunk_id for article in articles}) == len(articles)
@@ -45,6 +46,19 @@ def test_bundled_operator_help_is_complete_auditable_and_documented():
     guide = (ROOT / "docs/NEBULA3.md").read_text(encoding="utf-8")
     assert "Built-in operator help" in guide
     assert "../src/nebula/v3/operator_help.md" in guide
+
+
+def test_host_capacity_help_explains_saved_deferral_and_recovery():
+    matches = search_operator_help(
+        ["Nebula chats and Butler jobs are queued because host CPU capacity is busy"]
+    )
+    article = next(
+        match.article
+        for match in matches
+        if match.article.article_id == "host-capacity"
+    )
+    assert "starts automatically" in article.body
+    assert "nebula.settings.api_request" in article.body
 
 
 def test_operator_help_search_requires_product_or_failure_intent_and_ranks_details():

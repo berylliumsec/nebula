@@ -314,7 +314,19 @@ class ApiEntityValidator:
         # failing the delete: one corrupt record of any kind used to turn every
         # generic DELETE into an internal error.
         for model in candidate_models:
-            for candidate in self.store.iter_readable_entities(model):
+            references = [
+                (rule.field, target.id, rule.many)
+                for rule in _REFERENCE_RULES.get(model, ())
+                if rule.target is type(target)
+            ]
+            if isinstance(target, Advisory) and model is Correlation:
+                references.append(("advisory_id", target.advisory_id, False))
+            candidates = (
+                self.store.iter_readable_entities(model)
+                if isinstance(target, Engagement)
+                else self.store.iter_reference_candidates(model, references)
+            )
+            for candidate in candidates:
                 if type(candidate) is type(target) and candidate.id == target.id:
                     continue
                 if (

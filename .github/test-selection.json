@@ -1,12 +1,12 @@
 {
-  "reviewed_by": "Codex focused review of search and Work read admission; independent root-cause validation by validate_load_cause",
-  "reason": "Search and Work read-only HTTP handlers must not block unrelated operator requests under concurrent load. Validate six read/filter entry points, mixed 24-request cancellation retaining physical reader capacity, worker failure recovery, existing search scope/pagination/privacy/stale-index/cursor behavior, and Work ownership/auth/durable refresh and source-chat filters. Disposable paired LAN Core load compares 1/8/32/64 clients against 12000 synthetic notes and 2000 tasks. Extended selection: search action lookup cost must stay constant with page size and batch guards must retain ownership, existence, revision and device capability checks. Concurrent HTTP and separate Butler search services must repair once, preserve newer edits and deletions, and keep private chat filtering and digest-bound chunks. Candidate projection fields are read as scalar rows to avoid ORM hydration while retaining the same 2000-candidate bound and sorting.",
-  "exclusions": "Backend scheduling and search projection/action lookup only; response schemas, search ranking/query semantics, mutation API contracts, interface controls, native code, provider/harness execution and origin policy are unchanged. No frontend/native/Playwright tests apply to this read boundary; browser/layout/device matrix excluded. No full suites, live external services, production data or running Core replacement.",
+  "reviewed_by": "Codex focused synthetic capability stress review; independent diagnosis by validate_stress_causes",
+  "reason": "Synthetic saturation of26 saved-state HTTP journeys found relationship-query growth, request-loop storage/hash work, broad reference hydration on deletion and redundant overview table reads. Select focused reproductions plus preserved relation, revision, pagination, artifact, replay, export, CRUD and scheduler contracts. The added host-load policy requires CPU/memory cache, hysteresis, FIFO budget, shared refresh, cancellation/error ownership, provider/harness/mission recovery and real-Core direct/Butler tests. Include exact help discovery and product-index/Chroma source-digest gates. Three frontend cases verify saved queue-reason mapping; the one production/LAN queue journey is selected on eight permanent browser profiles. Independent diagnostic agents validated each repaired causal mechanism. Package knowledge and WebKit download gates are denied locally and need CI. No full suites or external runtimes.",
+  "exclusions": "No full suites. Live external providers/security tools and operator data remain excluded. Host-load queue journeys require targeted UI/real-Core validation; browser matrix and bundled product knowledge evidence will be recorded separately. All workload fixtures are disposable and synthetic.",
   "expected_tests": {
-    "python": 25,
-    "frontend": 0,
+    "python": 111,
+    "frontend": 3,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python_versions": [
     "3.12"
@@ -14,17 +14,41 @@
   "python_browser": false,
   "python_node": false,
   "python": [
+    "tests/test_stress_capabilities.py",
+    "tests/v3/test_capability_stress.py",
+    "tests/v3/test_relations.py",
+    "tests/v3/test_storage.py::test_overview_counts_entities_by_engagement",
+    "tests/v3/test_storage.py::test_count_and_overview_agree_with_list_entities_about_temporary_chats",
+    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
+    "tests/v3/test_artifacts.py",
     "tests/v3/test_load_read_responsiveness.py",
-    "tests/v3/test_federated_search.py",
-    "tests/v3/test_work_snapshot_api.py",
-    "tests/v3/test_work.py::test_work_api_auth_scope_and_refresh",
-    "tests/v3/test_control_plane_reads.py::test_worker_retains_context_and_recovers_from_a_failed_read",
-    "tests/v3/test_action_registry.py",
-    "tests/v3/test_butler_administration.py::test_butler_search_excludes_private_and_foreign_chats_before_pagination",
-    "tests/v3/test_butler_administration.py::test_butler_search_chunks_are_digest_bound_and_do_not_execute_actions"
+    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
+    "tests/v3/test_chat_throughput.py::test_queued_cancellation_prevents_provider_admission",
+    "tests/v3/test_storage.py::test_event_sequence_is_atomic_between_threads",
+    "tests/v3/test_exporter.py::test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest",
+    "tests/v3/test_reporting.py::test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_explicit",
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_reference_read_cost.py",
+    "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_control_assistant_work.py::test_start_chat_saves_a_separate_turn_for_core_owned_work",
+    "tests/v3/test_operator_help.py::test_bundled_operator_help_is_complete_auditable_and_documented",
+    "tests/v3/test_operator_help.py::test_host_capacity_help_explains_saved_deferral_and_recovery",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/hostCapacity.test.ts"
+  ],
   "native": [],
-  "playwright": [],
-  "change_digest": "cadd496b67418989bcc0cc4d552d9d8c19ee1cc7b8d21d9325f2435444a85476"
+  "playwright": [
+    "host-load-admission/model-chromium-320",
+    "host-load-admission/model-chromium-390",
+    "host-load-admission/model-chromium-430",
+    "host-load-admission/model-compact",
+    "host-load-admission/model-desktop",
+    "host-load-admission/model-webkit-320",
+    "host-load-admission/model-webkit-390",
+    "host-load-admission/model-webkit-430"
+  ],
+  "change_digest": "beae3cf0c54e2b235cc18af4ac9c6ffc9118041643eae1e2b852296242cb9a4c"
 }

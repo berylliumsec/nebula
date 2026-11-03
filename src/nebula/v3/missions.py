@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from .host_load import HostLoadGate
+from .host_admission import save_host_wait
+
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -199,6 +202,7 @@ class MissionService:
         if cancellation_timeout_seconds <= 0:
             raise ValueError("cancellation_timeout_seconds must be positive")
         self.store = store
+        self.host_load: HostLoadGate | None = None
         self.checkpoint_path = (
             Path(checkpoint_path).expanduser().resolve()
             if checkpoint_path is not None
@@ -941,6 +945,14 @@ class MissionService:
 
     async def _execute(self, queued: AgentRun, provider: ModelProvider) -> None:
         try:
+            if self.host_load is not None:
+
+                async def deferred(reason: str | None) -> None:
+                    await asyncio.to_thread(
+                        save_host_wait, self.store, AgentRun, queued.id, reason
+                    )
+
+                await self.host_load.wait(deferred)
             current = self.store.get(AgentRun, queued.id)
             if current.status == RunStatus.CANCELLING:
                 reason, actor = self._cancel_reasons.get(
