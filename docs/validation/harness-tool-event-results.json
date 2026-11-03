@@ -1,0 +1,435 @@
+{
+  "date": "2026-11-03",
+  "baseline_commit": "1951d3397cb12260629c3e65f4d3ebf3b2e4f4c4",
+  "environment": {
+    "python": "3.12.14",
+    "sqlite": "3.53.1",
+    "sqlalchemy": "2.0.37",
+    "dependencies": "Same installed interpreter and dependencies for baseline and candidate"
+  },
+  "lookup_only_before": [
+    {
+      "history": 0,
+      "active": 4,
+      "median_ms": 0.745203999983346,
+      "max_ms": 185.85039499998857,
+      "burst": {
+        "events": 200,
+        "elapsed_ms": 146.90424500000177,
+        "first_timer_delay_ms": 1.962730000007241
+      },
+      "query": {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_session_id = ? AND JSON_EXTRACT(entities.payload, ?) IN (?, ?, ?, ?) ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "tool_calls",
+          "chat",
+          "$.\"status\"",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+          ]
+        ]
+      }
+    },
+    {
+      "history": 4500,
+      "active": 4,
+      "median_ms": 18.48920250000674,
+      "max_ms": 24.931598000023314,
+      "burst": {
+        "events": 200,
+        "elapsed_ms": 3705.6097229999805,
+        "first_timer_delay_ms": 52.898272999987284
+      },
+      "query": {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_session_id = ? AND JSON_EXTRACT(entities.payload, ?) IN (?, ?, ?, ?) ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "tool_calls",
+          "chat",
+          "$.\"status\"",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+          ]
+        ]
+      }
+    }
+  ],
+  "lookup_only_after": [
+    {
+      "history": 0,
+      "active": 4,
+      "median_ms": 0.531932000001234,
+      "max_ms": 3.0361409999386524,
+      "burst": {
+        "events": 200,
+        "elapsed_ms": 136.5857490000053,
+        "first_timer_delay_ms": 8.219358999985161
+      },
+      "query": {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_harness_turn_id = ? AND entities.engagement_id = ? AND entities.tool_call_status IN (?, ?, ?, ?)",
+        "parameters": [
+          "tool_calls",
+          "turn",
+          "project",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            3,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_tool_call_turn_status_created (kind=? AND tool_call_harness_turn_id=? AND engagement_id=? AND tool_call_status=?)"
+          ]
+        ]
+      }
+    },
+    {
+      "history": 4500,
+      "active": 4,
+      "median_ms": 0.6954179999638654,
+      "max_ms": 3.9958510000133174,
+      "burst": {
+        "events": 200,
+        "elapsed_ms": 195.65776000001733,
+        "first_timer_delay_ms": 1.4578860000019631
+      },
+      "query": {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_harness_turn_id = ? AND entities.engagement_id = ? AND entities.tool_call_status IN (?, ?, ?, ?)",
+        "parameters": [
+          "tool_calls",
+          "turn",
+          "project",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            3,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_tool_call_turn_status_created (kind=? AND tool_call_harness_turn_id=? AND engagement_id=? AND tool_call_status=?)"
+          ]
+        ]
+      }
+    }
+  ],
+  "independent_lookup_before": [
+    {
+      "history": 0,
+      "active": 4,
+      "median_ms": 0.7087544999961892,
+      "max_ms": 3.0619910000098116,
+      "burst": {
+        "events": 200,
+        "elapsed_ms": 133.60417300000904,
+        "first_timer_delay_ms": 2.603362999996307
+      },
+      "query": {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_session_id = ? AND JSON_EXTRACT(entities.payload, ?) IN (?, ?, ?, ?) ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "tool_calls",
+          "chat",
+          "$.\"status\"",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+          ]
+        ]
+      }
+    },
+    {
+      "history": 4500,
+      "active": 4,
+      "median_ms": 19.541455000009478,
+      "max_ms": 26.449656000011146,
+      "burst": {
+        "events": 200,
+        "elapsed_ms": 3649.6637129999954,
+        "first_timer_delay_ms": 56.63631499999633
+      },
+      "query": {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_session_id = ? AND JSON_EXTRACT(entities.payload, ?) IN (?, ?, ?, ?) ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "tool_calls",
+          "chat",
+          "$.\"status\"",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+          ]
+        ]
+      }
+    }
+  ],
+  "independent_no_write_probe": [
+    {
+      "history": 0,
+      "profiled_events": 10,
+      "sql_statements": 10,
+      "select_statements": 10,
+      "write_statements": 0,
+      "direct_sql": {
+        "json_status": {
+          "returned_rows": 4,
+          "median_ms": 0.04071550000617208,
+          "plan": [
+            [
+              4,
+              0,
+              61,
+              "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+            ]
+          ]
+        },
+        "projected_status": {
+          "returned_rows": 4,
+          "median_ms": 0.030530999993061414,
+          "plan": [
+            [
+              4,
+              0,
+              61,
+              "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+            ]
+          ]
+        }
+      },
+      "instrumentation_note": "Discarded same-name JSON_EXTRACT UDF counts: SQLite 3.53.1 kept the built-in function. Root-cause findings use the actual SQL plan, direct SQL timings, profile, returned-row counts and statement counts.",
+      "sqlite_execute": [
+        {
+          "name": "<method 'execute' of 'sqlite3.Cursor' objects>",
+          "calls": 20,
+          "inclusive_ms": 0.190702,
+          "self_ms": 0.190702
+        }
+      ]
+    },
+    {
+      "history": 4500,
+      "profiled_events": 10,
+      "sql_statements": 10,
+      "select_statements": 10,
+      "write_statements": 0,
+      "direct_sql": {
+        "json_status": {
+          "returned_rows": 4,
+          "median_ms": 16.71290850001128,
+          "plan": [
+            [
+              4,
+              0,
+              61,
+              "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+            ]
+          ]
+        },
+        "projected_status": {
+          "returned_rows": 4,
+          "median_ms": 3.7363550000293344,
+          "plan": [
+            [
+              4,
+              0,
+              61,
+              "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+            ]
+          ]
+        }
+      },
+      "instrumentation_note": "Discarded same-name JSON_EXTRACT UDF counts: SQLite 3.53.1 kept the built-in function. Root-cause findings use the actual SQL plan, direct SQL timings, profile, returned-row counts and statement counts.",
+      "sqlite_execute": [
+        {
+          "name": "<method 'execute' of 'sqlite3.Cursor' objects>",
+          "calls": 20,
+          "inclusive_ms": 172.49803500000002,
+          "self_ms": 172.49803500000002
+        },
+        {
+          "name": "<method 'execute' of 'sqlite3.Cursor' objects>",
+          "calls": 20,
+          "inclusive_ms": 172.49803500000002,
+          "self_ms": 172.49803500000002
+        }
+      ]
+    }
+  ],
+  "lan_before": {
+    "label": "baseline",
+    "origin": "http://172.26.91.252:57245",
+    "source": "/tmp/nebula-harness-baseline/src",
+    "synthetic": true,
+    "auth_enabled": true,
+    "unauthorized_status": 401,
+    "history_per_chat": 4500,
+    "chats": 3,
+    "calls_per_chat": 50,
+    "ordinary_http": {
+      "count": 80,
+      "median_ms": 101.53938199999857,
+      "p95_ms": 183.41338100003668,
+      "max_ms": 257.6505619999807
+    },
+    "turns": {
+      "count": 3,
+      "median_ms": 9437.314057000094,
+      "p95_ms": 9983.940469000005,
+      "max_ms": 9983.940469000005
+    },
+    "one_ledger_row_per_call": true,
+    "ordered_durable_replay": true,
+    "reconnect_cursor": true,
+    "bookkeeping": {
+      "count": 300,
+      "median_ms": 25.23402700006727,
+      "p95_ms": 34.29307399994741,
+      "max_ms": 61.39827799995601
+    },
+    "loop_lag": {
+      "count": 193,
+      "median_ms": 46.855257000052006,
+      "p95_ms": 90.97736399995938,
+      "max_ms": 125.26497299994843
+    },
+    "query": [
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_session_id = ? AND JSON_EXTRACT(entities.payload, ?) IN (?, ?, ?, ?) ORDER BY entities.created_at, entities.id",
+        "parameters": [
+          "tool_calls",
+          "chat-0",
+          "$.\"status\"",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            4,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_kind_chat_session_created (kind=? AND chat_session_id=?)"
+          ]
+        ]
+      }
+    ],
+    "server_exit_code": 0,
+    "synthetic_data_removed": true
+  },
+  "lan_after": {
+    "label": "candidate",
+    "origin": "http://172.26.91.252:50807",
+    "source": "/workspace/nebula/src",
+    "synthetic": true,
+    "auth_enabled": true,
+    "unauthorized_status": 401,
+    "history_per_chat": 4500,
+    "chats": 3,
+    "calls_per_chat": 50,
+    "ordinary_http": {
+      "count": 68,
+      "median_ms": 27.456349999965823,
+      "p95_ms": 77.45163999993565,
+      "max_ms": 170.5460650000532
+    },
+    "turns": {
+      "count": 3,
+      "median_ms": 3492.1107400000437,
+      "p95_ms": 3499.9395590000404,
+      "max_ms": 3499.9395590000404
+    },
+    "one_ledger_row_per_call": true,
+    "ordered_durable_replay": true,
+    "reconnect_cursor": true,
+    "bookkeeping": {
+      "count": 300,
+      "median_ms": 5.108510500008379,
+      "p95_ms": 8.793124999897373,
+      "max_ms": 11.030393000055483
+    },
+    "loop_lag": {
+      "count": 199,
+      "median_ms": 7.707329000018035,
+      "p95_ms": 19.258182000035045,
+      "max_ms": 124.24980299998879
+    },
+    "query": [
+      {
+        "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_harness_turn_id = ? AND entities.engagement_id = ? AND entities.tool_call_status IN (?, ?, ?, ?)",
+        "parameters": [
+          "tool_calls",
+          "9a9f0ed4-54c1-4005-9bfe-5082dfdc7bfe",
+          "eng-a",
+          "proposed",
+          "waiting_approval",
+          "approved",
+          "running"
+        ],
+        "plan": [
+          [
+            3,
+            0,
+            61,
+            "SEARCH entities USING INDEX ix_entities_tool_call_turn_status_created (kind=? AND tool_call_harness_turn_id=? AND engagement_id=? AND tool_call_status=?)"
+          ]
+        ]
+      }
+    ],
+    "server_exit_code": 0,
+    "synthetic_data_removed": true
+  },
+  "core_source_sha256": {
+    "baseline": {
+      "src/nebula/v3/harnesses.py": "17ac97b156be39013e8375b589296642bc4ea4b2c1ca538d624ce6a686cf648d",
+      "src/nebula/v3/storage.py": "1fb4f40a6c044c545631ddebf497297a93da1686d669ba83ae0daa37b5b7d578",
+      "src/nebula/v3/database.py": "4b3c4e6d2d9e7f256c19a30cd26cd4864ce5f7b248b8abeb011c4b21e41361b0"
+    },
+    "candidate": {
+      "src/nebula/v3/harnesses.py": "e7d18708c4b2bec16c7c199226a7b9dea51301911d93f63143fd6d707eada3dd",
+      "src/nebula/v3/storage.py": "51e0bcd7b4e0debe47ddcee6c9eeb8619133c9ab2b99b1983bfc7c62e328eb9d",
+      "src/nebula/v3/database.py": "5e7145c4f05cc3b25036d37a101a9e8433c6570cbc67097a692130f2f2144f2e"
+    }
+  },
+  "limits": [
+    "Synthetic history-sensitive lookup and event-loop delay reproduced; reported live 5.1-second and earlier 6-8-second HTTP delays are not attributed or reproduced.",
+    "Synchronous writes, artifact persistence and quota/rate observers remain unchanged.",
+    "No production access or deployment. Browser/mobile and physical-device journeys are outside this internal SQL-only change. No live PostgreSQL server available."
+  ]
+}

@@ -1,12 +1,12 @@
 {
-  "reviewed_by": "Codex focused synthetic capability stress review; independent diagnosis by validate_stress_causes",
-  "reason": "Synthetic saturation of26 saved-state HTTP journeys found relationship-query growth, request-loop storage/hash work, broad reference hydration on deletion and redundant overview table reads. Select focused reproductions plus preserved relation, revision, pagination, artifact, replay, export, CRUD and scheduler contracts. The added host-load policy requires CPU/memory cache, hysteresis, FIFO budget, shared refresh, cancellation/error ownership, provider/harness/mission recovery and real-Core direct/Butler tests. Include exact help discovery and product-index/Chroma source-digest gates. Three frontend cases verify saved queue-reason mapping; the one production/LAN queue journey is selected on eight permanent browser profiles. Independent diagnostic agents validated each repaired causal mechanism. Package knowledge and WebKit download gates are denied locally and need CI. No full suites or external runtimes.",
-  "exclusions": "No full suites. Live external providers/security tools and operator data remain excluded. Host-load queue journeys require targeted UI/real-Core validation; browser matrix and bundled product knowledge evidence will be recorded separately. All workload fixtures are disposable and synthetic.",
+  "reviewed_by": "Codex focused tool-event lookup review; independent causal validation by validate_tool_bookkeeping",
+  "reason": "The exact turn/project/status lookup removes history-dependent harness bookkeeping reads. These 52 collected cases cover bounded SQL work through full result consumption with both chat and mission history, native/MCP identity and status transitions, all storage projection write paths, atomic migration upgrade/downgrade/failure retry, existing stream/approval ledger behavior and interruption/recovery. The committed synthetic LAN driver separately exercises three concurrent chats, authenticated ordinary HTTP reads, exact per-call ledger identity and reconnect cursors against baseline and candidate. The final diff adds only this repair, focused regression coverage, the synthetic driver and validation evidence.",
+  "exclusions": "No full suites, frontend, native desktop or Playwright: this change touches only Core SQL bookkeeping and schema projections; no interface, browser origin, authentication or route behavior changes. Real authenticated disposable non-loopback Core load/replay checks are recorded separately. External providers, security tools and operator data are excluded. Python 3.12 only; PostgreSQL server is not available locally.",
   "expected_tests": {
-    "python": 111,
-    "frontend": 3,
+    "python": 52,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -14,41 +14,16 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/test_stress_capabilities.py",
-    "tests/v3/test_capability_stress.py",
-    "tests/v3/test_relations.py",
-    "tests/v3/test_storage.py::test_overview_counts_entities_by_engagement",
-    "tests/v3/test_storage.py::test_count_and_overview_agree_with_list_entities_about_temporary_chats",
-    "tests/v3/test_api.py::test_typed_crud_revision_and_overview",
-    "tests/v3/test_artifacts.py",
-    "tests/v3/test_load_read_responsiveness.py",
-    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
-    "tests/v3/test_chat_throughput.py::test_queued_cancellation_prevents_provider_admission",
-    "tests/v3/test_storage.py::test_event_sequence_is_atomic_between_threads",
-    "tests/v3/test_exporter.py::test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest",
-    "tests/v3/test_reporting.py::test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_explicit",
-    "tests/v3/test_host_load.py",
-    "tests/v3/test_reference_read_cost.py",
-    "tests/v3/test_api_crud_validation.py",
-    "tests/v3/test_control_assistant_work.py::test_start_chat_saves_a_separate_turn_for_core_owned_work",
-    "tests/v3/test_operator_help.py::test_bundled_operator_help_is_complete_auditable_and_documented",
-    "tests/v3/test_operator_help.py::test_host_capacity_help_explains_saved_deferral_and_recovery",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_harness_tool_lookup.py",
+    "tests/v3/test_harness_tool_lookup_migration.py",
+    "tests/v3/test_entity_hot_lookups.py",
+    "tests/v3/test_harnesses.py::test_native_tool_event_keeps_one_ledger_row_past_the_first_page",
+    "tests/v3/test_harnesses.py::test_shared_session_handoff_streaming_and_frozen_mcp_snapshot",
+    "tests/v3/test_harnesses.py::test_mcp_policy_fails_closed_and_routes_exact_approval",
+    "tests/v3/test_harness_stopped_turns.py"
   ],
-  "frontend": [
-    "ui/src/api/hostCapacity.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "host-load-admission/model-chromium-320",
-    "host-load-admission/model-chromium-390",
-    "host-load-admission/model-chromium-430",
-    "host-load-admission/model-compact",
-    "host-load-admission/model-desktop",
-    "host-load-admission/model-webkit-320",
-    "host-load-admission/model-webkit-390",
-    "host-load-admission/model-webkit-430"
-  ],
-  "change_digest": "beae3cf0c54e2b235cc18af4ac9c6ffc9118041643eae1e2b852296242cb9a4c"
+  "playwright": [],
+  "change_digest": "1118a47f701ebd9f88073e9aa6f9332e7c42e3bccf722513f437d3df41476771"
 }

@@ -36,6 +36,7 @@ def _call(key="call", status="approved", origin="chat", project="project"):
         risk_class=RiskClass.LOCAL_READ,
         status=status,
         origin=origin,
+        metadata={"harness_turn_id": "harness-turn"},
     )
 
 
@@ -68,7 +69,11 @@ def test_all_entity_create_paths_populate_hot_projections(tmp_path, create_path,
     filters = (
         {"metadata.tool_call_id": "needle"}
         if model is Artifact
-        else {"status": "approved", "origin": "chat"}
+        else {
+            "status": "approved",
+            "origin": "chat",
+            "metadata.harness_turn_id": "harness-turn",
+        }
     )
     assert [item.id for item in store.find_entities(model, filters)] == [entity.id]
     store.database.dispose()
@@ -83,7 +88,12 @@ def test_reserved_tool_call_populates_projections_and_is_idempotent(tmp_path):
     assert [
         item.id
         for item in store.find_entities(
-            ToolCall, {"status": "approved", "origin": "mission"}
+            ToolCall,
+            {
+                "status": "approved",
+                "origin": "mission",
+                "metadata.harness_turn_id": "harness-turn",
+            },
         )
     ] == [call.id]
     store.database.dispose()
@@ -102,14 +112,26 @@ def test_all_update_paths_replace_and_clear_hot_projections(
         [{"metadata": {"tool_call_id": "changed"}}, {"metadata": {}}]
         if model is Artifact
         else [
-            {"status": ToolCallStatus.RUNNING, "origin": ToolCallOrigin.MISSION},
-            {"status": ToolCallStatus.COMPLETE, "origin": ToolCallOrigin.CHAT},
+            {
+                "status": ToolCallStatus.RUNNING,
+                "origin": ToolCallOrigin.MISSION,
+                "metadata": {"harness_turn_id": "changed-turn"},
+            },
+            {
+                "status": ToolCallStatus.COMPLETE,
+                "origin": ToolCallOrigin.CHAT,
+                "metadata": {},
+            },
         ]
     ):
         old_filters = (
             {"metadata.tool_call_id": entity.metadata.get("tool_call_id")}
             if model is Artifact
-            else {"status": entity.status.value, "origin": entity.origin.value}
+            else {
+                "status": entity.status.value,
+                "origin": entity.origin.value,
+                "metadata.harness_turn_id": entity.metadata.get("harness_turn_id"),
+            }
         )
         if update_path == "update":
             entity = store.update(
@@ -153,7 +175,11 @@ def test_all_update_paths_replace_and_clear_hot_projections(
         filters = (
             {"metadata.tool_call_id": entity.metadata.get("tool_call_id")}
             if model is Artifact
-            else {"status": entity.status.value, "origin": entity.origin.value}
+            else {
+                "status": entity.status.value,
+                "origin": entity.origin.value,
+                "metadata.harness_turn_id": entity.metadata.get("harness_turn_id"),
+            }
         )
         assert [item.id for item in store.find_entities(model, filters)] == [entity.id]
     store.database.dispose()

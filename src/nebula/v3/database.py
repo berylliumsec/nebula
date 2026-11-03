@@ -136,6 +136,15 @@ class EntityRow(Base):
             "created_at",
             "id",
         ),
+        Index(
+            "ix_entities_tool_call_turn_status_created",
+            "kind",
+            "tool_call_harness_turn_id",
+            "engagement_id",
+            "tool_call_status",
+            "created_at",
+            "id",
+        ),
         Index("ix_entities_engagement_updated", "engagement_id", "updated_at"),
         Index(
             "ix_entities_kind_engagement_updated_id",
@@ -190,6 +199,7 @@ class EntityRow(Base):
     artifact_tool_call_id: Mapped[str | None] = mapped_column(String(200))
     tool_call_status: Mapped[str | None] = mapped_column(String(40))
     tool_call_origin: Mapped[str | None] = mapped_column(String(40))
+    tool_call_harness_turn_id: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
