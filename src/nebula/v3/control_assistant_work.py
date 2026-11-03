@@ -1538,6 +1538,12 @@ class ControlAssistantWork:
         self._project(project_id)
         return await self._request("GET", "/api/v1/host-load", {})
 
+    async def host_cpu_budget(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        self._project(project_id)
+        return await self._request("GET", "/api/v1/host-cpu-budget", {})
+
     async def harness_quota(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -3515,6 +3521,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.host_cpu_budget",
+        "Read this Core host's saved CPU budget, host identity/revision, available capacity, automatic/custom effective limit and observed application state. It is shared across projects on this host. Change it through Settings GET/PUT /api/v1/host-cpu-budget using the read host_id and expected_revision. A saved inactive policy does not enable the experimental executor; only apply_state=applied proves its quota was observed.",
+        EMPTY_SCHEMA,
+        True,
+    ),
+    (
         "nebula.work.overview",
         "List this project's main chats, delegated subagents, and missions with current status and IDs. Call before choosing a target.",
         EMPTY_SCHEMA,
@@ -3914,6 +3926,8 @@ async def dispatch_work_tool(
         return await read_in_worker(work.overview, project_id)
     if name == "nebula.work.host_load":
         return await work.host_load(project_id, arguments)
+    if name == "nebula.work.host_cpu_budget":
+        return await work.host_cpu_budget(project_id, arguments)
     if name == "nebula.work.browser_sessions":
         return await read_in_worker(
             work.browser_sessions, project_id, arguments.get("offset", 0)

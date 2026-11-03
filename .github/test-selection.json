@@ -1,12 +1,12 @@
 {
-  "reviewed_by": "Codex shared-budget coverage review; independent causal checks by validate_cpu_scaling, validate_budget_chat_identity and validate_budget_poll_failure",
-  "reason": "One Core coordinator delegates pure PDF layout to an explicitly injected bounded process pool. The selected cases cover exact process/loop/request-context ownership, FIFO and count/byte admission, queued/running cancellation, startup/exit/replacement/shutdown, PDF equivalence/artifact integrity/cache/revision/auth and preserved harness ledgers. Butler adds fresh authenticated project/global/managed host-load reads, unknown values, shared off-loop sampling, discovery/help/catalog, packaged source digest and Chroma synchronization including actual Core startup. Thirteen new benchmark-model boundary cases cover shared global/per-owner/byte admission, round-robin fairness, cancellation, request callbacks, failure recovery, shutdown, RPC framing and current chat ownership through harness rollover, recorded bounded retries for report-status GETs and unretried ordinary latency probes. The owned-LAN resource-budget matrix separately exercises fifty real synthetic Core chat turns, ordinary HTTP reads, live Butler reads, actual aggregate Docker CPU/memory/PID limits and controlled resource failure. One frontend metadata case covers current host-load discovery terms. No full suite is selected.",
-  "exclusions": "No full suites. The CPU prototype is constructor-injected and leaves the shipped default unchanged. Butler adds read-only live host-capacity discovery and one focused frontend catalog metadata case; no new controls, geometry, browser-origin or authentication behavior. Native/Playwright suites are outside these boundaries. No production data, live providers or security tools. Local Python3.12; focused CI coverage selects3.11/3.12/3.13 for spawned-process lifecycle. Frozen/native packaging, Windows/macOS execution and whole-Core horizontal scaling remain outside the prototype.",
+  "reviewed_by": "Codex shared-budget and per-host CPU policy coverage review; independent causal validators recorded in docs/validation/host-cpu-budget.md",
+  "reason": "One Core coordinator delegates pure PDF layout to an explicitly injected bounded process pool. Selected pool/report/harness cases cover process/loop/context ownership, FIFO and count/byte admission, cancellation, worker recovery, PDF equivalence/artifact integrity/cache/revision/auth and preserved tool ledgers. Butler coverage proves fresh authenticated host-load reads, shared off-loop sampling, unknown values, discovery/help/catalog, source digest and actual startup Chroma synchronization. The 16 model boundary cases cover fairness, admission, byte limits, cancellation, failure/shutdown, RPC framing, harness rollover identity, bounded recorded polling retries, unretried ordinary reads, live grow/drain and both inert-executor startup paths. Sixteen host CPU policy cases cover per-host persistence/project sharing, observed application/retry, automatic/custom validation, identity/revision conflicts, restart, capacity reduction, corrupt-policy degradation and Butler read/save/readback. Product help includes CPU configuration discovery. Exactly 105 Python cases on 3.11/3.12/3.13 and 62 frontend cases in four feature-specific files are selected. Browser acceptance is exactly one real-Core CPU Settings journey in each of eight permanent desktop/compact/Chromium mobile/WebKit mobile profiles: pairing, save/reload, conflict/retry, observed/inactive state, accessibility and touch geometry. The separate owned-LAN model verifies actual kernel limits with 50 synthetic Core chats and ordinary HTTP/Butler reads. No full suite is selected.",
+  "exclusions": "No full suites. Host CPU policy, existing pool/report/harness boundaries and per-host control/receipt/discovery are selected. The browser matrix is one CPU Settings journey in eight profiles; unrelated interface journeys are excluded after review of the scoped card/CSS insertion. Real provider/GPU work, production deployment and native/frozen executor activation are excluded. The shared executor remains inactive in ordinary Core startup; saving its policy does not enable it.",
   "expected_tests": {
-    "python": 85,
-    "frontend": 1,
+    "python": 105,
+    "frontend": 62,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python_versions": [
     "3.11",
@@ -16,6 +16,7 @@
   "python_browser": false,
   "python_node": false,
   "python": [
+    "tests/v3/test_host_cpu_budget.py",
     "tests/v3/test_core_budget_model.py",
     "tests/v3/test_cpu_workers.py",
     "tests/v3/test_report_cpu_workers.py",
@@ -29,12 +30,25 @@
     "tests/v3/test_butler_capabilities.py::test_butler_discovers_chat_control_without_advertising_every_schema",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_fresh_butler_host_load_reads"
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_fresh_butler_host_load_reads",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_per_host_cpu_budget_configuration"
   ],
   "frontend": [
+    "ui/src/components/HostCpuBudgetSettings.test.tsx",
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts",
     "ui/src/settingsCatalog.hostLoad.test.ts"
   ],
   "native": [],
-  "playwright": [],
-  "change_digest": "a53395945a19269846cbf3cd893ba9601150a4523a7e470688cfc88f63f701c7"
+  "playwright": [
+    "entry:host-cpu-budget/model-desktop",
+    "entry:host-cpu-budget/model-compact",
+    "entry:host-cpu-budget/model-chromium-320",
+    "entry:host-cpu-budget/model-webkit-320",
+    "entry:host-cpu-budget/model-chromium-390",
+    "entry:host-cpu-budget/model-webkit-390",
+    "entry:host-cpu-budget/model-chromium-430",
+    "entry:host-cpu-budget/model-webkit-430"
+  ],
+  "change_digest": "b89f597a990da87f977682a27825daee6cc678eb6f436fa14dcc861590eb2d2c"
 }

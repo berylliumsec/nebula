@@ -1,0 +1,36 @@
+name: Rebuild product knowledge for CPU experiment
+
+on:
+  push:
+    branches: [experiment/core-process-workers]
+    paths:
+      - .github/workflows/cpu-experiment-knowledge.yml
+      - docs/design/nebula-settings-assistant.md
+      - ui/src/settingsCatalog.ts
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    if: github.ref == 'refs/heads/experiment/core-process-workers'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install only the knowledge builder dependencies
+        run: python -m pip install 'numpy<3' 'chromadb>=1.5.9,<2'
+      - name: Rebuild and verify the current guidance
+        run: |
+          python scripts/build_product_knowledge.py
+          python scripts/build_product_knowledge.py --verify
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: host-cpu-product-knowledge
+          path: src/nebula/v3/product_knowledge.sqlite3.b85
+          if-no-files-found: error

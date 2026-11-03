@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager, suppress
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -95,6 +96,8 @@ def serve(args):
         HarnessRuntimeService,
     )
     from nebula.v3.reporting import ReportRenderService
+    from nebula.v3.host_cpu_budget import HostCpuBudget
+    from nebula.v3.host_load import HostLoadGate
     from nebula.v3.storage import NebulaStore
 
     root = Path(args.directory)
@@ -187,6 +190,49 @@ def serve(args):
 
     compute = ComputeClient(root / "compute.sock", token)
     budget = FairBudget(compute.run) if args.policy == "shared-budget" else None
+    host_load = HostLoadGate()
+
+    async def capacity():
+        return (await host_load.snapshot()).cpu_capacity
+
+    async def observed_cpu_limit():
+        quota, period = (await compute.request("metrics"))["cpu_max"].split()
+        return float(quota) / float(period)
+
+    async def apply_cpu_limit(value):
+        name = os.environ["NEBULA_RESOURCE_MODEL_CONTAINER"]
+        if not name.startswith("nebula-resource-model-"):
+            raise ValueError("Require the driver's owned compute container")
+        environment = dict(os.environ)
+        for key in (
+            "DOCKER_HOST",
+            "DOCKER_CONTEXT",
+            "DOCKER_TLS",
+            "DOCKER_TLS_VERIFY",
+            "DOCKER_CERT_PATH",
+        ):
+            environment.pop(key, None)
+        process = await asyncio.create_subprocess_exec(
+            *DOCKER,
+            "update",
+            "--cpus",
+            str(value),
+            name,
+            env=environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await process.communicate()
+        if process.returncode:
+            raise RuntimeError("Owned compute CPU update failed")
+        budget.resize(max(1, min(4, math.ceil(value))))
+
+    host_cpu = HostCpuBudget(
+        root / "host-cpu-budget.json",
+        capacity,
+        apply=apply_cpu_limit if budget else None,
+        observe=observed_cpu_limit if budget else None,
+    )
     gateway = PdfGateway(compute, budget, REPO)
     renders = ReportRenderService(
         store=store, artifact_store=artifacts, cpu_workers=gateway
@@ -304,6 +350,8 @@ def serve(args):
         report_render_service=renders,
         auth_token=token,
         execution_data_root=root / "execution",
+        host_load_gate=host_load,
+        host_cpu_budget=host_cpu,
     )
     butler = ButlerCapabilities(
         store, artifacts, project.id, work=app.state.control_assistant_work
@@ -384,7 +432,7 @@ def serve(args):
         return {"released": len(ready)}
 
     @app.get("/__resource_model__/butler-host-load", dependencies=[Depends(authorized)])
-    async def host_load():
+    async def read_butler_host_load():
         return await butler.invoke(
             {"operation": "nebula.work.host_load", "arguments": {}}, change=False
         )
@@ -466,9 +514,27 @@ async def drive(args, token, core):
                 headers={"Authorization": "Bearer invalid"},
             )
         ).status_code == 401
+        cpu_policy = await get("/api/v1/host-cpu-budget")
+        if args.cpu_limit is not None:
+            configured = await client.put(
+                "/api/v1/host-cpu-budget",
+                json={
+                    "host_id": cpu_policy["host_id"],
+                    "expected_revision": cpu_policy["revision"],
+                    "cpu_limit": args.cpu_limit,
+                },
+            )
+            configured.raise_for_status()
+            cpu_policy = await get("/api/v1/host-cpu-budget")
+            assert (
+                cpu_policy["cpu_limit"] == args.cpu_limit
+                and cpu_policy["apply_state"] == "applied"
+            )
         compute_initial = await compute.request("metrics")
         quota, period = map(int, compute_initial["cpu_max"].split())
-        assert quota / period == (2 if args.policy == "shared-budget" else 4)
+        assert quota / period == (
+            cpu_policy["effective_cpu_limit"] if args.policy == "shared-budget" else 4
+        )
         if args.policy == "shared-budget":
             assert int(compute_initial["memory_max"]) == 512 * 1024 * 1024
             assert int(compute_initial["pids_max"]) == 128
@@ -811,11 +877,16 @@ async def drive(args, token, core):
             await asyncio.gather(*turns, *pdf_tasks, return_exceptions=True)
         if final["budget"]:
             state = final["budget"]
-            assert state["max_active"] <= 2 and state["max_owner_active"] == 1
+            assert (
+                state["max_active"]
+                <= min(4, math.ceil(cpu_policy["effective_cpu_limit"]))
+                and state["max_owner_active"] == 1
+            )
             assert state["max_admitted"] <= 128 and state["max_bytes"] <= 32 << 20
             assert state["admitted"] == state["input_bytes"] == 0
         return {
             "policy": args.policy,
+            "host_cpu_policy": cpu_policy,
             "origin": origin,
             "auth_enabled": True,
             "chats": args.chats,
@@ -856,6 +927,7 @@ def main():
     parser.add_argument("--host")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--cpu-limit", type=float)
     parser.add_argument(
         "--policy", choices=["admission-only", "shared-budget"], default="shared-budget"
     )
@@ -884,12 +956,24 @@ def main():
         or not 0 <= args.pdfs <= 16
     ):
         parser.error("Workload exceeds the owned model bounds")
+    if args.cpu_limit is not None and (
+        args.policy != "shared-budget"
+        or not math.isfinite(args.cpu_limit)
+        or args.cpu_limit <= 0
+    ):
+        parser.error("Custom CPU limit requires a positive finite shared-budget value")
     args.output = args.output.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     source_paths = [Path(__file__), Path(__file__).with_name("core_budget_model.py")]
     source_paths += [
         REPO / "src/nebula/v3" / name
-        for name in ("api.py", "harnesses.py", "reporting.py", "host_load.py")
+        for name in (
+            "api.py",
+            "harnesses.py",
+            "reporting.py",
+            "host_load.py",
+            "host_cpu_budget.py",
+        )
     ]
     args.source_hashes = {
         str(path.relative_to(REPO)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -917,6 +1001,7 @@ def main():
         env = dict(
             os.environ,
             NEBULA_RESOURCE_MODEL_TOKEN=token,
+            NEBULA_RESOURCE_MODEL_CONTAINER=container,
             XDG_DATA_HOME=directory + "/data",
             XDG_CONFIG_HOME=directory + "/config",
             XDG_CACHE_HOME=directory + "/cache",
@@ -959,7 +1044,7 @@ def main():
             "--directory",
             "/exchange",
             "--workers",
-            "2" if protected else str(args.chats + 2),
+            "4" if protected else str(args.chats + 2),
         ]
         subprocess.run(
             command, env=docker_env, check=True, capture_output=True, text=True
@@ -1005,6 +1090,8 @@ def main():
                 "--output",
                 str(args.output),
             ]
+            if args.cpu_limit is not None:
+                core_command.extend(["--cpu-limit", str(args.cpu_limit)])
             with args.output.with_suffix(".log").open("w") as log:
                 core = subprocess.Popen(core_command, env=env, stdout=log, stderr=log)
                 try:

@@ -74,7 +74,13 @@ def test_catalog_covers_settings_destinations_without_secrets():
     host = next(
         item for item in result["capability_families"] if item["id"] == "host-capacity"
     )
-    assert host["operations"] == ["nebula.work.host_load", "nebula.global.host_load"]
+    assert host["operations"] == [
+        "nebula.work.host_load",
+        "nebula.global.host_load",
+        "nebula.work.host_cpu_budget",
+        "nebula.global.host_cpu_budget",
+    ]
+    assert "/api/v1/host-cpu-budget" in host["configuration"]
     assert "/api/v1/host-load" in host["effect"]
     assert "nebula.notebook.edit_cell" in notebook_family["operations"]
     assert "nebula.notebook.file_index_status" in notebook_family["operations"]

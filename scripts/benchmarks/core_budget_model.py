@@ -66,11 +66,20 @@ class FairBudget:
     def start(self):
         if self.closed:
             raise RuntimeError("Model budget closed")
-        if not self.tasks:
-            self.tasks = [
-                asyncio.create_task(self._dispatch(), name=f"budget-model-{i}")
-                for i in range(self.concurrency)
-            ]
+        if len(self.tasks) < self.concurrency:
+            self.tasks.extend(
+                [
+                    asyncio.create_task(self._dispatch(), name=f"budget-model-{i}")
+                    for i in range(len(self.tasks), self.concurrency)
+                ]
+            )
+
+    def resize(self, concurrency):
+        if not 1 <= concurrency <= 4:
+            raise ValueError("Model concurrency must be 1–4")
+        self.concurrency = concurrency
+        self.start()
+        self.wake.set()
 
     async def run(self, owner, payload, *, on_start=None):
         self.start()
@@ -127,6 +136,10 @@ class FairBudget:
 
     async def _dispatch(self):
         while True:
+            if sum(self.active.values()) >= self.concurrency:
+                self.wake.clear()
+                await self.wake.wait()
+                continue
             while self.ready:
                 owner = self.ready.popleft()
                 if not self.queues.get(owner) or self.active[owner]:
@@ -173,6 +186,7 @@ class FairBudget:
                 self.active[owner] -= 1
                 self._release(job)
                 self._ready(owner)
+                self.wake.set()
 
     async def shutdown(self):
         self.closed = True

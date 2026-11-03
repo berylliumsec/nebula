@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name":"host-cpu-budget","patterns":["src/nebula/v3/host_cpu_budget.py","ui/src/api/hostCpuBudget.ts","ui/src/components/HostCpuBudgetSettings*","tests/v3/host_cpu_budget_fixture.py"],"areas":["host-cpu-budget"]},
     {"name":"host-load-admission","patterns":["src/nebula/v3/host_load.py","src/nebula/v3/host_admission.py","src/nebula/v3/provider_scheduler.py","tests/v3/host_load_fixture.py"],"areas":["host-load-admission"]},
     {"name":"butler-saved-data","patterns":["src/nebula/v3/butler_data.py","ui/src/components/butlerResultAction*","ui/src/pages/useChatNavigation*","ui/src/api/projectDataEvents.ts"],"areas":["butler-saved-data"]},
     {"name":"butler-inspection","patterns":["src/nebula/v3/butler_inspection.py","src/nebula/v3/executions.py","ui/src/components/butlerArtifactAction*","ui/src/components/ExecutionHistory*","ui/tests/fixtures/butler_inspection_core.py"],"areas":["butler-inspection"]},
@@ -112,6 +113,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "host-cpu-budget": [
+      {"area":"host-cpu-budget","project":"model-desktop","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-cpu-budget","project":"model-compact","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-cpu-budget","project":"model-chromium-320","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-cpu-budget","project":"model-webkit-320","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-cpu-budget","project":"model-chromium-390","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-cpu-budget","project":"model-webkit-390","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-cpu-budget","project":"model-chromium-430","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"host-cpu-budget","project":"model-webkit-430","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"}
+    ],
     "host-load-admission": [
       {"area":"host-load-admission","project":"model-desktop","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},
       {"area":"host-load-admission","project":"model-compact","test_match":"tests/host-load.spec.ts","runtime":"real-core","shard":"1/1"},

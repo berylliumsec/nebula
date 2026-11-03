@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from .host_load import HostLoadGate
+from .host_cpu_budget import (
+    HostCpuBudget,
+    HostCpuConflict,
+    HostCpuStatus,
+    HostCpuUpdate,
+)
 
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .code_completion import complete as complete_code
@@ -1804,6 +1810,7 @@ def create_app(
     ssh_environment_service: SshEnvironmentService | None = None,
     butler_memory_service: ButlerMemoryService | None = None,
     host_load_gate: HostLoadGate | None = None,
+    host_cpu_budget: HostCpuBudget | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -2479,6 +2486,19 @@ def create_app(
             return failures
 
         try:
+            try:
+                await host_cpus.startup()
+            except (OSError, ValueError) as exc:
+                emit_diagnostic(
+                    "warning",
+                    "host_cpu",
+                    "host_cpu.startup_failed",
+                    "Host CPU policy could not be loaded; other Core services remain available.",
+                    outcome="degraded",
+                    stage="startup",
+                    retryable=True,
+                    exception=exc,
+                )
             if isinstance(knowledge_index, ChromaKnowledgeIndex):
                 try:
                     await asyncio.to_thread(knowledge_index.sync_product_knowledge)
@@ -2772,6 +2792,14 @@ def create_app(
     app.state.butler_authority = butler_authority
     app.state.butler_improvements = butler_improvements
     host_load = host_load_gate or HostLoadGate()
+
+    async def host_cpu_capacity() -> float:
+        return (await host_load.snapshot()).cpu_capacity
+
+    host_cpus = host_cpu_budget or HostCpuBudget(
+        butler_instructions_root / "host-cpu-budget.json", host_cpu_capacity
+    )
+    app.state.host_cpu_budget = host_cpus
     provider_chat.provider_scheduler.host_load = host_load
     harness_runtime.host_load = host_load
     missions.host_load = host_load
@@ -4174,6 +4202,58 @@ def create_app(
             filename="nebula-diagnostics.zip",
             background=BackgroundTask(remove_temporary_export),
         )
+
+    @app.get(
+        f"{API_PREFIX}/host-cpu-budget",
+        response_model=HostCpuStatus,
+        tags=["system"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_host_cpu_budget(response: Response) -> HostCpuStatus:
+        response.headers["Cache-Control"] = "private, no-store"
+        try:
+            return await host_cpus.status()
+        except (OSError, ValueError) as exc:
+            record_caught_exception(
+                "host_cpu",
+                "host_cpu.read_failed",
+                "Host CPU policy could not be read.",
+                exc,
+                stage="read",
+            )
+            raise HTTPException(
+                503, "Host CPU settings are unavailable. Reload to retry."
+            ) from exc
+
+    @app.put(
+        f"{API_PREFIX}/host-cpu-budget",
+        response_model=HostCpuStatus,
+        tags=["system"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_host_cpu_budget(
+        request: HostCpuUpdate, response: Response
+    ) -> HostCpuStatus:
+        response.headers["Cache-Control"] = "private, no-store"
+        try:
+            return await host_cpus.update(request)
+        except HostCpuConflict as exc:
+            # diagnostic-expected: stale host/revision writes never apply.
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            # diagnostic-expected: an explicit CPU limit must fit this host.
+            raise HTTPException(422, str(exc)) from exc
+        except OSError as exc:
+            record_caught_exception(
+                "host_cpu",
+                "host_cpu.save_failed",
+                "Host CPU policy could not be saved.",
+                exc,
+                stage="save",
+            )
+            raise HTTPException(
+                503, "Could not save this host's CPU budget. Reload and retry."
+            ) from exc
 
     @app.get(
         f"{API_PREFIX}/host-load", tags=["system"], dependencies=[Depends(require_auth)]

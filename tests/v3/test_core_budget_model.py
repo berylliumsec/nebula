@@ -340,3 +340,110 @@ def test_ordinary_latency_observations_never_retry_transport_errors():
         assert failures[0]["retried"] is False
 
     asyncio.run(scenario())
+
+
+def test_live_resize_grows_then_drains_without_cancelling_running_jobs():
+    async def scenario():
+        releases = [asyncio.Event() for _ in range(4)]
+        started = []
+
+        async def runner(payload):
+            started.append(payload["index"])
+            await releases[payload["index"]].wait()
+            return payload
+
+        budget = FairBudget(runner)
+        tasks = [
+            asyncio.create_task(budget.run(str(i), {"kind": "cpu", "index": i}))
+            for i in range(3)
+        ]
+        await until(lambda: len(started) == 2)
+        budget.resize(3)
+        await until(lambda: len(started) == 3)
+        budget.resize(1)
+        final = asyncio.create_task(budget.run("3", {"kind": "cpu", "index": 3}))
+        await until(lambda: budget.snapshot()["admitted"] == 4)
+        releases[0].set()
+        releases[1].set()
+        await until(lambda: budget.snapshot()["active"] == 1)
+        assert started == [0, 1, 2] and not tasks[2].done()
+        releases[2].set()
+        await until(lambda: len(started) == 4)
+        releases[3].set()
+        await asyncio.gather(*tasks, final)
+        assert budget.snapshot()["admitted"] == budget.snapshot()["input_bytes"] == 0
+        await budget.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("policy", ["shared-budget", "admission-only"])
+def test_benchmark_lifespan_reads_the_capacity_gate_with_inert_executor(
+    tmp_path, monkeypatch, policy
+):
+    from argparse import Namespace
+    from fastapi.testclient import TestClient
+    from scripts.benchmarks import core_resource_budget as benchmark
+
+    observed = []
+    quota = [2.0]
+
+    class InertCompute:
+        def __init__(self, *args):
+            pass
+
+        async def request(self, operation, payload=None):
+            assert operation == "metrics"
+            return {"cpu_max": f"{int(quota[0] * 100000)} 100000"}
+
+        async def run(self, payload):
+            raise AssertionError("No computation may run during this startup check")
+
+    class InertProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def spawn(*command, **options):
+        assert command[:3] == ("docker", "--host=unix:///var/run/docker.sock", "update")
+        quota[0] = float(command[command.index("--cpus") + 1])
+        return InertProcess()
+
+    def run_app(app, **options):
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/host-cpu-budget",
+                headers={"Authorization": "Bearer synthetic-budget-startup"},
+            )
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["cpu_capacity"] > 0
+            assert data["effective_cpu_limit"] == max(0.01, data["cpu_capacity"] / 2)
+            assert data["apply_state"] == (
+                "applied" if policy == "shared-budget" else "inactive"
+            )
+            observed.append(data)
+
+    monkeypatch.setenv("NEBULA_RESOURCE_MODEL_TOKEN", "synthetic-budget-startup")
+    monkeypatch.setenv(
+        "NEBULA_RESOURCE_MODEL_CONTAINER", "nebula-resource-model-startup"
+    )
+    monkeypatch.setattr(benchmark, "ComputeClient", InertCompute)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr("uvicorn.run", run_app)
+    benchmark.serve(
+        Namespace(
+            directory=str(tmp_path),
+            chats=1,
+            history=0,
+            pdfs=0,
+            calls=1,
+            cpu_seconds=0.05,
+            policy=policy,
+            host="127.0.0.1",
+            port=0,
+            output=tmp_path / "startup.json",
+        )
+    )
+    assert len(observed) == 1

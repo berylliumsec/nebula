@@ -3566,6 +3566,24 @@
         "reason": "Permanent mission deletion and selected-URL cleanup require the visible destructive operator control.",
         "observed_result": "opened"
       }
+    },
+    {
+      "id": "host.cpu_budget",
+      "entry_point": "Settings → Setup → CPU budget, or an explicit Butler request to configure this Core host",
+      "ui_calls": [
+        "ui/src/api/hostCpuBudget.ts::request::GET \"host-cpu-budget\"",
+        "ui/src/api/hostCpuBudget.ts::request::\"PUT\" \"host-cpu-budget\""
+      ],
+      "core_owner": "Host-local CPU policy file and optional observed shared-executor quota",
+      "butler": {
+        "discover": "nebula.settings.catalog and nebula.settings.api_schema",
+        "read": "nebula.work.host_cpu_budget; nebula.settings.api_request GET host-cpu-budget",
+        "change": "nebula.settings.api_request PUT host-cpu-budget"
+      },
+      "authority": "Explicit host CPU setting request; observed host_id and expected_revision; finite 0.01..host-capacity limit or null for Automatic. Core persists and reads back policy and application state; saving an inactive policy never enables the experimental executor.",
+      "observed_result_test": "tests/v3/test_host_cpu_budget.py::test_butler_discovers_reads_and_saves_the_host_policy_with_readback",
+      "result": "One policy is shared across projects and browsers on this Core host, isolated from other hosts, with saved/inactive/pending/failed states distinguished from observed quota application.",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -3615,6 +3633,14 @@
     },
     {
       "key": "ui/src/api/butlerOverview.ts::request::GET `engagements/${encodeURIComponent(projectId)}/butler/overview${query.size ? `?${query}` : \"\"}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/hostCpuBudget.ts::request::\"PUT\" \"host-cpu-budget\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/hostCpuBudget.ts::request::GET \"host-cpu-budget\"",
       "count": 1
     },
     {
