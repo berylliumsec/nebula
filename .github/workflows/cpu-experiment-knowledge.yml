@@ -9,7 +9,7 @@ on:
       - ui/src/settingsCatalog.ts
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   rebuild:
@@ -29,12 +29,11 @@ jobs:
         run: |
           python scripts/build_product_knowledge.py
           python scripts/build_product_knowledge.py --verify
-      - name: Save the generated index on the experimental branch
+      - name: Export the generated public guidance resource
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/nebula/v3/product_knowledge.sqlite3.b85
-          if ! git diff --cached --quiet; then
-            git commit -m 'build: refresh product knowledge for Butler host-load reads'
-            git push origin HEAD:experiment/core-process-workers
-          fi
+          python - <<'PYCODE'
+          from pathlib import Path
+          print('NEBULA_PRODUCT_INDEX_BEGIN')
+          print(Path('src/nebula/v3/product_knowledge.sqlite3.b85').read_text(), end='')
+          print('NEBULA_PRODUCT_INDEX_END')
+          PYCODE
