@@ -39,7 +39,7 @@ _GLOBAL_SETTINGS = re.compile(
     r"providers|provider-catalog|harnesses|mcp-servers|ssh-environments|"
     r"runner-profiles|vpn-profiles|operator-profiles|credentials/(?:vault|[A-Za-z0-9_.~:-]+/status)|skills|"
     r"integrations|automation/runtime|diagnostics/settings|voice/settings|butler/(?:instructions|check-interval)|"
-    r"hooks|project-instructions|runtime-usage|host-load|setup|release"
+    r"hooks|project-instructions|runtime-usage|host-load|host-cpu-budget|setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
 )
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
@@ -979,6 +979,18 @@ async def execute_settings_api(
                 state="core_settings_saved",
                 client_action={
                     "kind": "butler_interval_refresh",
+                    "project_id": project_id,
+                },
+            )
+        if (
+            selected == "PUT"
+            and observed is not None
+            and candidate == "/api/v1/host-cpu-budget"
+        ):
+            outcome.update(
+                state="core_settings_saved",
+                client_action={
+                    "kind": "host_cpu_budget_refresh",
                     "project_id": project_id,
                 },
             )

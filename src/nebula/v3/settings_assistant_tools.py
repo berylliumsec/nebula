@@ -284,6 +284,18 @@ def catalog() -> dict[str, Any]:
         ],
         "capability_families": [
             {
+                "id": "host-capacity",
+                "discover_with": "nebula.capabilities.search",
+                "operations": [
+                    "nebula.work.host_load",
+                    "nebula.global.host_load",
+                    "nebula.work.host_cpu_budget",
+                    "nebula.global.host_cpu_budget",
+                ],
+                "effect": "Read /api/v1/host-load through Core authentication on every invocation. Report CPU and available-memory pressure, busy reason, measurement availability and sample age from Core's shared one-second sampler; global host_load is for scheduled Nebula-wide Butler.",
+                "configuration": "Settings → Setup → CPU budget. GET/PUT /api/v1/host-cpu-budget saves Automatic (cpu_limit=null) or a finite positive host limit using host_id and expected_revision. It is host-local and shared by every project/browser on that Core. Read back apply_state and applied_cpu_limit; saving an inactive policy does not activate the prototype.",
+            },
+            {
                 "id": "notebook",
                 "discover_with": "nebula.capabilities.search",
                 "operations": [
@@ -305,7 +317,7 @@ def catalog() -> dict[str, Any]:
                     "nebula.notebook.search_package",
                 ],
                 "effect": "interactive Butler delegates selected-project Notebook actions to Core under the current grant and project revision; the requesting browser selects host index paths",
-            }
+            },
         ],
         "settings": [
             {

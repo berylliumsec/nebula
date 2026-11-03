@@ -3097,3 +3097,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .session-workspace.chat-companion-open.stacked > .chat-companion-panel { grid-column: 1; grid-row: 3; width: auto; }
   .session-workspace.chat-companion-open.stacked .side-panel-resize-handle { display: none; }
 }
+.host-cpu-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.host-cpu-form label { display: grid; gap: 6px; min-width: 0; max-width: 100%; }
+.host-cpu-form input, .host-cpu-form select { min-height: 44px; width: 180px; max-width: 100%; }
+.host-cpu-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.host-cpu-actions .button { min-height: 44px; min-width: 44px; }

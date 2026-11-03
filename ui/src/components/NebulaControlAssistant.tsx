@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { createPortal } from "react-dom";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import {BUTLER_INTERVAL_CHANGED_EVENT} from "../api/butlerInstructions";
+import {HOST_CPU_BUDGET_CHANGED} from "../api/hostCpuBudget";
 import {notifyRuntimeSettingsChanged} from "../api/runtimeSettingsEvents";
 import { ApiError } from "../api/client";
 import { ACCEPTED_LIBRARY_FILES, encodeLibraryFile, MAX_LIBRARY_ITEM_BYTES, startLibraryArtifactDownload } from "../api/libraryFiles";
@@ -1819,6 +1820,10 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (action.kind === "butler_interval_refresh") {
       window.dispatchEvent(new Event(BUTLER_INTERVAL_CHANGED_EVENT));
       return "Core confirmed the Butler check interval. Its Settings control has been asked to refresh.";
+    }
+    if (action.kind === "host_cpu_budget_refresh") {
+      window.dispatchEvent(new Event(HOST_CPU_BUDGET_CHANGED));
+      return "Core confirmed its saved CPU policy. The Settings control will refresh its application state.";
     }
     if (action.kind === "credential_delete") {
       if (!api || coreState !== "online" || engagement?.id !== action.projectId) {

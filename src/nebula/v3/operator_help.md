@@ -410,7 +410,24 @@ quota and memory limits are considered where available. Hysteresis and a shared
 start budget prevent repeated bursts. Existing jobs continue.
 
 Queued work is saved and starts automatically after recovery; it can be cancelled
-while waiting. Butler can inspect `/api/v1/host-load` through
-`nebula.settings.api_schema` and `nebula.settings.api_request`, or read the policy
-in `nebula.work.catalog`. A saved or queued chat is not proof its runtime started.
+while waiting. Butler discovers `nebula.work.host_load` for a fresh authenticated
+`/api/v1/host-load` read. Scheduled Nebula-wide Butler also has
+`nebula.global.host_load`. The result includes CPU capacity and pressure,
+available-memory ratio, busy reason, measurement availability and sample age.
+Each invocation rereads Core; Core still shares its one-second sampler cache.
+The existing `nebula.settings.api_schema` and `nebula.settings.api_request` route
+remains available, and `nebula.work.catalog` names the direct read operation.
+A saved or queued chat is not proof its runtime started.
 Missing optional counters remain unknown and do not permanently strand work.
+
+Settings → Setup → CPU budget saves one policy on the connected Core host,
+shared across its projects and browsers. Automatic uses half the detected CPU
+capacity; Custom selects a positive finite CPU-equivalent limit up to that
+capacity. Butler reads `nebula.work.host_cpu_budget` or scheduled
+`nebula.global.host_cpu_budget`, then uses Settings GET/PUT
+`/api/v1/host-cpu-budget` with `host_id`, `expected_revision` and `cpu_limit`
+(`null` for Automatic). Read back the saved revision and application state.
+Only `apply_state=applied` and an observed `applied_cpu_limit` prove the active
+experimental shared executor changed. A saved inactive policy does not enable
+that executor or limit execution paths outside it. Reload before retrying a
+revision or host conflict; retry saving a pending or failed application.

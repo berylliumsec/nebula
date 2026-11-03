@@ -1,0 +1,274 @@
+{
+  "scope": "per-host CPU policy applied to the owned experimental executor; ordinary Core remains inactive",
+  "candidate_commit": "e49d2e03f6ff723960a7e3bb0549e2b5fbc35bcc",
+  "ui_bundle_sha256": "b499351714b036163c766c91c53a113c14d38f1136dc4b58640ff0c3e07d5515",
+  "lan_browser_origin": "http://172.26.91.252:54217",
+  "local_browser_profiles_passed": [
+    "model-desktop",
+    "model-compact",
+    "model-chromium-320",
+    "model-chromium-390",
+    "model-chromium-430"
+  ],
+  "results": [
+    {
+      "raw_receipt": "/tmp/host-cpu-three-smoke-fixed.json",
+      "raw_sha256": "e253a397153063f356da9f222d5c1340da2b7b0104c58054ae94f5cdc4e69d47",
+      "origin": "http://172.26.91.252:50605",
+      "policy": "shared-budget",
+      "host_cpu_policy": {
+        "host_id": "81c15bb26bf44284a4d66ff8b5b6fd14",
+        "revision": 2,
+        "cpu_limit": 3.0,
+        "host_name": "d2594391c221",
+        "cpu_capacity": 4.0,
+        "automatic_cpu_limit": 2.0,
+        "effective_cpu_limit": 3.0,
+        "applied_cpu_limit": 3.0,
+        "apply_state": "applied",
+        "capacity_clamped": false,
+        "detail": "Applied to this host's shared background executor."
+      },
+      "chats": 4,
+      "calls_per_chat": 2,
+      "cpu_seconds_per_call": 0.05,
+      "historical_calls_per_chat": 2,
+      "load_wall_s": 4.6725038069998845,
+      "all_chats_running_before_release": true,
+      "completed_chats": 4,
+      "exact_tool_ledgers_and_replay": true,
+      "ordinary_reads_by_phase": {
+        "drain": {
+          "count": 72,
+          "p50": 4.793,
+          "p95": 5.886,
+          "p99": 7.121,
+          "max": 7.121
+        },
+        "load": {
+          "count": 160,
+          "p50": 5.31,
+          "p95": 15.819,
+          "p99": 62.772,
+          "max": 64.286
+        },
+        "recovery": {
+          "count": 78,
+          "p50": 5.187,
+          "p95": 13.122,
+          "p99": 14.057,
+          "max": 14.057
+        }
+      },
+      "http_failures": [],
+      "poll_transport_failures": [],
+      "recovery_turn_s": 0.18119683000259101,
+      "core_exit_code": 0,
+      "owned_container_removed": true,
+      "synthetic_data_removed": true,
+      "source_sha256": {
+        "scripts/benchmarks/core_resource_budget.py": "b2763cfd03bee04493234dc083095b27007e34e01a97209b2d39d372b14ad250",
+        "scripts/benchmarks/core_budget_model.py": "989a39915297405405f8e51415c4789c99f55cc9e1eeab1fa98c294b169046cf",
+        "src/nebula/v3/api.py": "564de5cd559371fcd93639733c663c5ad9e7dcdf470572d0f50a70170a4abfc3",
+        "src/nebula/v3/harnesses.py": "e7d18708c4b2bec16c7c199226a7b9dea51301911d93f63143fd6d707eada3dd",
+        "src/nebula/v3/reporting.py": "91673a447ec7385380060c2fb60e67b06e08cdcbb1dc3b6dab222deeac29d577",
+        "src/nebula/v3/host_load.py": "963ff1a27d97a66b9ffd76c3f6f017cbd05e32c35b8cdb3e11d309fc99d5f219"
+      },
+      "completed_pdfs": [
+        {
+          "render_id": "3dcab3dd-16bb-4d2b-85b9-7fc8cd634e3e",
+          "sha256": "8958613ea51c97ab6eca53318a8041772f193feffe55c4b84583d64b36a501ff",
+          "bytes": 124775
+        },
+        {
+          "render_id": "847c3805-1f90-48c1-a87a-e78b83c7032d",
+          "sha256": "b71c3cf55e2cf406997bfa47f92da88464f4ecb71b6c85bae246940ef19f82e7",
+          "bytes": 124772
+        }
+      ],
+      "kernel_cpu_max": "300000 100000",
+      "kernel_memory_max": "536870912",
+      "kernel_pids_max": "128",
+      "max_active_compute_jobs": 3,
+      "peak_compute_mib_during_load": 236.129,
+      "peak_core_mib_during_load": 252.93,
+      "steady_compute_cpus": null,
+      "steady_window_definition": "10 seconds after release through 5 seconds before the end; absent for short smoke",
+      "final_budget": {
+        "accepted": 11,
+        "max_admitted": 6,
+        "max_bytes": 1320304,
+        "max_active": 3,
+        "max_owner_active": 1,
+        "completed": 11,
+        "active": 0,
+        "active_by_owner": {},
+        "admitted": 0,
+        "queued": 0,
+        "input_bytes": 0,
+        "capacity": 128,
+        "per_owner": 4,
+        "concurrency": 3
+      },
+      "shutdown_budget": {
+        "accepted": 11,
+        "max_admitted": 6,
+        "max_bytes": 1320304,
+        "max_active": 3,
+        "max_owner_active": 1,
+        "completed": 11,
+        "active": 0,
+        "active_by_owner": {},
+        "admitted": 0,
+        "queued": 0,
+        "input_bytes": 0,
+        "capacity": 128,
+        "per_owner": 4,
+        "concurrency": 3
+      },
+      "compute_memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "raw_receipt": "/tmp/host-cpu-three-50.json",
+      "raw_sha256": "ec0eeb7c63751daf634cbc99ebbc2eb32488931c4cff5a99b362a56c219e2d75",
+      "origin": "http://172.26.91.252:38205",
+      "policy": "shared-budget",
+      "host_cpu_policy": {
+        "host_id": "98e154ac26464b828871314ee21c1d11",
+        "revision": 2,
+        "cpu_limit": 3.0,
+        "host_name": "d2594391c221",
+        "cpu_capacity": 4.0,
+        "automatic_cpu_limit": 2.0,
+        "effective_cpu_limit": 3.0,
+        "applied_cpu_limit": 3.0,
+        "apply_state": "applied",
+        "capacity_clamped": false,
+        "detail": "Applied to this host's shared background executor."
+      },
+      "chats": 50,
+      "calls_per_chat": 4,
+      "cpu_seconds_per_call": 0.5,
+      "historical_calls_per_chat": 200,
+      "load_wall_s": 39.896571889999905,
+      "all_chats_running_before_release": true,
+      "completed_chats": 50,
+      "exact_tool_ledgers_and_replay": true,
+      "ordinary_reads_by_phase": {
+        "drain": {
+          "count": 84,
+          "p50": 5.86,
+          "p95": 8.747,
+          "p99": 13.158,
+          "max": 13.158
+        },
+        "load": {
+          "count": 1306,
+          "p50": 6.121,
+          "p95": 27.516,
+          "p99": 48.202,
+          "max": 464.79
+        },
+        "recovery": {
+          "count": 76,
+          "p50": 5.437,
+          "p95": 30.811,
+          "p99": 37.387,
+          "max": 37.387
+        }
+      },
+      "http_failures": [],
+      "poll_transport_failures": [],
+      "recovery_turn_s": 0.19111097499990137,
+      "core_exit_code": 0,
+      "owned_container_removed": true,
+      "synthetic_data_removed": true,
+      "source_sha256": {
+        "scripts/benchmarks/core_resource_budget.py": "4068d8aecac99bb2baf876f5e41d2bec52674d6191e66073c455ba321045e1f6",
+        "scripts/benchmarks/core_budget_model.py": "989a39915297405405f8e51415c4789c99f55cc9e1eeab1fa98c294b169046cf",
+        "src/nebula/v3/api.py": "564de5cd559371fcd93639733c663c5ad9e7dcdf470572d0f50a70170a4abfc3",
+        "src/nebula/v3/harnesses.py": "e7d18708c4b2bec16c7c199226a7b9dea51301911d93f63143fd6d707eada3dd",
+        "src/nebula/v3/reporting.py": "91673a447ec7385380060c2fb60e67b06e08cdcbb1dc3b6dab222deeac29d577",
+        "src/nebula/v3/host_load.py": "963ff1a27d97a66b9ffd76c3f6f017cbd05e32c35b8cdb3e11d309fc99d5f219",
+        "src/nebula/v3/host_cpu_budget.py": "65dd9a11ba8124d62e67b1625922382d5bac33a0a9d73d8d19e1e1f1f51a8462"
+      },
+      "completed_pdfs": [
+        {
+          "render_id": "b8b64bfc-a449-4966-98a1-b42b49af5ddc",
+          "sha256": "f413eccfc5bbceffd3872c293613e9587f37ae4b598b1258f210344cd9de4ad5",
+          "bytes": 124776
+        },
+        {
+          "render_id": "4cf7ee74-19df-405d-8477-3102deea143b",
+          "sha256": "ba0833bf258a483d4577781321f262415ed3a7114eb34b8e578b3761b13a4a28",
+          "bytes": 124776
+        },
+        {
+          "render_id": "140028b8-ca34-4070-b5fe-fb1ba89bf1f9",
+          "sha256": "9449f501c1e4c95453d0d0dfe17a5d9991cdc7de17479531acc9c65dcbedd1ca",
+          "bytes": 124777
+        },
+        {
+          "render_id": "f95b4871-c62f-4960-b9c0-bfed4eabd5ab",
+          "sha256": "b29f478b9ffeaee2e6c14be41eb0f19c59e64eee1ab473572946552907d70c83",
+          "bytes": 124777
+        }
+      ],
+      "kernel_cpu_max": "300000 100000",
+      "kernel_memory_max": "536870912",
+      "kernel_pids_max": "128",
+      "max_active_compute_jobs": 3,
+      "peak_compute_mib_during_load": 310.242,
+      "peak_core_mib_during_load": 274.148,
+      "steady_compute_cpus": 2.962,
+      "steady_window_definition": "10 seconds after release through 5 seconds before the end; absent for short smoke",
+      "final_budget": {
+        "accepted": 205,
+        "max_admitted": 52,
+        "max_bytes": 1321726,
+        "max_active": 3,
+        "max_owner_active": 1,
+        "completed": 205,
+        "active": 0,
+        "active_by_owner": {},
+        "admitted": 0,
+        "queued": 0,
+        "input_bytes": 0,
+        "capacity": 128,
+        "per_owner": 4,
+        "concurrency": 3
+      },
+      "shutdown_budget": {
+        "accepted": 205,
+        "max_admitted": 52,
+        "max_bytes": 1321726,
+        "max_active": 3,
+        "max_owner_active": 1,
+        "completed": 205,
+        "active": 0,
+        "active_by_owner": {},
+        "admitted": 0,
+        "queued": 0,
+        "input_bytes": 0,
+        "capacity": 128,
+        "per_owner": 4,
+        "concurrency": 3
+      },
+      "compute_memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    }
+  ]
+}

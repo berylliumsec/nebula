@@ -1,29 +1,54 @@
 {
-  "reviewed_by": "Codex focused tool-event lookup review; independent causal validation by validate_tool_bookkeeping",
-  "reason": "The exact turn/project/status lookup removes history-dependent harness bookkeeping reads. These 52 collected cases cover bounded SQL work through full result consumption with both chat and mission history, native/MCP identity and status transitions, all storage projection write paths, atomic migration upgrade/downgrade/failure retry, existing stream/approval ledger behavior and interruption/recovery. The committed synthetic LAN driver separately exercises three concurrent chats, authenticated ordinary HTTP reads, exact per-call ledger identity and reconnect cursors against baseline and candidate. The final diff adds only this repair, focused regression coverage, the synthetic driver and validation evidence.",
-  "exclusions": "No full suites, frontend, native desktop or Playwright: this change touches only Core SQL bookkeeping and schema projections; no interface, browser origin, authentication or route behavior changes. Real authenticated disposable non-loopback Core load/replay checks are recorded separately. External providers, security tools and operator data are excluded. Python 3.12 only; PostgreSQL server is not available locally.",
+  "reviewed_by": "Codex shared-budget and per-host CPU policy coverage review; independent causal validators recorded in docs/validation/host-cpu-budget.md",
+  "reason": "One Core coordinator delegates pure PDF layout to an explicitly injected bounded process pool. An added held-close worker teardown regression covers concurrent crash/shutdown cleanup. Selected pool/report/harness cases cover process/loop/context ownership, FIFO and count/byte admission, cancellation, worker recovery, PDF equivalence/artifact integrity/cache/revision/auth and preserved tool ledgers. Butler coverage proves fresh authenticated host-load reads, shared off-loop sampling, unknown values, discovery/help/catalog, source digest and actual startup Chroma synchronization. The 16 model boundary cases cover fairness, admission, byte limits, cancellation, failure/shutdown, RPC framing, harness rollover identity, bounded recorded polling retries, unretried ordinary reads, live grow/drain and both inert-executor startup paths. Sixteen host CPU policy cases cover per-host persistence/project sharing, observed application/retry, automatic/custom validation, identity/revision conflicts, restart, capacity reduction, corrupt-policy degradation and Butler read/save/readback. Product help includes CPU configuration discovery. Exactly 106 Python cases on 3.11/3.12/3.13 and 62 frontend cases in four feature-specific files are selected. Browser acceptance is exactly one real-Core CPU Settings journey in each of eight permanent desktop/compact/Chromium mobile/WebKit mobile profiles: pairing, save/reload, conflict/retry, observed/inactive state, accessibility and touch geometry. The separate owned-LAN model verifies actual kernel limits with 50 synthetic Core chats and ordinary HTTP/Butler reads. No full suite is selected.",
+  "exclusions": "No full suites. Host CPU policy, existing pool/report/harness boundaries and per-host control/receipt/discovery are selected. The browser matrix is one CPU Settings journey in eight profiles; unrelated interface journeys are excluded after review of the scoped card/CSS insertion. Real provider/GPU work, production deployment and native/frozen executor activation are excluded. The shared executor remains inactive in ordinary Core startup; saving its policy does not enable it.",
   "expected_tests": {
-    "python": 52,
-    "frontend": 0,
+    "python": 106,
+    "frontend": 62,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python_versions": [
-    "3.12"
+    "3.11",
+    "3.12",
+    "3.13"
   ],
   "python_browser": false,
   "python_node": false,
   "python": [
+    "tests/v3/test_host_cpu_budget.py",
+    "tests/v3/test_core_budget_model.py",
+    "tests/v3/test_cpu_workers.py",
+    "tests/v3/test_report_cpu_workers.py",
+    "tests/v3/test_reporting.py",
     "tests/v3/test_harness_tool_lookup.py",
-    "tests/v3/test_harness_tool_lookup_migration.py",
-    "tests/v3/test_entity_hot_lookups.py",
     "tests/v3/test_harnesses.py::test_native_tool_event_keeps_one_ledger_row_past_the_first_page",
-    "tests/v3/test_harnesses.py::test_shared_session_handoff_streaming_and_frozen_mcp_snapshot",
-    "tests/v3/test_harnesses.py::test_mcp_policy_fails_closed_and_routes_exact_approval",
-    "tests/v3/test_harness_stopped_turns.py"
+    "tests/v3/test_butler_host_load.py",
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_operator_help.py::test_host_capacity_help_explains_saved_deferral_and_recovery",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/v3/test_butler_capabilities.py::test_butler_discovers_chat_control_without_advertising_every_schema",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_fresh_butler_host_load_reads",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_per_host_cpu_budget_configuration"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/HostCpuBudgetSettings.test.tsx",
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/settingsCatalog.hostLoad.test.ts"
+  ],
   "native": [],
-  "playwright": [],
-  "change_digest": "1118a47f701ebd9f88073e9aa6f9332e7c42e3bccf722513f437d3df41476771"
+  "playwright": [
+    "entry:host-cpu-budget/model-desktop",
+    "entry:host-cpu-budget/model-compact",
+    "entry:host-cpu-budget/model-chromium-320",
+    "entry:host-cpu-budget/model-webkit-320",
+    "entry:host-cpu-budget/model-chromium-390",
+    "entry:host-cpu-budget/model-webkit-390",
+    "entry:host-cpu-budget/model-chromium-430",
+    "entry:host-cpu-budget/model-webkit-430"
+  ],
+  "change_digest": "cbcf77702c8e4f81aaf147c528b5ba07d3d25ed10c49999b52f7241b748029ed"
 }

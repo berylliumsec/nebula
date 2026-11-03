@@ -3,6 +3,13 @@ import type { ChatStreamEvent, HarnessProfile } from "../api/types";
 import { assistantTurnOptions, assistantWorkReceipt, headlessSessionChange, isSettingNavigationRequest, isThemeChangeCommand, projectModeChange, projectScopeChange, settingClientAction, settingToOpen, themeChange } from "./nebulaAssistantActions";
 
 describe("settings assistant actions", () => {
+  it("refreshes the host CPU setting only after trusted selected-project readback", () => {
+    const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "core_settings_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.settings.api_request", client_action: {kind: "host_cpu_budget_refresh", project_id: "selected"}}};
+    expect(settingClientAction(event, "selected")).toEqual({kind: "host_cpu_budget_refresh", projectId: "selected"});
+    expect(settingClientAction(event, "other")).toBeUndefined();
+    expect(settingClientAction({...event, receipt: {...event.receipt, read_back: false}}, "selected")).toBeUndefined();
+  });
   it("refreshes guides only for an observed selected-project guide write", () => {
     const event: ChatStreamEvent = {type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.capabilities.change", status: "complete", summary: "Saved", evidenceIds: [], artifacts: [], step: 0,
       receipt: {state: "core_project_data_saved", read_back: true, butler_project_id: "selected", butler_operation: "nebula.data.set_guide_progress", client_action: {kind: "guides_refresh", project_id: "selected"}}};
