@@ -1,22 +1,22 @@
 {
-  "reviewed_by": "Codex focused review after independent causal validation",
-  "reason": "Seven collected Python cases cover the global and project covering status indexes, create/update projections, migration backfill and downgrade, roster and peer ordering, authenticated HTTP roster, and the actual MCP agent.list and Work tool paths. The synthetic LAN load receipt compares old and new Core on the same 2 GB fixture with concurrent reads and writes.",
-  "exclusions": "No UI, native, or browser code changes. Frontend, native, and Playwright suites do not measure this storage lookup. The production app shell, authenticated health, actual HTTP roster, and both MCP gateway tools are probed in the real Core LAN load. No live providers or production data are used.",
+  "change_digest": "c35bf5d6776bcc1d6b02c534e0d358b05c4043065ce66357f1f0833cb617e13e",
+  "reviewed_by": "Codex paired terminal/headless feature review and independent CLI contract validation",
+  "reason": "38 focused terminal client/headless command checks, one actual authenticated headless Core journey over non-loopback TLS with an inert local provider and CLI subprocesses, and three bundled product-help digest/search/Chroma checks. Collected 42 tests. Independent review validated harness pause/model/config issues before repair.",
+  "exclusions": "No unrelated suites or paid providers. No browser layout, native code, frontend behavior or UI build changes; the settings catalog only adds terminal pairing discovery copy. Browser/mobile matrices and production frontend bundle are inapplicable to terminal-only entry points. Product-help regeneration and its three tests are blocked locally by denied embedding-model download (HTTP proxy 403); this missing gate prevents merge. Real-Core uses only temporary synthetic data.",
   "expected_tests": {
-    "python": 7,
+    "python": 42,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_turn_status_lookup.py",
-    "tests/v3/test_chat_turn_status_migration.py",
-    "tests/v3/test_work.py::test_agent_roster_matches_dashboard_scope_and_refreshes_links",
-    "tests/v3/test_work.py::test_work_agents_api_lists_active_sessions_across_projects",
-    "tests/v3/test_work_gateway.py::test_builtin_work_gateway_is_default_on_scoped_and_retains_updates"
+    "tests/v3/test_chat_cli.py",
+    "tests/v3/test_chat_cli_core.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [],
-  "change_digest": "dbdb76939a3153c46490b27e61d7e21d1a629ac6ae1c70631d461083075dc054"
+  "playwright": []
 }

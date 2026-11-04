@@ -5,6 +5,7 @@ Start with the [main README](../README.md) for an overview and installation opti
 ## Use Nebula
 
 - [Nebula 3 guide](NEBULA3.md): setup, projects, and core workflows.
+- [Headless Core and paired Butler CLI](CLI.md): run a server and chat from a terminal.
 - [Usage scenarios](NEBULA3_USAGE_SCENARIOS.md): examples of work in a project.
 - [Automation runtime](AUTOMATION-RUNTIME.md): agent commands, scope, and approvals.
 - [MCP servers](MCP-SERVERS.md): connect external tools.
