@@ -131,6 +131,44 @@ jobs:
         if: env.RUN_SELECTED == 'true'
         run: poetry build
 
+  terminal-client:
+    needs: selection
+    if: contains(needs.selection.outputs.python, 'tests/test_terminal_')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Build and install only the terminal distribution
+        run: |
+          python -m pip install 'build>=1.2,<2' 'setuptools>=77' wheel packaging pytest
+          python -m scripts.build_terminal_client --no-isolation --out-dir "$RUNNER_TEMP/terminal-client"
+          python -m pip install "$RUNNER_TEMP"/terminal-client/*.whl
+      - name: Run only the selected terminal contracts
+        env:
+          SELECTED_TESTS: ${{ needs.selection.outputs.python }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, sys
+          targets = [item for item in json.loads(os.environ['SELECTED_TESTS']) if item.startswith('tests/test_terminal_')]
+          assert targets, 'No reviewed terminal test targets'
+          subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', *targets], check=True)
+          subprocess.run([sys.executable, '-m', 'pytest', '-q', *targets], check=True)
+          PY
+      - name: Attach the reviewed client distributions
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: terminal-client-distributions
+          path: ${{ runner.temp }}/terminal-client/*
+          if-no-files-found: error
+
   database-migrations:
     needs: selection
     if: contains(needs.selection.outputs.python, 'tests/v3/test_migrations.py')

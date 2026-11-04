@@ -1,0 +1,1011 @@
+"""Interactive Assistant: all durable state and execution stay on Core."""
+
+from __future__ import annotations
+
+import asyncio
+import shlex
+from contextlib import suppress
+from typing import Any
+from uuid import uuid4
+
+import httpx
+from prompt_toolkit.patch_stdout import patch_stdout
+
+from .state import Cursor, Draft, View, main_chat, visible_message
+from .transport import ApiError, AsyncApi, ClientError, Settings, key, terminal_text
+from .ui import CancelledInput, InterruptedPrompt, TerminalUI
+
+
+def named(items: list[dict[str, Any]], field: str = "name") -> list[dict[str, Any]]:
+    return [
+        {**item, "name": str(item.get(field) or item.get("id") or "Unnamed")}
+        for item in items
+    ]
+
+
+class Shell:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        ui: TerminalUI | None = None,
+        api: AsyncApi | None = None,
+    ):
+        self.settings = settings
+        self.ui = ui or TerminalUI()
+        self._api = api
+        self.view: View | None = None
+        self.views: dict[tuple[str | None, str, str], View] = {}
+        self.stream_task: asyncio.Task[None] | None = None
+        self.attention_task: asyncio.Task[None] | None = None
+        self.profiles: dict[str, dict[str, Any]] = {}
+        self.seen_attention: set[str] = set()
+        self.running = True
+
+    @property
+    def api(self) -> AsyncApi:
+        if self._api is None:
+            raise ClientError("Choose a paired Core first.")
+        return self._api
+
+    def current(self) -> View:
+        if self.view is None:
+            raise ClientError("Choose a project with /projects.")
+        return self.view
+
+    async def connect(self, selected: str | None = None) -> None:
+        cores = self.settings.data.get("cores", {})
+        if selected is None and (self.settings.core is None or self._api is not None):
+            if not cores:
+                raise ClientError(
+                    "No paired Core. Run nebula-chat --core https://HOST:PORT pair first."
+                )
+            selected = (
+                await self.ui.choose(
+                    "Paired Core", [{"id": item, "name": item} for item in cores]
+                )
+            )["id"]
+        if selected is not None:
+            if selected not in cores:
+                raise ClientError(
+                    "Pair this Core first with nebula-chat --core https://HOST:PORT pair."
+                )
+            candidate_settings = Settings(
+                self.settings.path, self.settings.data, selected
+            )
+            candidate = AsyncApi(candidate_settings)
+        else:
+            candidate_settings = self.settings
+            candidate = self._api or AsyncApi(candidate_settings)
+        try:
+            health = await candidate.request("GET", "health")
+            if health.get("terminal_client_protocol") != 1:
+                raise ClientError(
+                    "This Core does not support Assistant shell protocol 1. Upgrade Core or use the legacy 'nebula-chat chat' Butler command."
+                )
+        except BaseException:
+            if candidate is not self._api:
+                await candidate.close()
+            raise
+        await self.detach()
+        await self.stop_attention()
+        if self._api is not None and self._api is not candidate:
+            await self._api.close()
+        self.settings.core = candidate_settings.core
+        self._api = candidate
+        self.settings.save(dict(self.settings.entry))
+        self.view = None
+        self.profiles.clear()
+        self.seen_attention.clear()
+        self.ui.say(f"Connected to {self.settings.core}")
+        self.attention_task = asyncio.create_task(self.attention_loop())
+
+    async def collection(
+        self,
+        title: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        selected: str | None = None,
+        extras: list[dict[str, Any]] | None = None,
+        field: str = "name",
+        predicate: Any = None,
+    ) -> dict[str, Any]:
+        offset = 0
+        complete = False
+
+        async def more() -> list[dict[str, Any]]:
+            nonlocal offset, complete
+            while True:
+                batch = await self.api.page(path, offset=offset, **(params or {}))
+                offset += len(batch)
+                complete = len(batch) < 100
+                matches = named(
+                    [item for item in batch if predicate is None or predicate(item)],
+                    field,
+                )
+                if matches or complete:
+                    return matches
+
+        items = await more()
+        if selected:
+            candidates = [
+                item
+                for item in items
+                if item["id"] == selected
+                or item["name"].casefold() == selected.casefold()
+            ]
+            while not complete:
+                batch = await more()
+                candidates.extend(
+                    item
+                    for item in batch
+                    if item["id"] == selected
+                    or item["name"].casefold() == selected.casefold()
+                )
+            return await self.ui.choose(title, candidates, selected=selected)
+        return await self.ui.choose(
+            title, [*(extras or []), *items], more=None if complete else more
+        )
+
+    def remember(self) -> None:
+        if self.view is None:
+            return
+        view = self.view
+        prefs = {
+            "project_id": view.project_id,
+            "session_id": view.session.get("id") if view.session else None,
+        }
+        self.settings.save({**self.settings.entry, "selection": prefs})
+        if view.session:
+            for identity, cached in list(self.views.items()):
+                if cached is view and identity[2] != view.session_id:
+                    del self.views[identity]
+            self.views[(self.settings.core, view.project_id, view.session_id)] = view
+
+    async def select_project(
+        self, selected: str | None = None, *, chat: str | None = None
+    ) -> None:
+        item = await self.collection(
+            "Project",
+            "engagements",
+            selected=selected,
+            extras=[{"id": "__create", "name": "Create project"}],
+            predicate=lambda row: not (row.get("metadata") or {}).get("archived_at"),
+        )
+        if item["id"] == "__create":
+            name = (await self.ui.ask("Project name")).strip()
+            if not name:
+                raise ClientError("A project needs a name.")
+            item = await self.api.request(
+                "POST", "engagements", json={"name": name, "request_id": str(uuid4())}
+            )
+            item = await self.api.request("GET", f"engagements/{key(item['id'])}")
+            self.ui.say(f"Created {item['name']}.")
+        await self.select_chat(chat, project=item)
+
+    async def select_chat(
+        self, selected: str | None = None, *, project: dict[str, Any] | None = None
+    ) -> None:
+        project = project or self.current().project
+        item = await self.collection(
+            "Conversation",
+            "chat-sessions",
+            params={"engagement_id": project["id"], "recent_first": "true"},
+            selected=selected,
+            field="title",
+            predicate=main_chat,
+            extras=[
+                {"id": "__new", "name": "New conversation"},
+                {"id": "__butler", "name": "Butler"},
+            ],
+        )
+        if item["id"] == "__butler":
+            await self.open_butler(project)
+        elif item["id"] == "__new":
+            await self.open_view(project, None)
+        else:
+            await self.open_view(project, item)
+
+    async def open_view(
+        self, project: dict[str, Any], session: dict[str, Any] | None
+    ) -> None:
+        if session is not None:
+            session = await self.api.request(
+                "GET", f"chat-sessions/{key(session['id'])}"
+            )
+            if session.get("engagement_id") != project["id"]:
+                raise ClientError(
+                    "This conversation belongs to another project. Choose it again."
+                )
+            if not main_chat(session) and not (session.get("metadata") or {}).get(
+                "control_assistant"
+            ):
+                raise ClientError(
+                    "Delegated conversations are inspected through /agents; message their parent main agent."
+                )
+        await self.detach()
+        identity = (
+            self.settings.core,
+            project["id"],
+            session["id"] if session else "__new",
+        )
+        view = (self.views.get(identity) if session is not None else None) or View(
+            project=project, session=session
+        )
+        view.session = session
+        self.views[identity] = view
+        self.view = view
+        if session:
+            await self.configuration()
+            view.environments = (session.get("metadata") or {}).get(
+                "ssh_environment_ids"
+            )
+            await self.history()
+            state = await self.status()
+            if state.get("busy"):
+                self.ui.say("Use /follow to attach; new text queues a follow-up.")
+        else:
+            self.ui.say(f"{project['name']} — New conversation")
+        self.remember()
+        self.update_toolbar()
+
+    async def runtimes(self) -> list[dict[str, Any]]:
+        view = self.current()
+        options: list[dict[str, Any]] = []
+        for backend, path in (("provider", "providers"), ("harness", "harnesses")):
+            offset = 0
+            while True:
+                profiles = await self.api.page(path, offset=offset)
+                for profile in profiles:
+                    owner = (profile.get("metadata") or {}).get(
+                        "engagement_id"
+                    ) or profile.get("engagement_id")
+                    if not profile.get("enabled") or (
+                        owner and owner != view.project_id
+                    ):
+                        continue
+                    self.profiles[profile["id"]] = profile
+                    models = (
+                        profile.get("model_allowlist", [])
+                        if backend == "provider"
+                        else (profile.get("capabilities") or {}).get("models", [])
+                    )
+                    for model in models:
+                        options.append(
+                            {
+                                "id": f"{backend}:{profile['id']}:{model}",
+                                "name": f"{profile['name']} / {model}",
+                                "backend": backend,
+                                "profile_id": profile["id"],
+                                "model": model,
+                                "profile": profile,
+                            }
+                        )
+                offset += len(profiles)
+                if len(profiles) < 100:
+                    break
+        return options
+
+    async def configuration(self) -> dict[str, Any]:
+        view = self.current()
+        if view.session:
+            result = await self.api.request(
+                "GET", f"chat-sessions/{key(view.session_id)}/assistant-config"
+            )
+            view.config = result["settings"]
+            view.session["revision"] = result["revision"]
+        elif not view.config:
+            defaults = view.project.get("assistant_defaults") or {}
+            options = await self.runtimes()
+            if not options:
+                raise ClientError(
+                    "No enabled model is configured on Core. Configure a provider or harness on the Core host, then use /model."
+                )
+            preferred = (
+                defaults.get("harness_id")
+                if defaults.get("backend") == "harness"
+                else defaults.get("provider_id")
+            )
+            matched = next(
+                (
+                    row
+                    for row in options
+                    if row["profile_id"] == preferred
+                    and (not defaults.get("model") or row["model"] == defaults["model"])
+                ),
+                None,
+            )
+            chosen = matched or (
+                options[0]
+                if len(options) == 1
+                else await self.ui.choose("Model runtime", options)
+            )
+            view.config = {
+                "backend": chosen["backend"],
+                "profile_id": chosen["profile_id"],
+                "model": chosen["model"],
+                "tools_enabled": False,
+                "planning_enabled": False,
+                "include_knowledge": True,
+                "allow_cloud_knowledge": False,
+                "mcp_server_ids": [],
+                "hook_ids": [],
+                "allow_subagents": False,
+                "allow_agent_messaging": False,
+            }
+        return view.config
+
+    async def open_butler(self, project: dict[str, Any] | None = None) -> None:
+        project = project or self.current().project
+        session = await self.api.request(
+            "GET",
+            "chat/control-assistant/session",
+            params={"engagement_id": project["id"]},
+        )
+        if session is None:
+            # Creating Butler uses its own reserved Core identity, never a main chat.
+            previous = self.view
+            self.view = View(project)
+            try:
+                config = await self.configuration()
+                session = await self.api.request(
+                    "POST",
+                    "chat/control-assistant/session",
+                    json={
+                        "engagement_id": project["id"],
+                        "backend": config["backend"],
+                        "model": config["model"],
+                        "provider_id"
+                        if config["backend"] == "provider"
+                        else "harness_profile_id": config["profile_id"],
+                    },
+                )
+            finally:
+                self.view = previous
+        await self.open_view(project, session)
+
+    async def history(self, more: bool = False) -> list[dict[str, Any]]:
+        view = self.current()
+        if view.session is None:
+            self.ui.say("No saved messages yet.")
+            return []
+        params: dict[str, Any] = {"include_replaced": "true", "limit": 50}
+        if more and view.history_before:
+            params["before_message_id"] = view.history_before
+        rows = await self.api.request(
+            "GET", f"chat/sessions/{key(view.session_id)}/messages", params=params
+        )
+        if rows:
+            view.history_before = rows[0]["id"]
+        for item in rows:
+            if visible_message(item):
+                self.ui.say("You:" if item["role"] == "user" else "Assistant:")
+                self.ui.markdown(item.get("content", ""))
+                for block in item.get("content_blocks") or []:
+                    if block.get("type") == "image":
+                        self.ui.say(
+                            f"[Image: {block.get('alt') or block.get('artifact_id') or 'attachment'}]"
+                        )
+        if len(rows) == 50:
+            self.ui.say("/history more reads earlier messages.")
+        return rows
+
+    async def state(self, view: View | None = None) -> dict[str, Any]:
+        view = view or self.current()
+        if view.session is None:
+            return {
+                "busy": view.submitting,
+                "pending": [],
+                "actions": [],
+                "detail": "New conversation.",
+            }
+        return await self.api.request(
+            "GET", f"chat/sessions/{key(view.session_id)}/state"
+        )
+
+    async def status(self) -> dict[str, Any]:
+        state = await self.state()
+        self.ui.say(state.get("detail") or state.get("execution", "Ready"))
+        for pending in state.get("pending", []):
+            self.ui.say(
+                f"Action required: {pending['text']}. Use /approvals or /input."
+            )
+        return state
+
+    def update_toolbar(self, detail: str = "") -> None:
+        if self.view:
+            view = self.view
+            self.ui.status = " · ".join(
+                filter(
+                    None,
+                    [
+                        view.project.get("name"),
+                        (view.session or {}).get("title", "New conversation"),
+                        view.config.get("model"),
+                        detail,
+                    ],
+                )
+            )
+
+    async def body(self, text: str, *, consent: bool = True) -> dict[str, Any]:
+        view = self.current()
+        config = await self.configuration()
+        backend = config["backend"]
+        fields = {
+            name: value
+            for name, value in config.items()
+            if name not in {"backend", "profile_id"} and value is not None
+        }
+        if backend == "provider":
+            fields = {
+                name: value
+                for name, value in fields.items()
+                if not name.startswith("harness_")
+            }
+        block: dict[str, Any] = {"role": "user", "content": text}
+        if view.draft.images:
+            block["content_blocks"] = view.draft.images
+        result = {
+            **fields,
+            "backend": backend,
+            "provider_id" if backend == "provider" else "harness_profile_id": config[
+                "profile_id"
+            ],
+            "engagement_id": view.project_id,
+            "messages": [block],
+            "stream": True,
+            "control_assistant": bool(
+                view.session
+                and (view.session.get("metadata") or {}).get("control_assistant")
+            ),
+        }
+        if view.session:
+            result["session_id"] = view.session_id
+        if view.environments is not None:
+            result["ssh_environment_ids"] = view.environments
+        if view.draft.skill:
+            result["skill" if backend == "provider" else "harness_skill"] = (
+                view.draft.skill
+            )
+        if view.draft.contexts:
+            result["context_attachments"] = view.draft.contexts
+        if consent:
+            if not self.profiles:
+                await self.runtimes()
+            profile = self.profiles.get(config["profile_id"], {})
+            local = (
+                profile.get("is_local") is True
+                or (profile.get("privacy") or {}).get("local_only") is True
+            )
+            tools = any(
+                result.get(name)
+                for name in (
+                    "tools_enabled",
+                    "mcp_server_ids",
+                    "allow_subagents",
+                    "allow_agent_messaging",
+                    "context_attachments",
+                )
+            )
+            if not local and tools:
+                if not await self.ui.confirm(
+                    f"Allow selected tool/context results to be sent to {config['model']} for this turn?"
+                ):
+                    raise CancelledInput()
+                result["allow_cloud_tool_results"] = True
+            if (
+                not local
+                and result.get("include_knowledge")
+                and not result.get("allow_cloud_knowledge")
+            ):
+                if not await self.ui.confirm(
+                    f"Allow selected project knowledge to be sent to {config['model']} for this turn?"
+                ):
+                    result["include_knowledge"] = False
+                else:
+                    result["allow_cloud_knowledge"] = True
+        return result
+
+    async def send(self, text: str) -> None:
+        from .settings import select_skill
+
+        view = self.current()
+        if view.submitting or view.uncertain:
+            if view.submitting:
+                view.draft.text = text
+            raise ClientError(
+                "The previous submission is uncertain. Review /status and /history; use /chats to select its saved conversation. Nothing was resent."
+            )
+        view.draft.text = text
+        if text.startswith("$"):
+            token = text.split(maxsplit=1)[0][1:]
+            await select_skill(self, token)
+            if len(text.split(maxsplit=1)) == 1:
+                view.draft.text = ""
+                return
+        body = await self.body(text)
+        active = (
+            await self.api.request(
+                "GET", f"chat/sessions/{key(view.session_id)}/pending-turn"
+            )
+            if view.session
+            else None
+        )
+        if active:
+            if view.draft.images:
+                raise ClientError(
+                    "Images cannot be queued during a response. Keep the attachment and send after it finishes."
+                )
+            queue = await self.api.request(
+                "GET", f"chat/sessions/{key(view.session_id)}/queue"
+            )
+            result = await self.api.request(
+                "POST",
+                f"chat/sessions/{key(view.session_id)}/queue",
+                json={
+                    "expected_revision": queue["revision"],
+                    "action": "enqueue",
+                    "idempotency_key": str(uuid4()),
+                    "request": body,
+                },
+            )
+            observed = await self.api.request(
+                "GET", f"chat/sessions/{key(view.session_id)}/queue"
+            )
+            if not any(
+                row["id"] in {item["id"] for item in observed["items"]}
+                for row in result["items"]
+            ):
+                raise ClientError(
+                    "Queue save could not be confirmed. Read /queue before retrying."
+                )
+            view.draft = Draft()
+            self.ui.say("Saved in Core's follow-up queue.")
+            return
+        await self.detach()
+        view.cursor = Cursor()
+        view.submitting = True
+        view.pending_draft, view.draft = view.draft, Draft()
+        self.stream_task = asyncio.create_task(
+            self.stream(view, "POST", "chat/completions", body)
+        )
+        self.update_toolbar("Submitting")
+
+    async def stream(
+        self, view: View, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> None:
+        accepted = method == "GET"
+        submission = method == "POST" and path == "chat/completions"
+        if submission and view.pending_draft is None:
+            view.pending_draft, view.draft = view.draft, Draft()
+        finished = False
+        retries = 0
+        while True:
+            try:
+                params = (
+                    {
+                        "after": view.cursor.sequence,
+                        **({"epoch": view.cursor.epoch} if view.cursor.epoch else {}),
+                    }
+                    if method == "GET"
+                    else None
+                )
+                async for event, payload in self.api.events(
+                    method, path, body=body, params=params
+                ):
+                    event = payload.get("type") or event
+                    if payload.get("turn_id"):
+                        view.cursor.turn_id = payload["turn_id"]
+                    if event in {
+                        "started",
+                        "queued",
+                        "admitted",
+                        "done",
+                    } and payload.get("turn_id"):
+                        accepted = True
+                        view.submitting = view.session is None and not payload.get(
+                            "session_id"
+                        )
+                        view.uncertain = False
+                        if submission:
+                            view.pending_draft = None
+                        view.cursor.turn_id = (
+                            payload.get("turn_id") or view.cursor.turn_id
+                        )
+                        view.cursor.harness_turn_id = (
+                            payload.get("harness_turn_id")
+                            or view.cursor.harness_turn_id
+                        )
+                        session_id = payload.get("session_id")
+                        if session_id and view.session is None:
+                            view.session = {
+                                "id": session_id,
+                                "engagement_id": view.project_id,
+                                "title": "Conversation",
+                                "backend": (body or view.config).get("backend"),
+                                "model": (body or view.config).get("model"),
+                                "metadata": {
+                                    "control_assistant": bool(
+                                        (body or {}).get("control_assistant")
+                                    )
+                                },
+                            }
+                        if self.view is view:
+                            self.remember()
+                    if not view.cursor.accept(payload):
+                        continue
+                    if self.view is not view:
+                        return
+                    if event in {"delta", "message_delta"}:
+                        delta = terminal_text(payload.get("delta") or "")
+                        view.cursor.text = (view.cursor.text + delta)[-1_000_000:]
+                        self.ui.delta(delta)
+                    elif event == "done":
+                        finished = True
+                        final = (payload.get("message") or {}).get("content", "")
+                        if final and final != view.cursor.text:
+                            self.ui.say(
+                                "\nSaved answer:" if view.cursor.text else "Assistant:"
+                            )
+                            self.ui.markdown(final)
+                        else:
+                            self.ui.say()
+                        self.ui.say("Response complete.")
+                        break
+                    elif event == "cancelled":
+                        finished = True
+                        self.ui.say("\nResponse stopped.")
+                        break
+                    elif event == "error":
+                        finished = True
+                        raise ClientError(
+                            payload.get("operator_detail")
+                            or payload.get("detail")
+                            or payload.get("message")
+                            or "Turn failed. Review /activity."
+                        )
+                    elif event in {
+                        "approval_required",
+                        "input_required",
+                        "interaction_required",
+                    } or (
+                        event in {"approval", "interaction"}
+                        and payload.get("item_status")
+                        in {"waiting_approval", "waiting_input"}
+                    ):
+                        self.ui.say(
+                            "\nAction required: "
+                            + str(
+                                payload.get("detail")
+                                or payload.get("summary")
+                                or payload.get("title")
+                                or event.replace("_", " ")
+                            )
+                            + ". Use /approvals or /input."
+                        )
+                        self.update_toolbar("Waiting for input")
+                        return
+                    elif event in {"callback_waiting", "waiting_callback"}:
+                        self.ui.say(
+                            "Core is waiting for a tool callback. Work continues on Core; /status reads its progress."
+                        )
+                        return
+                    elif event in {
+                        "tool_started",
+                        "tool_completed",
+                        "queued",
+                        "admitted",
+                        "planning",
+                        "progress",
+                    }:
+                        self.update_toolbar(
+                            str(
+                                payload.get("summary")
+                                or payload.get("message")
+                                or event.replace("_", " ")
+                            )[:160]
+                        )
+                if finished:
+                    view.submitting = False
+                    self.update_toolbar("Ready")
+                    return
+                raise httpx.ReadError("Stream ended before its final frame")
+            except asyncio.CancelledError:
+                if submission and not accepted:
+                    view.uncertain = True
+                    self.restore_draft(view)
+                view.submitting = False
+                raise
+            except httpx.HTTPError:
+                if (
+                    accepted
+                    and view.cursor.turn_id
+                    and retries < 3
+                    and self.view is view
+                ):
+                    retries += 1
+                    method, path, body = (
+                        "GET",
+                        f"chat/turns/{key(view.cursor.turn_id)}/events",
+                        None,
+                    )
+                    self.update_toolbar("Reconnecting")
+                    await asyncio.sleep(retries)
+                    try:
+                        state = (
+                            await self.state(view) if view.session else {"busy": True}
+                        )
+                        if not state.get("busy"):
+                            await self.history()
+                            self.ui.say(state.get("detail", "Read saved state."))
+                            view.submitting = False
+                            return
+                    except httpx.HTTPError:
+                        continue
+                    except ClientError as exc:
+                        view.submitting = False
+                        self.ui.say(
+                            "Cannot reconcile Core state: "
+                            + str(exc)
+                            + ". Nothing was resent."
+                        )
+                        return
+                    method, path, body = (
+                        "GET",
+                        f"chat/turns/{key(view.cursor.turn_id)}/events",
+                        None,
+                    )
+                    continue
+                view.uncertain = not accepted
+                view.submitting = False
+                if not accepted:
+                    self.restore_draft(view)
+                if self.view is view:
+                    self.ui.say(
+                        "\nConnection lost. Nothing was resent. Review /status and /history, then /follow; use /chats if no conversation identity was confirmed."
+                    )
+                return
+            except ClientError as exc:
+                view.submitting = False
+                if not accepted:
+                    self.restore_draft(view)
+                if self.view is view:
+                    self.ui.say("\n" + str(exc))
+                return
+
+    def restore_draft(self, view: View) -> None:
+        if view.pending_draft is not None:
+            if view.draft == Draft():
+                view.draft, view.pending_draft = view.pending_draft, None
+            elif self.view is view:
+                self.ui.say(
+                    "The previous submission remains in memory. /draft reviews it; nothing was resent."
+                )
+
+    async def follow(self) -> None:
+        view = self.current()
+        state = (
+            await self.state()
+            if view.session
+            else {
+                "turn_id": view.cursor.turn_id,
+                "harness_turn_id": view.cursor.harness_turn_id,
+            }
+        )
+        if not state.get("turn_id"):
+            await self.history()
+            return
+        await self.detach()
+        if view.cursor.turn_id != state["turn_id"]:
+            view.cursor = Cursor(
+                turn_id=state["turn_id"], harness_turn_id=state.get("harness_turn_id")
+            )
+        self.stream_task = asyncio.create_task(
+            self.stream(view, "GET", f"chat/turns/{key(state['turn_id'])}/events")
+        )
+
+    async def stop(self) -> None:
+        view = self.current()
+        state = await self.state()
+        if "stop" not in state.get("actions", []):
+            raise ClientError(
+                "This turn is idle or its runtime does not support interruption. Read /status."
+            )
+        result = await self.api.request(
+            "POST", f"chat/turns/{key(state['turn_id'])}/cancel"
+        )
+        await self.detach()
+        view.submitting = False
+        self.ui.say(f"Turn {result['status']}.")
+        await self.status()
+
+    async def detach(self) -> None:
+        if self.stream_task is not None:
+            self.stream_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.stream_task
+            self.stream_task = None
+
+    async def attention_loop(self) -> None:
+        etag: str | None = None
+        offline = False
+        while True:
+            await asyncio.sleep(5)
+            try:
+                response = await self.api.client.get(
+                    "chat/attention", headers={"If-None-Match": etag} if etag else {}
+                )
+                if response.status_code == 304:
+                    continue
+                from .transport import check_response
+
+                check_response(response)
+                etag = response.headers.get("etag")
+                for item in response.json():
+                    if item["action_id"] not in self.seen_attention:
+                        self.seen_attention.add(item["action_id"])
+                        self.ui.say(
+                            f"Action required in {item['engagement_name']} / {item['session_title']}: {item['kind']}. Use /chats, /approvals or /input."
+                        )
+                if len(self.seen_attention) > 200:
+                    self.seen_attention = {
+                        item["action_id"] for item in response.json()
+                    }
+                offline = False
+            except (httpx.HTTPError, ClientError) as exc:
+                if not offline:
+                    self.ui.say(
+                        "Core attention updates unavailable. /status checks the selected chat. "
+                        + (
+                            str(exc)
+                            if isinstance(exc, ClientError)
+                            else "Check the network connection."
+                        )
+                    )
+                offline = True
+
+    async def stop_attention(self) -> None:
+        if self.attention_task:
+            self.attention_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.attention_task
+            self.attention_task = None
+
+    async def command(self, text: str) -> None:
+        from .attachments import attach, attachments
+        from .settings import model, select_skill, settings
+        from .workflows import actions
+
+        parts = shlex.split(text[1:])
+        if not parts:
+            return
+        name, args = parts[0], parts[1:]
+        if name in {"quit", "exit"}:
+            self.running = False
+        elif name == "help":
+            self.ui.help()
+        elif name == "draft":
+            view = self.current()
+            if view.pending_draft is None:
+                self.ui.say("No previous submission is waiting in memory.")
+            else:
+                self.ui.say(view.pending_draft.text)
+                if not view.submitting and await self.ui.confirm(
+                    "Swap this previous submission into the unsent draft?"
+                ):
+                    view.draft, view.pending_draft = view.pending_draft, view.draft
+        elif name == "core":
+            await self.connect(args[0] if args else None)
+            await self.select_project()
+        elif name == "projects":
+            await self.select_project(args[0] if args else None)
+        elif name == "chats":
+            await self.select_chat(" ".join(args) or None)
+        elif name == "new":
+            await self.open_view(self.current().project, None)
+            self.current().config = {}
+            self.current().draft = Draft()
+        elif name == "butler":
+            await self.open_butler()
+        elif name == "history":
+            await self.history(bool(args and args[0] == "more"))
+        elif name == "status":
+            await self.status()
+        elif name == "follow":
+            await self.follow()
+        elif name == "detach":
+            await self.detach()
+            self.ui.say("Viewer detached. Core work continues.")
+        elif name == "stop":
+            await self.stop()
+        elif name == "model":
+            await model(self)
+        elif name == "settings":
+            await settings(self)
+        elif name == "skills":
+            await select_skill(self, " ".join(args) or None)
+        elif name == "attach":
+            await attach(self, args)
+        elif name == "attachments":
+            await attachments(self)
+        elif name in actions:
+            await actions[name](self, args)
+        else:
+            raise ClientError("Unknown command. Use /help.")
+        self.update_toolbar()
+
+    async def run(self, project: str | None = None, chat: str | None = None) -> None:
+        try:
+            await self.connect(self.settings.core if self._api is None else None)
+            prefs = self.settings.entry.get("selection") or {}
+            restored = False
+            if project is None and prefs.get("project_id"):
+                try:
+                    selected = await self.api.request(
+                        "GET", f"engagements/{key(prefs['project_id'])}"
+                    )
+                    if chat is not None:
+                        await self.select_chat(chat, project=selected)
+                    elif prefs.get("session_id"):
+                        session = await self.api.request(
+                            "GET", f"chat-sessions/{key(prefs['session_id'])}"
+                        )
+                        await self.open_view(selected, session)
+                    else:
+                        await self.open_view(selected, None)
+                    restored = True
+                except ApiError as exc:
+                    if exc.status not in {404, 409}:
+                        raise
+                    self.ui.say(
+                        "The remembered conversation is unavailable. Choose another."
+                    )
+            if not restored:
+                await self.select_project(project, chat=chat)
+            self.ui.say("/help for commands. Core work continues after /quit.")
+            while self.running:
+                try:
+                    view = self.current()
+                    text = await self.ui.ask("You", default=view.draft.text, main=True)
+                    if not text.strip():
+                        continue
+                    if text.startswith("/"):
+                        await self.command(text)
+                    else:
+                        await self.send(text)
+                except InterruptedPrompt:
+                    try:
+                        state = await self.state()
+                        if state.get("busy"):
+                            await self.stop()
+                    except (ClientError, httpx.HTTPError) as exc:
+                        self.ui.say(
+                            str(exc)
+                            if isinstance(exc, ClientError)
+                            else "Cannot read Core state. Nothing was cancelled; use /status."
+                        )
+                except CancelledInput:
+                    continue
+                except EOFError:
+                    break
+                except (ClientError, ValueError, OSError, httpx.HTTPError) as exc:
+                    self.ui.say(
+                        str(exc)
+                        if not isinstance(exc, httpx.HTTPError)
+                        else "Cannot reach Core securely. Check the connection; nothing was automatically resent."
+                    )
+        except (CancelledInput, EOFError):
+            self.ui.say("Terminal closed. Core work continues.")
+        finally:
+            await self.detach()
+            await self.stop_attention()
+            if self._api:
+                await self._api.close()
+
+
+def run_shell(
+    settings: Settings, *, project: str | None = None, chat: str | None = None
+) -> None:
+    with patch_stdout():
+        asyncio.run(Shell(settings).run(project, chat))

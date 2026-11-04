@@ -5,107 +5,34 @@ Keep this entry point independent of Core's API, database and runtime imports.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
-import re
-import ssl
-import tempfile
-from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Iterator
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import httpx
 import typer
 
-
-app = typer.Typer(
-    help="Pair with Nebula Core and chat with Butler in your terminal.",
-    no_args_is_help=True,
+from .terminal.transport import (
+    ClientError as ClientError,
+    Settings as Settings,
+    check_response as check_response,
+    connection as connection,
+    loopback as loopback,
+    origin as origin,
+    request as request,
+    require_core as require_core,
+    terminal_text as terminal_text,
+    user_errors as user_errors,
 )
 
 
-class ClientError(Exception):
-    """An actionable failure that can be shown without a traceback."""
-
-
-def terminal_text(value: Any) -> str:
-    text = str(value)
-    text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", text)
-    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
-    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "", text)
-
-
-def origin(value: str) -> str:
-    try:
-        parsed = urlsplit(value.strip())
-        port = parsed.port
-    except ValueError as exc:
-        raise ClientError(
-            "Use a Core origin such as https://nebula.example:8765."
-        ) from exc
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/", "/api/v1", "/api/v1/"}
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ClientError(
-            "Use a Core HTTP(S) origin without credentials, a query or fragment."
-        )
-    host = parsed.hostname.lower()
-    if ":" in host:
-        host = f"[{host}]"
-    suffix = (
-        f":{port}" if port and port != {"http": 80, "https": 443}[parsed.scheme] else ""
-    )
-    return f"{parsed.scheme}://{host}{suffix}"
-
-
-def loopback(value: str) -> bool:
-    host = urlsplit(value).hostname or ""
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-@dataclass
-class Settings:
-    path: Path
-    data: dict[str, Any]
-    core: str | None
-
-    @property
-    def entry(self) -> dict[str, Any]:
-        return self.data.get("cores", {}).get(self.core, {})
-
-    def save(self, entry: dict[str, Any] | None) -> None:
-        self.data.setdefault("cores", {})
-        if entry is None:
-            self.data["cores"].pop(self.core, None)
-            if self.data.get("active_core") == self.core:
-                self.data["active_core"] = next(iter(self.data["cores"]), None)
-        else:
-            self.data["cores"][self.core] = entry
-            self.data["active_core"] = self.core
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        descriptor, temporary = tempfile.mkstemp(prefix=".chat-", dir=self.path.parent)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(self.data, handle, indent=2)
-                handle.write("\n")
-            os.replace(temporary, self.path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
+app = typer.Typer(
+    help="Pair with Nebula Core and use Assistant or Butler in your terminal.",
+    no_args_is_help=False,
+    invoke_without_command=True,
+)
 
 
 @app.callback()
@@ -139,92 +66,10 @@ def configure(
             raise ValueError("invalid Core entry")
         selected = core or data.get("active_core")
         ctx.obj = Settings(path, data, origin(selected) if selected else None)
+        if ctx.invoked_subcommand is None:
+            launch_shell(ctx.obj)
     except (OSError, ValueError, ClientError) as exc:
         typer.echo(f"Cannot read pairing configuration: {terminal_text(exc)}", err=True)
-        raise typer.Exit(1) from exc
-
-
-def require_core(settings: Settings) -> str:
-    if not settings.core:
-        raise ClientError("Choose a Core with --core https://HOST:PORT, then run pair.")
-    return settings.core
-
-
-def check_response(response: httpx.Response, *, pairing: bool = False) -> None:
-    if response.is_success:
-        return
-    if response.is_redirect:
-        raise ClientError(
-            "Core redirected the request. Use its final HTTPS origin and pair there."
-        )
-    try:
-        detail = response.json().get("detail", "")
-    except (ValueError, AttributeError):
-        detail = ""
-    if not isinstance(detail, str):
-        detail = "Core rejected the supplied values."
-    if response.status_code == 401 and not pairing:
-        detail = "Pairing expired or was revoked. Run pair again for this Core."
-    raise ClientError(f"Core ({response.status_code}): {terminal_text(detail)[:1500]}")
-
-
-@contextmanager
-def connection(
-    settings: Settings,
-    *,
-    paired: bool = True,
-    ca_cert: Path | None = None,
-    allow_http: bool = False,
-) -> Iterator[httpx.Client]:
-    core = require_core(settings)
-    entry = settings.entry if paired else {}
-    if paired and not all(
-        entry.get(key) for key in ("device_token", "csrf_token", "device_id")
-    ):
-        raise ClientError("This Core is not paired. Run pair first.")
-    if core.startswith("http:") and not (allow_http or entry.get("allow_http")):
-        raise ClientError(
-            "Pairing requires HTTPS. For an explicitly enabled test LAN, use pair --allow-http."
-        )
-    certificate = ca_cert or entry.get("ca_cert")
-    verification: ssl.SSLContext | bool = (
-        ssl.create_default_context(cafile=str(certificate)) if certificate else True
-    )
-    headers = {"Origin": core, "User-Agent": "nebula-chat"}
-    cookies = {}
-    if paired:
-        headers["X-Nebula-CSRF"] = entry["csrf_token"]
-        cookies = {
-            "nebula_device": entry["device_token"],
-            "nebula_csrf": entry["csrf_token"],
-        }
-    with httpx.Client(
-        base_url=core + "/api/v1/",
-        headers=headers,
-        cookies=cookies,
-        verify=verification,
-        follow_redirects=False,
-        timeout=httpx.Timeout(30, read=90),
-    ) as client:
-        yield client
-
-
-def request(client: httpx.Client, method: str, path: str, **kwargs: Any) -> Any:
-    response = client.request(method, path, **kwargs)
-    check_response(response)
-    return response.json() if response.content else None
-
-
-@contextmanager
-def user_errors() -> Iterator[None]:
-    try:
-        yield
-    except (ClientError, OSError, httpx.HTTPError, ValueError) as exc:
-        if isinstance(exc, httpx.HTTPError):
-            message = "Cannot reach Core securely. Check its address, connection and CA certificate, then reconnect. No message was automatically retried."
-        else:
-            message = terminal_text(exc)
-        typer.echo(message, err=True)
         raise typer.Exit(1) from exc
 
 
@@ -532,9 +377,7 @@ def stream(
     finished = False
     typer.echo("Butler: ", nl=False)
     try:
-        with client.stream(
-            method, path, **({"json": body} if body is not None else {})
-        ) as response:
+        with client.stream(method, path, json=body) as response:
             if not response.is_success:
                 response.read()
                 check_response(response)
@@ -716,6 +559,29 @@ def chat(
                     )
                 else:
                     typer.echo(terminal_text(exc))
+
+
+def launch_shell(
+    settings: Settings, project: str | None = None, chat: str | None = None
+) -> None:
+    from .terminal.shell import run_shell
+
+    with user_errors():
+        run_shell(settings, project=project, chat=chat)
+
+
+@app.command()
+def shell(
+    ctx: typer.Context,
+    project: Annotated[
+        str | None, typer.Option(help="Project name or ID; otherwise choose.")
+    ] = None,
+    chat: Annotated[
+        str | None, typer.Option(help="Conversation name or ID; otherwise choose.")
+    ] = None,
+) -> None:
+    """Open the interactive Assistant with project/chat menus and slash commands."""
+    launch_shell(ctx.obj, project, chat)
 
 
 def main() -> None:

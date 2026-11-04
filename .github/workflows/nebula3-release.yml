@@ -245,6 +245,8 @@ jobs:
           cargo run --locked --quiet --manifest-path ui/src-tauri/Cargo.toml \
             --example verify_update_signature -- \
             "$appimage" "$appimage.sig" "$NEBULA_UPDATER_PUBLIC_KEY"
+      - name: Build independent terminal client distributions
+        run: poetry run python -m scripts.build_terminal_client --out-dir "$RUNNER_TEMP/release-stage"
       - name: Generate per-artifact SBOMs and checksums
         run: |
           stage="$RUNNER_TEMP/release-stage"

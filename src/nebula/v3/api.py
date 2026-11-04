@@ -4326,6 +4326,7 @@ def create_app(
                 else "unavailable"
             ),
             "api_version": "v1",
+            "terminal_client_protocol": 1,
             "scheduler": provider_chat.provider_scheduler.metrics(),
             "diagnostics": {
                 **diagnostic_health,
