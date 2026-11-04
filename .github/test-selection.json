@@ -88,7 +88,23 @@
     "area:latest-browser-regressions"
   ],
   "python_node": true,
-  "change_digest": "472a5a714eac81707adb4b66e3891abaa16b3a857c18a1d9a0671a5611304ae4",
+  "change_digest": "480ca4a83aba80e24359b6bb02e1527534f8868f218d43d1f2fdb8bf3c6b6261",
   "python_browser": true,
-  "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
+  "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request.",
+  "full_suite_integration_selection": {
+    "workflow": ".github/workflows/regression-integrations.yml",
+    "expected_tests": 9,
+    "targets": [
+      "tests/v3/test_workspace.py::test_workspace_text_search_ripgrep_preserves_python_results",
+      "tests/v3/test_workspace.py::test_workspace_text_search_pins_files_and_falls_back_on_rg_failure",
+      "tests/v3/test_workspace.py::test_workspace_text_search_limit_keeps_original_file_count",
+      "tests/v3/test_workspace.py::test_workspace_text_search_uses_python_for_small_files",
+      "tests/v3/test_notebooks.py::test_jupyter_worker_streams_and_reuses_a_kernel",
+      "tests/v3/test_knowledge_rerank.py::test_the_pinned_model_meets_its_calibration",
+      "tests/v3/test_sandbox_integration.py::test_real_rootless_runtime_streams_raw_code_and_persists_only_workspace",
+      "tests/v3/test_sandbox_integration.py::test_real_rootless_runtime_opens_and_removes_container_terminal",
+      "tests/v3/test_human_terminal_integration.py::test_real_kali_terminal_is_root_writable_networked_and_ephemeral"
+    ],
+    "reason": "The user requested all tests run and pass. Independent validation identified9 CPU-runnable checks skipped for missing tools/models/runtime. This manual job installs real pinned notebook/model dependencies and rootless Podman, and rejects every skip. A live vLLM Qwen endpoint is separately required for the final optional live-provider test."
+  }
 }

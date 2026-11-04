@@ -257,6 +257,21 @@ def test_manual_full_runs_require_fresh_explicit_approval():
                 step["env"]["NEBULA_FULL_SUITE_REASON"] == "${{ inputs.review_reason }}"
             )
 
+    integrations = yaml.safe_load(
+        (ROOT / ".github/workflows/regression-integrations.yml").read_text()
+    )
+    # Public model downloads and real rootless runtimes stay manual-only.
+    assert set(integrations.get("on", integrations.get(True))) == {"workflow_dispatch"}
+    integration_jobs = integrations["jobs"]
+    assert integration_jobs["integration-checks"]["needs"] == "approval"
+    approval = integration_jobs["approval"]["steps"][0]
+    assert approval["env"]["FULL_APPROVAL"] == "${{ inputs.full_approval }}"
+    assert approval["env"]["REVIEW_REASON"] == "${{ inputs.review_reason }}"
+    assert 'test "$GITHUB_EVENT_NAME" = workflow_dispatch' in approval["run"]
+    assert 'test "$FULL_APPROVAL" = RUN_FULL_SUITE' in approval["run"]
+    assert 'test -n "$REVIEW_REASON"' in approval["run"]
+    assert 'test "$GITHUB_RUN_ATTEMPT" = 1' in approval["run"]
+
 
 def test_playwright_workers_revalidate_the_parent_selection():
     source = """
