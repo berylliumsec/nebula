@@ -21,6 +21,11 @@ function expectTouchTarget(measurement: number | undefined, label?: string): voi
   expect(Math.round((measurement ?? 0) * 100) / 100, label).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
 }
 
+async function activateControl(target: Locator): Promise<void> {
+  if (test.info().project.use.hasTouch) await target.tap();
+  else await target.click();
+}
+
 /** Open the goal through its visible entry point when a wide workspace uses the context rail. */
 async function openConversationGoal(page: Page) {
   const panel = page.getByRole("region", {name: "Conversation goal", exact: true});
@@ -183,6 +188,10 @@ async function installTruthfulCore(page: Page) {
       body = {revision: 0, paused: false, items: []};
     } else if (path.includes("/chat/sessions/") && path.endsWith("/task-plans")) {
       body = {plans: [], directives: []};
+    } else if (path.includes("/chat/sessions/") && path.endsWith("/state")) {
+      body = {schema: "nebula.session-state/v1", session_id: path.split("/").at(-2), revision: 1,
+        turn_id: null, harness_turn_id: null, execution: "idle", busy: false, detail: "",
+        connection: "connected", actions: [], pending: [], decisions: []};
     } else if (path.includes("/chat/sessions/") && path.endsWith("/goal")) {
       responseStatus = 404;
       body = { detail: "Goal not found" };
@@ -207,6 +216,13 @@ async function installTruthfulCore(page: Page) {
       // array, which reads as an unavailable vault and silently downgrades
       // every credential dialog to session-only storage.
       body = { state: "available" };
+    } else if (path.endsWith("/host-cpu-budget")) {
+      body = {host_id: "preview-host", host_name: "Preview host", revision: 1, enabled: false,
+        cpu_limit: null, cpu_capacity: 4, automatic_cpu_limit: 2, effective_cpu_limit: 2,
+        applied_cpu_limit: null, apply_state: "inactive", capacity_clamped: false,
+        activation_supported: true, activation_unavailable_reason: null, executor_scope: "report-pdfs",
+        executor_state: "disabled", worker_count: 0, active_jobs: 0, queued_jobs: 0, maximum_worker_cpus: 4,
+        detail: "Background PDF workers are disabled."};
     } else if (path.endsWith("/diagnostics/settings")) {
       body = {
         schema: "nebula.diagnostics-settings/v1",
@@ -642,15 +658,31 @@ async function installTruthfulCore(page: Page) {
   });
 }
 
-/** Phones reach session details through the chat header's conversation menu. */
+/** Saved conversations expose the reloadable context drawer from the composer. */
 async function openSessionDetails(page: Page) {
-  if ((page.viewportSize()?.width ?? 1440) <= 760) {
-    await page.getByRole("button", { name: "Conversation actions" }).click();
-    await page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Session details/ }).click();
-  } else {
-    await page.getByRole("button", { name: "Chat tools" }).click();
-    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
-  }
+  await page.getByRole("button", { name: /^Open context details/ }).click();
+}
+
+async function installDetailsConversation(page: Page) {
+  const session = { ...entity, id: "details-chat", engagement_id: "scratch-project", title: "Saved details conversation", backend: "provider", metadata: {} };
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) return route.fulfill({ json: [session] });
+    if (path.endsWith("/chat-sessions/details-chat")) return route.fulfill({ json: session });
+    if (path.endsWith("/chat/sessions/details-chat/messages")) return route.fulfill({ json: [] });
+    if (path.endsWith("/chat/sessions/details-chat/pending-turn")) return route.fulfill({ json: null });
+    return route.fallback();
+  });
+}
+
+async function installButlerSession(page: Page, providerId: string, model: string, sessionId: string) {
+  const session = { ...entity, id: sessionId, engagement_id: "scratch-project", title: "Butler", backend: "provider", provider_profile_id: providerId, model, metadata: { control_assistant: true } };
+  await page.route("**/api/v1/chat/control-assistant/session**", route => route.fulfill({ json: session }));
+  await page.route(`**/api/v1/chat-sessions/${sessionId}/assistant-config`, route => route.fulfill({ json: {
+    session_id: sessionId, revision: 1, settings: { backend: "provider", profile_id: providerId, model, tools_enabled: true },
+  } }));
+  await page.route(`**/api/v1/chat/sessions/${sessionId}/messages**`, route => route.fulfill({ json: [] }));
+  await page.route(`**/api/v1/chat/sessions/${sessionId}/pending-turn`, route => route.fulfill({ json: null }));
 }
 
 async function openWorkspace(page: Page, route: string, heading: string) {
@@ -2674,6 +2706,7 @@ reloadTest("assistant popup Butler live status follows saved work without losing
     turn_id: "butler-status-turn", message: { id: "answer", role: "assistant", content: "The agents are working." },
     usage: { input_tokens: 5, output_tokens: 5, total_tokens: 10 }, finish_reason: "stop", citations: [],
   }, true));
+  await butler.getByRole("button", { name: "Chat", exact: true }).click();
   await expect(butler.getByText("The agents are working.")).toBeVisible();
   await expect(activity).toHaveCount(0);
   await expect(composer).toBeEnabled();
@@ -2687,6 +2720,7 @@ reloadTest("stabilization Butler applies a model-selected device-theme tool rece
   };
   await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
   await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["theme-action-model"] } }));
+  await installButlerSession(page, provider.id, "theme-action-model", "theme-action-session");
   let requested = false;
   await page.route("**/api/v1/chat/completions", route => {
     const request = route.request().postDataJSON() as { control_assistant?: boolean };
@@ -2731,6 +2765,7 @@ reloadTest("stabilization Butler follows a model-selected Projects navigation re
   };
   await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
   await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["navigation-action-model"] } }));
+  await installButlerSession(page, provider.id, "navigation-action-model", "navigation-action-session");
   let requested = false;
   await page.route("**/api/v1/chat/completions", route => {
     requested = (route.request().postDataJSON() as { control_assistant?: boolean }).control_assistant === true;
@@ -2924,9 +2959,9 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     await expect(top).toHaveAttribute("data-lens-open", "false");
     await sideHandle.hover();
   } else {
-    await topHandle.tap();
+    await activateControl(topHandle);
     await expect(top).toHaveAttribute("data-lens-open", "true");
-    await sideHandle.tap();
+    await activateControl(sideHandle);
   }
   await expect(side.locator(".nav-list")).toBeVisible();
   await expect.poll(() => side.evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(250);
@@ -2946,9 +2981,9 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
     const conversationsBounds = await conversations.boundingBox();
     const navigationBounds = await sideHandle.boundingBox();
     expect(conversationsBounds && navigationBounds && navigationBounds.y + navigationBounds.height < conversationsBounds.y).toBe(true);
-    await conversations.tap();
+    await activateControl(conversations);
     await expect(page.getByRole("complementary", { name: "Conversations" })).toBeVisible();
-    await page.getByRole("button", { name: "Close conversations" }).tap();
+    await activateControl(page.getByRole("button", { name: "Close conversations" }));
   }
   const composerFrame = page.locator(".chat-studio > .chat-panel > .chat-composer");
   const composerInput = composerFrame.locator(".chat-composer-input");
@@ -3173,6 +3208,7 @@ test("Workbench omits the removed Human controlled badge in every theme", async 
 });
 
 test("Light keeps the shared status and search cluster in the conventional shell", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) <= 760, "Phone widths use the mobile navigation instead of the desktop status cluster.");
   await openWorkspace(page, "/", "Workbench");
   await setTheme(page, "light");
 
@@ -3611,6 +3647,15 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
   test.setTimeout(90_000);
   for (const [name, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);
+    if (name === "settings" && (page.viewportSize()?.width ?? 1440) > 760) {
+      const budget = page.getByRole("region", { name: "CPU budget" });
+      await expect(budget.getByText("Core host · Preview host", { exact: true })).toBeVisible();
+      await expect(budget.getByText("4 CPUs available. Automatic uses 2.", { exact: true })).toBeVisible();
+      await expect(budget.getByRole("combobox", { name: "CPU budget mode" })).toHaveValue("automatic");
+      await expect(budget.getByRole("checkbox", { name: "Enable background PDF workers" })).not.toBeChecked();
+      await expect(budget.getByRole("status")).toHaveText("Background PDF workers are disabled.");
+      await expect(budget.getByRole("alert")).toHaveCount(0);
+    }
     await expect(page).toHaveScreenshot(`${name}-${testInfo.project.name}.png`, {
       fullPage: true,
       mask: [page.locator(".top-bar-public-ip")],
@@ -4402,7 +4447,9 @@ test("conversation actions menu stays open while the transcript scrolls and the 
   await installReasoningProvider(page);
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith("/chat-sessions")) await route.fulfill({ json: [session] });
+    if (path.endsWith("/chat-sessions")) await route.fulfill({ json: [session, ...Array.from({ length: 24 }, (_, index) => ({
+      ...session, id: `menu-scroll-other-${index}`, title: `Saved conversation ${index}`,
+    }))] });
     else if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) await route.fulfill({ json: messages });
     else if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) await route.fulfill({ json: null });
     else await route.fallback();
@@ -4427,8 +4474,14 @@ test("conversation actions menu stays open while the transcript scrolls and the 
   await page.evaluate(() => new Promise(requestAnimationFrame));
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Export transcript" })).toBeVisible();
-  // Scrolling the list itself moves the trigger, so the placed menu closes.
+  // A queued scroll event leaves a visible trigger and its anchored menu usable.
   await conversations.locator("nav").evaluate((element) => element.dispatchEvent(new Event("scroll")));
+  await expect(menu).toBeVisible();
+  // Moving the trigger out of the list viewport closes its menu.
+  await conversations.locator("nav").evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
   await expect(menu).toHaveCount(0);
 });
 
@@ -4474,6 +4527,10 @@ test("conversation More actions remain usable on mobile Workbench navigation", a
   await page.keyboard.press("ArrowUp");
   await expect(menu.getByRole("menuitem", { name: "Archive" })).toBeFocused();
   await page.keyboard.press("ArrowUp");
+  await expect(menu.getByRole("menuitem", { name: "Set purple flag for Conversation action review" })).toBeFocused();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
@@ -4530,7 +4587,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
   expect(geometry.pageWidth).toBeLessThanOrEqual(geometry.viewportWidth);
   expect(geometry.duplicateDockDisplay).toBe("none");
   expect(geometry.composerFontSize).toBeGreaterThanOrEqual(16);
-  expect(geometry.navigationIcons).toHaveLength(5);
+  expect(geometry.navigationIcons).toHaveLength(4);
   expect(geometry.navigationIcons.every(({ width, height }) => width >= 18 && height >= 18)).toBe(true);
 
   await page.getByRole("button", { name: "More workbench views" }).click();
@@ -4727,7 +4784,12 @@ reloadTest("stabilization empty project offers the existing project picker after
   await picker.getByRole("button", {name: "New project"}).click();
   await expect(picker.getByLabel("Name", {exact: true})).toBeFocused();
   await picker.getByLabel("Name", {exact: true}).fill("Disposable workspace");
-  await expect(picker.getByRole("button", {name: "Create in Host mode", exact: true})).toBeInViewport();
+  const create = picker.getByRole("button", {name: "Create in Host mode", exact: true});
+  await create.scrollIntoViewIfNeeded();
+  await expect(create).toBeInViewport();
+  const bounds = (await picker.boundingBox())!;
+  expect(bounds.y).toBeGreaterThanOrEqual(0);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   await expect(page.locator("body")).toHaveJSProperty("scrollWidth", await page.locator("body").evaluate(el => el.clientWidth));
   await testInfo.attach("empty-project-recovery", {body: await page.screenshot(), contentType: "image/png"});
 });
@@ -5054,7 +5116,7 @@ test("VPN settings keep upload and project routing calm at every width", async (
   const automation = page.locator("details#automation-settings");
   const automationSummary = automation.locator(":scope > summary");
   await automationSummary.evaluate(summary => summary.scrollIntoView({ block: "center" }));
-  if ((page.viewportSize()?.width ?? 1_000) <= 760) await automationSummary.tap();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await activateControl(automationSummary);
   else await automationSummary.click();
   await expect(automation).toHaveJSProperty("open", true);
   const section = page.locator("#automation-runtime-settings");
@@ -5071,7 +5133,7 @@ test("VPN settings keep upload and project routing calm at every width", async (
     const target = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
     return target === button || button.contains(target);
   })).toBe(true);
-  if ((page.viewportSize()?.width ?? 1_000) <= 760) await useForProject.tap();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await activateControl(useForProject);
   else await useForProject.click();
   await expect.poll(() => selectedVpnProfile).toBe("vpn-preview");
   await expect(section.getByText("In use", { exact: true })).toBeVisible();
@@ -6420,12 +6482,12 @@ reloadTest("assistant upgrade side chat toolbar inherits saved history and resto
   if (!(await otherConversation.isVisible())) {
     if ((page.viewportSize()?.width ?? 1440) <= 1100) {
       const chooser = sidePane.getByRole("button", { name: "Choose main conversation" });
-      if (mobile) await chooser.tap();
+      if (mobile) await activateControl(chooser);
       else { await chooser.focus(); await page.keyboard.press("Enter"); }
       await expect(chooser).toHaveAttribute("aria-expanded", "true");
     } else await page.getByRole("button", { name: "Show conversations" }).click();
   }
-  if (mobile) await otherConversation.tap();
+  if (mobile) await activateControl(otherConversation);
   else await otherConversation.click();
   await expect(page).toHaveURL(new RegExp(`session=${other.id}`));
   await expect(page).not.toHaveURL(/sideChat=/);
@@ -6445,7 +6507,7 @@ reloadTest("assistant upgrade side chat toolbar inherits saved history and resto
   if (mobile) await page.getByRole("button", { name: "Open conversations" }).click();
   else if (!(await parentConversation.isVisible())) await page.getByRole("button", { name: "Show conversations" }).click();
   await parentConversation.waitFor({state: "visible"});
-  if (mobile) await parentConversation.tap();
+  if (mobile) await activateControl(parentConversation);
   else await parentConversation.click();
   await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
   await expect(sidePane).toBeVisible();
@@ -6985,7 +7047,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
     if (!await button.isVisible()) {
       await page.getByRole("button", {name: "Open conversations", exact: true}).click();
     }
-    if ((page.viewportSize()?.width ?? 1_000) <= 760) await button.tap();
+    if ((page.viewportSize()?.width ?? 1_000) <= 760) await activateControl(button);
     else { await button.focus(); await button.press("Enter"); }
   };
   const expectTranscriptAfterPreview = async (text: string) => {
@@ -7009,7 +7071,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   if (!viewport) throw new Error("Expected a visible chat viewport");
   const previewX = viewport.x + viewport.width / 2;
   const previewY = viewport.y + Math.min(viewport.height / 2, 120);
-  if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.touchscreen.tap(previewX, previewY);
+  if (test.info().project.use.hasTouch) await page.touchscreen.tap(previewX, previewY);
   else await page.mouse.click(previewX, previewY);
   const readingAnchor = page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true});
   await expect(readingAnchor).toBeAttached();
@@ -7321,7 +7383,9 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
   else await page.getByRole("button", { name: "Hide session details" }).click();
   await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
   await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
-  await expect(page.getByRole("checkbox", { name: /Audit lifecycle/ })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Chat runtime" })).toHaveValue("harness");
+  await expect(page.getByRole("checkbox", { name: /Audit lifecycle/ })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /Audit lifecycle/ })).not.toBeChecked();
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
@@ -8776,6 +8840,7 @@ test("assistant upgrade model and effort stay editable while a response runs", a
     const path = new URL(request.url()).pathname;
     if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
     if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [session()] });
+    if (path.endsWith("/chat-sessions/live-chat") && request.method() === "GET") return route.fulfill({ json: session() });
     if (path.endsWith("/chat/sessions/live-chat/messages")) return route.fulfill({ json: [] });
     if (path.endsWith("/chat/sessions/live-chat/pending-turn")) return route.fulfill({ json: null });
     if (path.endsWith("/chat/sessions/live-chat/goal")) return route.fulfill({ status: 404, json: { detail: "No goal" } });
@@ -9274,6 +9339,7 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
   expect(geometry.footerPaddingInline).toBeGreaterThanOrEqual(12);
   const accessibility = await new AxeBuilder({ page }).include(".activity-ledger").analyze();
   expect(accessibility.violations).toEqual([]);
+  await showActivity.scrollIntoViewIfNeeded();
   const chatScrollBefore = await page.locator(".chat-scroll").evaluate(element => element.scrollTop);
   await showActivity.click();
   await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
@@ -10286,7 +10352,7 @@ test("settings shows the live Kali preparation stage instead of a passive runtim
     });
   });
 
-  await page.goto("/settings");
+  await page.goto("/settings#setup-settings");
   await expect(page.getByRole("heading", { name: "Preparing Kali runtime…" })).toBeVisible();
   await expect(page.locator("#setup-settings").getByText("Downloading the official Kali base image.")).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "Kali runtime preparation progress" })).toHaveAttribute(
@@ -10514,10 +10580,10 @@ test("Assistant opens the live terminal beside the chat and runs commands there"
   await page.getByRole("region", { name: "Terminal beside chat" }).getByRole("button", { name: "Hide terminal" }).click();
   await expect(page.getByRole("region", { name: "Terminal beside chat" })).toHaveCount(0);
   await page.getByRole("button", { name: "Chat tools" }).click();
-  const toggle = page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Terminal/ });
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
-  await toggle.click();
-  await expect(page.getByRole("region", { name: "Terminal beside chat" })).toBeVisible();
+  await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Terminal/ }).click();
+  const terminalTab = page.getByRole("region", { name: "Terminal 1 beside chat" });
+  await expect(terminalTab).toBeVisible();
+  await terminalTab.getByRole("button", { name: "Close Terminal 1 tab" }).click();
   await page.getByRole("tab", { name: "Terminal", exact: true }).click();
   await expect(page).toHaveURL(/view=terminal/);
 });
@@ -11445,7 +11511,7 @@ test("phone shell keeps the terminal in its own tab and the chat edge to edge", 
   await navigation.getByRole("button", { name: "Chat", exact: true }).click();
   await page.getByRole("button", { name: "Conversation actions" }).click();
   const actions = page.getByRole("menu", { name: "Conversation actions" });
-  await expect(actions.getByRole("menuitem", { name: /Session details/ })).toBeVisible();
+  await expect(actions.getByRole("menuitem", { name: /Chat details/ })).toBeVisible();
   await expect(actions.getByRole("menuitem", { name: /Search messages/ })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(actions).toHaveCount(0);
@@ -11667,7 +11733,8 @@ test("browser research tools expose durable workflows on paired clients", async 
 });
 
 test("conversation switching keeps side panels adjustable and mobile drawers intact", async ({ page }) => {
-  await openWorkspace(page, "/?view=chat", "Workbench");
+  await installDetailsConversation(page);
+  await openWorkspace(page, "/?view=chat&session=details-chat", "Workbench");
   const viewportWidth = page.viewportSize()?.width ?? 1440;
 
   if (viewportWidth <= 760) {
@@ -11677,8 +11744,7 @@ test("conversation switching keeps side panels adjustable and mobile drawers int
     await expect(conversations).toBeVisible();
     await expect(conversations.getByRole("separator")).toHaveCount(0);
     await conversations.getByRole("button", { name: "Hide conversations" }).click();
-    await page.getByRole("button", { name: "Conversation actions" }).click();
-    await page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Session details/ }).click();
+    await openSessionDetails(page);
     const drawer = page.getByRole("dialog", { name: "Conversation details" });
     await expect(drawer).toBeVisible();
     await expect(drawer.getByRole("separator")).toHaveCount(0);
@@ -11704,8 +11770,7 @@ test("conversation switching keeps side panels adjustable and mobile drawers int
   await expect.poll(() => conversations.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(Math.round(conversationWidth + 56));
   await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.conversations.width"))).toBe(String(Math.round(conversationWidth + 56)));
 
-  await page.getByRole("button", { name: "Chat tools" }).click();
-  await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
+  await openSessionDetails(page);
   if (viewportWidth <= 1100) {
     const drawer = page.getByRole("dialog", { name: "Conversation details" });
     await expect(drawer).toBeVisible();
@@ -11734,14 +11799,9 @@ test("conversation switching keeps side panels adjustable and mobile drawers int
 });
 
 test("Assistant session details use reloadable drawer navigation", async ({ page }) => {
-  await openWorkspace(page, "/?view=chat", "Workbench");
-  if ((page.viewportSize()?.width ?? 1440) <= 760) {
-    await page.getByRole("button", { name: "Conversation actions" }).click();
-    await page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Session details/ }).click();
-  } else {
-    await page.getByRole("button", { name: "Chat tools" }).click();
-    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
-  }
+  await installDetailsConversation(page);
+  await openWorkspace(page, "/?view=chat&session=details-chat", "Workbench");
+  await openSessionDetails(page);
   const drawer = (page.viewportSize()?.width ?? 1440) <= 1100
     ? page.getByRole("dialog", {name: "Conversation details"})
     : page.getByRole("complementary", {name: "Session inspector"});
@@ -12263,6 +12323,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(settings.getByRole("combobox", { name: "Chat runtime", exact: true })).toBeInViewport({ ratio: 1 });
   const lastSetting = settings.locator(".chat-settings-capabilities").getByText("No enabled MCP profiles");
   await lastSetting.scrollIntoViewIfNeeded();
+  await lastSetting.evaluate(element => element.scrollIntoView({block: "center"}));
   await expect(lastSetting).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: test.info().outputPath("roomy-assistant-settings.png") });
   await page.keyboard.press("Escape");
@@ -12774,10 +12835,11 @@ test("shared actions keep Chat tools and focus controls reachable", async ({ pag
     }
     await bar.getByRole("button", { name: "Chat tools" }).click();
     const tools = bar.getByRole("group", { name: "Chat tools" });
-    await expect(tools.getByRole("menuitem", { name: "Tool assistance" })).toBeVisible();
+    await expect(tools.getByRole("button", { name: /Tool assistance/ })).toBeVisible();
     await tools.getByRole("button", { name: /Chat details/ }).click();
-    await expect(page.getByRole("button", { name: "Close details" })).toBeVisible();
-    await page.getByRole("button", { name: "Close details" }).click();
+    const details = page.getByRole("region", { name: "Chat details 1 beside chat" });
+    await expect(details).toBeVisible();
+    await details.getByRole("button", { name: "Close Chat details 1 tab" }).click();
     await page.getByRole("toolbar", { name: "Workbench controls" }).getByRole("button", { name: "Enter focus mode" }).focus();
     await page.keyboard.press("Enter");
   }
@@ -13221,7 +13283,7 @@ reloadTest("stabilization terminal long output keeps the prompt and typed input 
   expect(screenBounds!.y + screenBounds!.height).toBeLessThanOrEqual(shellBounds.y + shellBounds.height + 1);
   expect(shellBounds.y + shellBounds.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   const input = page.getByRole("textbox", {name: "Terminal input"});
-  if ((page.viewportSize()?.width ?? 0) > 760) {
+  if (!test.info().project.use.hasTouch) {
     await shell.locator(".xterm-screen").hover({position: {x: 20, y: 20}});
     await page.mouse.wheel(0, -3000);
     await expect(rows).not.toContainText("listing-row-149");
@@ -14848,8 +14910,7 @@ test("stabilization Project Snapshot floats over chat and minimizes", async ({ p
   await expect(view).toBeVisible();
   expect(Math.round((await view.boundingBox())?.x ?? 0)).toBe(Math.round(moved?.x ?? 0));
   await view.getByRole("button", { name: "Minimize Project Snapshot" }).click();
-  await page.getByRole("button", { name: "Chat tools" }).click();
-  await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
+  await openSessionDetails(page);
   await expect(page.getByRole("navigation", { name: "Conversation detail views" }).getByRole("button")).toHaveText(["Context", "Results", "Subagents"]);
   await page.getByRole("button", { name: "Close details" }).click();
   await show.click();
@@ -14868,8 +14929,9 @@ test("stabilization focus mode keeps an empty chat beside its code editor", asyn
   if (!mobile) {
     await page.getByRole("button", { name: "Chat tools" }).click();
     await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Code editor/ }).click();
-    await expect(page.getByRole("region", { name: "Code beside chat" })).toBeVisible();
-    await expect(page).toHaveURL(/side=code/);
+    await expect(page.getByRole("region", { name: "Code 1 beside chat" })).toBeVisible();
+    await expect.poll(() => new URL(page.url()).searchParams.getAll("panel").some(value => value.startsWith("code:1:"))).toBe(true);
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
   }
 
   const enterFocus = page.getByRole("button", { name: "Enter focus mode" });
@@ -14882,10 +14944,10 @@ test("stabilization focus mode keeps an empty chat beside its code editor", asyn
   await expect(page.locator(".app-shell > .side-nav, .app-shell > .mobile-companion-nav")).toBeHidden();
 
   if (!mobile) {
-    const placement = await page.locator(".session-workspace.chat-companion-open").evaluate((workspace) => {
+    const placement = await page.locator(".session-workspace.side-chat-open").evaluate((workspace) => {
       const bounds = workspace.getBoundingClientRect();
       const chat = workspace.querySelector<HTMLElement>(":scope > .chat-empty-state")!.getBoundingClientRect();
-      const code = workspace.querySelector<HTMLElement>(":scope > .chat-companion-panel")!.getBoundingClientRect();
+      const code = workspace.querySelector<HTMLElement>(":scope > #side-tool-panel")!.getBoundingClientRect();
       return {
         display: getComputedStyle(workspace).display,
         chatWidth: chat.width,
@@ -14917,12 +14979,17 @@ test("stabilization focus mode keeps an empty chat beside its code editor", asyn
   await expect(page.locator(".sessions-page.chat-focus")).toHaveCount(0);
   await expect(emptyChat.getByRole("button", { name: "Start new chat" })).toBeVisible();
   if (!mobile) {
-    const code = page.getByRole("region", { name: "Code beside chat" });
+    const selectedPanel = new URL(page.url()).searchParams.get("panelTab");
+    await page.reload();
+    const code = page.getByRole("region", { name: "Code 1 beside chat" });
     await expect(code).toBeVisible();
+    await expect.poll(() => new URL(page.url()).searchParams.get("panelTab")).toBe(selectedPanel);
+    await expect(emptyChat.getByRole("button", { name: "Start new chat" })).toBeVisible();
     const codeBounds = await code.boundingBox();
     const chatBounds = await emptyChat.boundingBox();
     expect(codeBounds!.x - (chatBounds!.x + chatBounds!.width)).toBeGreaterThanOrEqual(8);
-    await expect(page).toHaveURL(/side=code/);
+    await expect.poll(() => new URL(page.url()).searchParams.getAll("panel").some(value => value.startsWith("code:1:"))).toBe(true);
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 });
@@ -14950,87 +15017,108 @@ test("chat companions reveal Code, Browser, and Notes from the conversation", as
   await expect(exitFocus.locator("svg")).toBeVisible();
   await exitFocus.click();
   await expect(enterFocus).toBeVisible();
+  const chooseTool = async (name: string) => {
+    if (mobile) {
+      await page.getByRole("button", { name: "Conversation actions" }).click();
+      await page.getByRole("menuitem", { name: new RegExp(`^${name}\\b`) }).click();
+    } else {
+      await page.getByRole("button", { name: "Chat tools" }).click();
+      await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: new RegExp(`^${name}\\b`) }).click();
+    }
+  };
   if (mobile) {
-    await page.getByRole("button", { name: "Conversation actions" }).click();
-    await page.getByRole("menuitem", { name: /Code editor/ }).click();
-    await expect(page).toHaveURL(/view=code/);
-    await expect(page.locator(".code-editor-panel")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
-    await page.getByRole("navigation", { name: "Mobile operator navigation" }).getByRole("button", { name: "Chat" }).click();
-    await page.getByRole("button", { name: "Conversation actions" }).click();
-    await page.getByRole("menuitem", { name: /Notes/ }).click();
-    await expect(page).toHaveURL(/view=notes/);
-    await expect(page.locator(".notes-panel")).toBeVisible();
+    for (const [menu, label] of [["Code editor", "Code 1"], ["Notes", "Notes 1"]]) {
+      await chooseTool(menu);
+      const panel = page.getByRole("region", { name: `${label} beside chat` });
+      await expect(panel).toBeVisible();
+      await expect(page).toHaveURL(/view=chat/);
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe("companion-chat");
+      const bounds = (await panel.boundingBox())!;
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+      await panel.getByRole("button", { name: `Close ${label} tab` }).click();
+      await expect(page.getByText("Parent context", { exact: true })).toBeVisible();
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     return;
   }
-  const chooseTool = async (name: string) => {
-    await page.getByRole("button", { name: "Chat tools" }).click();
-    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: new RegExp(name) }).click();
-  };
+
   await chooseTool("Terminal");
-  const terminal = page.getByRole("region", { name: "Terminal beside chat" });
+  const terminal = page.getByRole("region", { name: "Terminal 1 beside chat" });
   await expect(terminal).toBeVisible();
-  await terminal.getByRole("button", { name: "Expand Terminal in chat" }).click();
-  await expect(page).toHaveURL(/view=chat.*companion=full/);
-  await expect(page.locator(".session-workspace.chat-terminal-open.expanded")).toBeVisible();
-  await terminal.getByRole("button", { name: "Return Terminal to side" }).click();
-  await expect(page).not.toHaveURL(/companion=full/);
-  await terminal.getByRole("button", { name: "Hide terminal" }).click();
+  await terminal.getByRole("button", { name: "Expand Terminal 1 to full screen" }).click();
+  const fullTerminal = page.getByRole("dialog", { name: "Terminal 1 full screen" });
+  await expect(fullTerminal).toBeVisible();
+  await fullTerminal.getByRole("button", { name: "Restore Terminal 1 to split view" }).click();
+  await terminal.getByRole("button", { name: "Close Terminal 1 tab" }).click();
   await expect(terminal).toHaveCount(0);
+
   await chooseTool("Code editor");
-  const code = page.getByRole("region", { name: "Code beside chat" });
+  const code = page.getByRole("region", { name: "Code 1 beside chat" });
   await expect(code).toBeVisible();
-  await expect(page).toHaveURL(/side=code/);
+  await expect.poll(() => new URL(page.url()).searchParams.getAll("panel").some(value => value.startsWith("code:1:"))).toBe(true);
   await expect.poll(async () => {
     const workspace = await page.locator(".session-workspace").boundingBox();
     const panel = await code.boundingBox();
-    return workspace && panel ? Math.abs(panel.width - workspace.width / 2) : 1_000;
+    return workspace && panel ? Math.abs(panel.width - (workspace.width - 12) / 2) : 1_000;
   }).toBeLessThan(24);
   await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
-  await code.getByRole("button", { name: "Expand Code editor in chat" }).click();
-  await expect(page.locator(".session-workspace > .conversation-toolbar")).toBeHidden();
-  await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
-  await code.getByRole("button", { name: "Return Code editor to side" }).click();
+  await code.getByRole("button", { name: "Expand Code 1 to full screen" }).click();
+  const fullCode = page.getByRole("dialog", { name: "Code 1 full screen" });
+  await expect(fullCode).toBeVisible();
+  await expect(page.locator(".chat-studio")).toHaveJSProperty("inert", true);
+  await page.keyboard.press("Escape");
+  await expect(code).toBeVisible();
+  await expect(page.locator(".chat-studio")).toHaveJSProperty("inert", false);
   await expect(page.locator(".session-workspace > .conversation-toolbar")).toBeVisible();
-  const separator = code.getByRole("separator", { name: "Resize code panel" });
   if ((page.viewportSize()?.width ?? 1440) > 1250) {
     const before = (await code.boundingBox())!.width;
-    await separator.focus();
+    await page.getByRole("separator", { name: "Resize side chat" }).focus();
     await page.keyboard.press("ArrowLeft");
     await expect.poll(async () => (await code.boundingBox())!.width).toBeGreaterThan(before);
   }
-  await code.getByRole("button", { name: "Hide Code editor" }).click();
-  await expect(code).toHaveCount(0);
+
   await chooseTool("Browser");
-  await expect(page.getByRole("region", { name: "Browser beside chat" })).toBeVisible();
+  const browser = page.getByRole("region", { name: "Browser 1 beside chat" });
+  await expect(browser).toBeVisible();
   await chooseTool("Notes");
-  const notes = page.getByRole("region", { name: "Notes beside chat" });
+  const notes = page.getByRole("region", { name: "Notes 1 beside chat" });
   await expect(notes).toBeVisible();
-  await expect(page.getByRole("region", { name: "Browser beside chat" })).toHaveCount(0);
+  await expect(browser).toHaveCount(0);
   await notes.getByRole("button", { name: "Create note" }).click();
   await notes.getByRole("textbox", { name: "Note title" }).fill("Unsaved companion draft");
-  await notes.getByRole("button", { name: "Hide Notes" }).click();
-  await chooseTool("Notes");
+  await notes.getByRole("tab", { name: "Code 1", exact: true }).click();
+  await expect(code).toBeVisible();
+  await code.getByRole("tab", { name: "Notes 1", exact: true }).click();
   await expect(notes.getByRole("textbox", { name: "Note title" })).toHaveValue("Unsaved companion draft");
+  const originalPanelUrl = page.url();
   const showConversations = page.getByRole("button", { name: "Show conversations" });
   if (await showConversations.isVisible()) await showConversations.click();
   await page.locator('.session-select[data-session-id="companion-chat-2"]').click();
-  await expect(page.getByRole("region", { name: "Notes beside chat" })).toHaveCount(0);
+  await expect(notes).toHaveCount(0);
   await chooseTool("Notes");
-  await expect(page.getByRole("region", { name: "Notes beside chat" }).getByRole("textbox", { name: "Note title" })).toHaveCount(0);
-  await page.locator('.session-select[data-session-id="companion-chat"]').click();
+  await expect(page.getByRole("region", { name: "Notes 1 beside chat" }).getByRole("textbox", { name: "Note title" })).toHaveCount(0);
+  // Conversation selection replaces its route; tool actions add their own
+  // entries. Return to the parent, then select the same numbered Notes tab.
+  const historyLength = await page.evaluate(() => window.history.length);
+  for (let step = 0; step < historyLength && new URL(page.url()).searchParams.get("session") !== "companion-chat"; step += 1) {
+    await page.goBack();
+  }
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe("companion-chat");
+  await page.getByRole("tab", { name: "Notes 1", exact: true }).click();
+  await expect(page).toHaveURL(originalPanelUrl);
   await expect(notes.getByRole("textbox", { name: "Note title" })).toHaveValue("Unsaved companion draft");
-  await notes.getByRole("button", { name: "Expand Notes in chat" }).click();
-  await expect(page).toHaveURL(/view=chat.*companion=full/);
+  await notes.getByRole("button", { name: "Expand Notes 1 to full screen" }).click();
+  const fullNotes = page.getByRole("dialog", { name: "Notes 1 full screen" });
+  await expect(fullNotes).toBeVisible();
+  const bounds = (await fullNotes.boundingBox())!;
+  expect(bounds.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 2);
+  await page.keyboard.press("Escape");
   await expect(notes).toBeVisible();
-  await expect.poll(async () => (await notes.boundingBox())!.width).toBeGreaterThan((await page.locator(".session-workspace").boundingBox())!.width - 4);
-  await notes.getByRole("button", { name: "Return Notes to side" }).click();
-  await expect(page).not.toHaveURL(/companion=full/);
   await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
-  await expect(page.locator(".notes-panel")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
 reloadTest("notebook Workbench tab and chat companion keep the same Python file", async ({page}) => {
   const notebook = {path: "quick.ipynb", revision: "r1", cell_revisions: {cell1: "h1"}, document: {nbformat: 4, nbformat_minor: 5, metadata: {}, cells: [{id: "cell1", cell_type: "code", source: "print(1)", execution_count: null, outputs: []}]}};
   await page.route("**/api/v1/**", async route => {
@@ -15056,7 +15144,7 @@ reloadTest("notebook Workbench tab and chat companion keep the same Python file"
     await page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Chat"}).click();
     await page.getByRole("button", {name: "Conversation actions"}).click();
     await page.getByRole("menuitem", {name: /Notebook/}).click();
-    const sheet = page.getByRole("region", {name: "Notebook beside chat"});
+    const sheet = page.getByRole("region", {name: "Notebook 1 beside chat"});
     await expect(sheet).toBeVisible();
     const bounds = await sheet.boundingBox();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -15065,7 +15153,7 @@ reloadTest("notebook Workbench tab and chat companion keep the same Python file"
     await page.getByRole("tab", {name: "Analyst chat"}).click();
     await page.getByRole("button", {name: "Chat tools"}).click();
     await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Notebook/}).click();
-    await expect(page.getByRole("region", {name: "Notebook beside chat"}).getByRole("combobox", {name: "Notebook"})).toHaveValue("quick.ipynb");
+    await expect(page.getByRole("region", {name: "Notebook 1 beside chat"}).getByRole("combobox", {name: "Notebook"})).toHaveValue("quick.ipynb");
   }
 });
 
@@ -15190,7 +15278,7 @@ reloadTest("assistant popup Butler long history keeps the composer and jump to l
   await composer.fill("A new question after a long conversation");
   await expect(composer).toHaveValue("A new question after a long conversation");
   const mobile = await page.evaluate(() => matchMedia("(max-width: 760px), (max-height: 500px) and (pointer: coarse)").matches);
-  const surface = mobile ? transcript.locator("..") : transcript;
+  const surface = mobile ? transcript.locator("../..") : transcript;
   expect(await surface.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(24);
   await surface.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll", {bubbles: true})); });
   const jump = butler.getByRole("button", {name: "Scroll to latest message"});

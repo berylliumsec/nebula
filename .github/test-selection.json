@@ -5,8 +5,8 @@
   "expected_tests": {
     "python": 1157,
     "frontend": 101,
-    "native": 16,
-    "playwright": 32
+    "native": 1,
+    "playwright": 206
   },
   "python": [
     "tests/test_test_selection.py",
@@ -65,15 +65,16 @@
     "ui/src/pages/sidePanelTabs.test.ts"
   ],
   "native": [
-    "diagnostics::tests"
+    "diagnostics::tests::shared_cross_language_contract_matches_native_diagnostics"
   ],
   "playwright": [
     "area:icon-pack",
     "area:butler-private-settings",
-    "area:universal-agents"
+    "area:universal-agents",
+    "area:test-suite-regressions"
   ],
   "python_node": true,
-  "change_digest": "fee7ff58bc1c5afeb38f24bc1b8a8698faff81e90f994da7655f2592d8b043ed",
+  "change_digest": "ae19fdbc8d1d4fb522999dddaf4023980d09b0bbd94a7c5d3b83c28690fdd6f0",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }

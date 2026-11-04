@@ -399,9 +399,10 @@ jobs:
       - name: Prepare compile-time sidecar boundary
         run: |
           target="$(rustc -vV | sed -n 's/^host: //p')"
-          mkdir -p ui/src-tauri/binaries
+          mkdir -p ui/src-tauri/binaries ui/src-tauri/resources/notebook-runtime
           mkdir -p build/nebula-core-metadata
           printf 'Generated CI fixture for native shell tests.\n' > build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
+          printf 'Compile-time resource fixture; no executable notebook runtime.\n' > ui/src-tauri/resources/notebook-runtime/TEST_FIXTURE.txt
           touch "ui/src-tauri/binaries/nebula-core-$target"
           chmod +x "ui/src-tauri/binaries/nebula-core-$target"
       - name: Test native menus and sidecar boundary
