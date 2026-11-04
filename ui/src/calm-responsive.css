@@ -108,3 +108,16 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Provider setup must remain reachable inside the phone Settings lens. Its
+   heading and three actions cannot fit on one row within the clipped group. */
+@media (max-width: 760px) {
+  .embedded-settings-page #provider-settings > .section-heading {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .embedded-settings-page #provider-settings > .section-heading > div {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+}

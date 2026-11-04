@@ -1,50 +1,22 @@
 {
-  "reviewed_by": "Codex GUI worker activation boundary review",
-  "reason": "GUI enable/disable activates the normal Core PDF pool. The five feature Python files cover real owned PIDs/affinity, PDF equivalence/artifacts, restart/migration, stale saves, bounded queue/bytes, drain/repin/replacement, cancelled callers, legacy-thread ownership, startup failure/retry/cleanup and unknown observation recovery. Seven exact discovery/help/entry/product-index/Chroma-startup cases cover Butler integration and packaging. Four scoped frontend files cover activation/readback/polling, unknown counts, retry, conflicts and host changes. Exactly one real-Core production-LAN journey runs in each of eight permanent desktop/mobile Chromium/WebKit profiles. Separately, the conditional frozen-Linux job builds the actual executable and runs one enable/PDF/resize/restart/disable smoke; no Rust suites run. The owned 50-request large-PDF LAN burst tests bounded overload, live 3-to-1 resize, draining disable and ordinary API reads. No full suite is authorized.",
-  "exclusions": "No real providers, external chat/tool/harness execution, GPU work, production deployment, physical devices or macOS/Windows activation. Linux affinity applies only to PDF workers. Native=0 means no Rust suites; one actual frozen Linux Core journey is selected separately. No unrelated Python/frontend/browser journeys.",
+  "reviewed_by": "Codex first-user journey review",
+  "reason": "One new first-use journey: empty Core, UI pairing/provider setup/project/chat/upload/analysis and reload. Run only this journey across eight existing desktop/mobile profiles; validate catalog separately. The same journey verifies a narrow provider-header wrapping fix discovered at 320px; clickability and full viewport visibility are asserted.",
+  "exclusions": "CSS layout and E2E changes only: real-browser geometry is the relevant layer, with no component logic, native or Core unit changes. No unrelated browser journeys, live model services, desktop shell or physical-device claims. Recovery, cancellation and deletion remain separate existing journeys.",
   "expected_tests": {
-    "python": 73,
-    "frontend": 70,
+    "python": 3,
+    "frontend": 0,
     "native": 0,
     "playwright": 8
   },
-  "python_versions": [
-    "3.11",
-    "3.12",
-    "3.13"
-  ],
-  "python_browser": false,
-  "python_node": false,
   "python": [
-    "tests/v3/test_report_cpu_activation.py",
-    "tests/v3/test_host_cpu_budget.py",
-    "tests/v3/test_cpu_workers.py",
-    "tests/v3/test_report_cpu_workers.py",
-    "tests/v3/test_reporting.py",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_per_host_cpu_budget_configuration",
-    "tests/v3/test_butler_host_load.py::test_core_startup_syncs_current_host_load_guidance_into_chroma",
-    "tests/v3/test_harness_activity_cost.py::test_packaged_entry_serves_the_gateway_without_importing_core",
-    "tests/v3/test_operator_help.py::test_host_capacity_help_explains_saved_deferral_and_recovery"
+    "tests/test_playwright_impact.py::test_first_user_selection_covers_only_the_onboarding_journey",
+    "tests/test_playwright_impact.py::test_full_manifest_covers_every_permanent_playwright_project",
+    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans"
   ],
-  "frontend": [
-    "ui/src/components/HostCpuBudgetSettings.test.tsx",
-    "ui/src/pages/SettingsPage.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/settingsCatalog.hostLoad.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:host-cpu-budget/model-desktop",
-    "entry:host-cpu-budget/model-compact",
-    "entry:host-cpu-budget/model-chromium-320",
-    "entry:host-cpu-budget/model-webkit-320",
-    "entry:host-cpu-budget/model-chromium-390",
-    "entry:host-cpu-budget/model-webkit-390",
-    "entry:host-cpu-budget/model-chromium-430",
-    "entry:host-cpu-budget/model-webkit-430"
+    "area:first-user"
   ],
-  "change_digest": "b824087f00dc65ca09228e911474018b8228734fb500fd3a9b0677537e04d510"
+  "change_digest": "68109fdd7f0a9d5153c6c4f1ad1e5ae36cbc68826cefdc678b69c8ede284a121"
 }
