@@ -199,6 +199,8 @@ jobs:
         run: |
           if test "$TEST_MATCH" = tests/release-live.spec.ts; then
             release_fixture="$(mktemp -d "$RUNNER_TEMP/nebula-release-XXXXXX")"
+            mkdir -p "$release_fixture/tmp"
+            export TMPDIR="$release_fixture/tmp"
             export NEBULA_RELEASE_TOKEN_FILE="$release_fixture/token"
             export NEBULA_RELEASE_COMMIT="$(git rev-parse HEAD)"
             release_host="$(node -e 'const interfaces = Object.values(require("node:os").networkInterfaces()).flat(); const address = interfaces.find(value => value && value.family === "IPv4" && !value.internal)?.address; if (!address) process.exit(1); process.stdout.write(address);')"

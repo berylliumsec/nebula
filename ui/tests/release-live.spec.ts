@@ -1,4 +1,4 @@
-import {chmod, copyFile, mkdtemp, readFile} from "node:fs/promises";
+import {chmod, copyFile, mkdtemp, readFile, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {expect, request, test} from "@playwright/test";
@@ -61,6 +61,9 @@ test("stabilization deployed approval completes once and survives reconnect", as
     await page.goto(`${origin}/projects/${projectId}/workbench?view=chat`);
     await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
     await page.getByRole("button", {name: "New chat", exact: true}).click();
+    if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) {
+      await page.locator(".chat-composer").hover();
+    }
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     await page.getByRole("combobox", {name: "Chat runtime", exact: true}).selectOption("harness");
     await page.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption(harnessId!);
@@ -99,8 +102,12 @@ test("stabilization deployed approval completes once and survives reconnect", as
     const receipts = (await readFile(path.join(fixtureRoot, "stabilization_acp.receipts.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
     expect(receipts).toHaveLength(1);
     expect(receipts[0].allowed).toBe(true);
-    await info.attach("deployed-approval-receipt", {body: JSON.stringify({origin, commit, projectId, session, state, receipts}), contentType: "application/json"});
-    await info.attach("deployed-approval-reconnected", {body: await page.screenshot(), contentType: "image/png"});
+    const receiptPath = info.outputPath("deployed-approval-receipt.json");
+    await writeFile(receiptPath, JSON.stringify({origin, commit, profile: info.project.name, projectId, session, state, receipts}, null, 2));
+    await info.attach("deployed-approval-receipt", {path: receiptPath, contentType: "application/json"});
+    const screenshotPath = info.outputPath("deployed-approval-reconnected.png");
+    await page.screenshot({path: screenshotPath});
+    await info.attach("deployed-approval-reconnected", {path: screenshotPath, contentType: "image/png"});
   } finally {
     await page.context().setOffline(false);
     // Attach the receipt before cleanup, then remove the disposable conversation

@@ -3991,6 +3991,7 @@ test("assistant upgrade conversation switching restores durable Core history pro
 
 test("assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   const runtimeRoot = process.env.NEBULA_TEST_MANAGED_BROWSER_RUNTIME;
   expect(runtimeRoot, "A verified managed Chromium runtime is required for the LAN browser journey").toBeTruthy();
   const fixture = await startBrowserPentestAuditFixture({runtimeRoot});
@@ -4032,6 +4033,7 @@ test("assistant upgrade linked reply opens a durable file and scoped website in 
     await expect(code.locator(".code-editor-panel")).toContainText("second line");
     await page.reload();
     await expect(code.locator(".code-editor-panel")).toContainText("second line");
+    if (mobile) await code.getByRole("button", {name: "Close Code 1 tab", exact: true}).click();
     await reply.getByRole("link", { name: "Open site" }).click();
     const browser = page.getByRole("region", { name: "Browser 1 beside chat" });
     await expect(browser).toBeVisible();
@@ -4040,12 +4042,13 @@ test("assistant upgrade linked reply opens a durable file and scoped website in 
     await page.reload();
     await expect(browser.getByRole("textbox", { name: "Browser address" })).toHaveValue(targetUrl, { timeout: 30_000 });
     expect(targetHits.filter(hit => hit === "GET /start")).toHaveLength(1);
+    if (mobile) await browser.getByRole("button", {name: "Close Browser 1 tab", exact: true}).click();
     const refuse = await api.patch(`scope-policies/${scopePolicyId}`, {data: {changes: {allowed_cidrs: ["192.0.2.0/24"]}}});
     expect(refuse.ok(), await refuse.text()).toBe(true);
     const siteLink = reply.getByRole("link", { name: "Open site" });
     await siteLink.focus();
     await siteLink.press("Enter");
-    const retryBrowser = page.getByRole("region", { name: "Browser 2 beside chat" });
+    const retryBrowser = page.getByRole("region", { name: mobile ? "Browser 1 beside chat" : "Browser 2 beside chat" });
     await expect(retryBrowser).toBeVisible();
     await expect(page.getByRole("alert")).toContainText("scope");
     expect(targetHits.filter(hit => hit === "GET /start")).toHaveLength(1);
@@ -5301,6 +5304,7 @@ test("a paired browser can revoke itself without a stale authentication error", 
 
 test("assistant upgrade focused work surfaces retain real Core project context", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   const core = await startRealCore();
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
@@ -5319,9 +5323,15 @@ test("assistant upgrade focused work surfaces retain real Core project context",
       { tab: "Project browser", view: "browser", content: ".persistent-browser" },
       { tab: "Workspace files", view: "workspace", content: ".workspace-browser" },
     ]) {
-      await clickWorkbenchTab(page, tab);
+      if (mobile) {
+        await page.getByRole("button", {name: "More workbench views", exact: true}).click();
+        await page.getByRole("dialog", {name: "More", exact: true}).getByRole("button", {name: view === "workspace" ? "Files" : view === "code" ? "Code" : "Browser", exact: true}).click();
+      } else await clickWorkbenchTab(page, tab);
       await expect(page.locator(content)).toBeVisible();
-      await page.getByRole("button", { name: "Enter focus mode" }).click();
+      if (mobile) {
+        await page.getByRole("button", {name: "More workbench views", exact: true}).click();
+        await page.getByRole("dialog", {name: "More", exact: true}).getByRole("button", {name: "Focus mode", exact: true}).click();
+      } else await page.getByRole("button", { name: "Enter focus mode" }).click();
       await expect(page.locator(`.sessions-page.workbench-focus.full-screen > .session-layout.${view}`)).toBeVisible();
       await expect(page.locator(content)).toBeVisible();
       await expect(page.locator(".workbench-view-tabs")).toHaveCount(0);
@@ -5581,6 +5591,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
 
 test("project execution mode uses production Code, real Git changes, and reviewed unrestricted commands", async ({ page }) => {
   test.setTimeout(60_000);
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   const core = await startRealCore();
   const projectFolder = await mkdtemp(path.join(tmpdir(), "nebula-source-control-project-"));
   const api = await playwrightRequest.newContext({
@@ -5627,11 +5638,14 @@ test("project execution mode uses production Code, real Git changes, and reviewe
     await page.getByRole("button", { name: /scanner\.py/ }).click();
     await expect(page.locator(".cm-line").nth(1)).toHaveText("    return 'changed'");
     await expect(page.getByRole("button", {name: "Python · intelligence ready"})).toBeVisible({ timeout: 10_000 });
-    await page.getByRole("button", { name: "More editor tools" }).click();
-    await page.getByLabel("Editor tools").getByRole("button", { name: "Problems" }).click();
+    await page.getByRole("button", { name: mobile ? "More editor actions" : "More editor tools", exact: true }).click();
+    await page.getByLabel(mobile ? "Editor options" : "Editor tools").getByRole("button", { name: "Problems" }).click();
     await expect(page.locator(".cm-panel-lint")).toBeVisible();
-    await page.getByRole("button", { name: "More editor tools" }).click();
-    await page.getByLabel("Editor tools").getByRole("button", { name: "Tasks" }).click();
+    if (mobile) await page.getByRole("button", {name: "Project tasks and tests", exact: true}).click();
+    else {
+      await page.getByRole("button", { name: "More editor tools" }).click();
+      await page.getByLabel("Editor tools").getByRole("button", { name: "Tasks" }).click();
+    }
     const tasks = page.getByRole("dialog", { name: "Project tasks and tests" });
     await tasks.getByRole("option", { name: /make: lint/ }).click();
     const executionReview = page.getByRole("dialog", { name: "Review exact code execution" });
@@ -5641,6 +5655,7 @@ test("project execution mode uses production Code, real Git changes, and reviewe
     await expect(executionReview.getByText("One scoped target", { exact: true })).toHaveCount(0);
     await expect(executionReview.getByPlaceholder("host.example or 192.0.2.10")).toHaveCount(0);
     await executionReview.getByRole("button", { name: "Close execution review" }).click();
+    if (mobile) await page.getByRole("button", {name: "Show editor files", exact: true}).click();
     await page.getByRole("tab", { name: "Changes" }).click();
     await expect(page.getByText(/Stage, commit, branch, pull, and push remain in Nebula Terminal/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Open Terminal" })).toBeVisible();
@@ -6595,6 +6610,7 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
 
 test("assistant upgrade side chat inherits Core history and replies independently after reload", async ({page}, testInfo) => {
   test.setTimeout(120_000);
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub({streamDelayMs: 20});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
@@ -6615,15 +6631,28 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await expect(coreReady(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
     await expect(page.locator(".session-workspace > .chat-studio > .chat-panel .chat-message.operator")).toContainText("Original research question");
-    await page.getByRole("button", {name: "Chat tools"}).click();
-    await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Side chat/}).click();
+    if (mobile) {
+      await page.getByRole("button", {name: "Conversation actions", exact: true}).click();
+      await page.getByRole("menu", {name: "Conversation actions", exact: true}).getByRole("menuitem", {name: /Open side chat/}).click();
+    } else {
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Side chat/}).click();
+    }
     const side = page.getByRole("region", {name: "Side chat"});
     await expect(side).toBeVisible();
     const parentPanel = page.locator(".session-workspace.side-chat-open > .chat-studio > .chat-panel");
-    await expect(parentPanel).toBeVisible();
-    const widths = await page.locator(".session-workspace.side-chat-open > .chat-studio, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
-    expect(widths).toHaveLength(2);
-    expect(Math.abs(widths[0] - widths[1])).toBeLessThanOrEqual(2);
+    if (mobile) {
+      await expect(parentPanel).toBeHidden();
+      const bounds = await side.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.width).toBeGreaterThanOrEqual(page.viewportSize()!.width - 1);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+    } else {
+      await expect(parentPanel).toBeVisible();
+      const widths = await page.locator(".session-workspace.side-chat-open > .chat-studio, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
+      expect(widths).toHaveLength(2);
+      expect(Math.abs(widths[0] - widths[1])).toBeLessThanOrEqual(2);
+    }
     await expect(side.getByRole("button", {name: "Inherited history · 2 messages"})).toBeVisible();
     const sideOpen = await page.evaluate(() => performance.getEntriesByName("nebula.side_chat.open", "measure").at(-1)?.duration);
     console.info(`SIDE_CHAT_PROFILE ${JSON.stringify({durationMs: sideOpen ?? null, origin: core.origin, project: testInfo.project.name})}`);
@@ -8227,7 +8256,7 @@ for (const runtime of ["provider", "harness"] as const) {
       await page.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Add Grok", exact: true}).click();
       const dialog = runtime === "provider"
         ? page.getByRole("dialog", {name: new RegExp(`^(Add model provider|Edit ${name})$`)})
-        : page.getByRole("dialog");
+        : page.getByRole("dialog", {name: new RegExp(`^(Add Grok ACP|Edit ${name})$`)});
       const profileName = dialog.getByRole("textbox", {name: runtime === "provider" ? "Profile name" : "Name", exact: true});
       if (runtime === "provider") {
         await dialog.getByRole("combobox", {name: "Provider type", exact: true}).selectOption("vllm");
@@ -10460,7 +10489,7 @@ with store.transaction() as transaction:
     const transcript = butler.getByRole("log", {name: "Butler conversation"});
     await expect(transcript.getByText(/Saved Butler message 79/)).toBeVisible();
     const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
-    const surface = mobile ? transcript.locator("..") : transcript;
+    const surface = mobile ? transcript.locator("..").locator("..") : transcript;
     await surface.evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll", {bubbles: true})); });
     const jump = butler.getByRole("button", {name: "Scroll to latest message"});
     await expect(jump).toBeVisible();
@@ -12915,6 +12944,7 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
 
 reliabilityTest("assistant upgrade real Core nests durable subagent conversations", async ({page}, testInfo) => {
   test.setTimeout(90_000);
+  const conversationToggleName = (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations";
   const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
   await withOwnedCleanup(async () => {
     const listed = await (await core.api.get("chat-sessions")).json() as Array<{id: string; parent_session_id?: string; metadata: Record<string, unknown>}>;
@@ -12925,7 +12955,7 @@ reliabilityTest("assistant upgrade real Core nests durable subagent conversation
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat`);
-    await page.getByRole("button", {name: "Show conversations"}).click();
+    await page.getByRole("button", {name: conversationToggleName, exact: true}).click();
     const sidebar = page.getByRole("complementary", {name: "Conversations"});
     await expect(sidebar.locator('[data-session-id="sidebar-parent"]')).toBeVisible();
     await expect(sidebar.locator('[data-session-id="sidebar-child"]')).toHaveCount(0);
@@ -12935,6 +12965,8 @@ reliabilityTest("assistant upgrade real Core nests durable subagent conversation
     await sidebar.locator('[data-session-id="sidebar-child"]').click();
     await expect(page).toHaveURL(/session=sidebar-child/);
     await page.reload();
+    const reopen = page.getByRole("button", {name: conversationToggleName, exact: true});
+    if (conversationToggleName === "Open conversations" || await reopen.isVisible()) await reopen.click();
     await expect(sidebar.locator('[data-session-id="sidebar-child"]')).toBeVisible();
     await testInfo.attach("subagent-sidebar-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: "sidebar-child"}), contentType: "application/json"});
     await testInfo.attach("subagent-sidebar-screen", {body: await page.screenshot(), contentType: "image/png"});
@@ -12943,6 +12975,7 @@ reliabilityTest("assistant upgrade real Core nests durable subagent conversation
 
 reliabilityTest("assistant upgrade real Core groups Butler initiated chats after reload", async ({page}, testInfo) => {
   test.setTimeout(300_000);
+  const conversationToggleName = (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations";
   const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
   await withOwnedCleanup(async () => {
     const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
@@ -12961,7 +12994,7 @@ reliabilityTest("assistant upgrade real Core groups Butler initiated chats after
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat`);
-    await page.getByRole("button", {name: "Show conversations"}).click();
+    await page.getByRole("button", {name: conversationToggleName, exact: true}).click();
     const sidebar = page.getByRole("complementary", {name: "Conversations"});
     const openActions = async (title: string) => {
       const trigger = sidebar.getByRole("button", {name: `More actions for ${title}`});
@@ -12995,7 +13028,7 @@ reliabilityTest("assistant upgrade real Core groups Butler initiated chats after
     await sidebar.locator('[data-session-id="sidebar-recovery"]').click();
     await expect(page).toHaveURL(/session=sidebar-recovery/);
     await page.reload();
-    const reopen = page.getByRole("button", {name: "Show conversations"});
+    const reopen = page.getByRole("button", {name: conversationToggleName, exact: true});
     await expect(sidebar.or(reopen).first()).toBeVisible({timeout: 30_000});
     if (await reopen.isVisible()) await reopen.click();
     await expect(sidebar.locator('[data-session-id="sidebar-recovery"]')).toBeVisible({timeout: 20_000});

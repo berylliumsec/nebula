@@ -11,6 +11,8 @@ from approval_core import InertHostLoadMonitor
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.host_load import HostLoadGate
+from nebula.v3.runtime_platform import default_runtime_platform
+from nebula.v3.storage import NebulaStore
 
 
 def main() -> None:
@@ -26,9 +28,15 @@ def main() -> None:
     descriptor = os.open(args.token_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w") as output:
         output.write(token)
+    store = NebulaStore(args.root / "nebula.db")
+    artifacts = ArtifactStore(args.root / "artifacts")
+    platform = default_runtime_platform(
+        store=store, artifact_store=artifacts, data_root=args.root
+    )
     app = create_app(
-        database=args.root / "nebula.db",
-        artifact_store=ArtifactStore(args.root / "artifacts"),
+        store,
+        artifact_store=artifacts,
+        tool_platform=platform,
         auth_token=token,
         execution_data_root=args.root,
         static_dir=args.static_dir,
