@@ -9,6 +9,7 @@ from .host_cpu_budget import (
     HostCpuStatus,
     HostCpuUpdate,
 )
+from .report_cpu_executor import ReportCpuExecutor
 
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .code_completion import complete as complete_code
@@ -2355,11 +2356,14 @@ def create_app(
             runtime_resolver=tool_platform.resolve_human_terminal_runtime,
         )
     report_renders = report_render_service
+    report_cpu_executor = None
     if report_renders is None and artifact_store is not None:
+        report_cpu_executor = ReportCpuExecutor()
         report_renders = ReportRenderService(
             store=store,
             artifact_store=artifact_store,
             operator_id=active_operator_id,
+            cpu_workers=report_cpu_executor,
         )
     if report_renders is not None and report_renders.store is not store:
         raise ValueError("report_render_service must use the API store")
@@ -2486,19 +2490,6 @@ def create_app(
             return failures
 
         try:
-            try:
-                await host_cpus.startup()
-            except (OSError, ValueError) as exc:
-                emit_diagnostic(
-                    "warning",
-                    "host_cpu",
-                    "host_cpu.startup_failed",
-                    "Host CPU policy could not be loaded; other Core services remain available.",
-                    outcome="degraded",
-                    stage="startup",
-                    retryable=True,
-                    exception=exc,
-                )
             if isinstance(knowledge_index, ChromaKnowledgeIndex):
                 try:
                     await asyncio.to_thread(knowledge_index.sync_product_knowledge)
@@ -2566,6 +2557,19 @@ def create_app(
                     "renderer",
                     report_renders.startup,
                     report_renders.shutdown,
+                )
+            try:
+                await host_cpus.startup()
+            except (OSError, ValueError) as exc:
+                emit_diagnostic(
+                    "warning",
+                    "host_cpu",
+                    "host_cpu.startup_failed",
+                    "Host CPU policy could not be loaded; other Core services remain available.",
+                    outcome="degraded",
+                    stage="startup",
+                    retryable=True,
+                    exception=exc,
                 )
             if scope_imports is not None:
                 await start_component(
@@ -2797,9 +2801,12 @@ def create_app(
         return (await host_load.snapshot()).cpu_capacity
 
     host_cpus = host_cpu_budget or HostCpuBudget(
-        butler_instructions_root / "host-cpu-budget.json", host_cpu_capacity
+        butler_instructions_root / "host-cpu-budget.json",
+        host_cpu_capacity,
+        executor=report_cpu_executor,
     )
     app.state.host_cpu_budget = host_cpus
+    app.state.report_cpu_executor = report_cpu_executor
     provider_chat.provider_scheduler.host_load = host_load
     harness_runtime.host_load = host_load
     missions.host_load = host_load

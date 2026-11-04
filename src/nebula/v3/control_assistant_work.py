@@ -3522,7 +3522,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.host_cpu_budget",
-        "Read this Core host's saved CPU budget, host identity/revision, available capacity, automatic/custom effective limit and observed application state. It is shared across projects on this host. Change it through Settings GET/PUT /api/v1/host-cpu-budget using the read host_id and expected_revision. A saved inactive policy does not enable the experimental executor; only apply_state=applied proves its quota was observed.",
+        "Read this Core host's CPU budget, saved enabled state, host identity/revision, worker count, Linux affinity and actual executor_state. Settings → Setup enables background PDF workers shared across projects. Change through Settings GET/PUT /api/v1/host-cpu-budget with fresh host_id/expected_revision, cpu_limit and enabled only for an explicit activation/disable request; omitting enabled preserves state. Poll fresh reads while pending: running requires executor_state=running and apply_state=applied; disabled requires zero workers. Resize/disable drains accepted PDF work. External chat/tool/LLM/GPU processes are outside this pool.",
         EMPTY_SCHEMA,
         True,
     ),

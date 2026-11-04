@@ -1,0 +1,198 @@
+{
+  "scope": "Linux GUI-activated PDF workers; no live provider/harness/GPU work",
+  "source_cli": {
+    "raw_receipt": "/tmp/cpu-activation-source-cli.json",
+    "raw_sha256": "5d27cf4eaadaf59ad9762636049b32c7bd72f2b19b56089d3bce4c3fdf10e6dc",
+    "binary_sha256": "370a03342dbbeb1a890b98b0902e5d3c9792b4e6e20473439bdc521ebb34df9f",
+    "candidate_commit": "d60277ee6bbd6256e15ec2bceee65606f2657c0a",
+    "scope": "one real Linux Core PDF-worker activation journey",
+    "source_sha256": {
+      "src/nebula/v3/api.py": "7f8e10b310f6171f4de62856be1c6f2f2ecb8a2fc3cbd45d32a933929b10a0b4",
+      "src/nebula/v3/cpu_workers.py": "bcbf3826a8923dfd90bc4f3d1d33b3dd00361f74053a91617b61e9e84159cd76",
+      "src/nebula/v3/host_cpu_budget.py": "edaf62cacd41af8da05cfa088848009cee0b950ce5a6d2d873b4bfcffd78af0d",
+      "src/nebula/v3/report_cpu_executor.py": "b33b9e580814bd4e82d176050cd4e4f7d20e4ac714d1985bf89b8338d1e51119",
+      "src/nebula/v3/reporting.py": "dacba78c57630c5de46cbaa52620ca8dd412d106f9f9da40cd0333b222caf56d",
+      "scripts/nebula_core_entry.py": "a80d421348dc536ed999de4d028a81f79ec0f0ebe5b198ddec7aefb3c6030ccc"
+    },
+    "pdf_sha256": "52604527c69bb9e716979038e1281318094dccd2c8fd23df117b69b3b17ad621",
+    "first_running": {
+      "host_id": "8992fd024ce843b28192636221441178",
+      "revision": 2,
+      "enabled": true,
+      "cpu_limit": 1.0,
+      "host_name": "d2594391c221",
+      "cpu_capacity": 4.0,
+      "automatic_cpu_limit": 2.0,
+      "effective_cpu_limit": 1.0,
+      "applied_cpu_limit": 1.0,
+      "apply_state": "applied",
+      "capacity_clamped": false,
+      "detail": "Running 1 PDF workers on 1 CPUs.",
+      "activation_supported": true,
+      "activation_unavailable_reason": null,
+      "executor_scope": "report-pdfs",
+      "executor_state": "running",
+      "worker_count": 1,
+      "active_jobs": 0,
+      "queued_jobs": 0,
+      "worker_pids": [
+        18599
+      ],
+      "worker_affinities": [
+        [
+          0
+        ]
+      ],
+      "maximum_worker_cpus": 4
+    },
+    "resized": {
+      "host_id": "8992fd024ce843b28192636221441178",
+      "revision": 3,
+      "enabled": true,
+      "cpu_limit": 2.0,
+      "host_name": "d2594391c221",
+      "cpu_capacity": 4.0,
+      "automatic_cpu_limit": 2.0,
+      "effective_cpu_limit": 2.0,
+      "applied_cpu_limit": 2.0,
+      "apply_state": "applied",
+      "capacity_clamped": false,
+      "detail": "Running 2 PDF workers on 2 CPUs.",
+      "activation_supported": true,
+      "activation_unavailable_reason": null,
+      "executor_scope": "report-pdfs",
+      "executor_state": "running",
+      "worker_count": 2,
+      "active_jobs": 0,
+      "queued_jobs": 0,
+      "worker_pids": [
+        18757,
+        18792
+      ],
+      "worker_affinities": [
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ],
+      "maximum_worker_cpus": 4
+    },
+    "restored": {
+      "host_id": "8992fd024ce843b28192636221441178",
+      "revision": 3,
+      "enabled": true,
+      "cpu_limit": 2.0,
+      "host_name": "d2594391c221",
+      "cpu_capacity": 4.0,
+      "automatic_cpu_limit": 2.0,
+      "effective_cpu_limit": 2.0,
+      "applied_cpu_limit": 2.0,
+      "apply_state": "applied",
+      "capacity_clamped": false,
+      "detail": "Running 2 PDF workers on 2 CPUs.",
+      "activation_supported": true,
+      "activation_unavailable_reason": null,
+      "executor_scope": "report-pdfs",
+      "executor_state": "running",
+      "worker_count": 2,
+      "active_jobs": 0,
+      "queued_jobs": 0,
+      "worker_pids": [
+        18845,
+        18893
+      ],
+      "worker_affinities": [
+        [
+          0
+        ],
+        [
+          1
+        ]
+      ],
+      "maximum_worker_cpus": 4
+    },
+    "disabled": {
+      "host_id": "8992fd024ce843b28192636221441178",
+      "revision": 4,
+      "enabled": false,
+      "cpu_limit": 2.0,
+      "host_name": "d2594391c221",
+      "cpu_capacity": 4.0,
+      "automatic_cpu_limit": 2.0,
+      "effective_cpu_limit": 2.0,
+      "applied_cpu_limit": null,
+      "apply_state": "inactive",
+      "capacity_clamped": false,
+      "detail": "Background PDF workers are disabled.",
+      "activation_supported": true,
+      "activation_unavailable_reason": null,
+      "executor_scope": "report-pdfs",
+      "executor_state": "disabled",
+      "worker_count": 0,
+      "active_jobs": 0,
+      "queued_jobs": 0,
+      "worker_pids": [],
+      "worker_affinities": [],
+      "maximum_worker_cpus": 4
+    },
+    "passed": true,
+    "core_exit_code": 130,
+    "synthetic_data_removed": true
+  },
+  "browser": {
+    "origin": "http://172.26.91.252:54217",
+    "bundle_sha256": "8a88508adbc3df3b96c1461d4abf648678b0e730415d88f55747c99a18be0b6c",
+    "profiles_passed": [
+      "model-desktop",
+      "model-compact",
+      "model-chromium-320",
+      "model-chromium-390",
+      "model-chromium-430"
+    ],
+    "mobile": "emulated; no physical devices"
+  },
+  "load": {
+    "raw_receipt": "/tmp/cpu-activation-load-50.json",
+    "raw_sha256": "8d18b524df0594d897c07efbd7d4baf997003d66b1fb20a1fdb4c747301fdb61",
+    "origin": "http://172.26.91.252:53017",
+    "paragraphs_per_report": 2500,
+    "reports_requested": 50,
+    "completed_first_attempt": 9,
+    "explicit_queue_rejections": 41,
+    "completed_during_disable": 1,
+    "load_wall_s": 208.15374930100006,
+    "ordinary_reads_ms": {
+      "count": 12486,
+      "p50": 5.599,
+      "p95": 8.739,
+      "p99": 11.934,
+      "max": 599.8259139996662
+    },
+    "ordinary_failures": [],
+    "core_exit_code": 0,
+    "fixture_data_removed": true,
+    "synthetic_data_removed": true,
+    "source_sha256": {
+      "src/nebula/v3/api.py": "7f8e10b310f6171f4de62856be1c6f2f2ecb8a2fc3cbd45d32a933929b10a0b4",
+      "src/nebula/v3/cpu_workers.py": "bcbf3826a8923dfd90bc4f3d1d33b3dd00361f74053a91617b61e9e84159cd76",
+      "src/nebula/v3/host_cpu_budget.py": "edaf62cacd41af8da05cfa088848009cee0b950ce5a6d2d873b4bfcffd78af0d",
+      "src/nebula/v3/report_cpu_executor.py": "e26e0497a4ad227c7096ac82bbe62bb7f96d1da144865757628d026844afc6a2",
+      "src/nebula/v3/reporting.py": "dacba78c57630c5de46cbaa52620ca8dd412d106f9f9da40cd0333b222caf56d",
+      "tests/v3/host_cpu_budget_fixture.py": "4f0a3ec2f0af998b4ea6a3cca3b691f2774f8ecb0e6957a8a798fa95c406fd9c"
+    },
+    "initial_workers": 3,
+    "resized_workers": 1,
+    "disabled_workers": 0,
+    "max_admitted": 9,
+    "max_active": 3,
+    "max_snapshot_bytes": 2425927,
+    "live_old_pool_repin_samples": 991
+  },
+  "excluded_attempt": {
+    "stage": "fixture seeding, before activation and CPU load",
+    "reason": "Saved ChatSession rows omitted required model/provider binding; independently validated and corrected without changing product validation",
+    "trace": "/tmp/cpu-activation-load-50.seed-failure.driver.log"
+  }
+}

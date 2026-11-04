@@ -293,7 +293,7 @@ def catalog() -> dict[str, Any]:
                     "nebula.global.host_cpu_budget",
                 ],
                 "effect": "Read /api/v1/host-load through Core authentication on every invocation. Report CPU and available-memory pressure, busy reason, measurement availability and sample age from Core's shared one-second sampler; global host_load is for scheduled Nebula-wide Butler.",
-                "configuration": "Settings → Setup → CPU budget. GET/PUT /api/v1/host-cpu-budget saves Automatic (cpu_limit=null) or a finite positive host limit using host_id and expected_revision. It is host-local and shared by every project/browser on that Core. Read back apply_state and applied_cpu_limit; saving an inactive policy does not activate the prototype.",
+                "configuration": "Settings → Setup → CPU budget enables one host-wide PDF worker pool on Linux. GET/PUT /api/v1/host-cpu-budget uses fresh host_id/expected_revision, cpu_limit=null for Automatic or whole worker CPUs, and enabled only for an explicit activation/disable request; omission preserves state. Automatic uses roughly half capacity with minimum one and maximum four workers. Verify executor_state=running plus apply_state=applied and observed count/affinity; a saved/pending policy is not running. Resize/disable drains accepted work; disabled requires zero workers. Retry failed activation by saving or disable for standard PDF export. External chat/tool/LLM/GPU execution and external quota backends are outside activation.",
             },
             {
                 "id": "notebook",

@@ -778,7 +778,7 @@ class ButlerGlobalActions:
         operations = (
             (
                 "nebula.global.host_cpu_budget",
-                "Read this Core host's configured CPU budget and observed executor quota across projects. Distinguish saved/inactive from applied. This read never changes the budget or enables an executor.",
+                "Read this Core host's configured CPU budget, saved enabled state and observed PDF worker count/affinity across projects. Distinguish pending/failed from running and disabled; external chat/tool/LLM/GPU execution is separate. This read never changes settings or enables workers.",
                 {"type": "object", "additionalProperties": False, "properties": {}},
                 RiskClass.LOCAL_READ,
                 self.host_cpu_budget,

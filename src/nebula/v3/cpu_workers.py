@@ -44,10 +44,13 @@ class CpuWorkerClosed(CpuWorkerError):
     pass
 
 
-def _worker_main(connection: Connection) -> None:
+def _worker_main(connection: Connection, cpu: int | None = None) -> None:
     """A spawn target that never starts a Core or opens its database."""
 
     try:
+        if cpu is not None:
+            os.sched_setaffinity(0, {cpu})
+            os.nice(10)
         connection.send(("ready", os.getpid()))
         while True:
             request = connection.recv()
@@ -140,6 +143,7 @@ class CpuWorkerPool:
         max_total_input_bytes: int = 32 * 1024 * 1024,
         startup_timeout: float = 10.0,
         shutdown_timeout: float = 5.0,
+        cpu_affinity: tuple[int, ...] | None = None,
     ) -> None:
         if not 1 <= workers <= 4 or not 0 <= queued <= 32:
             raise ValueError("CPU workers must be 1–4 and queued jobs 0–32")
@@ -147,12 +151,16 @@ class CpuWorkerPool:
             raise ValueError("CPU snapshot limits must be positive and ordered")
         if startup_timeout <= 0 or shutdown_timeout <= 0:
             raise ValueError("CPU worker timeouts must be positive")
+        if cpu_affinity is not None and not cpu_affinity:
+            raise ValueError("CPU worker affinity must contain at least one CPU")
         self.worker_count = workers
         self.capacity = workers + queued
         self.max_input_bytes = max_input_bytes
         self.max_total_input_bytes = max_total_input_bytes
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
+        self.cpu_affinity = cpu_affinity
+        self._affinity_lock = asyncio.Lock()
         self._context = multiprocessing.get_context("spawn")
         self._workers: list[_Worker] = []
         self._dispatchers: list[asyncio.Task] = []
@@ -160,6 +168,8 @@ class CpuWorkerPool:
         self._jobs: set[_Job] = set()
         self._input_bytes = 0
         self._wake = asyncio.Event()
+        self._idle = asyncio.Event()
+        self._idle.set()
         self._start_lock = asyncio.Lock()
         self._started = False
         self._closed = False
@@ -180,10 +190,15 @@ class CpuWorkerPool:
             "max_input_bytes": 0,
         }
 
-    async def _spawn(self, generation: int = 1) -> _Worker:
+    async def _spawn(self, generation: int = 1, index: int = 0) -> _Worker:
         parent, child = self._context.Pipe()
         process = self._context.Process(
-            target=_worker_main, args=(child,), name="nebula-cpu", daemon=True
+            target=_worker_main,
+            args=(child, self.cpu_affinity[index % len(self.cpu_affinity)])
+            if self.cpu_affinity is not None
+            else (child,),
+            name="nebula-cpu",
+            daemon=True,
         )
         try:
             process.start()
@@ -202,6 +217,13 @@ class CpuWorkerPool:
                 raise CpuWorkerLost("CPU worker did not acknowledge startup")
             if self._closed:
                 raise CpuWorkerClosed("CPU workers stopped during startup")
+            async with self._affinity_lock:
+                if self.cpu_affinity is not None:
+                    await asyncio.to_thread(
+                        os.sched_setaffinity,
+                        worker.pid,
+                        {self.cpu_affinity[index % len(self.cpu_affinity)]},
+                    )
         except BaseException:
             # diagnostic-expected: the caller records startup/replacement failure;
             # stop the owned child before propagating it.
@@ -220,8 +242,8 @@ class CpuWorkerPool:
                 return
             self._owner_loop = loop
             try:
-                for _ in range(self.worker_count):
-                    self._workers.append(await self._spawn())
+                for index in range(self.worker_count):
+                    self._workers.append(await self._spawn(index=index))
             except BaseException:
                 # diagnostic-expected: partial startup owns and removes every child.
                 self._closed = True
@@ -270,6 +292,7 @@ class CpuWorkerPool:
             on_start,
         )
         self._jobs.add(job)
+        self._idle.clear()
         self._input_bytes += input_bytes
         self._pending.append(job)
         self._stats["accepted"] += 1
@@ -296,6 +319,23 @@ class CpuWorkerPool:
         if job in self._jobs:
             self._jobs.remove(job)
             self._input_bytes -= job.input_bytes
+            if not self._jobs:
+                self._idle.set()
+
+    async def drain(self) -> None:
+        """Wait for actual work, including cancelled callers' running jobs."""
+        await self._idle.wait()
+
+    async def set_affinity(self, cpus: tuple[int, ...]) -> None:
+        if not cpus:
+            raise ValueError("CPU worker affinity must contain at least one CPU")
+        async with self._affinity_lock:
+            self.cpu_affinity = cpus
+            for index, worker in enumerate(self._workers):
+                if worker.process.is_alive():
+                    await asyncio.to_thread(
+                        os.sched_setaffinity, worker.pid, {cpus[index % len(cpus)]}
+                    )
 
     async def _next_job(self) -> _Job | None:
         while not self._pending:
@@ -364,7 +404,7 @@ class CpuWorkerPool:
                 if self._closed:
                     return
                 try:
-                    replacement = await self._spawn(worker.generation + 1)
+                    replacement = await self._spawn(worker.generation + 1, index)
                 except Exception as exc:
                     if self._closed:
                         return

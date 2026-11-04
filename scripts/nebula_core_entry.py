@@ -25,6 +25,9 @@ def run_gateway_shim(arguments: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    from multiprocessing import freeze_support
+
+    freeze_support()
     if sys.argv[1:2] == [GATEWAY_COMMAND]:
         raise SystemExit(run_gateway_shim(sys.argv[2:]))
     from nebula.v3.cli import main

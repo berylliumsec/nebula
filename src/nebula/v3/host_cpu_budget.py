@@ -17,6 +17,7 @@ from pydantic import Field
 
 from .diagnostics import record_caught_exception
 from .domain import NebulaModel
+from .report_cpu_executor import ReportCpuExecutor
 
 ApplyState = Literal["inactive", "applied", "pending", "failed", "unavailable"]
 
@@ -24,6 +25,7 @@ ApplyState = Literal["inactive", "applied", "pending", "failed", "unavailable"]
 class HostCpuPolicy(NebulaModel):
     host_id: str = Field(min_length=1, max_length=100)
     revision: int = Field(ge=1)
+    enabled: bool | None = Field(default=None, strict=True)
     cpu_limit: float | None = Field(
         default=None, ge=0.01, allow_inf_nan=False, strict=True
     )
@@ -32,6 +34,7 @@ class HostCpuPolicy(NebulaModel):
 class HostCpuUpdate(NebulaModel):
     host_id: str = Field(min_length=1, max_length=100)
     expected_revision: int = Field(ge=1)
+    enabled: bool | None = Field(default=None, strict=True)
     cpu_limit: float | None = Field(ge=0.01, allow_inf_nan=False, strict=True)
 
 
@@ -44,6 +47,18 @@ class HostCpuStatus(HostCpuPolicy):
     apply_state: ApplyState
     capacity_clamped: bool
     detail: str
+    activation_supported: bool = False
+    activation_unavailable_reason: str | None = (
+        "This executor is managed outside Core Settings."
+    )
+    executor_scope: str = "external"
+    executor_state: str = "unmanaged"
+    worker_count: int | None = None
+    active_jobs: int | None = None
+    queued_jobs: int | None = None
+    worker_pids: list[int] | None = None
+    worker_affinities: list[list[int]] | None = None
+    maximum_worker_cpus: int | None = None
 
 
 class HostCpuConflict(ValueError):
@@ -60,13 +75,17 @@ class HostCpuBudget:
         *,
         apply: Callable[[float], Awaitable[None]] | None = None,
         observe: Callable[[], Awaitable[float]] | None = None,
+        executor: ReportCpuExecutor | None = None,
     ):
         if (apply is None) != (observe is None):
             raise ValueError("CPU budget application requires an observer")
+        if executor is not None and apply is not None:
+            raise ValueError("Choose Core-managed workers or external quota callbacks")
         self.path = path
         self.capacity = capacity
         self.apply = apply
         self.observe = observe
+        self.executor = executor
         self._lock = asyncio.Lock()
         self._application_failed = False
 
@@ -85,14 +104,94 @@ class HostCpuBudget:
 
     def _read(self) -> HostCpuPolicy:
         if not self.path.exists():
-            policy = HostCpuPolicy(host_id=uuid4().hex, revision=1)
+            policy = HostCpuPolicy(
+                host_id=uuid4().hex,
+                revision=1,
+                enabled=False if self.executor is not None else None,
+            )
             self._write(policy)
             return policy
-        return HostCpuPolicy.model_validate(
+        policy = HostCpuPolicy.model_validate(
             json.loads(self.path.read_text(encoding="utf-8"))
+        )
+        if self.executor is not None and policy.enabled is None:
+            policy = policy.model_copy(update={"enabled": False})
+        return policy
+
+    async def _managed_status(
+        self, policy: HostCpuPolicy, capacity: float
+    ) -> HostCpuStatus:
+        assert self.executor is not None
+        automatic, target, maximum = self.executor.limits(capacity, policy.cpu_limit)
+        reason = self.executor.support_reason()
+        if maximum < 1:
+            reason = "Background PDF workers need at least one available CPU."
+        observed = None
+        state: ApplyState
+        facts = {}
+        try:
+            facts = await self.executor.observe()
+            observed = facts["applied_cpu_limit"]
+            executor_state = facts["executor_state"]
+            if self._application_failed or executor_state == "failed":
+                state, detail = (
+                    "failed",
+                    facts.get("error")
+                    or "Background PDF workers could not apply the setting. Save again to retry.",
+                )
+            elif not policy.enabled and executor_state == "disabled":
+                state, detail = "inactive", "Background PDF workers are disabled."
+            elif policy.enabled and executor_state == "running" and observed == target:
+                state, detail = (
+                    "applied",
+                    f"Running {facts['worker_count']} PDF workers on {observed:g} CPUs.",
+                )
+            else:
+                state, detail = (
+                    "pending",
+                    "Draining accepted PDF work before applying the worker setting."
+                    if executor_state == "draining"
+                    else "Starting background PDF workers…",
+                )
+        except Exception as exc:
+            record_caught_exception(
+                "host_cpu",
+                "host_cpu.workers_read_failed",
+                "Background PDF workers could not be observed.",
+                exc,
+                stage="readback",
+            )
+            state, detail, executor_state = (
+                "unavailable",
+                "Worker status could not be checked. Reload to retry.",
+                "unavailable",
+            )
+        return HostCpuStatus(
+            **policy.model_dump(),
+            host_name=socket.gethostname(),
+            cpu_capacity=capacity,
+            automatic_cpu_limit=automatic,
+            effective_cpu_limit=target,
+            applied_cpu_limit=observed,
+            apply_state=state,
+            capacity_clamped=policy.cpu_limit is not None
+            and policy.cpu_limit != target,
+            detail=detail,
+            activation_supported=reason is None,
+            activation_unavailable_reason=reason,
+            executor_scope="report-pdfs",
+            executor_state=executor_state,
+            maximum_worker_cpus=maximum,
+            worker_count=facts.get("worker_count"),
+            active_jobs=facts.get("active_jobs"),
+            queued_jobs=facts.get("queued_jobs"),
+            worker_pids=facts.get("worker_pids"),
+            worker_affinities=facts.get("worker_affinities"),
         )
 
     async def _status(self, policy: HostCpuPolicy, capacity: float) -> HostCpuStatus:
+        if self.executor is not None:
+            return await self._managed_status(policy, capacity)
         automatic = max(0.01, capacity / 2)
         target = min(policy.cpu_limit or automatic, capacity)
         observed: float | None = None
@@ -159,11 +258,16 @@ class HostCpuBudget:
 
     async def _apply(self, policy: HostCpuPolicy, capacity: float) -> None:
         self._application_failed = False
-        if self.apply is not None:
+        if self.executor is not None or self.apply is not None:
             try:
-                await self.apply(
-                    min(policy.cpu_limit or max(0.01, capacity / 2), capacity)
-                )
+                if self.executor is not None:
+                    _, target, _ = self.executor.limits(capacity, policy.cpu_limit)
+                    await self.executor.request(policy.enabled is True, target)
+                else:
+                    assert self.apply is not None
+                    await self.apply(
+                        min(policy.cpu_limit or max(0.01, capacity / 2), capacity)
+                    )
             except Exception as exc:
                 self._application_failed = True
                 record_caught_exception(
@@ -194,10 +298,19 @@ class HostCpuBudget:
                 raise ValueError(
                     f"CPU limit exceeds this host's {capacity:g} available CPUs"
                 )
+            enabled = policy.enabled if request.enabled is None else request.enabled
+            if self.executor is None and request.enabled is not None:
+                raise ValueError(
+                    "Activation is unavailable for this Core's externally managed executor."
+                )
+            if self.executor is not None:
+                _, target, _ = self.executor.limits(capacity, request.cpu_limit)
+                self.executor.validate(enabled is True, target)
             saved = HostCpuPolicy(
                 host_id=policy.host_id,
                 revision=policy.revision + 1,
                 cpu_limit=request.cpu_limit,
+                enabled=enabled,
             )
             await asyncio.to_thread(self._write, saved)
             await self._apply(saved, capacity)
