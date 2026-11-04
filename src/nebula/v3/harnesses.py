@@ -292,6 +292,13 @@ _HARNESS_GOAL_CONTINUE_INSTRUCTION = (
     "Do not stop merely to report status."
 )
 _GOAL_NO_TOOL_TURN_LIMIT = 3
+_GOAL_CAPACITY_RECOVERY_INSTRUCTION = (
+    "The previous Core-owned goal turn stopped because the selected model was at "
+    "capacity. Read the current goal, chat, and saved tool results before acting. "
+    "Do not repeat a completed action. If an effect is uncertain, stop and report "
+    "the exact hold. Otherwise continue one safe next step toward the goal."
+)
+_MAX_GOAL_CAPACITY_RETRIES = 1
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 # A gateway call answers this long before the harness's own tool timeout, so
@@ -3901,6 +3908,7 @@ _CODEX_ERROR_REASON_CODES = {
     "usageLimitExceeded": "quota_exhausted",
     "rateLimitExceeded": "rate_limited",
     "serverOverloaded": "dependency_unavailable",
+    "cyberPolicy": "permission_denied",
     "httpConnectionFailed": "dependency_unavailable",
     "responseStreamConnectionFailed": "dependency_unavailable",
     "responseStreamDisconnected": "dependency_unavailable",
@@ -12063,17 +12071,156 @@ class HarnessRuntimeService:
         finally:
             self._chat_turn_tasks.pop(turn_id, None)
             await self._settle_provider_subagents(turn_id)
+            capacity_recovered = False
             try:
-                await self._settle_goal_turn(turn_id)
+                capacity_recovered = await self._auto_recover_goal_capacity(turn_id)
             except Exception as exc:
                 record_caught_exception(
                     "harnesses",
-                    "harnesses.goal.settle_failed",
-                    "A harness goal turn could not be settled.",
+                    "harnesses.goal.capacity_recovery_failed",
+                    "A capacity-stopped goal could not start its bounded continuation.",
                     exc,
-                    stage="goal-settle",
+                    stage="goal-capacity-recovery",
                     metadata={"entity_type": "harness_turn", "entity_id": turn_id},
                 )
+            if not capacity_recovered:
+                try:
+                    await self._settle_goal_turn(turn_id)
+                except Exception as exc:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.goal.settle_failed",
+                        "A harness goal turn could not be settled.",
+                        exc,
+                        stage="goal-settle",
+                        metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+                    )
+
+    def _capacity_effects_settled(self, turn: HarnessTurn, owner: ChatTurn) -> bool:
+        """Require durable receipts before continuing an interrupted goal.
+
+        The continuation is a new instruction, never a replay of the failed
+        prompt. Completed read-only tools can be reconciled here. Writes,
+        native commands, hooks, and unresolved tool calls require inspection.
+        """
+
+        if owner.request_snapshot.get("hook_snapshots"):
+            return False
+        recovery = owner.request_snapshot.get("recovery")
+        if isinstance(recovery, dict) and (
+            recovery.get("required")
+            or recovery.get("unknown_tool_call_ids")
+            or recovery.get("unknown_hook_execution_ids")
+        ):
+            return False
+        for call_id in set(turn.tool_call_ids) | set(owner.tool_call_ids):
+            try:
+                call = self.store.get(ToolCall, call_id)
+            except NotFoundError:
+                return False
+            if call.status != ToolCallStatus.COMPLETE or call.risk_class not in {
+                RiskClass.LOCAL_READ,
+                RiskClass.PASSIVE,
+            }:
+                return False
+        events = self.store.replay_operation_events(turn.id, limit=1_001)
+        if len(events) > 1_000:
+            return False
+        started: set[str] = set()
+        completed: set[str] = set()
+        for event in events:
+            payload = event.payload
+            if event.event_type in {
+                "harness.approval",
+                "harness.interaction",
+                "harness.message_delta",
+            }:
+                return False
+            if event.event_type in {"harness.item_upsert", "harness.output_delta"}:
+                if payload.get("item_kind") in {
+                    "command",
+                    "file_change",
+                    "subagent",
+                    "tool",
+                    "goal",
+                }:
+                    return False
+            if event.event_type in {"harness.tool_started", "harness.tool_completed"}:
+                item_id = payload.get("item_id")
+                if not isinstance(item_id, str) or not item_id:
+                    return False
+                if event.event_type == "harness.tool_started":
+                    started.add(item_id)
+                else:
+                    completed.add(item_id)
+        return started == completed
+
+    async def _auto_recover_goal_capacity(self, turn_id: str) -> bool:
+        """Continue once after a confirmed, effect-settled model overload."""
+
+        if self._closed:
+            return False
+        turn = self.store.get(HarnessTurn, turn_id)
+        if (
+            turn.origin != HarnessTurnOrigin.CHAT
+            or turn.status != HarnessTurnStatus.INTERRUPTED
+            or not turn.chat_turn_id
+        ):
+            return False
+        owner = self.store.get(ChatTurn, turn.chat_turn_id)
+        if owner.status != ChatTurnStatus.INTERRUPTED or not owner.goal_id:
+            return False
+        attempt = turn.metadata.get("automatic_capacity_retry_attempt", 0)
+        if not isinstance(attempt, int) or attempt >= _MAX_GOAL_CAPACITY_RETRIES:
+            return False
+        diagnostic = turn.metadata.get("diagnostic")
+        info = (
+            diagnostic.get("vendor_error_info")
+            if isinstance(diagnostic, dict)
+            else None
+        )
+        kind = next(iter(info), None) if isinstance(info, dict) else info
+        if kind is not None and kind != "serverOverloaded":
+            return False
+        if kind is None and not (turn.error or "").startswith(
+            "Selected model is at capacity."
+        ):
+            return False
+        if not self._capacity_effects_settled(turn, owner):
+            return False
+        from .chat_goals import ChatGoalService, GoalWrite
+
+        goals = ChatGoalService(self.store)
+        goal = goals.get(owner.session_id)
+        if (
+            goal.id != owner.goal_id
+            or goal.status != ChatGoalStatus.PAUSED
+            or goal.blocked_reason != turn.error
+        ):
+            return False
+        # Give transient server load a short chance to clear. Re-read the goal
+        # afterward so an operator action during this delay wins.
+        await asyncio.sleep(3)
+        if self._closed:
+            return False
+        try:
+            goals.write(
+                owner.session_id,
+                GoalWrite(expected_revision=goal.revision, action="resume"),
+            )
+        except (ConflictError, NotFoundError):
+            return False
+        next_turn_id = await self.dispatch_running_goal(
+            owner.session_id,
+            _GOAL_CAPACITY_RECOVERY_INSTRUCTION,
+            automatic_capacity_retry_of=turn.id,
+        )
+        # A saved operator follow-up can own the next turn. If dispatch found
+        # one, leave the goal running for that queue rather than pausing it.
+        return (
+            next_turn_id is not None
+            or goals.get(owner.session_id).status == ChatGoalStatus.RUNNING
+        )
 
     def _pause_goal(self, session_id: str, reason: str) -> None:
         from .chat_goals import ChatGoalService, GoalWrite
@@ -12273,7 +12420,11 @@ class HarnessRuntimeService:
         return found
 
     async def dispatch_running_goal(
-        self, session_id: str, instruction: str
+        self,
+        session_id: str,
+        instruction: str,
+        *,
+        automatic_capacity_retry_of: str | None = None,
     ) -> str | None:
         """Start one harness turn for an idle Core-owned goal."""
         from .chat_assistant_config import chat_assistant_config
@@ -12357,6 +12508,19 @@ class HarnessRuntimeService:
                     "harness_cyber_access_program"
                 ],
             )
+            if automatic_capacity_retry_of is not None:
+                harness_turn = self.store.update(
+                    HarnessTurn,
+                    harness_turn.id,
+                    {
+                        "metadata": {
+                            **harness_turn.metadata,
+                            "retry_of_turn_id": automatic_capacity_retry_of,
+                            "automatic_capacity_retry_attempt": 1,
+                        }
+                    },
+                    expected_revision=harness_turn.revision,
+                )
             try:
                 self.start_chat_turn(harness_turn.id)
             except Exception:
@@ -13389,6 +13553,12 @@ class HarnessRuntimeService:
                         "error_id": error_id,
                         "reason_code": reason,
                         "remediation_id": guidance.remediation_id,
+                        **(
+                            {"vendor_error_info": exc.vendor_error_info}
+                            if isinstance(exc, HarnessTurnFailedError)
+                            and exc.vendor_error_info is not None
+                            else {}
+                        ),
                     },
                 )
                 yield self._persist_activity(

@@ -1310,6 +1310,16 @@
       {"area":"harness-goal","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"},
       {"area":"harness-goal","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade harness goal works on production LAN Core across new and existing chats","runtime":"real-core","shard":"1/1"}
     ],
+    "harness-capacity-recovery": [
+      {"area":"harness-capacity-recovery","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-capacity-recovery","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-capacity-recovery","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-capacity-recovery","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-capacity-recovery","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-capacity-recovery","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-capacity-recovery","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"},
+      {"area":"harness-capacity-recovery","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN","runtime":"real-core","shard":"1/1"}
+    ],
     "provider-goal-lifecycle-core": [
       {"area":"provider-goal-lifecycle-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core creates a goal before the first turn and pauses it on stop","runtime":"real-core","shard":"1/1"},
       {"area":"provider-goal-lifecycle-core","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core creates a goal before the first turn and pauses it on stop","runtime":"real-core","shard":"1/1"},

@@ -227,6 +227,18 @@ def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
     )
 
 
+def test_product_search_explains_core_goal_capacity_recovery(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Does Core retry a harness goal when the model is overloaded?"
+    )
+    assert any(
+        "Recover a harness goal from model capacity" in str(item["text"])
+        and "policy refusal" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_butler_work_agent_access_and_history(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     access = search_product_knowledge(
