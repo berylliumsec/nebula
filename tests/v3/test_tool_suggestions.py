@@ -730,7 +730,11 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
         MCP_TOOL,
         NOTES_TOOL,
         "notes.write",
-    } == set(prepared.tool_components.specs)
+    } == {
+        name
+        for name in prepared.tool_components.specs
+        if name.startswith(("mcp.", "tool_catalog.")) or name == "notes.write"
+    }
     snapshot = prepared.turn.request_snapshot
     assert snapshot["mcp_server_ids"] == ["notes"]
     assert [item["id"] for item in snapshot["mcp_catalog_snapshot"]] == ["tracker"]

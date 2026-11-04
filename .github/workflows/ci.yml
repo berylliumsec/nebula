@@ -128,14 +128,16 @@ jobs:
       - name: Prepare the compile-time sidecar fixture
         run: |
           target="$(rustc -vV | sed -n 's/^host: //p')"
-          mkdir -p ui/src-tauri/binaries build/nebula-core-metadata
+          mkdir -p ui/src-tauri/binaries build/nebula-core-metadata ui/src-tauri/resources/notebook-runtime
           printf 'Generated full-test fixture.\n' > build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
+          printf 'Compile-time resource fixture; no executable notebook runtime.\n' > ui/src-tauri/resources/notebook-runtime/TEST_FIXTURE.txt
           touch "ui/src-tauri/binaries/nebula-core-$target"
           chmod +x "ui/src-tauri/binaries/nebula-core-$target"
       - name: Collect and run every native test
+        shell: bash
         run: |
-          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml -- --list | tee "$RUNNER_TEMP/full-tests-native-collection.txt"
-          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml | tee "$RUNNER_TEMP/full-tests-native.txt"
+          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml -- --list 2>&1 | tee "$RUNNER_TEMP/full-tests-native-collection.txt"
+          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/full-tests-native.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

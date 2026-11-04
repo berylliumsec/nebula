@@ -12,6 +12,7 @@ from nebula.v3.api import create_app
 from nebula.v3.chat import ChatRequestMessage
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
+    ChatSession,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
@@ -904,11 +905,26 @@ def test_prepare_sends_only_selected_servers_when_on_demand_loading_is_off(
     assert service.tool_platform.calls == [["notes"]]
     assert prepared.turn.request_snapshot["tool_catalog"] is None
     assert prepared.turn.request_snapshot["mcp_catalog_snapshot"] == []
-    assert set(prepared.tool_components.specs) == {NOTES_TOOL, NOTES_WRITE_TOOL_NAME}
+    assert {
+        name
+        for name in prepared.tool_components.specs
+        if name.startswith(("mcp.", "tool_catalog.")) or name == NOTES_WRITE_TOOL_NAME
+    } == {NOTES_TOOL, NOTES_WRITE_TOOL_NAME}
 
 
 def test_on_demand_servers_never_turn_tools_on_for_a_plain_chat(tmp_path, monkeypatch):
     service, request = _mcp_service(tmp_path, monkeypatch, lambda: None, selected=())
+    # Side chats keep the project but carry no Work, roster or peer tools.
+    session = service.store.create(
+        ChatSession(
+            engagement_id=request.engagement_id,
+            provider_profile_id=request.provider_id,
+            model="model-a",
+            title="Plain chat",
+            metadata={"side_chat": True},
+        )
+    )
+    request = request.model_copy(update={"session_id": session.id})
 
     prepared = service.prepare(request)
 

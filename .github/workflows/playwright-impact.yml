@@ -196,6 +196,10 @@ jobs:
           SECURITY_PROXY: ${{ steps.selected_tests.outputs.security_proxy }}
           NEBULA_UI_TEST_COMMAND: npm run preview -- --host 0.0.0.0 --port 1420
         run: |
+          if test "$TEST_MATCH" = tests/universal-agents.spec.ts; then
+            export NEBULA_MODEL_TEST_HOST="$(node -e 'const interfaces = Object.values(require("node:os").networkInterfaces()).flat(); const address = interfaces.find(value => value && value.family === "IPv4" && !value.internal)?.address; if (!address) process.exit(1); process.stdout.write(address);')"
+            export NEBULA_REQUIRE_LAN_TESTS=1
+          fi
           args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
           if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
           # This selected Core file is monolithic. Without fully-parallel

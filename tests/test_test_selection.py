@@ -241,6 +241,13 @@ def test_manual_full_runs_require_fresh_explicit_approval():
     assert 'test "$GITHUB_RUN_ATTEMPT" = 1' in approval["run"]
     for name in ("full-source", "full-native"):
         assert jobs[name]["needs"] == "full-approval"
+    native = next(
+        step
+        for step in jobs["full-native"]["steps"]
+        if "cargo test" in step.get("run", "")
+    )
+    # GitHub's explicit bash shell enables pipefail; tee must not mask Cargo.
+    assert native["shell"] == "bash"
     for step in jobs["full-source"]["steps"]:
         if "pytest -q tests packaging" in step.get(
             "run", ""

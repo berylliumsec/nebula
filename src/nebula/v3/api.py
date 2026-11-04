@@ -2053,16 +2053,8 @@ def create_app(
     from .notebook_mcp import NotebookMcpTools
 
     notebook_mcp = NotebookMcpTools(store, notebook_service)
-    project_offset = 0
-    while True:
-        existing_projects = store.list_entities(
-            Engagement, limit=1000, offset=project_offset
-        )
-        for existing_project in existing_projects:
-            notebook_mcp.register_profile(existing_project.id)
-        if len(existing_projects) < 1000:
-            break
-        project_offset += len(existing_projects)
+    for existing_project in store.iter_readable_entities(Engagement):
+        notebook_mcp.register_profile(existing_project.id)
     automation_tool_platform = (
         AutomationToolPlatform(
             manager=automation_runtime,
@@ -15997,8 +15989,12 @@ def _register_crud_routes(
                     candidate = store.get(ScopePolicy, current.scope_policy_id)
                     if candidate.engagement_id == current.id:
                         owned_scope = candidate
-                owned_policies = store.list_entities(
-                    AutomationProjectPolicy, engagement_id=entity_id, limit=1_000
+                owned_policies = list(
+                    store.iter_reference_candidates(
+                        AutomationProjectPolicy,
+                        [("engagement_id", entity_id, False)],
+                        engagement_id=entity_id,
+                    )
                 )
                 owned_configuration_ids = [policy.id for policy in owned_policies]
                 if owned_scope is not None:

@@ -11660,7 +11660,9 @@ class HarnessRuntimeService:
                 "allowed_tool_names": allowed_tool_names,
                 "allow_mcp_catalog": allow_mcp_catalog,
                 "mcp_catalog_snapshot": [
-                    item.model_dump(mode="json") for item in catalog_profiles
+                    item.model_dump(mode="json")
+                    for item in catalog_profiles
+                    if item.id not in session.mcp_server_ids
                 ],
                 "ssh_environment_ids": [item.id for item in ssh_hosts],
                 "ssh_environment_snapshot": [
@@ -18025,18 +18027,24 @@ class HarnessRuntimeService:
         browser_binding = browser_binding if isinstance(browser_binding, str) else None
         subagent_binding = self._subagent_binding(session)
         knowledge_binding = turn.metadata.get("knowledge_access") is True
+        owner = (
+            self.store.get(ChatTurn, turn.chat_turn_id) if turn.chat_turn_id else None
+        )
+        core_snapshot = dict(owner.request_snapshot) if owner else {}
+        # Session replacement and handoff provenance is immutable history,
+        # not a change to the gateway's effective tool configuration.
+        for provenance in (
+            "harness_session_id",
+            "forked_from_harness_session_id",
+            "session_rollover_reason",
+        ):
+            core_snapshot.pop(provenance, None)
         core_binding = hashlib.sha256(
             json.dumps(
                 {
-                    "snapshot": self.store.get(
-                        ChatTurn, turn.chat_turn_id
-                    ).request_snapshot
-                    if turn.chat_turn_id
-                    else {},
+                    "snapshot": core_snapshot,
                     "guarded": session.metadata.get("core_guarded_tools"),
-                    "goal": self.store.get(ChatTurn, turn.chat_turn_id).goal_id
-                    if turn.chat_turn_id
-                    else None,
+                    "goal": owner.goal_id if owner else None,
                 },
                 sort_keys=True,
             ).encode()

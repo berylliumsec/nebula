@@ -6,7 +6,7 @@ from nebula.v3.operator_help import (
     search_operator_help,
 )
 from nebula.v3.domain import RiskClass
-from nebula.v3.tool_failures import tool_failure
+from nebula.v3.tool_failures import failure_receipt_text, tool_failure
 from nebula.v3.tool_results import serialize_model_result
 from nebula.v3.tools import ToolSpec
 from scripts.context_retention_eval import DEFAULT_SEED, SCENARIOS, build_scenario
@@ -227,7 +227,9 @@ def test_a_failed_tool_receipt_is_searched_for_its_recovery_procedure():
     )
 
     assert search_operator_help([receipt]) == ()
-    observed = search_operator_help([receipt], observed_failure=True)
+    observed = search_operator_help(
+        [failure_receipt_text(receipt)], observed_failure=True
+    )
     assert observed[0].article.article_id == "diagnostics"
 
 

@@ -184,8 +184,8 @@ def test_text_only_switch_replaces_history_images_with_placeholders(tmp_path):
     sent = first.model_request.messages[0].content
     assert isinstance(sent, list)
     assert [part["type"] for part in sent] == ["text", "image"]
-    asyncio.run(service.complete(first))
-    session = store.get(ChatSession, first.session.id)
+    completion = asyncio.run(service.complete(first))
+    session = store.get(ChatSession, completion.session_id)
 
     preflight = service.runtime_switch_preflight(
         session.id,
@@ -352,8 +352,8 @@ def test_selected_context_survives_followups(tmp_path):
         )
     )
     assert "BEGIN SELECTED CONTEXT" in str(first.model_request.messages[-1].content)
-    asyncio.run(service.complete(first))
-    session_id = first.session.id
+    completion = asyncio.run(service.complete(first))
+    session_id = completion.session_id
     stored = service.session_messages(session_id)
     # The durable transcript keeps the operator's words; the attachment stays
     # in metadata.

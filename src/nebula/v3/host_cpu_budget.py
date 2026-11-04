@@ -155,7 +155,7 @@ class HostCpuBudget:
                 )
         except Exception as exc:
             record_caught_exception(
-                "host_cpu",
+                "runtime",
                 "host_cpu.workers_read_failed",
                 "Background PDF workers could not be observed.",
                 exc,
@@ -208,7 +208,7 @@ class HostCpuBudget:
                     raise ValueError("Invalid observed CPU quota")
             except Exception as exc:
                 record_caught_exception(
-                    "host_cpu",
+                    "runtime",
                     "host_cpu.observe_failed",
                     "The background CPU quota could not be observed.",
                     exc,
@@ -271,7 +271,7 @@ class HostCpuBudget:
             except Exception as exc:
                 self._application_failed = True
                 record_caught_exception(
-                    "host_cpu",
+                    "runtime",
                     "host_cpu.apply_failed",
                     "The saved CPU budget could not be applied to the background executor.",
                     exc,

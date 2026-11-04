@@ -265,7 +265,7 @@ def test_project_never_policy_auto_approves_native_browser_actions(tmp_path):
         )
     )
     project, _ = _project(client, store)
-    [policy] = store.list_engagement_entities(AutomationProjectPolicy, project.id)
+    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=project.id)
     store.update(
         AutomationProjectPolicy,
         policy.id,

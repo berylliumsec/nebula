@@ -1,19 +1,21 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated repairs for API shapes, durable settings, tool catalogs, model and goal limits, lifecycle fixtures, transcript layout, and explicit manual full-run guards. All frontend tests passed locally; full browser baseline and manual full source/native evidence are recorded separately.",
-  "exclusions": "Focused PR CI covers changed regression files and two browser journeys across eight permanent desktop/mobile Chromium/WebKit profiles each. Separate explicit full runs cover all frontend/Python/native tests and the entire browser catalog. No live providers, real credentials, deployments, or physical devices. Native tests run in the manual full job; local GTK and model/browser-download limits are documented.",
+  "reason": "Independent root-cause validation and focused regressions cover repaired API/storage startup scans, CPU diagnostics, help ranking, stable harness capability fingerprints, and stale fixture contracts. The explicit manual full run collects all 4967 Python tests, all frontend tests and all native tests; the separate full browser run covers every catalog entry. Universal agent checks include real-Core pairing, saved MCP selections, stable transport reuse and reload.",
+  "exclusions": "No live providers, real operator data, deployments, or physical devices. Focused PR jobs run changed test files and relevant product regressions; full native/source/browser coverage is separately manually dispatched under the explicit user request. Local model/Chromium download and LAN browser policy limits are covered on hosted CI. The current full frontend result is 1745 passed; final UI repairs are verified separately before merge.",
   "expected_tests": {
-    "python": 655,
+    "python": 1157,
     "frontend": 64,
     "native": 0,
-    "playwright": 16
+    "playwright": 32
   },
   "python": [
     "tests/test_test_selection.py",
     "tests/v3/test_all_tool_failure_guidance.py",
     "tests/v3/test_api.py",
+    "tests/v3/test_api_crud_validation.py",
     "tests/v3/test_browser_companion.py",
     "tests/v3/test_browser_security.py",
+    "tests/v3/test_butler_memory.py",
     "tests/v3/test_butler_migration_merge.py",
     "tests/v3/test_butler_tool_failures.py",
     "tests/v3/test_chat.py",
@@ -28,7 +30,27 @@
     "tests/v3/test_conversation_search.py",
     "tests/v3/test_generic_crud_exposure.py",
     "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_subagent_choice_sticks.py"
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_history_content_fidelity.py",
+    "tests/v3/test_inference_timeouts_probe_budget.py",
+    "tests/v3/test_install_routing.py",
+    "tests/v3/test_operator_help.py",
+    "tests/v3/test_packaging.py::test_nebula3_runtime_has_no_conditional_import_fallbacks",
+    "tests/v3/test_report_cpu_activation.py::test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery",
+    "tests/v3/test_row_horizon.py",
+    "tests/v3/test_sandbox.py",
+    "tests/v3/test_settings_assistant_tools.py",
+    "tests/v3/test_startup_unreadable_rows.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_subagent_choice_new_chats.py",
+    "tests/v3/test_subagent_choice_sticks.py",
+    "tests/v3/test_subagent_delivery.py",
+    "tests/v3/test_subagent_refusal_categories.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_universal_agent_tools.py",
+    "tests/v3/test_vendor_session_recreate.py"
   ],
   "frontend": [
     "ui/src/App.sendConsent.test.tsx",
@@ -41,10 +63,11 @@
   "native": [],
   "playwright": [
     "area:icon-pack",
-    "area:butler-private-settings"
+    "area:butler-private-settings",
+    "area:universal-agents"
   ],
   "python_node": true,
-  "change_digest": "a3ce62eb562d5a3f4ef4f492079db1062b033829342c3d69110879fe8501c009",
+  "change_digest": "0408a34f16ded64d237494a415bb549bb836fd12942c2d5666ccf607e5166fef",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }
