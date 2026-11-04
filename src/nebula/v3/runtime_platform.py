@@ -400,7 +400,7 @@ class RuntimePlatform:
         *,
         engagement_id: str,
         turn_id: str,
-        provider: ModelProvider,
+        provider: ModelProvider | None,
         model: str,
         mcp_profiles: tuple[McpServerProfile, ...] = (),
         ssh_environments: tuple[SshEnvironment, ...] = (),

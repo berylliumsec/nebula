@@ -5,9 +5,14 @@ const choice = { enabled: true, ready: true, providerId: "openrouter", model: "d
 
 describe("the subagent fields a message carries", () => {
   it("delegates a provider chat to its own model, with the operator's limit", () => {
-    expect(subagentRequestFields("provider", choice)).toEqual({ allowSubagents: true, maxActiveSubagents: 2, subagentReasoningEffort: undefined });
-    expect(subagentRequestFields("provider", { ...choice, enabled: false })).toEqual({ allowSubagents: false, maxActiveSubagents: undefined, subagentReasoningEffort: undefined });
+    expect(subagentRequestFields("provider", { ...choice, providerId: "", model: "" })).toEqual({ allowSubagents: true, maxActiveSubagents: 2, subagentReasoningEffort: undefined });
+    expect(subagentRequestFields("provider", { ...choice, providerId: "", model: "", enabled: false })).toEqual({ allowSubagents: false, maxActiveSubagents: undefined, subagentReasoningEffort: undefined });
     expect(subagentRequestFields("provider", { ...choice, reasoningEffort: "xhigh" }).subagentReasoningEffort).toBe("xhigh");
+  });
+
+  it.each(["provider", "harness"] as const)("lets a %s parent select a separate provider or harness", (backend) => {
+    expect(subagentRequestFields(backend, choice)).toMatchObject({allowSubagents: true, subagentProviderId: "openrouter", subagentModel: choice.model});
+    expect(subagentRequestFields(backend, {...choice, providerId: "", harnessId: "codex", model: "gpt-test"})).toMatchObject({allowSubagents: true, subagentHarnessId: "codex", subagentModel: "gpt-test"});
   });
 
   it("runs a harness chat's subagents on the chosen model once it is verified", () => {

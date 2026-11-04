@@ -488,6 +488,22 @@ class ChatGoalService:
                 "hook_ids": body.hook_ids,
                 "reasoning_effort": body.reasoning_effort,
                 "allow_subagents": body.allow_subagents,
+                "provider_subagent": (
+                    {
+                        **(
+                            {"harness_profile_id": body.subagent_harness_id}
+                            if body.subagent_harness_id
+                            else {"provider_profile_id": body.subagent_provider_id}
+                        ),
+                        "model": body.subagent_model,
+                        "max_active": body.max_active_subagents,
+                        "reasoning_effort": body.subagent_reasoning_effort,
+                    }
+                    if body.allow_subagents
+                    and body.subagent_model
+                    and (body.subagent_provider_id or body.subagent_harness_id)
+                    else None
+                ),
                 "subagent_reasoning_effort": body.subagent_reasoning_effort,
                 "allow_agent_messaging": resolve_agent_messaging_choice(
                     self.store, body.engagement_id, None, body.allow_agent_messaging

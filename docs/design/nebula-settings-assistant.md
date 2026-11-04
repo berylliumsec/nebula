@@ -315,7 +315,7 @@ receive an advisory planning request and can share structured steps with
 blocks the turn. When a plan is shared, Core includes it in a delegated
 subagent's task context; a harness-reported native plan is a fallback. Child
 agents inherit the planning preference and may share their own plan.
-Butler can save a different main harness and provider subagent on the same chat.
+Butler can save the main runtime and a provider or harness child runtime independently on the same chat.
 The saved choice becomes the bound runtime when a new message starts; Butler
 checks the resulting turn before reporting a goal resumed. Immediate messages
 carry the same saved MCP servers and Plan choice as queued next messages.
@@ -838,3 +838,39 @@ is still pending. Report the actual error, cancelled or ready phase from a later
 Core status read, and retry only the requested operation. A shared automation
 image can separately be prepared through `automation/runtime/prepare`; its global
 image metadata is distinct from the project's execution policy or Host consent.
+
+
+## Shared Core tools and mixed subagents
+
+Assistant settings chooses the main runtime and child runtime independently.
+Provider and harness parents may each select a provider or harness child with
+its own advertised model. A provider parent without an explicit child selection
+keeps its own provider/model. Core applies the same depth, concurrency, privacy
+and model-verification rules in every combination. The capability result's
+`subagents.available` and `can_start` describe the parent; the separate
+`child_delegation_available` describes whether the child can delegate further.
+Discovery accepts category, cursor and limit on both provider and harness paths.
+
+Project lifecycle hooks are selectable for both backends. Explicitly assigned
+child hooks retain immutable manifests and executable hashes in every round.
+Omitted child hook IDs still mean none, as documented in the tool schema.
+Required start hooks block task work; required completion hooks block publication
+of a successful answer. Actual hook execution IDs and statuses are durable
+attestation, and appear in child reports and the conversation's hook outcomes.
+Core command guards remain independent of vendor-native hooks. A narrowed child
+or selected command guard uses Core's gateway rather than unrestricted native
+tools that could bypass the Core selection.
+
+Managed harnesses share Core working notes, conversation search, durable research
+result queries, goal progress/attention/completion, selected skill resources,
+project SSH wrappers and web search. Project policy, workspace identity, cloud
+transfer consent, active-turn ownership and approvals still apply. Enabled usable
+MCP sources can be discovered through the on-demand catalog; loading a schema
+grants no permission. Butler's administrative capabilities remain Butler-only.
+
+Narrowed children keep the Core control tools needed for their assigned skills,
+catalog sources and delegation. Retrying preserves their original tools, SSH
+hosts, skills and MCP catalog selection. Interrupted effectful hooks require
+reconciliation before replay; a rejected final answer still records consumed
+usage and pauses its Core goal. Notebook MCP remains explicitly selected for
+both backends and is excluded from automatic on-demand discovery.

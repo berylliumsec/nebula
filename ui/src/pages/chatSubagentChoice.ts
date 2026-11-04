@@ -22,13 +22,14 @@ type SubagentRequestFields = Pick<
 /**
  * The subagent fields a message (or a new goal conversation) carries.
  *
- * A provider chat's subagents share its own model. A harness chat's run on a
- * chosen provider model, which Core accepts only once it is verified; until
+ * Every parent can choose a provider or harness child runtime. A provider
+ * parent with no explicit choice keeps its own model. Core verifies a chosen
+ * provider model before use; until
  * then the turn runs without them and carries the choice for Core to remember,
  * so a chat this message creates keeps the box checked.
  */
 export function subagentRequestFields(runtimeKind: "provider" | "harness", choice: ComposerSubagentChoice): SubagentRequestFields {
-  if (runtimeKind === "provider") {
+  if (runtimeKind === "provider" && !choice.providerId && !choice.harnessId) {
     return { allowSubagents: choice.enabled, maxActiveSubagents: choice.enabled ? choice.limit : undefined, subagentReasoningEffort: choice.enabled ? choice.reasoningEffort : undefined };
   }
   if (choice.enabled && choice.ready) {

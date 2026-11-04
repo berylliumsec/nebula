@@ -330,8 +330,9 @@ def test_harness_delegates_to_harness_and_reuses_child_for_another_round(tmp_pat
         assert record.rounds == 2
         assert record.status == ChatSubagentStatus.COMPLETED
         assert seen["capabilities"]["runtime"] == "harness"
-        assert seen["capabilities"]["subagents"]["available"] is False
-        assert seen["capabilities"]["tool_names"] == []
+        assert seen["capabilities"]["subagents"]["available"] is True
+        assert seen["capabilities"]["subagents"]["child_delegation_available"] is True
+        assert "notes.write" in seen["capabilities"]["tool_names"]
         assert seen["first"]["subagents"][0]["report"] == "Found three routes."
         assert seen["message"]["delivery"] == "new_round"
         assert seen["second"]["subagents"][0]["report"] == "The correction is complete."
@@ -599,7 +600,7 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
         async def script(connection: ScriptedConnection, prompt: str) -> str:
             del prompt
             available = _payload(await connection.call("subagent.capabilities"))
-            assert "notes.write" not in available["tool_names"]
+            assert "notes.write" in available["tool_names"]
             assert available["mcp_servers"] == []
             assert [item["id"] for item in available["hooks"]] == ["audit"]
             _payload(

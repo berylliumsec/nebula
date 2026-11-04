@@ -135,6 +135,14 @@ def update_chat_assistant_config(
     current = chat_assistant_config(store, session)
     changes = patch.model_dump(exclude_unset=True, mode="json")
     selected = {**current, **changes}
+    if changes.get("subagent_provider_id") and changes.get(
+        "subagent_harness_profile_id"
+    ):
+        raise ValueError("choose one subagent runtime")
+    if changes.get("subagent_provider_id"):
+        selected["subagent_harness_profile_id"] = None
+    elif changes.get("subagent_harness_profile_id"):
+        selected["subagent_provider_id"] = None
     backend = selected["backend"]
     if backend not in {"provider", "harness"}:
         raise ValueError("choose Provider or Agent harness")
@@ -212,14 +220,16 @@ def update_chat_assistant_config(
         bypass_permissions=bool(scope and scope.bypass_permissions),
     )
     if selected["hook_ids"]:
-        if backend != "provider":
-            raise ValueError("lifecycle hooks are available only for provider chats")
         if workspace_resolver is None:
             raise ValueError("the project workspace is unavailable for hook discovery")
         catalog = discover_native_hooks(workspace_resolver(session.engagement_id))
         for hook_id in selected["hook_ids"]:
             snapshot_native_hook(hook_id, catalog)
-    if backend == "harness" and selected["allow_subagents"]:
+    if selected["allow_subagents"] and (
+        backend == "harness"
+        or selected["subagent_provider_id"]
+        or selected["subagent_harness_profile_id"]
+    ):
         provider_id = selected["subagent_provider_id"]
         harness_id = selected["subagent_harness_profile_id"]
         child_model = selected["subagent_model"]
@@ -260,28 +270,29 @@ def update_chat_assistant_config(
     if backend == "provider":
         metadata["allow_subagents"] = selected["allow_subagents"]
         metadata["max_active_subagents"] = selected["max_active_subagents"]
+    if selected["allow_subagents"] and (
+        selected["subagent_provider_id"] or selected["subagent_harness_profile_id"]
+    ):
+        metadata["provider_subagent"] = {
+            **(
+                {"provider_profile_id": selected["subagent_provider_id"]}
+                if selected["subagent_provider_id"]
+                else {"harness_profile_id": selected["subagent_harness_profile_id"]}
+            ),
+            "model": selected["subagent_model"] or "",
+            **(
+                {"max_active": selected["max_active_subagents"]}
+                if selected["max_active_subagents"] is not None
+                else {}
+            ),
+            **(
+                {"reasoning_effort": selected["subagent_reasoning_effort"]}
+                if selected["subagent_reasoning_effort"] is not None
+                else {}
+            ),
+        }
     else:
-        if selected["allow_subagents"]:
-            metadata["provider_subagent"] = {
-                **(
-                    {"provider_profile_id": selected["subagent_provider_id"]}
-                    if selected["subagent_provider_id"]
-                    else {"harness_profile_id": selected["subagent_harness_profile_id"]}
-                ),
-                "model": selected["subagent_model"] or "",
-                **(
-                    {"max_active": selected["max_active_subagents"]}
-                    if selected["max_active_subagents"] is not None
-                    else {}
-                ),
-                **(
-                    {"reasoning_effort": selected["subagent_reasoning_effort"]}
-                    if selected["subagent_reasoning_effort"] is not None
-                    else {}
-                ),
-            }
-        else:
-            metadata.pop("provider_subagent", None)
+        metadata.pop("provider_subagent", None)
     return store.update(
         ChatSession,
         session.id,

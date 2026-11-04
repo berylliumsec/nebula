@@ -39,7 +39,7 @@ import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarge
 import { sshApprovalTarget, type SshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
 import { ProjectSnapshotPanel } from "../components/structured-result";
-import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentPostedResult, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentEffortField, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
+import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentPostedResult, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, mergeRecentListedSessions, reconcileListedSessions } from "./chatSessionList";
 import { nextSideChatNumber, sideChatForConversation, sideChatsForConversation, sideChatTabLabel } from "./sideChatSelection";
@@ -2095,22 +2095,17 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (pendingAgentMessagingSaveSessionRef.current !== activeChatSession.id) {
       setAllowAgentMessaging(next?.allowAgentMessaging ?? activeChatSession.allowAgentMessaging === true);
     }
-    if (next?.backend === "harness" || (!next && activeChatSession.backend === "harness")) {
-      setAllowSubagents(next?.allowSubagents ?? activeChatSession.allowSubagents === true);
-      setSubagentProviderId(next?.subagentProviderId ?? activeChatSession.subagentProviderId ?? "");
-      setSubagentHarnessId(next?.subagentHarnessProfileId ?? activeChatSession.subagentHarnessId ?? "");
-      setSubagentModel(next?.subagentModel ?? activeChatSession.subagentModel ?? "");
-      setSubagentLimit(next?.maxActiveSubagents ?? activeChatSession.subagentLimit);
-      setSubagentReasoningEffort(next?.subagentReasoningEffort ?? activeChatSession.subagentReasoningEffort);
-      setSelectedMcpIds(next?.mcpServerIds ?? activeChatSession.mcpServerIds);
-      return;
-    }
-    setSelectedMcpIds(next?.mcpServerIds ?? activeChatSession.mcpServerIds);
-    setSelectedHookIds(next?.hookIds ?? activeChatSession.hookIds);
-    setReasoningEffort(next?.reasoningEffort ?? activeChatSession.reasoningEffort ?? "");
     setAllowSubagents(next?.allowSubagents ?? activeChatSession.allowSubagents === true);
+    setSubagentProviderId(next?.subagentProviderId ?? activeChatSession.subagentProviderId ?? "");
+    setSubagentHarnessId(next?.subagentHarnessProfileId ?? activeChatSession.subagentHarnessId ?? "");
+    setSubagentModel(next?.subagentModel ?? activeChatSession.subagentModel ?? "");
     setSubagentLimit(next?.maxActiveSubagents ?? activeChatSession.subagentLimit);
     setSubagentReasoningEffort(next?.subagentReasoningEffort ?? activeChatSession.subagentReasoningEffort);
+    setSelectedMcpIds(next?.mcpServerIds ?? activeChatSession.mcpServerIds);
+    setSelectedHookIds(next?.hookIds ?? activeChatSession.hookIds);
+    if ((next?.backend ?? activeChatSession.backend) === "provider") {
+      setReasoningEffort(next?.reasoningEffort ?? activeChatSession.reasoningEffort ?? "");
+    }
   }, [activeChatSession?.id, activeChatSession?.revision]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = contextUsePercent(activeContextStatus);
@@ -2288,7 +2283,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [coreState, embeddedSideChat, runtimeModel, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
 
   useEffect(() => {
-    if (runtimeKind !== "harness" || !allowSubagents || coreState !== "online" || !subagentProvider || !subagentModel.trim() || subagentModelVerification) return;
+    if (!allowSubagents || coreState !== "online" || !subagentProvider || !subagentModel.trim() || subagentModelVerification) return;
     const key = `${subagentProvider.id}:${subagentModel.trim()}`;
     if (attemptedToolVerificationRef.current.has(key)) return;
     attemptedToolVerificationRef.current.add(key);
@@ -2647,7 +2642,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return () => controller.abort();
   }, [api, embeddedSideChat, engagement, runtimeKind, selectedHarness, projectCatalogKey]);
   useEffect(() => {
-    if (embeddedSideChat || !api || !engagement || runtimeKind !== "provider") {
+    if (embeddedSideChat || !api || !engagement) {
       setNativeHooks([]);
       setSelectedHookIds([]);
       setNativeHookError(undefined);
@@ -2994,16 +2989,16 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       toolsEnabled: runtimeKind === "harness" ? true : canUseTools,
       planningEnabled,
       mcpServerIds: selectedMcpIds,
-      hookIds: runtimeKind === "provider" ? selectedHookIds : [],
+      hookIds: selectedHookIds,
       // The goal's first turn is one Core starts, and it reads these from
       // the conversation; without them the new chat unchecks Subagents.
       reasoningEffort: runtimeKind === "provider" ? reasoningEffort || undefined : undefined,
       harnessReasoningEffort: runtimeKind === "harness" ? harnessReasoningEffort || undefined : undefined,
       harnessServiceTier: runtimeKind === "harness" ? harnessServiceTier || undefined : undefined,
       harnessCyberAccessProgram: runtimeKind === "harness" ? harnessCyberAccessProgram || undefined : undefined,
-      subagentProviderId: runtimeKind === "harness" && allowSubagents ? subagentProviderId || undefined : undefined,
-      subagentHarnessId: runtimeKind === "harness" && allowSubagents ? subagentHarnessId || undefined : undefined,
-      subagentModel: runtimeKind === "harness" && allowSubagents ? subagentModel || undefined : undefined,
+      subagentProviderId: allowSubagents ? subagentProviderId || undefined : undefined,
+      subagentHarnessId: allowSubagents ? subagentHarnessId || undefined : undefined,
+      subagentModel: allowSubagents ? subagentModel || undefined : undefined,
       allowSubagents,
       allowAgentMessaging,
       maxActiveSubagents: allowSubagents ? subagentLimit : undefined,
@@ -3590,7 +3585,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setSelectedMcpIds(nextMcpServerIds);
     setSelectedHookIds(nextHookIds);
     setAssistantSettingsError(undefined);
-    if (!api || !sessionId || runtimeKind !== "provider") {
+    if (!api || !sessionId) {
       void rememberAssistantDefaults({ mcpServerIds: nextMcpServerIds, hookIds: nextHookIds });
       return;
     }
@@ -3688,7 +3683,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         allowSubagents: choice.enabled,
         maxActiveSubagents: choice.limit ?? null,
         subagentReasoningEffort: choice.reasoningEffort ?? null,
-        ...(current.backend === "harness" && choice.enabled
+        ...(choice.enabled
           ? { subagentProviderId: choice.harnessId ? undefined : choice.providerId, subagentHarnessId: choice.harnessId, subagentModel: choice.model }
           : {}),
       });
@@ -4242,7 +4237,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       const approval = approvalRecord?.status === "pending" ? approvalRecord : undefined;
       const decisionRecorded = approvalRecord && !approval && pendingTurn?.status === "waiting_approval";
       if (decisionRecorded) setResolvedApproval({ id: approvalRecord.id, status: approvalRecord.status, turnId: pendingTurn.id, harnessTurnId: pendingTurn.harnessTurnId });
-      if (summary?.backend === "provider") {
+      if (summary) {
         const hookLoader = pendingTurn
           ? api.listChatHookExecutions(pendingTurn.id, loadController.signal)
           : api.listSessionHookExecutions(id, loadController.signal);
@@ -5257,7 +5252,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         liveGoalStreamDirtyRef.current = false;
         setLiveGoalTokenEstimate(streamEvent.usage.totalTokens + (streamEvent.contextUsage?.totalTokens ?? 0));
       }
-      if (request.backend === "provider" && streamEvent.turnId && api) {
+      if (streamEvent.turnId && api) {
         void api.listChatHookExecutions(streamEvent.turnId).then(setHookExecutions).catch(error => {
           void logCaughtDiagnostic("interface.chat.hook_outcomes_failed", "Hook outcomes could not be loaded.", error, "chat-hooks");
         });
@@ -5636,7 +5631,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       harnessSessionId: !initialSessionId && harnessSessionId ? harnessSessionId : undefined,
       mcpServerIds: embeddedSideChat ? [] : selectedMcpIds,
       sshEnvironmentIds: embeddedSideChat ? [] : runtimeKind === "provider" ? environmentIdsForTarget(environmentTarget) : undefined,
-      hookIds: embeddedSideChat ? [] : runtimeKind === "provider" ? selectedHookIds : undefined,
+      hookIds: embeddedSideChat ? [] : selectedHookIds,
       engagementId: engagement.id,
       sessionId: returnedSessionId,
       goalId: !embeddedSideChat && providerGoal?.status === "running" ? providerGoal.id : undefined,
@@ -6820,17 +6815,17 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 {runtimeKind === "harness" && selectedHarness && !selectedHarness.capabilities?.skillInvocation && <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} /><span>Skills unavailable<small>This harness did not advertise structured skill invocation.</small></span></div>}
                 {runtimeKind === "harness" && selectedHarness?.capabilities?.skillInvocation && selectedHarness.nativeCapabilities.skills && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project and installed skills…" : harnessSkills.length ? "Type $ in the composer to invoke a skill for one turn." : "No project or installed skills were discovered.")}</small></span></div>}
                 {runtimeKind === "provider" && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project skills…" : harnessSkills.length ? "Type $ in the composer to select a skill. Running goals keep its immutable snapshot." : "No project skills were discovered.")}</small></span></div>}
-                {runtimeKind === "provider" && <div className="chat-harness-mcp" data-guide="lifecycle-hooks"><span>Lifecycle hooks</span>{nativeHookError ? <><small role="alert">{nativeHookError}</small><ShowMeHow guide="lifecycle-hooks" step={1} label="Fix with guide" /></> : nativeHooks.length ? nativeHooks.map(hook => <label className="chat-knowledge-toggle" key={hook.id}><input type="checkbox" checked={selectedHookIds.includes(hook.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void saveProviderAssistantSelections(selectedMcpIds, event.target.checked ? [...selectedHookIds, hook.id] : selectedHookIds.filter(id => id !== hook.id))} /><span>{hook.manifest.name}<small>{hook.manifest.description || hook.id} · {hook.manifest.events.length} events · {hook.manifest.failurePolicy} on failure</small></span></label>) : <><small>No project hooks found in .agents/hooks.</small><ShowMeHow guide="lifecycle-hooks" /></>}</div>}
+                {<div className="chat-harness-mcp" data-guide="lifecycle-hooks"><span>Lifecycle hooks</span>{nativeHookError ? <><small role="alert">{nativeHookError}</small><ShowMeHow guide="lifecycle-hooks" step={1} label="Fix with guide" /></> : nativeHooks.length ? nativeHooks.map(hook => <label className="chat-knowledge-toggle" key={hook.id}><input type="checkbox" checked={selectedHookIds.includes(hook.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void saveProviderAssistantSelections(selectedMcpIds, event.target.checked ? [...selectedHookIds, hook.id] : selectedHookIds.filter(id => id !== hook.id))} /><span>{hook.manifest.name}<small>{hook.manifest.description || hook.id} · {hook.manifest.events.length} events · {hook.manifest.failurePolicy} on failure</small></span></label>) : <><small>No project hooks found in .agents/hooks.</small><ShowMeHow guide="lifecycle-hooks" /></>}</div>}
                 <div className="chat-knowledge-toggle" role="status" data-guide="knowledge-status"><ShieldCheck size={15} aria-hidden="true" /><span>Knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} source${knowledgeItemCount === 1 ? "" : "s"} available automatically` : `${runtimeKind === "provider" ? "Profile" : "Harness"} is text-only` : "No sources loaded"}</small></span></div>
-                {runtimeKind === "harness" && <HarnessSubagentSettings
+                {<HarnessSubagentSettings
                   providers={enabledProviders}
                   harnesses={harnesses}
-                  harnessName={selectedHarness?.name ?? "The harness"}
+                  harnessName={runtimeKind === "harness" ? selectedHarness?.name ?? "The assistant" : selectedProvider?.name ?? "The assistant"}
                   choice={{ enabled: allowSubagents, providerId: subagentProviderId, harnessId: subagentHarnessId, model: subagentModel, limit: subagentLimit, reasoningEffort: subagentReasoningEffort }}
                   disabled={sending || assistantSettingsBusy}
                   onChange={(choice) => void saveSubagentChoice(choice)}
                 />}
-                {runtimeKind === "provider" && <div className="chat-provider-subagents"><label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveSubagentChoice({ enabled: event.target.checked, providerId: "", model: "", limit: subagentLimit, reasoningEffort: subagentReasoningEffort })} /><span><strong>Subagents</strong><small>Delegate independent work to parallel children on this model · {subagentLimitLabel(subagentLimit)}</small></span></label>{allowSubagents && <SubagentEffortField effort={subagentReasoningEffort} disabled={sending || assistantSettingsBusy} onChange={(reasoningEffort) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit: subagentLimit, reasoningEffort })} />}{allowSubagents && <SubagentLimitField limit={subagentLimit} delegator="the assistant" disabled={sending || assistantSettingsBusy} onChange={(limit) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit, reasoningEffort: subagentReasoningEffort })} />}</div>}
+
                 {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.isSideChat && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>{runtimeKind === "provider" && !modelVerified ? "Available when this model is verified for tools. Text chat still works." : runtimeKind === "harness" && selectedHarness?.capabilities?.mcp === false ? "This harness does not advertise messaging tools. Text chat still works." : "Coordinate with main agents in this project. Messages appear in both conversations."}</small></span></label>}
                 {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void (async () => { try { if (await ensureNotebookConsent(nextIds)) await saveProviderAssistantSelections(nextIds, selectedHookIds); } catch (error) { logCaughtDiagnostic("interface.sessions.notebook_mcp_selection_failed", "Notebook MCP selection could not be saved.", error, "assistant_settings"); setAssistantSettingsError(String(error)); } })()} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void chooseHarnessMcpServer(server.id, event.target.checked)} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
@@ -6954,7 +6949,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               <div className="chat-operator-updates">
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} isShown={(messageId) => messages.some((message) => message.id === messageId)} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
-              {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
+              {hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
               {waitingCallback && ((waitingCallback.kind !== "subagents" && waitingCallback.kind !== "reply")
                 || !messages.some(message => message.id === waitingCallback.assistantId && message.content.trim()))
                 && <CallbackWaitingStatus summary={waitingCallback.summary} resultsUrl={waitingCallback.resultsUrl} kind={waitingCallback.kind} />}
