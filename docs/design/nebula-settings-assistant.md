@@ -799,7 +799,15 @@ rewind, remediation, remote action, discussion or deletion.
 
 Ordinary revision-bound settings remain callable when Core can read them back.
 `nebula.settings.api_request` can GET and PUT `diagnostics/settings`, returning the
-saved logging values. Compatible next-turn runtime switches reuse
+saved logging values. For performance bottlenecks, latency, SQL timing, worker
+queue delays, or event-loop stalls, GET `diagnostics/performance` through the same
+tool. Discovery and schema expose this read-only operation. It returns bounded
+process-local counters, recent p50/p95 timings, SQL fingerprints, and correlated
+slow-request phases; a live diagnostics export includes `performance.json`.
+These inclusive timings can overlap and do not establish a root cause or measure
+browser rendering, model generation, or network transit. Compare snapshots before
+and after reproducing the slow operation. No log-level change or paid provider
+call is needed. Compatible next-turn runtime switches reuse
 `nebula.work.set_chat_settings`; switches requiring transcript compaction remain
 in Chat for explicit review. Provider final-answer resume is a requesting-browser
 conversation transport and grants no additional model operation.
