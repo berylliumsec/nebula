@@ -65,38 +65,42 @@ provider-parent messaging and goal/scheduled-choice fixtures. Their assertions
 were not weakened. The selected existing passing cases cover the relevant
 lifecycle and recovery behavior.
 
-## Acceptance still required
+## Local limits and CI acceptance
 
 Local WebKit installation was denied by network policy (403 from
 `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`). The three
-committed iPhone/WebKit widths 320/390/430 remain selected for normal PR CI.
-No local WebKit pass is claimed. Initial commit `e38a0f3b` subsequently passed
-all eight browser profiles in normal PR CI, including all three WebKit widths
+committed iPhone/WebKit widths 320/390/430 are exercised in normal PR CI.
+No local WebKit pass is claimed. Initial commit `e38a0f3b` passed all eight
+browser profiles, including all three WebKit widths
 ([browser run](https://github.com/berylliumsec/nebula/actions/runs/41828680366)).
-The same commit passed 110 selected Python checks, including both product-help
-checks in CI's regenerated checkout, and the 17 frontend checks
+That commit passed 110 selected Python checks and 17 frontend checks
 ([CI run](https://github.com/berylliumsec/nebula/actions/runs/41828680382)).
-A follow-up adds the existing operator reconciliation API and recorded late
-outcome recovery for fenced harness hooks; it releases the interrupted chat only
-after all unknown effects are resolved. This adds one parameterized regression
-case (30 new cases total). All 30 new cases passed locally after the follow-up,
-and six targeted provider/harness cleanup cases also passed. Final-head CI is
-reported on the PR.
 
-Product-help regeneration and both selected index/digest-to-Chroma checks were
-attempted. The embedding model download at
-`chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz` was denied by
-network policy (403). The bundled product index is therefore still stale;
-its digest and embeddings were not fabricated. Regenerate the committed index
-with `python scripts/build_product_knowledge.py`, then verify the two selected
-`test_product_knowledge.py` cases in an environment with the approved model.
-The normal CI tests may regenerate their own checkout, which does not replace
-committing the candidate's updated index.
+The recovery follow-up adds the existing operator reconciliation API and
+recorded late outcome recovery for fenced harness hooks. It releases the
+interrupted chat only after all unknown effects are resolved. This adds one
+parameterized regression case (30 new cases total); all 30 passed locally.
+Its 111 Python checks and frontend checks passed CI. One WebKit reload check
+opened settings before the restored harness selection loaded; the browser test
+now waits for the visible saved parent runtime, as it already did on initial
+navigation. The final test also passed locally in Chromium 390 on LAN port
+22689. Final-head results are linked from [the PR checks](https://github.com/berylliumsec/nebula/pull/920/checks)
+and must pass before merge.
 
-The PR must remain unmerged until the product-help artifact, Chroma synchronization
-and required final-head evidence are available, per
-`.codex/rules/change-workflow.md` and the product-quality skill. Temporary Core
-instances and synthetic data are removed after evidence collection.
+Local product-help regeneration and both index/digest-to-Chroma checks were
+attempted but the embedding model download at
+`chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz` was denied (403).
+This is a local verification limit, not a requirement to commit a generated
+index: `.gitignore` deliberately excludes that file. The Poetry build backend
+regenerates and verifies it for wheels, source distributions and editable builds;
+the frozen Core build also calls `ensure_product_knowledge`. Normal CI generated
+the candidate index, passed both selected product-help checks (including Chroma
+source-digest synchronization), and built the distributions. No fabricated
+embeddings, source digests or new download routes were used.
+
+Temporary Core instances and synthetic data are removed after evidence
+collection. Physical devices and live paid-vendor runtimes were unavailable;
+the inert-runtime acceptance boundary remains explicit.
 
 Notebook MCP needs explicit selection on **both** backends; storage deliberately
 excludes it from automatic on-demand discovery. Other usable MCP catalog sources

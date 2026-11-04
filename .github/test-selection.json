@@ -130,7 +130,7 @@
   "playwright": [
     "area:universal-agents"
   ],
-  "change_digest": "c94c7fa4df051a439b44a5518b29f2112dd49bf171a6740eab9b83c6b09e2f63",
+  "change_digest": "a4a5db46960d036cdf6b1fc51b44eba500541b3bbcca022c1b99bbb247bb38f3",
   "baseline_failures": [
     "tests/v3/test_chat_subagents.py::test_cloud_subagent_turn_asks_for_tool_result_consent_before_acceptance",
     "tests/v3/test_chat_subagents.py::test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level",

@@ -33,7 +33,7 @@ test("all parent and child runtimes retain lifecycle guards and saved choices", 
       expect((await new AxeBuilder({page}).include("[role=dialog]").analyze()).violations).toEqual([]);
       await page.keyboard.press("Escape");
       await page.reload();
-      await expect(trigger).toBeVisible();
+      await expect(trigger).toContainText(parent === "provider" ? "Synthetic provider" : "Synthetic harness", {timeout: 20000});
       if (!info.project.use.hasTouch) await page.locator(".chat-composer").hover();
       await trigger.click();
       await expect(settings.getByRole("checkbox", {name: /^guard/})).toBeChecked();
