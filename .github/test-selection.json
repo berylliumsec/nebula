@@ -1,31 +1,22 @@
 {
-  "change_digest": "7c58b3a40c24a2b661c15168b5e59c8ff386e3091a9e16a79f910b7143fb3e7f",
-  "reviewed_by": "Codex agent, focused Core capacity recovery review",
-  "reason": "Core now continues a Core-owned harness goal once after a confirmed model overload when saved effects are settled. The selected Python cases cover one retry, repeated overload, completed reads, writes and unknown effects, policy refusal precedence, Codex error mapping, and product guidance indexing. The selected real-Core browser journey covers saved goal state, transcript, refresh, overload, and policy hold on the eight permanent desktop and mobile profiles with a production bundle and inert LAN fixture.",
-  "exclusions": "No ui/src behavior or Rust code changed, so frontend component and native test lists are empty. Full Python and Playwright suites are excluded; the selected cases exercise the changed lifecycle and its operator-visible integration. Live providers, physical devices, and deployment are outside this branch validation.",
+  "reviewed_by": "Codex focused review after independent causal validation",
+  "reason": "Seven collected Python cases cover the global and project covering status indexes, create/update projections, migration backfill and downgrade, roster and peer ordering, authenticated HTTP roster, and the actual MCP agent.list and Work tool paths. The synthetic LAN load receipt compares old and new Core on the same 2 GB fixture with concurrent reads and writes.",
+  "exclusions": "No UI, native, or browser code changes. Frontend, native, and Playwright suites do not measure this storage lookup. The production app shell, authenticated health, actual HTTP roster, and both MCP gateway tools are probed in the real Core LAN load. No live providers or production data are used.",
   "expected_tests": {
-    "python": 20,
+    "python": 7,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_chat_goals.py::test_failed_harness_turn_pauses_goal_until_explicit_resume",
-    "tests/v3/test_harness_chat_goals.py::test_model_capacity_continues_goal_once_from_saved_state",
-    "tests/v3/test_harness_chat_goals.py::test_repeated_model_capacity_pauses_without_retry_loop",
-    "tests/v3/test_harness_chat_goals.py::test_capacity_continuation_uses_completed_tool_receipt",
-    "tests/v3/test_harness_chat_goals.py::test_capacity_after_completed_write_stays_paused",
-    "tests/v3/test_harness_chat_goals.py::test_capacity_with_unresolved_native_effect_stays_paused",
-    "tests/v3/test_harness_chat_goals.py::test_cyber_policy_refusal_does_not_route_or_retry_goal",
-    "tests/v3/test_codex_turn_outcomes.py::test_codex_failed_turn_raises_a_turn_failure_with_codex_message",
-    "tests/v3/test_codex_turn_outcomes.py::test_codex_turn_failure_reason_reaches_the_chat_stream_error_frame",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_core_goal_capacity_recovery",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_chat_turn_status_lookup.py",
+    "tests/v3/test_chat_turn_status_migration.py",
+    "tests/v3/test_work.py::test_agent_roster_matches_dashboard_scope_and_refreshes_links",
+    "tests/v3/test_work.py::test_work_agents_api_lists_active_sessions_across_projects",
+    "tests/v3/test_work_gateway.py::test_builtin_work_gateway_is_default_on_scoped_and_retains_updates"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:harness-capacity-recovery"
-  ]
+  "playwright": [],
+  "change_digest": "dbdb76939a3153c46490b27e61d7e21d1a629ac6ae1c70631d461083075dc054"
 }

@@ -1330,6 +1330,7 @@ class McpGatewaySession:
                     break
                 response: dict[str, Any]
                 request_id: Any = None
+                name: str | None = None
                 try:
                     if line is None or len(line) > MAX_MCP_MESSAGE_BYTES:
                         raise ValueError("gateway request exceeded 4 MiB")
@@ -1377,7 +1378,12 @@ class McpGatewaySession:
                         "id": request_id,
                         "error": {"message": _safe(exc), "type": type(exc).__name__},
                     }
-                encoded = encode_gateway_frame(response)
+                if name in {"work.agents", "agent.list"}:
+                    # These lists can contain hundreds of entries. Encode their
+                    # responses outside Core's event loop under concurrent reads.
+                    encoded = await asyncio.to_thread(encode_gateway_frame, response)
+                else:
+                    encoded = encode_gateway_frame(response)
                 if len(encoded) > MAX_MCP_MESSAGE_BYTES:
                     encoded = encode_gateway_frame(
                         {

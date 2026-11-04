@@ -5,6 +5,7 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -40,6 +41,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    type_coerce,
     update,
 )
 from sqlalchemy.exc import IntegrityError
@@ -71,6 +73,7 @@ from .domain import (
     ChatQueue,
     ChatSession,
     ChatTurn,
+    ChatTurnStatus,
     ENTITY_MODEL_BY_KIND,
     Engagement,
     Entity,
@@ -88,6 +91,30 @@ from .domain import (
 )
 
 EntityT = TypeVar("EntityT", bound=Entity)
+
+
+@dataclass(frozen=True, slots=True)
+class ChatTurnStatusRow:
+    """The fields needed to identify a turn in live agent lists."""
+
+    id: str
+    engagement_id: str
+    session_id: str
+    status: ChatTurnStatus
+    recovery_visible: bool
+    core_resume_pending: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ChatSessionAgentRow:
+    """The small conversation fields used by rosters and peer discovery."""
+
+    id: str
+    engagement_id: str
+    title: str
+    backend: str
+    model: str
+    metadata: dict[str, Any]
 
 
 def _recovery_pending(payload: dict[str, Any]) -> bool:
@@ -233,6 +260,22 @@ def _entity_lookup_fields(entity: Entity) -> dict[str, Any]:
     """Return every denormalized lookup field maintained for an entity row."""
 
     fields = {**_automation_lookup_fields(entity), **_chat_lookup_fields(entity)}
+    if isinstance(entity, ChatTurn):
+        recovery_visible = (
+            entity.status == ChatTurnStatus.INTERRUPTED
+            and _recovery_pending({"request_snapshot": entity.request_snapshot})
+        )
+        if recovery_visible:
+            from .chat_subagents import core_resumes_interrupted_turn
+
+            core_resume_pending = core_resumes_interrupted_turn(entity)
+        else:
+            core_resume_pending = False
+        fields.update(
+            chat_turn_status=entity.status.value,
+            chat_turn_recovery_visible=recovery_visible,
+            chat_turn_core_resume_pending=core_resume_pending,
+        )
     if isinstance(entity, Artifact):
         call_id = entity.metadata.get("tool_call_id")
         fields["artifact_tool_call_id"] = call_id if isinstance(call_id, str) else None
@@ -1461,6 +1504,7 @@ class NebulaStore:
                     "metadata.tool_call_id",
                 ): EntityRow.artifact_tool_call_id,
                 (ToolCall.entity_kind, "status"): EntityRow.tool_call_status,
+                (ChatTurn.entity_kind, "status"): EntityRow.chat_turn_status,
                 (ToolCall.entity_kind, "origin"): EntityRow.tool_call_origin,
                 (
                     ToolCall.entity_kind,
@@ -1545,6 +1589,105 @@ class NebulaStore:
             statement = statement.limit(limit)
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
+
+    def chat_turn_status_rows(
+        self,
+        statuses: Sequence[ChatTurnStatus],
+        *,
+        engagement_id: str | None = None,
+    ) -> list[ChatTurnStatusRow]:
+        """Read live-turn fields from the status index, oldest first.
+
+        The selected columns are covered by the index; a historical turn's JSON
+        overflow pages are never read to decide whether it matches.
+        """
+
+        if not statuses:
+            return []
+        statement = select(
+            EntityRow.id,
+            EntityRow.engagement_id,
+            type_coerce(EntityRow.created_at, String).label("sort_created_at"),
+            EntityRow.chat_session_id,
+            EntityRow.chat_turn_status,
+            EntityRow.chat_turn_recovery_visible,
+            EntityRow.chat_turn_core_resume_pending,
+        ).where(
+            EntityRow.kind == ChatTurn.entity_kind,
+            EntityRow.chat_turn_status.in_([status.value for status in statuses]),
+        )
+        if engagement_id is not None:
+            statement = statement.where(EntityRow.engagement_id == engagement_id)
+        # SQLite otherwise favors the older (kind, engagement, created_at)
+        # index to satisfy ORDER BY and scans every historical turn. Sorting
+        # the small matching set here leaves both status queries covering.
+        with self.database.session() as session:
+            rows = list(session.execute(statement))
+            rows.sort(key=lambda row: (row.sort_created_at, row.id))
+            return [
+                ChatTurnStatusRow(
+                    id=row.id,
+                    engagement_id=row.engagement_id,
+                    session_id=row.chat_session_id,
+                    status=ChatTurnStatus(row.chat_turn_status),
+                    recovery_visible=bool(row.chat_turn_recovery_visible),
+                    core_resume_pending=bool(row.chat_turn_core_resume_pending),
+                )
+                for row in rows
+            ]
+
+    def chat_session_agent_rows(
+        self,
+        *,
+        engagement_id: str | None = None,
+        session_ids: Collection[str] | None = None,
+        include_temporary: bool = False,
+    ) -> list[ChatSessionAgentRow]:
+        """Fetch only the conversation fields needed by live-agent readers."""
+
+        identifiers = sorted(set(session_ids)) if session_ids is not None else None
+        if identifiers == []:
+            return []
+        rows: list[ChatSessionAgentRow] = []
+        chunks = (
+            [
+                identifiers[index : index + 500]
+                for index in range(0, len(identifiers), 500)
+            ]
+            if identifiers is not None
+            else [None]
+        )
+        with self.database.session() as session:
+            for chunk in chunks:
+                statement = select(
+                    EntityRow.id,
+                    EntityRow.engagement_id,
+                    EntityRow.payload["title"].as_string().label("title"),
+                    EntityRow.payload["backend"].as_string().label("backend"),
+                    EntityRow.payload["model"].as_string().label("model"),
+                    EntityRow.payload["metadata"].label("metadata"),
+                ).where(EntityRow.kind == ChatSession.entity_kind)
+                if engagement_id is not None:
+                    statement = statement.where(
+                        EntityRow.engagement_id == engagement_id
+                    )
+                if chunk is not None:
+                    statement = statement.where(EntityRow.id.in_(chunk))
+                if not include_temporary:
+                    statement = statement.where(not_temporary_chat_session())
+                statement = statement.order_by(*_entity_order(False))
+                rows.extend(
+                    ChatSessionAgentRow(
+                        id=row.id,
+                        engagement_id=row.engagement_id,
+                        title=row.title,
+                        backend=row.backend,
+                        model=row.model,
+                        metadata=row.metadata or {},
+                    )
+                    for row in session.execute(statement)
+                )
+        return rows
 
     def count_entities(
         self,

@@ -15918,6 +15918,36 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
+    def _gateway_offered_tool(
+        self, session: HarnessSession, name: str
+    ) -> tuple[dict[str, Any] | None, list[str]]:
+        available_names: list[str] = []
+        cursor = None
+        seen_cursors: set[str] = set()
+        turn = self._active_gateway_turn(session.id)
+        for _ in range(64):
+            catalog = self._gateway_catalog(
+                session,
+                {"cursor": cursor} if cursor else None,
+                turn=turn,
+            )
+            available_names.extend(
+                str(item.get("name"))
+                for item in catalog["tools"]
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
+            offered = next(
+                (item for item in catalog["tools"] if item["name"] == name),
+                None,
+            )
+            if offered is not None:
+                return offered, available_names
+            cursor = catalog.get("nextCursor")
+            if not isinstance(cursor, str) or cursor in seen_cursors:
+                break
+            seen_cursors.add(cursor)
+        return None, available_names
+
     async def _gateway_call(
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -15925,8 +15955,6 @@ class HarnessRuntimeService:
 
         offered = None
         available_names: list[str] = []
-        cursor = None
-        seen_cursors: set[str] = set()
         try:
             if name == "subagent.capabilities":
                 from .read_workers import read_in_worker
@@ -15935,28 +15963,14 @@ class HarnessRuntimeService:
                     self._gateway_capabilities_offer, session
                 )
             else:
-                turn = self._active_gateway_turn(session.id)
-                for _ in range(64):
-                    catalog = self._gateway_catalog(
-                        session,
-                        {"cursor": cursor} if cursor else None,
-                        turn=turn,
+                if name in {"work.agents", "agent.list"}:
+                    from .read_workers import read_in_worker
+
+                    offered, available_names = await read_in_worker(
+                        self._gateway_offered_tool, session, name
                     )
-                    available_names.extend(
-                        str(item.get("name"))
-                        for item in catalog["tools"]
-                        if isinstance(item, dict) and isinstance(item.get("name"), str)
-                    )
-                    offered = next(
-                        (item for item in catalog["tools"] if item["name"] == name),
-                        None,
-                    )
-                    if offered is not None:
-                        break
-                    cursor = catalog.get("nextCursor")
-                    if not isinstance(cursor, str) or cursor in seen_cursors:
-                        break
-                    seen_cursors.add(cursor)
+                else:
+                    offered, available_names = self._gateway_offered_tool(session, name)
         except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
             fallback = ToolSpec.model_construct(
                 name=name,
@@ -16399,6 +16413,13 @@ class HarnessRuntimeService:
         if name == "goal.block":
             return self._gateway_goal_block_call(turn, arguments)
         if name in _GATEWAY_WORK_SCHEMAS:
+            if name == "work.agents":
+                # Its roster is a database read; keep it off the MCP event loop.
+                from .read_workers import read_in_worker
+
+                return await read_in_worker(
+                    self._gateway_work_call, turn, name, arguments
+                )
             return self._gateway_work_call(turn, name, arguments)
 
         async def execute_action() -> dict[str, Any]:
@@ -16623,18 +16644,13 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
-    async def _gateway_agent_message(
+    def _prepare_gateway_agent_message(
         self,
         session: HarnessSession,
         turn: HarnessTurn,
         name: str,
         arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Run a project-scoped peer-agent tool for a harness chat.
-
-        Refusals are raised to ``_gateway_call`` and classified by type.
-        """
-
+    ) -> tuple[AgentMessageService, ToolCall, ToolInvocation]:
         service = self.agent_messages
         if (
             service is None
@@ -16693,18 +16709,12 @@ class HarnessRuntimeService:
             runtime_session_kind="harness",
             runtime_session_id=session.id,
         )
-        try:
-            if name == "agent.list":
-                result = service.list_output(invocation)
-            elif name == "agent.read":
-                result = service.read_output(invocation)
-            else:
-                result = await service.send(
-                    invocation,
-                    str(arguments.get("session_id") or ""),
-                    str(arguments.get("message") or ""),
-                )
-        except (ToolBrokerError, ChatError) as exc:
+        return service, call, invocation
+
+    def _gateway_agent_message_failed(
+        self, name: str, call: ToolCall, exc: Exception
+    ) -> None:
+        if isinstance(exc, (ToolBrokerError, ChatError)):
             record_caught_exception(
                 "harnesses",
                 "harnesses.gateway.agent_message_refused",
@@ -16713,11 +16723,11 @@ class HarnessRuntimeService:
                 stage="gateway",
                 metadata={"tool_name": name},
             )
-            self._finish_gateway_call(call.id, error=exc)
-            raise
-        except Exception as exc:
-            self._finish_gateway_call(call.id, error=exc)
-            raise
+        self._finish_gateway_call(call.id, error=exc)
+
+    def _gateway_agent_message_result(
+        self, call: ToolCall, result: dict[str, Any]
+    ) -> dict[str, Any]:
         self._finish_gateway_call(call.id, result=result)
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
         return {
@@ -16725,6 +16735,59 @@ class HarnessRuntimeService:
             "structuredContent": result,
             "isError": False,
         }
+
+    def _gateway_agent_list_call(
+        self,
+        session: HarnessSession,
+        turn: HarnessTurn,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run the complete peer-list read and its audit writes in a worker."""
+
+        service, call, invocation = self._prepare_gateway_agent_message(
+            session, turn, "agent.list", arguments
+        )
+        try:
+            result = service.list_output(invocation)
+        except Exception as exc:
+            self._gateway_agent_message_failed("agent.list", call, exc)
+            raise
+        return self._gateway_agent_message_result(call, result)
+
+    async def _gateway_agent_message(
+        self,
+        session: HarnessSession,
+        turn: HarnessTurn,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run a project-scoped peer-agent tool for a harness chat.
+
+        Refusals are raised to ``_gateway_call`` and classified by type.
+        """
+
+        if name == "agent.list":
+            from .read_workers import read_in_worker
+
+            return await read_in_worker(
+                self._gateway_agent_list_call, session, turn, arguments
+            )
+        service, call, invocation = self._prepare_gateway_agent_message(
+            session, turn, name, arguments
+        )
+        try:
+            if name == "agent.read":
+                result = service.read_output(invocation)
+            else:
+                result = await service.send(
+                    invocation,
+                    str(arguments.get("session_id") or ""),
+                    str(arguments.get("message") or ""),
+                )
+        except Exception as exc:
+            self._gateway_agent_message_failed(name, call, exc)
+            raise
+        return self._gateway_agent_message_result(call, result)
 
     def _gateway_work_call(
         self, turn: HarnessTurn, name: str, arguments: dict[str, Any]

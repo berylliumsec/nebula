@@ -8241,9 +8241,18 @@ def create_app(
         tags=["work"],
         dependencies=[Depends(require_auth)],
     )
-    def active_work_agents() -> list[WorkAgentActivity]:
+    async def active_work_agents() -> Response:
         """One response for the overview, independent of project count."""
-        return work_service.active_agents()
+
+        def roster_response() -> JSONResponse:
+            return JSONResponse(
+                [
+                    agent.model_dump(mode="json")
+                    for agent in work_service.active_agents()
+                ]
+            )
+
+        return await read_in_worker(roster_response)
 
     @app.get(
         f"{API_PREFIX}/work/events",
