@@ -1,9 +1,9 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated runtime, layout and navigation repairs are covered by 1319 Python, 221 frontend, one shared native contract and 539 focused browser cases. The 76 latest interface cases include retained runtime receipts, compact controls, delayed Back responses and policy activation during skill reads across twelve profiles. Manual full runs are explicitly user-authorized; nine extra CPU integration checks install real dependencies and reject skips. The live Qwen server is optional by user instruction; a deterministic contract fixture runs in CI. Native-message identity checks preserve open activity through authoritative history replacement.",
+  "reason": "Independently validated runtime, layout and navigation repairs are covered by 1326 Python, 221 frontend, one shared native contract and 539 focused browser cases. The 76 latest interface cases include retained runtime receipts, compact controls, delayed Back responses and policy activation during skill reads across twelve profiles. Manual full runs are explicitly user-authorized; nine extra CPU integration checks install real dependencies and reject skips. The live Qwen server is optional by user instruction; a deterministic contract fixture runs in CI. Native-message identity checks preserve open activity through authoritative history replacement. Quiet-chat streaming adds seven correlation/reconnection checks after independent validation of the stable WebKit fetch-buffer defect; the original popup status assertion remains unchanged.",
   "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
-    "python": 1319,
+    "python": 1326,
     "frontend": 221,
     "native": 1,
     "playwright": 539
@@ -14,6 +14,7 @@
     "tests/v3/test_all_tool_failure_guidance.py",
     "tests/v3/test_api.py",
     "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_api_stream_context.py",
     "tests/v3/test_browser_companion.py",
     "tests/v3/test_browser_security.py",
     "tests/v3/test_butler_memory.py",
@@ -24,6 +25,7 @@
     "tests/v3/test_chat_api.py",
     "tests/v3/test_chat_context_assembly.py",
     "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_reconnection.py",
     "tests/v3/test_chat_stream_follow.py",
     "tests/v3/test_chat_subagent_lifecycle.py",
     "tests/v3/test_chat_subagents.py",
@@ -94,7 +96,7 @@
     "area:latest-browser-regressions"
   ],
   "python_node": true,
-  "change_digest": "59c389984cdadcf9bc02737a67ae8963fa92a0c52f0a02596caed93c70a3f364",
+  "change_digest": "fa3176fa1c26cb99d48fe64ec5fa6bb75e293fca4ba71a073c35b28d855904b6",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request.",
   "full_suite_integration_selection": {
@@ -117,7 +119,7 @@
     "live_qwen": "User explicitly authorized skipping live inference and requested a deterministic Qwen fixture; fixture acceptance is selected separately."
   },
   "full_suite_selection": {
-    "python": 5011,
+    "python": 5012,
     "frontend": 1758,
     "native": 54,
     "playwright": 3338,

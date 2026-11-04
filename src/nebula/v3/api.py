@@ -14956,8 +14956,13 @@ async def _correlated_stream(
 ) -> AsyncIterator[bytes]:
     """Preserve request correlation after the HTTP response starts streaming."""
 
+    # Affected WebKit fetch readers release buffered data on the next write
+    # (https://bugs.webkit.org/show_bug.cgi?id=322545). Bound quiet-chat status
+    # latency while retaining the same pending Core-owned source read.
     iterator = aiter(
-        _with_heartbeats(stream, b": keepalive\n\n") if heartbeat else stream
+        _with_heartbeats(stream, b": keepalive\n\n", interval=1)
+        if heartbeat
+        else stream
     )
     try:
         while True:
