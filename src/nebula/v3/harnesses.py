@@ -12116,7 +12116,9 @@ class HarnessRuntimeService:
         for call_id in set(turn.tool_call_ids) | set(owner.tool_call_ids):
             try:
                 call = self.store.get(ToolCall, call_id)
-            except NotFoundError:
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: a missing receipt cannot prove settled effects
                 return False
             if call.status != ToolCallStatus.COMPLETE or call.risk_class not in {
                 RiskClass.LOCAL_READ,
@@ -12208,7 +12210,10 @@ class HarnessRuntimeService:
                 owner.session_id,
                 GoalWrite(expected_revision=goal.revision, action="resume"),
             )
-        except (ConflictError, NotFoundError):
+        except (
+            ConflictError,
+            NotFoundError,
+        ):  # diagnostic-expected: a concurrent goal change wins
             return False
         next_turn_id = await self.dispatch_running_goal(
             owner.session_id,
