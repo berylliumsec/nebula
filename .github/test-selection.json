@@ -1,12 +1,12 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated runtime and interface regressions are covered by focused Python, native and component tests, 174 affected mocked-browser cases, and the affected real-Core journeys across desktop/mobile Chromium and WebKit. Manual full-suite runs are explicitly authorized by the user and now include every product browser spec with its required runtime; release-only checks use a fresh disposable Core, private test token and production bundle. The final CPU diagnostics regressions and all product-help retrieval/index synchronization tests cover the last full-source failures. Phone regressions cover all newly observed real-Core cases across six Chromium/WebKit profiles. Complete-file thinking checks across eight profiles and the narrow MCP project-scope case verify the standalone regressions exposed by the full catalog. The complete packaging file verifies the paired CLI source/script boundary, and MissionControls verifies local-clock behavior with a deterministic clock.",
+  "reason": "Independently validated runtime, layout and navigation regressions are covered by 1317 Python, 156 frontend, one shared native contract and 527 focused browser cases. Browser coverage includes the original affected journeys, every newly observed phone Core journey across six Chromium/WebKit profiles, all thinking profiles, narrow MCP switching and 64 latest layout/status/Back cases across twelve profiles. Full Python/frontend/native and all 18 product browser specs are exercised by manual runs explicitly authorized by the user; release acceptance uses a disposable paired LAN Core and clean production bundle. Usage videos remain separate, and no operator data or live provider credentials are used.",
   "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
     "python": 1317,
-    "frontend": 142,
+    "frontend": 156,
     "native": 1,
-    "playwright": 463
+    "playwright": 527
   },
   "python": [
     "tests/test_playwright_impact.py",
@@ -69,7 +69,10 @@
     "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx",
     "ui/src/pages/SettingsPage.test.tsx",
     "ui/src/pages/chatDraftNavigation.test.tsx",
-    "ui/src/pages/sidePanelTabs.test.ts"
+    "ui/src/pages/chatMobileDrawerRestore.test.tsx",
+    "ui/src/pages/sideChatSelection.test.ts",
+    "ui/src/pages/sidePanelTabs.test.ts",
+    "ui/src/pages/useSessionState.test.tsx"
   ],
   "native": [
     "diagnostics::tests::shared_cross_language_contract_matches_native_diagnostics"
@@ -81,10 +84,11 @@
     "area:test-suite-regressions",
     "area:test-suite-core-regressions",
     "area:mobile-core-regressions",
-    "area:catalog-test-regressions"
+    "area:catalog-test-regressions",
+    "area:latest-browser-regressions"
   ],
   "python_node": true,
-  "change_digest": "21b10d166979933f0c0bcd4c8be9e95a919626f7392eb399c0661d5273e555b7",
+  "change_digest": "472a5a714eac81707adb4b66e3891abaa16b3a857c18a1d9a0671a5611304ae4",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }

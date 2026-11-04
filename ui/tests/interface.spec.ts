@@ -4818,6 +4818,8 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
   await page.getByRole("button", {name: "New chat", exact: true}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
   await expect(composer).toBeVisible();
+  const goalEntry = page.getByRole("button", {name: "Add goal", exact: true});
+  await expect(goalEntry).toBeVisible();
   for (const landscape of [false, true]) {
     if (landscape) await page.setViewportSize({width: 844, height: 390});
     for (const detail of ["Browser event capture is disabled for this binding.", "Local diagnostic storage is temporarily unavailable. ".repeat(8)]) {
@@ -4851,6 +4853,9 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
       expectTouchTarget(geometry.width);
       expectTouchTarget(geometry.summaryHeight);
       expect(geometry.hit, JSON.stringify(geometry)).toBe(true);
+      await expect(composer).toBeInViewport({ratio: 1});
+      await expect(goalEntry).toBeInViewport({ratio: 1});
+      if (testInfo.project.use.hasTouch) expectTouchTarget((await goalEntry.boundingBox())?.height);
       await send.focus();
       await expect(send).toBeFocused();
       await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
@@ -5770,6 +5775,16 @@ test("assistant live guidance releases stale busy UI when Core reports a termina
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat/sessions/grok-terminal-chat/state")) {
+      const terminal = activityReads > 1;
+      await route.fulfill({json: {
+        schema: "nebula.session-state/v1", session_id: "grok-terminal-chat", revision: terminal ? 2 : 1,
+        turn_id: "grok-terminal-turn", harness_turn_id: "grok-terminal-turn", execution: terminal ? "interrupted" : "running",
+        busy: !terminal, detail: terminal ? "The harness turn was interrupted." : "A harness turn is currently running.",
+        connection: "connected", actions: terminal ? [] : ["stop"], pending: [], decisions: [],
+      }});
+      return;
+    }
     if (path.endsWith("/providers") && request.method() === "GET") {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
       return;
@@ -6368,6 +6383,65 @@ test("assistant upgrade keeps a short operator message's actions on top and clic
   await operator.getByRole("button", { name: "Fork conversation here", exact: true }).click();
   await expect.poll(() => forked).toEqual([expect.objectContaining({ through_message_id: "hello-message" })]);
   await expect(page.getByRole("button", { name: "Open parent" })).toBeVisible();
+});
+
+reloadTest("assistant upgrade Back keeps a late side-chat completion closed", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) > 760, "Back is the phone-width side-chat control.");
+  const provider = {...entity, id: "late-side-provider", name: "Side chat provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true, secret_ref: null, model_allowlist: ["side-model"], capabilities: {streaming: true}, privacy: {local_only: true, permits_sensitive_data: true}, metadata: {default_model: "side-model"}};
+  const parent = {...entity, id: "late-side-parent", engagement_id: "scratch-project", title: "Main research", backend: "provider", provider_profile_id: provider.id, model: "side-model", metadata: {}};
+  const side = {...parent, id: "late-side-child", title: "Side research", parent_session_id: parent.id, metadata: {side_chat: true}};
+  let completionAccepted = false;
+  let completionReadWaiting = false;
+  let releaseCompletion!: () => void;
+  const completionGate = new Promise<void>(resolve => { releaseCompletion = resolve; });
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({json: [provider]});
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({json: {provider_id: provider.id, healthy: true, models: ["side-model"]}});
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({json: [parent]});
+    if (path.endsWith(`/chat-sessions/${parent.id}`)) return route.fulfill({json: parent});
+    if (path.endsWith(`/chat-sessions/${side.id}`) && request.method() === "GET") {
+      if (completionAccepted) { completionReadWaiting = true; await completionGate; }
+      return route.fulfill({json: side});
+    }
+    if (path.endsWith(`/chat/sessions/${parent.id}/side-chats`)) return route.fulfill({json: [side]});
+    if (path.endsWith(`/chat/sessions/${parent.id}/messages`)) return route.fulfill({json: [{...entity, id: "late-parent-answer", engagement_id: "scratch-project", session_id: parent.id, sequence: 1, role: "assistant", content: "Parent context stays selected.", citations: [], metadata: {}}]});
+    if (path.endsWith(`/chat/sessions/${side.id}/messages`)) return route.fulfill({json: []});
+    if (path.endsWith("/pending-turn")) return route.fulfill({json: null});
+    if (path.endsWith("/chat/completions")) {
+      completionAccepted = true;
+      const frames = [
+        {type: "started", session_id: side.id, turn_id: "late-side-turn", provider_id: provider.id, model: "side-model"},
+        {type: "delta", session_id: side.id, delta: "Side answer is complete.", provider_id: provider.id, model: "side-model"},
+        {type: "done", session_id: side.id, turn_id: "late-side-turn", provider_id: provider.id, model: "side-model", message: {id: "late-side-answer", role: "assistant", content: "Side answer is complete."}, usage: {input_tokens: 2, output_tokens: 3, total_tokens: 5}, finish_reason: "stop", citations: []},
+      ];
+      return route.fulfill({contentType: "text/event-stream", body: frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n"});
+    }
+    return route.fallback();
+  });
+  try {
+    await openWorkspace(page, `/?view=chat&session=${parent.id}&sideChat=${side.id}`, "Workbench");
+    const pane = page.locator(".side-chat-pane");
+    await expect(pane).toBeVisible();
+    await pane.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Finish this side turn.");
+    await pane.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect.poll(() => completionReadWaiting).toBe(true);
+    await pane.getByRole("button", {name: "Back to main chat"}).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("sideChat")).toBe("none");
+    await expect(pane).toHaveCount(0);
+    const response = page.waitForResponse(reply => new URL(reply.url()).pathname.endsWith(`/chat-sessions/${side.id}`));
+    releaseCompletion();
+    await (await response).finished();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(new URL(page.url()).searchParams.get("sideChat")).toBe("none");
+    expect(new URL(page.url()).searchParams.get("session")).toBe(parent.id);
+    await expect(pane).toHaveCount(0);
+    await expect(page.getByText("Parent context stays selected.", {exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "Conversation actions", exact: true}).click({trial: true});
+  } finally {
+    releaseCompletion();
+  }
 });
 
 reloadTest("assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation", async ({ page }, testInfo) => {
@@ -9476,9 +9550,20 @@ test("stabilization completed harness output keeps one continuous transcript scr
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile harness projects.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
   const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
+  const harnessCompleted = () => page.evaluate(() => (globalThis as typeof globalThis & {__harnessCompletionDone?: boolean}).__harnessCompletionDone === true);
   let steeringBody: unknown;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat/sessions/chat-harness-completion/state")) {
+      const completed = await harnessCompleted();
+      await route.fulfill({json: {
+        schema: "nebula.session-state/v1", session_id: "chat-harness-completion", revision: completed ? 2 : 1,
+        turn_id: harnessTurnId, harness_turn_id: harnessTurnId, execution: completed ? "idle" : "running", busy: !completed,
+        detail: completed ? "Verification completed successfully." : "A harness turn is currently running.",
+        connection: "connected", actions: completed ? [] : ["stop", "steer"], pending: [], decisions: [],
+      }});
+      return;
+    }
     if (path.endsWith(`/harness-turns/${harnessTurnId}/steer`)) {
       steeringBody = route.request().postDataJSON();
       await route.fulfill({ status: 204, body: "" });
@@ -9513,17 +9598,18 @@ test("stabilization completed harness output keeps one continuous transcript scr
       return;
     }
     if (path.endsWith(`/harness-sessions/${harnessSessionId}/activity`)) {
+      const completed = await harnessCompleted();
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
         session_id: harnessSessionId,
-        session_status: "running",
-        busy: true,
+        session_status: completed ? "idle" : "running",
+        busy: !completed,
         live: true,
         turn_id: harnessTurnId,
-        turn_status: "running",
+        turn_status: completed ? "complete" : "running",
         turn_origin: "chat",
         started_at: entity.created_at,
         last_activity_at: entity.updated_at,
-        detail: "A harness turn is currently running.",
+        detail: completed ? "The harness turn completed." : "A harness turn is currently running.",
         plan: [
           { id: "inspect", title: "Inspect the current operator workflow", status: "completed" },
           { id: "implement", title: "Implement the expandable status rail", status: "in_progress" },
@@ -9569,6 +9655,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
       (globalThis as typeof globalThis & { __harnessTurnRequest?: unknown }).__harnessTurnRequest = JSON.parse(String(init?.body ?? "{}"));
+      (globalThis as typeof globalThis & {__harnessCompletionDone?: boolean}).__harnessCompletionDone = false;
       const encoder = new TextEncoder();
       const output = "Completed command output stays available behind its disclosure without creating a second transcript scroll.\n".repeat(80);
       const streamingAnswer = "**Streaming Markdown is visible.** Inline `memcpy` is formatted before completion.\n\n```python\nprint('waiting for completion')\n";
@@ -9589,6 +9676,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
           let index = 0;
           const enqueue = () => {
             const frame = frames[index++];
+            if ((frame as {type?: string})?.type === "done") (globalThis as typeof globalThis & {__harnessCompletionDone?: boolean}).__harnessCompletionDone = true;
             if (frame) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
             if (index >= frames.length) {
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -9626,6 +9714,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await composer.fill("$review Run the verification.");
   await page.getByRole("button", { name: "Send message" }).click();
   const runtimeRollover = page.getByRole("status").filter({ hasText: "Command runtime updated" });
+  await expect(runtimeRollover).toContainText("Harness is working");
   await expect(runtimeRollover).toContainText("preserved the prior session");
   await expect(runtimeRollover).toContainText("current command runtime");
   const streamingWork = page.getByRole("region", {name: "Work summary"});
@@ -9653,7 +9742,6 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await expect.poll(() => steeringBody).toEqual({ text: "Prioritize the TLS boundary and preserve exact output." });
   await expect(guidanceComposer).toHaveValue("");
   await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
-  await page.evaluate(() => {(globalThis as typeof globalThis & {__releaseHarnessCompletion?: boolean}).__releaseHarnessCompletion = true;});
   const planToggle = page.getByRole("button", { name: "Expand plan steps, 1 of 3 completed" });
   await expect(planToggle).toBeVisible();
   await planToggle.click();
@@ -9686,6 +9774,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await expect(planSteps).toBeFocused();
   await collapsePlan.click();
   await expect(page.getByRole("list", { name: "Plan steps" })).toHaveCount(0);
+  await page.evaluate(() => {(globalThis as typeof globalThis & {__releaseHarnessCompletion?: boolean}).__releaseHarnessCompletion = true;});
   const ledger = page.getByRole("region", { name: "Work summary" });
   await expect(ledger.locator(".activity-ledger-footer > span")).toContainText("Completed", { timeout: 5_000 });
   await ledger.getByRole("button", { name: "Show activity" }).click();
@@ -9693,6 +9782,8 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await expect(activity).not.toHaveAttribute("open", "");
   await expect(activity.getByText("Completed", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 5_000 });
+  await expect(runtimeRollover).toHaveCount(0);
+  await expect(page.getByText("Harness is working", {exact: true})).toHaveCount(0);
   const transcriptGeometry = await page.locator(".chat-message.assistant").last().evaluate((element) => {
     const markdown = element.querySelector<HTMLElement>(".assistant-markdown");
     return {

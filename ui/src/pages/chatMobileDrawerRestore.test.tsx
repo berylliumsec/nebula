@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { DialogProvider } from "../components/DialogSystem";
@@ -29,9 +29,13 @@ afterEach(() => {
   else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  window.history.replaceState(null, "", "/");
 });
 
-it("keeps an operator-opened mobile drawer through delayed URL chat restoration", async () => {
+it.each([
+  ["URL chat restoration", "/projects/engagement-1/workbench?view=chat&session=session-1"],
+  ["initial recent-chat selection", "/projects/engagement-1/workbench?view=chat"],
+])("keeps an operator-opened mobile drawer through delayed %s", async (_scenario, route) => {
   const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
   const session = {
     ...entity, id: "session-1", engagement_id: "engagement-1", title: "Priority fixture",
@@ -54,10 +58,11 @@ it("keeps an operator-opened mobile drawer through delayed URL chat restoration"
   });
   vi.stubGlobal("fetch", fetchMock);
   const user = userEvent.setup();
+  window.history.replaceState(null, "", route);
   render(
-    <MemoryRouter initialEntries={["/projects/engagement-1/workbench?view=chat&session=session-1"]}>
+    <BrowserRouter>
       <ThemeProvider><WorkspaceProvider><DialogProvider><App /></DialogProvider></WorkspaceProvider></ThemeProvider>
-    </MemoryRouter>,
+    </BrowserRouter>,
   );
 
   await user.click(await screen.findByRole("button", { name: "Open conversations" }, { timeout: 10_000 }));
@@ -67,6 +72,7 @@ it("keeps an operator-opened mobile drawer through delayed URL chat restoration"
   const priority = (await within(drawer).findByTitle("Priority fixture")).closest("button");
   expect(priority).not.toBeNull();
   await waitFor(() => expect(priority?.closest(".session-list-item")).toHaveClass("active"));
+  expect(new URL(window.location.href).searchParams.get("session")).toBe("session-1");
   expect(drawer).toBeVisible();
   await user.click(priority!);
   await waitFor(() => expect(screen.queryByRole("complementary", { name: "Conversations" })).not.toBeInTheDocument());
