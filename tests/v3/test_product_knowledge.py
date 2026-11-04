@@ -37,6 +37,16 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
+def test_product_search_finds_core_performance_telemetry(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Core performance bottlenecks latency SQL worker queue event loop"
+    )
+    content = "\n".join(str(item["text"]) for item in matches)
+    assert "diagnostics/performance" in content
+    assert "performance.json" in content
+
+
 def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     for question, expected in (

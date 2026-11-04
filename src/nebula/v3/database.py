@@ -35,6 +35,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .domain import utc_now
+from .performance import PerformanceTelemetry, install_sql_timing
 
 CURRENT_SCHEMA_VERSION = 5
 SCRATCH_PROJECT_BOOTSTRAP_KEY = "scratch_project_v1"
@@ -593,6 +594,7 @@ class Database:
         )
         if self.engine.dialect.name == "sqlite":
             event.listen(self.engine, "connect", self._configure_sqlite)
+        self.performance = PerformanceTelemetry()
         self._session_factory = sessionmaker(
             bind=self.engine,
             class_=Session,
@@ -612,6 +614,8 @@ class Database:
                 )
                 self.engine.dispose()
                 raise
+        # Bootstrap DDL must not consume the bounded runtime label budget.
+        install_sql_timing(self.engine, self.performance)
 
     @staticmethod
     def _normalize_url(location: str | Path) -> str:
@@ -825,8 +829,10 @@ class Database:
     def session(self) -> Iterator[Session]:
         session = self._session_factory()
         try:
-            yield session
-            session.commit()
+            with self.performance.span("db.session"):
+                yield session
+                with self.performance.span("db.commit"):
+                    session.commit()
         except Exception as caught_error:
             record_caught_exception(
                 "storage",

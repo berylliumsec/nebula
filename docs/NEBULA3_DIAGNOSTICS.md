@@ -142,6 +142,57 @@ The authenticated API exposes settings, file inventory, recent errors,
 development-browser event ingress, and local export at `/api/v1/diagnostics/*`.
 Browser ingress is bounded and enabled only in browser-development mode.
 
+## Local performance measurements
+
+Core keeps lightweight performance telemetry in memory, independently of the
+logging level. Ask Butler to inspect performance bottlenecks; its Settings API
+discovery includes read-only `GET diagnostics/performance`. Developers can also
+read the authenticated `GET /api/v1/diagnostics/performance` endpoint. It requires
+the same Core authentication as other diagnostics and returns `Cache-Control:
+private, no-store`. There is no separate performance dashboard or setting.
+
+The `nebula.performance/v1` snapshot contains:
+
+- `operations`, ranked by cumulative milliseconds: count, errors, cancellations,
+  total, mean, maximum, and p50/p95 over the most recent 128 observations;
+- `recent_slow`: the last 64 operations taking at least 250 ms, with request IDs
+  and inclusive phase breakdowns for slow HTTP responses;
+- fixed memory limits and an overflow counter when operation labels exceed the
+  512-label budget (additional measurements go into `other`).
+
+`http.response` measures dispatch through response readiness, including
+serialization and gzip. Routes use templates, so project/chat IDs and query
+strings are never recorded. SSE lifetime has its own `http.stream` counter and
+does not populate the slow-operation list simply because a stream stays open.
+`worker.queue` and `worker.run` separate the bounded read pool's queue wait from
+its synchronous operation, naming the Python callable. `worker.entity_listing_wait`
+measures admission for generic entity listings. `provider.capacity.*` and
+`provider.host_load_wait` measure admission before a provider turn can run.
+
+`db.execute.<kind>.<fingerprint>` measures DBAPI cursor execution, including lock
+waits at that boundary. Fingerprints are hashes; SQL text, parameters, and result
+rows are never stored. Slow database calls include a Core source location when
+available. `db.session` includes session work and commit; `db.commit` includes
+flush/commit. Session time can also include ORM materialization, connection-pool
+wait, and application work; cursor timing alone cannot distinguish those.
+`runtime.event_loop_lag` samples timer delay once per second to expose stalls
+that affect multiple requests.
+
+Reproduce the slow journey, read a snapshot, and compare operation counts/totals
+with a preceding snapshot. Use the request ID to connect a slow response to its
+SQL and worker phases and to ordinary diagnostic records. Durations are inclusive
+and concurrent work can overlap, so summing rows does not give wall-clock time.
+Percentiles describe a recent rolling sample, while totals cover this process's
+lifetime. Data resets when Core restarts, is never uploaded, and incurs no
+per-measurement disk or network I/O. Performance polling and support-bundle
+generation are excluded from HTTP timing.
+
+Live API diagnostics exports include the snapshot as `performance.json`, covered
+by the ZIP's SHA-256 manifest. Offline `nebula-core diagnostics export` cannot
+read another process's in-memory measurements. This instrumentation identifies
+slow Core boundaries; provider generation, browser rendering, network transit,
+and arbitrary Python function-level CPU work still require targeted profiling.
+
 ## Enforcement
 
 CI runs Python AST, TypeScript compiler-API, and Rust/clippy checks. A catch,

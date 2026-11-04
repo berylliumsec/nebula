@@ -1842,6 +1842,10 @@ def create_app(
             "pass either mission_service or mission_checkpoint_path, not both"
         )
     diagnostics = diagnostic_manager or get_diagnostics()
+    performance = store.database.performance
+    from .performance import EventLoopLagMonitor, PerformanceMiddleware
+
+    loop_lag_monitor = EventLoopLagMonitor(performance)
     url_fetcher = knowledge_url_fetcher or fetch_url_document
 
     def emit_diagnostic(
@@ -2402,6 +2406,8 @@ def create_app(
     async def lifespan(_: FastAPI):
         install_asyncio_exception_hook()
         started: list[tuple[str, str, Callable[[], Any]]] = []
+        loop_lag_monitor.start()
+        started.append(("diagnostics", "event-loop-monitor", loop_lag_monitor.stop))
         # Lazy startup is driven by opening the browser; Core still owns shutdown.
         started.append(("runtime", "managed-browser-host", managed_browser_host.close))
         started.append(
@@ -2866,6 +2872,7 @@ def create_app(
     # Added last so timing includes FastAPI serialization and the inner gzip
     # middleware's initial response work without instrumenting streaming bodies.
     app.add_middleware(ChatServerTimingMiddleware)
+    app.add_middleware(PerformanceMiddleware, performance=performance)
 
     route_feature_by_tag = {
         "administration": "storage",
@@ -3386,8 +3393,12 @@ def create_app(
     entity_listing_slots = asyncio.Semaphore(4)
 
     async def require_entity_listing_capacity() -> AsyncIterator[None]:
-        async with entity_listing_slots:
+        with performance.span("worker.entity_listing_wait"):
+            await entity_listing_slots.acquire()
+        try:
             yield
+        finally:
+            entity_listing_slots.release()
 
     def _device_response(
         device: PairedDeviceSession, *, current_id: str | None = None
@@ -3897,6 +3908,16 @@ def create_app(
         return diagnostics
 
     @app.get(
+        f"{API_PREFIX}/diagnostics/performance",
+        tags=["diagnostics"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_performance_snapshot() -> JSONResponse:
+        """Inspect bounded local timings, slow operations, and request breakdowns."""
+        snapshot = await asyncio.to_thread(performance.snapshot)
+        return JSONResponse(snapshot, headers={"Cache-Control": "private, no-store"})
+
+    @app.get(
         f"{API_PREFIX}/diagnostics/settings",
         tags=["diagnostics"],
         dependencies=[Depends(require_auth)],
@@ -4175,7 +4196,9 @@ def create_app(
         destination = export_dir / f"nebula-diagnostics-{secrets.token_hex(8)}.zip"
         # The bundle drains the writer first and then zips the log directory,
         # neither of which belongs on the event loop.
-        await asyncio.to_thread(manager.export, destination)
+        await asyncio.to_thread(
+            manager.export, destination, performance_snapshot=performance.snapshot()
+        )
 
         def remove_temporary_export() -> None:
             try:

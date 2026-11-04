@@ -171,10 +171,13 @@ class ProviderScheduler:
     async def admit(self, turn_id: str) -> ProviderAdmission:
         turn = self.store.get(ChatTurn, turn_id)
         lane = turn.capacity_lane
+        performance = self.store.database.performance
         if lane == "background":
-            await self._background.acquire()
+            with performance.span("provider.capacity.background"):
+                await self._background.acquire()
         try:
-            await self._provider.acquire()
+            with performance.span("provider.capacity.shared"):
+                await self._provider.acquire()
         except BaseException:
             if lane == "background":
                 self._background.release()
@@ -191,7 +194,8 @@ class ProviderScheduler:
                         save_host_wait, self.store, ChatTurn, turn_id, reason
                     )
 
-                await self.host_load.wait(deferred)
+                with performance.span("provider.host_load_wait"):
+                    await self.host_load.wait(deferred)
             latest = self.store.get(ChatTurn, turn_id)
             if latest.status == ChatTurnStatus.CANCELLED:
                 raise asyncio.CancelledError
