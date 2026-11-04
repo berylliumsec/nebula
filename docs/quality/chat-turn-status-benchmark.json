@@ -1,0 +1,1921 @@
+{
+  "baseline_commit": "884d862",
+  "candidate_base_commit": "807121b17ee230ff88718a7897eff1e1f0fc1178",
+  "candidate_commit": "807121b17ee230ff88718a7897eff1e1f0fc1178",
+  "candidate_source_sha256": "051437efa17a1fab06a6679872eba0bc326be05bd7b1930b0d5f54007875a95d",
+  "configuration": {
+    "clients_per_path": [
+      1,
+      16,
+      32,
+      64
+    ],
+    "duration_seconds": 12,
+    "event_write_interval_seconds": 0.2,
+    "fixture_recovery_runner": "paused to keep orphaned synthetic turns stable; active routing turns restored after startup",
+    "health_and_shell_probe_interval_seconds": 0.25,
+    "health_and_shell_probe_process": "independent of the load driver",
+    "interrupted": 500,
+    "mcp_gateway_sessions_per_client": 1,
+    "payload_chars": 120000,
+    "reader_paths_run_separately": true,
+    "request_timeout_seconds": 20,
+    "routing": 60,
+    "think_seconds": 2,
+    "turn_update_interval_seconds": 0.5,
+    "turns": 17000
+  },
+  "fixture": {
+    "active_routing": 64,
+    "db_bytes": 2103181312,
+    "expected_digests": {
+      "agent.list": "adc54c6dccf80a80cb41fee7819af411e8853748ad2bc6771bbea77adb6669e3",
+      "http": "42494757d8cd8b4fe3b130c5b6739594f10c4a34b4bc5280e5c3bc41eb030910",
+      "work.agents": "ac797b99810208ba6e717e45f2a91d9e765720408dd96ffe8eeac4525a26e2d5"
+    },
+    "expected_result_counts": {
+      "agent.list": 560,
+      "http": 461,
+      "work.agents": 461
+    },
+    "harness_profile_id": "bench-inert-harness",
+    "interrupted": 500,
+    "large_turns": 17000,
+    "project_id": "bench-project",
+    "seed_seconds": 13.72,
+    "turn_payload_bytes": 2057037940,
+    "turns": 17004,
+    "writer_turn_id": "bench-turn-00501"
+  },
+  "fixture_only": false,
+  "lan_host": "172.26.91.252",
+  "migration": {
+    "migration_seconds": 17.14
+  },
+  "phases": {
+    "new": {
+      "1": {
+        "agent.list": {
+          "clients_per_path": 1,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 0.77,
+              "rchar": 12564845,
+              "read_bytes": 0,
+              "wchar": 2865678,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 255291392
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 2.32,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.21
+            },
+            "samples": 611
+          },
+          "mcp_gateway_sessions": 1,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 54.96,
+                "p50": 38.67,
+                "p95": 51.66,
+                "p99": 54.3
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 6,
+              "throughput_per_second": 0.486,
+              "timeouts": 0
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 18.61,
+                "p50": 6.53,
+                "p95": 8.52,
+                "p99": 18.3
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 21.81,
+                "p50": 7.9,
+                "p95": 15.87,
+                "p99": 21.36
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 1,
+          "think_seconds": 2,
+          "wall_seconds": 12.36,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 1,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 0.68,
+              "rchar": 7273184,
+              "read_bytes": 0,
+              "wchar": 10908,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 253145088
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 1.16,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "samples": 606
+          },
+          "mcp_gateway_sessions": 1,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 12.7,
+                "p50": 7.16,
+                "p95": 10.71,
+                "p99": 12.56
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": 38.55,
+                "p50": 17.93,
+                "p95": 35.22,
+                "p99": 37.88
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 6,
+              "throughput_per_second": 0.489,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 14.9,
+                "p50": 8.48,
+                "p95": 13.63,
+                "p99": 14.66
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 1,
+          "think_seconds": 2,
+          "wall_seconds": 12.27,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 1,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 1.07,
+              "rchar": 12170921,
+              "read_bytes": 0,
+              "wchar": 2161810,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 257073152
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 1.81,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.2
+            },
+            "samples": 617
+          },
+          "mcp_gateway_sessions": 1,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 28.76,
+                "p50": 8.69,
+                "p95": 15.41,
+                "p99": 27.45
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 43.51,
+                "p50": 10.64,
+                "p95": 18.76,
+                "p99": 36.8
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 114.08,
+                "p50": 60.52,
+                "p95": 103.71,
+                "p99": 112.01
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 6,
+              "throughput_per_second": 0.479,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 1,
+          "think_seconds": 2,
+          "wall_seconds": 12.53,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        }
+      },
+      "16": {
+        "agent.list": {
+          "clients_per_path": 16,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 6.25,
+              "rchar": 163141856,
+              "read_bytes": 0,
+              "wchar": 44987018,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 276918272
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 171.8,
+              "p50": 0.0,
+              "p95": 6.7,
+              "p99": 65.11
+            },
+            "samples": 661
+          },
+          "mcp_gateway_sessions": 16,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 921.54,
+                "p50": 176.51,
+                "p95": 907.77,
+                "p99": 921.22
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 86,
+              "throughput_per_second": 6.189,
+              "timeouts": 0
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 327.64,
+                "p50": 10.09,
+                "p95": 60.88,
+                "p99": 215.52
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 326.27,
+                "p50": 7.15,
+                "p95": 52.67,
+                "p99": 226.23
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 16,
+          "think_seconds": 2,
+          "wall_seconds": 13.9,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 16,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 3.8,
+              "rchar": 45415736,
+              "read_bytes": 0,
+              "wchar": 11376,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 264327168
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 8.32,
+              "p50": 0.0,
+              "p95": 0.16,
+              "p99": 3.71
+            },
+            "samples": 632
+          },
+          "mcp_gateway_sessions": 16,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 286.99,
+                "p50": 8.63,
+                "p95": 46.77,
+                "p99": 178.21
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": 440.71,
+                "p50": 73.59,
+                "p95": 387.34,
+                "p99": 431.8
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 96,
+              "throughput_per_second": 7.128,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 286.0,
+                "p50": 7.06,
+                "p95": 58.2,
+                "p99": 206.56
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 16,
+          "think_seconds": 2,
+          "wall_seconds": 13.47,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 16,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 6.3,
+              "rchar": 181170064,
+              "read_bytes": 0,
+              "wchar": 47968225,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 278773760
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 262.33,
+              "p50": 0.0,
+              "p95": 2.09,
+              "p99": 52.03
+            },
+            "samples": 655
+          },
+          "mcp_gateway_sessions": 16,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 270.92,
+                "p50": 7.7,
+                "p95": 67.96,
+                "p99": 268.47
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 277.25,
+                "p50": 5.0,
+                "p95": 71.46,
+                "p99": 242.26
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1054.14,
+                "p50": 146.87,
+                "p95": 903.92,
+                "p99": 1045.43
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 91,
+              "throughput_per_second": 6.52,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 16,
+          "think_seconds": 2,
+          "wall_seconds": 13.96,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        }
+      },
+      "32": {
+        "agent.list": {
+          "clients_per_path": 32,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 9.6,
+              "rchar": 343488407,
+              "read_bytes": 0,
+              "wchar": 93381505,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 294686720
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 280.34,
+              "p50": 0.0,
+              "p95": 8.78,
+              "p99": 174.61
+            },
+            "samples": 652
+          },
+          "mcp_gateway_sessions": 32,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1860.25,
+                "p50": 157.83,
+                "p95": 1594.28,
+                "p99": 1840.57
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 177,
+              "throughput_per_second": 12.801,
+              "timeouts": 0
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 604.56,
+                "p50": 13.58,
+                "p95": 44.89,
+                "p99": 391.11
+              },
+              "mismatches": 0,
+              "success": 47,
+              "throughput_per_second": 3.917,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 616.8,
+                "p50": 9.3,
+                "p95": 43.88,
+                "p99": 392.57
+              },
+              "mismatches": 0,
+              "success": 47,
+              "throughput_per_second": 3.917,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 32,
+          "think_seconds": 2,
+          "wall_seconds": 13.83,
+          "writers": {
+            "errors": [],
+            "events": 58,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 32,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 7.14,
+              "rchar": 106717621,
+              "read_bytes": 0,
+              "wchar": 11002,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 268242944
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 33.27,
+              "p50": 0.0,
+              "p95": 1.78,
+              "p99": 5.52
+            },
+            "samples": 611
+          },
+          "mcp_gateway_sessions": 32,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 482.11,
+                "p50": 11.81,
+                "p95": 67.79,
+                "p99": 354.79
+              },
+              "mismatches": 0,
+              "success": 47,
+              "throughput_per_second": 3.917,
+              "timeouts": 0
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1200.1,
+                "p50": 39.77,
+                "p95": 942.51,
+                "p99": 1167.1
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 186,
+              "throughput_per_second": 13.348,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 483.36,
+                "p50": 11.15,
+                "p95": 94.32,
+                "p99": 356.07
+              },
+              "mismatches": 0,
+              "success": 47,
+              "throughput_per_second": 3.917,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 32,
+          "think_seconds": 2,
+          "wall_seconds": 13.94,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 32,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 12.6,
+              "rchar": 317777908,
+              "read_bytes": 0,
+              "wchar": 86050129,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 296714240
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 283.55,
+              "p50": 0.0,
+              "p95": 22.33,
+              "p99": 112.42
+            },
+            "samples": 597
+          },
+          "mcp_gateway_sessions": 32,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 419.69,
+                "p50": 22.93,
+                "p95": 277.12,
+                "p99": 364.07
+              },
+              "mismatches": 0,
+              "success": 47,
+              "throughput_per_second": 3.917,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 668.4,
+                "p50": 20.87,
+                "p95": 270.29,
+                "p99": 509.57
+              },
+              "mismatches": 0,
+              "success": 46,
+              "throughput_per_second": 3.833,
+              "timeouts": 0
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 2527.24,
+                "p50": 389.36,
+                "p95": 2263.5,
+                "p99": 2500.91
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 156,
+              "throughput_per_second": 11.159,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 32,
+          "think_seconds": 2,
+          "wall_seconds": 13.98,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        }
+      },
+      "64": {
+        "agent.list": {
+          "clients_per_path": 64,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 16.18,
+              "rchar": 454499048,
+              "read_bytes": 0,
+              "wchar": 121173282,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 320016384
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 484.94,
+              "p50": 0.0,
+              "p95": 174.77,
+              "p99": 395.51
+            },
+            "samples": 605
+          },
+          "mcp_gateway_sessions": 64,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 4663.11,
+                "p50": 1772.27,
+                "p95": 4011.24,
+                "p99": 4341.84
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 217,
+              "throughput_per_second": 15.506,
+              "timeouts": 0
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1326.18,
+                "p50": 23.53,
+                "p95": 166.34,
+                "p99": 904.27
+              },
+              "mismatches": 0,
+              "success": 44,
+              "throughput_per_second": 3.667,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1340.71,
+                "p50": 21.14,
+                "p95": 190.82,
+                "p99": 905.99
+              },
+              "mismatches": 0,
+              "success": 44,
+              "throughput_per_second": 3.667,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 64,
+          "think_seconds": 2,
+          "wall_seconds": 13.99,
+          "writers": {
+            "errors": [],
+            "events": 57,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 64,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 12.6,
+              "rchar": 247704888,
+              "read_bytes": 0,
+              "wchar": 10847,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 277450752
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 316.25,
+              "p50": 0.0,
+              "p95": 1.99,
+              "p99": 13.21
+            },
+            "samples": 602
+          },
+          "mcp_gateway_sessions": 64,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 352.92,
+                "p50": 12.43,
+                "p95": 197.15,
+                "p99": 318.66
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": 2028.31,
+                "p50": 315.67,
+                "p95": 1546.59,
+                "p99": 1973.6
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 351,
+              "throughput_per_second": 25.152,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 299.36,
+                "p50": 8.49,
+                "p95": 249.0,
+                "p99": 290.88
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 64,
+          "think_seconds": 2,
+          "wall_seconds": 13.96,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 64,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 17.15,
+              "rchar": 480262417,
+              "read_bytes": 0,
+              "wchar": 107484648,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 325365760
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 576.27,
+              "p50": 0.0,
+              "p95": 159.24,
+              "p99": 439.93
+            },
+            "samples": 597
+          },
+          "mcp_gateway_sessions": 64,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1056.54,
+                "p50": 32.4,
+                "p95": 291.09,
+                "p99": 754.63
+              },
+              "mismatches": 0,
+              "success": 44,
+              "throughput_per_second": 3.667,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1460.6,
+                "p50": 22.83,
+                "p95": 227.44,
+                "p99": 997.65
+              },
+              "mismatches": 0,
+              "success": 43,
+              "throughput_per_second": 3.583,
+              "timeouts": 0
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 6460.56,
+                "p50": 3378.36,
+                "p95": 5343.88,
+                "p99": 5972.73
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 171,
+              "throughput_per_second": 11.633,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 64,
+          "think_seconds": 2,
+          "wall_seconds": 14.7,
+          "writers": {
+            "errors": [],
+            "events": 56,
+            "turn_updates": 23
+          }
+        }
+      }
+    },
+    "old": {
+      "1": {
+        "agent.list": {
+          "clients_per_path": 1,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 4.97,
+              "rchar": 8369940799,
+              "read_bytes": 0,
+              "wchar": 2915044,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 257134592
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 1174.98,
+              "p50": 0.0,
+              "p95": 949.1,
+              "p99": 1099.57
+            },
+            "samples": 623
+          },
+          "mcp_gateway_sessions": 1,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1193.72,
+                "p50": 1150.35,
+                "p95": 1187.85,
+                "p99": 1192.55
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 4,
+              "throughput_per_second": 0.316,
+              "timeouts": 0
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1195.63,
+                "p50": 7.17,
+                "p95": 1091.94,
+                "p99": 1175.56
+              },
+              "mismatches": 0,
+              "success": 35,
+              "throughput_per_second": 2.917,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1196.62,
+                "p50": 4.97,
+                "p95": 1095.35,
+                "p99": 1173.08
+              },
+              "mismatches": 0,
+              "success": 35,
+              "throughput_per_second": 2.917,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 1,
+          "think_seconds": 2,
+          "wall_seconds": 12.66,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 1,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 6.52,
+              "rchar": 9550475214,
+              "read_bytes": 0,
+              "wchar": 270182999,
+              "write_bytes": 269746176
+            },
+            "rss_bytes_end": 392749056
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 53.71,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 1.63
+            },
+            "samples": 602
+          },
+          "mcp_gateway_sessions": 1,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 85.87,
+                "p50": 6.78,
+                "p95": 17.67,
+                "p99": 73.98
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1639.6,
+                "p50": 1479.57,
+                "p95": 1619.33,
+                "p99": 1635.55
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 4,
+              "throughput_per_second": 0.324,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 71.35,
+                "p50": 9.01,
+                "p95": 18.16,
+                "p99": 48.64
+              },
+              "mismatches": 0,
+              "success": 48,
+              "throughput_per_second": 4.0,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 1,
+          "think_seconds": 2,
+          "wall_seconds": 12.34,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 1,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 5.63,
+              "rchar": 8376039005,
+              "read_bytes": 0,
+              "wchar": 1369670,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 386011136
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 1365.53,
+              "p50": 0.0,
+              "p95": 1112.46,
+              "p99": 1275.61
+            },
+            "samples": 652
+          },
+          "mcp_gateway_sessions": 1,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1388.01,
+                "p50": 7.58,
+                "p95": 1274.22,
+                "p99": 1355.04
+              },
+              "mismatches": 0,
+              "success": 32,
+              "throughput_per_second": 2.667,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1387.94,
+                "p50": 7.49,
+                "p95": 1270.9,
+                "p99": 1352.85
+              },
+              "mismatches": 0,
+              "success": 32,
+              "throughput_per_second": 2.667,
+              "timeouts": 0
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 1390.06,
+                "p50": 1306.86,
+                "p95": 1382.14,
+                "p99": 1388.48
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 4,
+              "throughput_per_second": 0.299,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 1,
+          "think_seconds": 2,
+          "wall_seconds": 13.38,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        }
+      },
+      "16": {
+        "agent.list": {
+          "clients_per_path": 16,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 28.21,
+              "rchar": 50208260260,
+              "read_bytes": 0,
+              "wchar": 11177091,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 261857280
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 19218.03,
+              "p50": 6920.82,
+              "p95": 17833.25,
+              "p99": 18939.15
+            },
+            "samples": 1365
+          },
+          "mcp_gateway_sessions": 16,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 19226.15,
+                "p50": 15477.54,
+                "p95": 18020.86,
+                "p99": 18983.76
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 24,
+              "throughput_per_second": 0.852,
+              "timeouts": 0
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 16,
+          "think_seconds": 2,
+          "wall_seconds": 28.16,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 16,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 45.02,
+              "rchar": 47987047131,
+              "read_bytes": 0,
+              "wchar": 1357426733,
+              "write_bytes": 1355292672
+            },
+            "rss_bytes_end": 1604722688
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 4916.42,
+              "p50": 1206.9,
+              "p95": 4019.22,
+              "p99": 4729.8
+            },
+            "samples": 617
+          },
+          "mcp_gateway_sessions": 16,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": 8128.72,
+                "p50": 362.2,
+                "p95": 6350.17,
+                "p99": 7773.01
+              },
+              "mismatches": 0,
+              "success": 9,
+              "throughput_per_second": 0.75,
+              "timeouts": 0
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": 15006.98,
+                "p50": 14521.89,
+                "p95": 14829.37,
+                "p99": 14971.45
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 20,
+              "throughput_per_second": 1.191,
+              "timeouts": 0
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 4984.97,
+                "p50": 387.17,
+                "p95": 4694.19,
+                "p99": 4926.82
+              },
+              "mismatches": 0,
+              "success": 10,
+              "throughput_per_second": 0.833,
+              "timeouts": 0
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 16,
+          "think_seconds": 2,
+          "wall_seconds": 16.8,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 16,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 30.88,
+              "rchar": 45682237267,
+              "read_bytes": 0,
+              "wchar": 10478755,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 393732096
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 22681.67,
+              "p50": 7509.5,
+              "p95": 20865.26,
+              "p99": 22068.41
+            },
+            "samples": 1440
+          },
+          "mcp_gateway_sessions": 16,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 19947.23,
+                "p50": 10885.93,
+                "p95": 19117.47,
+                "p99": 19781.28
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 14,
+              "throughput_per_second": 0.454,
+              "timeouts": 8
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 16,
+          "think_seconds": 2,
+          "wall_seconds": 30.83,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        }
+      },
+      "32": {
+        "agent.list": {
+          "clients_per_path": 32,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 32.03,
+              "rchar": 57658593433,
+              "read_bytes": 0,
+              "wchar": 13530811,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 272678912
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 31848.48,
+              "p50": 15864.85,
+              "p95": 30286.55,
+              "p99": 31540.53
+            },
+            "samples": 1528
+          },
+          "mcp_gateway_sessions": 32,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 19989.0,
+                "p50": 10992.64,
+                "p95": 19040.72,
+                "p99": 19799.34
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 17,
+              "throughput_per_second": 0.532,
+              "timeouts": 23
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 32,
+          "think_seconds": 2,
+          "wall_seconds": 31.98,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 32,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 59.58,
+              "rchar": 65165157344,
+              "read_bytes": 0,
+              "wchar": 1938152276,
+              "write_bytes": 1935192064
+            },
+            "rss_bytes_end": 1848737792
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 16414.28,
+              "p50": 6411.11,
+              "p95": 15542.38,
+              "p99": 16243.3
+            },
+            "samples": 719
+          },
+          "mcp_gateway_sessions": 32,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": 16955.82,
+                "p50": 16951.2,
+                "p95": 16955.35,
+                "p99": 16955.72
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 3,
+              "throughput_per_second": 0.145,
+              "timeouts": 29
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": 82.13,
+                "p50": 82.13,
+                "p95": 82.13,
+                "p99": 82.13
+              },
+              "mismatches": 0,
+              "success": 1,
+              "throughput_per_second": 0.083,
+              "timeouts": 1
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 32,
+          "think_seconds": 2,
+          "wall_seconds": 20.74,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 32,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 31.83,
+              "rchar": 46074726272,
+              "read_bytes": 0,
+              "wchar": 10275356,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 399790080
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 31700.02,
+              "p50": 15639.73,
+              "p95": 29799.22,
+              "p99": 31044.89
+            },
+            "samples": 1466
+          },
+          "mcp_gateway_sessions": 32,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 18519.77,
+                "p50": 9699.36,
+                "p95": 17664.64,
+                "p99": 18348.75
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 13,
+              "throughput_per_second": 0.409,
+              "timeouts": 26
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 32,
+          "think_seconds": 2,
+          "wall_seconds": 31.81,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        }
+      },
+      "64": {
+        "agent.list": {
+          "clients_per_path": 64,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 32.05,
+              "rchar": 57026150457,
+              "read_bytes": 0,
+              "wchar": 14160347,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 281014272
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 31861.1,
+              "p50": 15826.23,
+              "p95": 30010.96,
+              "p99": 31553.61
+            },
+            "samples": 1495
+          },
+          "mcp_gateway_sessions": 64,
+          "paths": {
+            "agent.list": {
+              "errors": [],
+              "latency_ms": {
+                "max": 19060.62,
+                "p50": 10476.39,
+                "p95": 18272.35,
+                "p99": 18902.97
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 16,
+              "throughput_per_second": 0.5,
+              "timeouts": 56
+            },
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            }
+          },
+          "reader_path": "agent.list",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 64,
+          "think_seconds": 2,
+          "wall_seconds": 32.0,
+          "writers": {
+            "errors": [],
+            "events": 59,
+            "turn_updates": 24
+          }
+        },
+        "http": {
+          "clients_per_path": 64,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 57.48,
+              "rchar": 56822236983,
+              "read_bytes": 0,
+              "wchar": 2077256502,
+              "write_bytes": 2074128384
+            },
+            "rss_bytes_end": 1954463744
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 18357.52,
+              "p50": 7784.3,
+              "p95": 17455.59,
+              "p99": 18186.22
+            },
+            "samples": 715
+          },
+          "mcp_gateway_sessions": 64,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "http": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 64
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            }
+          },
+          "reader_path": "http",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 64,
+          "think_seconds": 2,
+          "wall_seconds": 20.75,
+          "writers": {
+            "errors": [],
+            "events": 58,
+            "turn_updates": 24
+          }
+        },
+        "work.agents": {
+          "clients_per_path": 64,
+          "core_process": {
+            "delta": {
+              "cpu_seconds": 30.93,
+              "rchar": 41622737124,
+              "read_bytes": 0,
+              "wchar": 10084446,
+              "write_bytes": 0
+            },
+            "rss_bytes_end": 407097344
+          },
+          "duration_seconds": 12.0,
+          "event_loop_lag": {
+            "ms": {
+              "max": 30742.72,
+              "p50": 15362.39,
+              "p95": 29283.54,
+              "p99": 30456.16
+            },
+            "samples": 1419
+          },
+          "mcp_gateway_sessions": 64,
+          "paths": {
+            "health": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "shell": {
+              "errors": [],
+              "latency_ms": {
+                "max": null,
+                "p50": null,
+                "p95": null,
+                "p99": null
+              },
+              "mismatches": 0,
+              "success": 0,
+              "throughput_per_second": 0.0,
+              "timeouts": 1
+            },
+            "work.agents": {
+              "errors": [],
+              "latency_ms": {
+                "max": 19342.49,
+                "p50": 10180.94,
+                "p95": 18505.5,
+                "p99": 19175.09
+              },
+              "mismatch_examples": [],
+              "mismatches": 0,
+              "success": 13,
+              "throughput_per_second": 0.421,
+              "timeouts": 57
+            }
+          },
+          "reader_path": "work.agents",
+          "request_timeout_seconds": 20.0,
+          "simultaneous_reader_tasks": 64,
+          "think_seconds": 2,
+          "wall_seconds": 30.87,
+          "writers": {
+            "errors": [],
+            "events": 60,
+            "turn_updates": 24
+          }
+        }
+      }
+    }
+  },
+  "plans": {
+    "new": {
+      "global": [
+        "SEARCH entities USING COVERING INDEX ix_entities_chat_turn_status (kind=? AND chat_turn_status=?)"
+      ],
+      "project": [
+        "SEARCH entities USING COVERING INDEX ix_entities_project_chat_turn_status (kind=? AND engagement_id=? AND chat_turn_status=?)"
+      ]
+    },
+    "old": {
+      "global": [
+        "SEARCH entities USING INDEX ix_entities_automation_status_expiry (kind=?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ],
+      "project": [
+        "SEARCH entities USING INDEX ix_entities_kind_engagement_created_id (kind=? AND engagement_id=?)"
+      ]
+    }
+  },
+  "ui_index_sha256": "420977897bff8c3c9efac687ea6a1e69ebb8b803b73594a16433d4a7b240c060"
+}

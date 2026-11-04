@@ -17,7 +17,6 @@ from pydantic import Field, model_validator
 from .domain import (
     AgentRun,
     ChatSession,
-    ChatTurn,
     ChatTurnStatus,
     Engagement,
     EngagementStatus,
@@ -27,7 +26,6 @@ from .domain import (
     WorkItem,
     WorkUpdate,
 )
-from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .runtime_platform import RuntimeToolComponents
 from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -270,29 +268,37 @@ class WorkService:
             if project.status == EngagementStatus.ARCHIVED:
                 return []
         active_statuses = [
-            ChatTurnStatus.QUEUED.value,
-            ChatTurnStatus.ROUTING.value,
-            ChatTurnStatus.WAITING_APPROVAL.value,
-            ChatTurnStatus.WAITING_CALLBACK.value,
-            ChatTurnStatus.FINALIZING.value,
-            ChatTurnStatus.INTERRUPTED.value,
+            ChatTurnStatus.QUEUED,
+            ChatTurnStatus.ROUTING,
+            ChatTurnStatus.WAITING_APPROVAL,
+            ChatTurnStatus.WAITING_CALLBACK,
+            ChatTurnStatus.FINALIZING,
+            ChatTurnStatus.INTERRUPTED,
         ]
-        turns = self.store.find_entities(
-            ChatTurn,
-            {"status": active_statuses},
+        turns = self.store.chat_turn_status_rows(
+            active_statuses,
             engagement_id=engagement_id,
-            limit=None,
         )
+        turns = [
+            turn
+            for turn in turns
+            if turn.status != ChatTurnStatus.INTERRUPTED or turn.recovery_visible
+        ]
+        sessions = {
+            session.id: session
+            for session in self.store.chat_session_agent_rows(
+                session_ids={turn.session_id for turn in turns},
+                include_temporary=True,
+            )
+        }
         activity: list[WorkAgentActivity] = []
         project_statuses: dict[str, EngagementStatus] = {}
         for turn in turns:
-            if turn.status == ChatTurnStatus.INTERRUPTED:
-                recovery = turn.request_snapshot.get("recovery", {})
-                if not isinstance(recovery, dict) or not (
-                    recovery.get("required") or recovery.get("automatic_retry_pending")
-                ):
-                    continue
-            session = self.store.get(ChatSession, turn.session_id)
+            session = sessions.get(turn.session_id)
+            if session is None:
+                raise NotFoundError(
+                    f"chat_sessions entity not found: {turn.session_id}"
+                )
             if engagement_id is not None and session.engagement_id != engagement_id:
                 continue
             if session.metadata.get("temporary_assistant") or session.metadata.get(
@@ -308,10 +314,10 @@ class WorkService:
                     project_statuses[session.engagement_id] = project_status
                 if project_status == EngagementStatus.ARCHIVED:
                     continue
-            waiting = not is_subagent_session(session) and (
+            waiting = not isinstance(session.metadata.get("subagent_id"), str) and (
                 turn.status == ChatTurnStatus.WAITING_APPROVAL
                 or turn.status == ChatTurnStatus.INTERRUPTED
-                and not core_resumes_interrupted_turn(turn)
+                and not turn.core_resume_pending
             )
             activity.append(
                 WorkAgentActivity(

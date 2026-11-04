@@ -23,7 +23,6 @@ from .chat_subagents import (
     CoreDelivery,
     DeliveryItem,
     harness_result_fits,
-    is_subagent_session,
     pack_delivery,
     provider_result_fits,
 )
@@ -42,7 +41,7 @@ from .domain import (
     utc_now,
 )
 from .runtime_platform import RuntimeToolComponents
-from .storage import ConflictError, NotFoundError
+from .storage import ChatSessionAgentRow, ConflictError, NotFoundError
 from .tools import (
     InvalidToolArguments,
     ToolExecutionResult,
@@ -114,16 +113,16 @@ class AgentMessageService:
         self.harness_steer: Callable[[str, str], Awaitable[bool]] | None = None
 
     @staticmethod
-    def _eligible(session: ChatSession) -> bool:
+    def _eligible(session: ChatSession | ChatSessionAgentRow) -> bool:
         return not (
-            is_subagent_session(session)
+            isinstance(session.metadata.get("subagent_id"), str)
             or session.metadata.get("temporary_assistant") is True
             or session.metadata.get("side_chat") is True
             or isinstance(session.metadata.get("archived_at"), str)
         )
 
     @classmethod
-    def _addressable(cls, session: ChatSession) -> bool:
+    def _addressable(cls, session: ChatSession | ChatSessionAgentRow) -> bool:
         return (
             cls._eligible(session)
             and session.metadata.get("allow_agent_messaging") is True
@@ -149,33 +148,26 @@ class AgentMessageService:
         return session
 
     def peers(self, session: ChatSession) -> list[dict[str, Any]]:
-        turns = self.store.find_entities(
-            ChatTurn,
-            {"status": [item.value for item in _UNFINISHED]},
+        turns = self.store.chat_turn_status_rows(
+            list(_UNFINISHED),
             engagement_id=session.engagement_id,
         )
         active = {turn.session_id: turn.status.value for turn in turns}
         peers: list[dict[str, Any]] = []
-        offset = 0
-        while page := self.store.list_entities(
-            ChatSession,
+        for candidate in self.store.chat_session_agent_rows(
             engagement_id=session.engagement_id,
-            offset=offset,
-            limit=1_000,
         ):
-            offset += len(page)
-            for candidate in page:
-                if candidate.id == session.id or not self._addressable(candidate):
-                    continue
-                peers.append(
-                    {
-                        "session_id": candidate.id,
-                        "title": candidate.title,
-                        "backend": candidate.backend.value,
-                        "model": candidate.model,
-                        "state": active.get(candidate.id, "idle"),
-                    }
-                )
+            if candidate.id == session.id or not self._addressable(candidate):
+                continue
+            peers.append(
+                {
+                    "session_id": candidate.id,
+                    "title": candidate.title,
+                    "backend": candidate.backend,
+                    "model": candidate.model,
+                    "state": active.get(candidate.id, "idle"),
+                }
+            )
         return sorted(
             peers, key=lambda item: (item["title"].casefold(), item["session_id"])
         )
