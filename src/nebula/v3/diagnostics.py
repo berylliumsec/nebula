@@ -1656,7 +1656,9 @@ class DiagnosticManager:
         )
         return unique[-bounded_limit:]
 
-    def export(self, output: Path) -> Path:
+    def export(
+        self, output: Path, *, performance_snapshot: dict[str, Any] | None = None
+    ) -> Path:
         output = output.expanduser().resolve()
         if output.suffix.lower() != ".zip":
             raise ValueError("diagnostics export must use a .zip extension")
@@ -1730,6 +1732,15 @@ class DiagnosticManager:
                     name = f"logs/{path.name}"
                     archive.writestr(name, data)
                     manifest[name] = hashlib.sha256(data).hexdigest()
+
+                if performance_snapshot is not None:
+                    performance_bytes = json.dumps(
+                        performance_snapshot, sort_keys=True, separators=(",", ":")
+                    ).encode("utf-8")
+                    archive.writestr("performance.json", performance_bytes)
+                    manifest["performance.json"] = hashlib.sha256(
+                        performance_bytes
+                    ).hexdigest()
 
                 export_health = dict(self.status())
                 export_health.pop("log_directory", None)
