@@ -212,6 +212,7 @@ import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } fro
 import {
   cancelActiveAssistantMessage,
   cancelStreamingAssistantMessage,
+  reconcileAuthoritativeMessages,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
   savedAssistantState,
@@ -2484,7 +2485,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setHistoryBeforeId(recent.beforeId);
       setHasOlderHistory(recent.hasOlder);
       setReplacedMessages(recent.replaced);
-      setMessages(recovered);
+      setMessages(current => sessionSelectionGenerationRef.current === generation
+        ? reconcileAuthoritativeMessages(current, recovered) : current);
       if (harnessProgress?.turnId === turnId) {
         setSending(false);
         setChatReconnecting(false);
@@ -5804,7 +5806,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           setHasOlderHistory(recent.hasOlder);
           setReplacedMessages(recent.replaced);
           setMessages(current => current.some(message => message.id === userId)
-            ? recovered : current);
+            ? reconcileAuthoritativeMessages(current, recovered) : current);
         }
       }
     } catch (error) {

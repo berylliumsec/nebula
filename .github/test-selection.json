@@ -1,10 +1,10 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated runtime, layout and navigation repairs are covered by 1319 Python, 181 frontend, one shared native contract and 539 focused browser cases. The 76 latest interface cases include retained runtime receipts, compact controls, delayed Back responses and policy activation during skill reads across twelve profiles. Manual full runs are explicitly user-authorized; nine extra CPU integration checks install real dependencies and reject skips. The live Qwen server is optional by user instruction; a deterministic contract fixture runs in CI.",
+  "reason": "Independently validated runtime, layout and navigation repairs are covered by 1319 Python, 221 frontend, one shared native contract and 539 focused browser cases. The 76 latest interface cases include retained runtime receipts, compact controls, delayed Back responses and policy activation during skill reads across twelve profiles. Manual full runs are explicitly user-authorized; nine extra CPU integration checks install real dependencies and reject skips. The live Qwen server is optional by user instruction; a deterministic contract fixture runs in CI. Native-message identity checks preserve open activity through authoritative history replacement.",
   "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
     "python": 1319,
-    "frontend": 181,
+    "frontend": 221,
     "native": 1,
     "playwright": 539
   },
@@ -62,9 +62,11 @@
     "ui/src/App.subagentChoice.test.tsx",
     "ui/src/App.test.tsx",
     "ui/src/api/visiblePoll.test.ts",
+    "ui/src/components/ActivityLedger.test.tsx",
     "ui/src/components/AssistantSetupLinks.test.tsx",
     "ui/src/components/ChatStudioRail.test.tsx",
     "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/HarnessThinking.test.tsx",
     "ui/src/components/ManagedAssistantBrowser.test.tsx",
     "ui/src/components/MissionControls.test.tsx",
     "ui/src/components/PostToolAssistant.test.tsx",
@@ -72,6 +74,7 @@
     "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx",
     "ui/src/pages/SettingsPage.test.tsx",
     "ui/src/pages/chatDraftNavigation.test.tsx",
+    "ui/src/pages/chatMessageReconciliation.test.ts",
     "ui/src/pages/chatMobileDrawerRestore.test.tsx",
     "ui/src/pages/sideChatSelection.test.ts",
     "ui/src/pages/sidePanelTabs.test.ts",
@@ -91,7 +94,7 @@
     "area:latest-browser-regressions"
   ],
   "python_node": true,
-  "change_digest": "e8f81c53a198fc33b638c54fb5045cf73cad2333f91d9a4da7e63beb5c014576",
+  "change_digest": "59c389984cdadcf9bc02737a67ae8963fa92a0c52f0a02596caed93c70a3f364",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request.",
   "full_suite_integration_selection": {
@@ -115,7 +118,7 @@
   },
   "full_suite_selection": {
     "python": 5011,
-    "frontend": 1755,
+    "frontend": 1758,
     "native": 54,
     "playwright": 3338,
     "matrix_entries": 190

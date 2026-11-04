@@ -372,15 +372,20 @@ async function openNebulaAssistantFromShell(page: Page) {
 
 async function guideEntry(page: Page) {
   const guides = page.getByRole("button", {name: "Guides", exact: true});
-  // Quiet Lens keeps secondary top-bar actions behind its visible menu.
-  const topMenu = page.getByRole("button", {name: "Open top menu"});
-  if (!await guides.isVisible() && await topMenu.isVisible()) {
-    await topMenu.focus();
-    // Escape suppresses hover/focus reveal until the menu is activated again.
-    await topMenu.press("Enter");
-  }
-  if ((page.viewportSize()?.width ?? 1440) <= 760 && !await guides.isVisible()) {
-    await page.getByRole("button", {name: "More workbench views", exact: true}).click();
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    if (!await guides.isVisible()) {
+      const more = page.getByRole("button", {name: "More workbench views", exact: true});
+      await expect(more).toBeVisible();
+      await more.click();
+    }
+  } else {
+    // Quiet Lens keeps secondary top-bar actions behind its visible menu.
+    const topMenu = page.getByRole("button", {name: "Open top menu"});
+    if (!await guides.isVisible() && await topMenu.isVisible()) {
+      await topMenu.focus();
+      // Escape suppresses hover/focus reveal until the menu is activated again.
+      await topMenu.press("Enter");
+    }
   }
   await expect(guides).toBeVisible();
   // Move keyboard focus into the opened menu so its lens handle stops
@@ -3510,7 +3515,7 @@ test("assistant upgrade interactive guides create real hook files and resume fro
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
 
-    // The hub is reachable from the top bar with a usable touch target.
+    // The hub is reachable from the shell with a usable touch target.
     const guidesButton = await guideEntry(page);
     const buttonBox = await guidesButton.boundingBox();
     expect(Math.min(buttonBox!.width, buttonBox!.height)).toBeGreaterThanOrEqual((page.viewportSize()?.width ?? 1440) > 760 ? 28 : 44);
@@ -10444,6 +10449,12 @@ test("assistant upgrade Butler shows live work and restores it after reload on p
     await expect(activity).toBeVisible();
     await expect(activity).toContainText(/Preparing Butler|Starting Butler|Butler is/);
     await expect(butler.getByRole("textbox", {name: "Ask Butler a question"})).toBeDisabled();
+    await expect.poll(async () => {
+      const response = await api.get(`chat/control-assistant/session?engagement_id=${encodeURIComponent(projectId)}`);
+      if (!response.ok()) return null;
+      const saved = await response.json() as {id: string; engagement_id: string} | null;
+      return saved && {id: saved.id, engagement_id: saved.engagement_id};
+    }).toEqual({id: expect.any(String), engagement_id: projectId});
     const sessionResponse = await api.get(`chat/control-assistant/session?engagement_id=${encodeURIComponent(projectId)}`);
     expect(sessionResponse.ok(), await sessionResponse.text()).toBe(true);
     const session = await sessionResponse.json() as {id: string};

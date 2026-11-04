@@ -9612,6 +9612,10 @@ test("stabilization completed harness output keeps one continuous transcript scr
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
   const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
   const harnessCompleted = () => page.evaluate(() => (globalThis as typeof globalThis & {__harnessCompletionDone?: boolean}).__harnessCompletionDone === true);
+  let finalHistoryReads = 0;
+  let finalHistoryResponses = 0;
+  let releaseFinalHistory!: () => void;
+  const finalHistoryGate = new Promise<void>(resolve => { releaseFinalHistory = resolve; });
   let steeringBody: unknown;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -9668,6 +9672,9 @@ test("stabilization completed harness output keeps one continuous transcript scr
         turn_id: harnessTurnId,
         turn_status: completed ? "complete" : "running",
         turn_origin: "chat",
+        last_turn_id: completed ? harnessTurnId : null,
+        last_turn_status: completed ? "complete" : null,
+        last_turn_origin: completed ? "chat" : null,
         started_at: entity.created_at,
         last_activity_at: entity.updated_at,
         detail: completed ? "The harness turn completed." : "A harness turn is currently running.",
@@ -9685,10 +9692,13 @@ test("stabilization completed harness output keeps one continuous transcript scr
     }
     // After the stream completes, Workbench reloads the durable transcript and turn activity.
     if (path.endsWith("/chat/sessions/chat-harness-completion/messages")) {
+      const finalRead = await harnessCompleted();
+      if (finalRead) { finalHistoryReads += 1; await finalHistoryGate; }
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([
         { ...entity, id: "user-harness-completion", engagement_id: "scratch-project", session_id: "chat-harness-completion", sequence: 1, role: "user", content: "$review Run the verification.", citations: [], metadata: {} },
         { ...entity, id: "assistant-harness-completion", engagement_id: "scratch-project", session_id: "chat-harness-completion", sequence: 2, role: "assistant", content: "**Verification completed successfully.** The operator remains in control of the next action.\n\n".repeat(30), citations: [], metadata: { harness_turn_id: harnessTurnId } },
       ]) });
+      if (finalRead) finalHistoryResponses += 1;
       return;
     }
     if (path.endsWith(`/harness-turns/${harnessTurnId}/events`)) {
@@ -9699,8 +9709,9 @@ test("stabilization completed harness output keeps one continuous transcript scr
           { ...base, id: "event-command-start", sequence: 2, type: "item_upsert", item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", payload: { command: "npm test" } },
           { ...base, id: "event-command-output", sequence: 3, type: "output_delta", item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: "Completed command output stays available behind its disclosure without creating a second transcript scroll.\n".repeat(80), payload: {} },
           { ...base, id: "event-command-done", sequence: 4, type: "item_upsert", item_id: "command-1", item_kind: "command", item_status: "completed", title: "Run verification", summary: "Verification passed.", payload: { command: "npm test", exit_code: 0 } },
+          { ...base, id: "event-thinking", sequence: 5, type: "item_upsert", item_id: "thinking-1", item_kind: "reasoning", item_status: "completed", title: "Reasoning", payload: {reasoning_summary_state: "available", reasoning_summary_text: "Retained thinking during an unchanged history refresh."} },
         ],
-        next_sequence: 4,
+        next_sequence: 5,
       }) });
       return;
     }
@@ -9729,6 +9740,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
         { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", artifact_ids: [], payload: { command: "npm test" } },
         { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: output, artifact_ids: [], payload: {} },
         { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 4, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "completed", title: "Run verification", summary: "Verification passed.", artifact_ids: [], payload: { command: "npm test", exit_code: 0 } },
+        { type: "item_upsert", schema_version: "nebula.harness-activity/v2", sequence: 5, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "thinking-1", item_kind: "reasoning", item_status: "completed", title: "Reasoning", artifact_ids: [], payload: {reasoning_summary_state: "available", reasoning_summary_text: "Retained thinking during an unchanged history refresh."} },
         { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
         { type: "done", session_id: "chat-harness-completion", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", message: { id: "assistant-harness-completion", role: "assistant", content: answer }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
       ];
@@ -9838,7 +9850,26 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await page.evaluate(() => {(globalThis as typeof globalThis & {__releaseHarnessCompletion?: boolean}).__releaseHarnessCompletion = true;});
   const ledger = page.getByRole("region", { name: "Work summary" });
   await expect(ledger.locator(".activity-ledger-footer > span")).toContainText("Completed", { timeout: 5_000 });
-  await ledger.getByRole("button", { name: "Show activity" }).click();
+  try {
+    await expect.poll(() => finalHistoryReads).toBe(2);
+    await ledger.getByRole("button", { name: "Show activity" }).click();
+    const thinking = ledger.locator(".activity-ledger-audit .harness-reasoning-summary").filter({hasText: "Retained thinking during an unchanged history refresh."});
+    await expect(thinking).toContainText("Retained thinking during an unchanged history refresh.");
+    const thinkingDetails = thinking.locator("xpath=ancestor::details[1]");
+    await thinkingDetails.locator(":scope > summary").click();
+    await expect(thinking).toBeVisible();
+    await ledger.evaluate(element => { (globalThis as typeof globalThis & {__expandedHarnessRow?: Element}).__expandedHarnessRow = element.closest(".chat-message")!; });
+    releaseFinalHistory();
+    await expect.poll(() => finalHistoryResponses).toBe(2);
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await ledger.evaluate(element => element.closest(".chat-message") === (globalThis as typeof globalThis & {__expandedHarnessRow?: Element}).__expandedHarnessRow)).toBe(true);
+    await expect(ledger.getByRole("button", {name: "Hide activity"})).toHaveAttribute("aria-expanded", "true");
+    await expect(thinkingDetails).toHaveAttribute("open", "");
+    await expect(thinking).toBeVisible();
+    await expect(thinking).toContainText("Retained thinking during an unchanged history refresh.");
+  } finally {
+    releaseFinalHistory();
+  }
   const activity = ledger.locator(".activity-ledger-entry-content details", { hasText: "Run verification" });
   await expect(activity).not.toHaveAttribute("open", "");
   await expect(activity.getByText("Completed", { exact: true })).toBeVisible();
