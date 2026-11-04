@@ -922,7 +922,7 @@ def test_goal_active_time_excludes_idle_gaps_between_turns(
     clock = {"now": started}
     monkeypatch.setattr(chat_goals_module, "utc_now", lambda: clock["now"])
     monkeypatch.setattr(chat_module, "utc_now", lambda: clock["now"])
-    goals, goal = _running_goal(store, session, time_budget_seconds=60)
+    goals, goal = _running_goal(store, session, time_budget_seconds=1800)
 
     def work(seconds_from_start: float, seconds: float) -> None:
         turn = _turn(store, session, status=ChatTurnStatus.ROUTING, goal_id=goal.id)

@@ -32,7 +32,7 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.storage import NebulaStore
-from tests.v3.test_butler_authority import _setup
+from tests.v3.test_butler_authority import _capture_immediate_guidance, _setup
 
 
 class _CitedLoopReviewer:
@@ -100,8 +100,9 @@ def _record_call(
     return call
 
 
-def test_three_exact_failures_create_one_concern_and_queue_only_to_parent(tmp_path):
+def test_three_exact_failures_create_one_concern_and_steer_only_the_parent(tmp_path):
     store, app, project, main, _, child, worker = _setup(tmp_path, child=True)
+    delivered = _capture_immediate_guidance(app)
     authority = app.state.butler_authority
     authority.write(
         project.id,
@@ -140,11 +141,13 @@ def test_three_exact_failures_create_one_concern_and_queue_only_to_parent(tmp_pa
     actions = store.find_entities(ButlerAction, {}, engagement_id=project.id)
     assert len(actions) == 1 and actions[0].status == "dispatched"
     assert actions[0].target_session_id == main.id
-    parent_items = app.state.control_assistant_work.queue.get(main.id).items
-    assert len(parent_items) == 1
-    message = parent_items[0]["request"]["messages"][0]["content"]
+    assert len(delivered) == 1
+    assert delivered[0][0] == project.id
+    assert delivered[0][1]["session_id"] == main.id
+    message = delivered[0][1]["text"]
     assert "three separate completed turns" in message
     assert "wider goal failed" in message
+    assert app.state.control_assistant_work.queue.get(main.id).items == []
     assert app.state.control_assistant_work.queue.get(child.session_id).items == []
 
     reopened = NebulaStore(tmp_path / "core.db")

@@ -536,12 +536,12 @@ def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
     compacted = prepare(session.id)
 
     assert compacted.context_snapshot is not None
-    assert set(compacted.tool_components.specs) == {
+    assert {
         "skill.read_resource",
         CONVERSATION_SEARCH_TOOL_NAME,
         # Every turn with tools can also keep working notes.
         "notes.write",
-    }
+    } <= set(compacted.tool_components.specs)
     assert compacted.turn.request_snapshot["conversation_search"] is True
 
     # The model's call runs through the turn's broker without an approval and
@@ -574,12 +574,14 @@ def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
         expected_revision=store.get(ChatTurn, compacted.turn.id).revision,
     )
     resumed = service.prepare_resume(turn.id)
-    assert CONVERSATION_SEARCH_TOOL_NAME in resumed.tool_components.specs
+    assert set(resumed.tool_components.specs) == set(compacted.tool_components.specs)
 
     # A conversation that still fits has nothing archived to search.
     short = prepare("short")
     assert short.context_snapshot is None
-    assert set(short.tool_components.specs) == {"skill.read_resource", "notes.write"}
+    assert set(compacted.tool_components.specs) == set(short.tool_components.specs) | {
+        CONVERSATION_SEARCH_TOOL_NAME
+    }
     assert short.turn.request_snapshot["conversation_search"] is False
     # The compacted request was sized with the search tool's definition.
     definition = chat_module.estimate_tool_definitions(

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.playwright_impact import main, select_plan
 from scripts.test_selection import change_digest, validate
@@ -204,13 +205,21 @@ def test_pytest_guard_requires_files_or_explicit_approval(monkeypatch):
 
 def test_workflows_never_implicitly_expand_test_targets():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    jobs = yaml.safe_load(ci)["jobs"]
+    ordinary_ci = "\n".join(
+        step.get("run", "")
+        for name, job in jobs.items()
+        if name not in {"full-approval", "full-source", "full-native"}
+        for step in job.get("steps", [])
+    )
     matrix = (ROOT / ".github/workflows/playwright-impact.yml").read_text()
     release = (ROOT / ".github/workflows/nebula3-release.yml").read_text()
     assert "pytest -q tests/v3\n" not in release
     assert "npm --prefix ui test -- --" not in release
     assert "cargo test --locked --manifest-path" not in release
     assert "pytest -q tests/v3\n" not in ci
-    assert "npm test -- --testTimeout" not in ci
+    assert "npm test -- --testTimeout" not in ordinary_ci
+    assert "pytest -q tests packaging" not in ordinary_ci
     assert "scripts/test_selection.py" in ci and "scripts/test_selection.py" in matrix
     assert 'run: test "$SELECTION_RESULT" = success' in ci
     assert "Record omitted runtime without running tests" in ci
@@ -218,6 +227,28 @@ def test_workflows_never_implicitly_expand_test_targets():
     assert 'test "$EVENT_NAME" = workflow_dispatch' in matrix
     assert 'test "$FULL_APPROVAL" = RUN_FULL_SUITE' in matrix
     assert "args+=(--full-approved)" in matrix
+
+
+def test_manual_full_runs_require_fresh_explicit_approval():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    gate = jobs["full-approval"]
+    assert gate["if"] == "github.event_name == 'workflow_dispatch'"
+    approval = gate["steps"][0]
+    assert approval["env"]["FULL_APPROVAL"] == "${{ inputs.full_approval }}"
+    assert approval["env"]["REVIEW_REASON"] == "${{ inputs.review_reason }}"
+    assert 'test "$FULL_APPROVAL" = RUN_FULL_SUITE' in approval["run"]
+    assert 'test -n "$REVIEW_REASON"' in approval["run"]
+    assert 'test "$GITHUB_RUN_ATTEMPT" = 1' in approval["run"]
+    for name in ("full-source", "full-native"):
+        assert jobs[name]["needs"] == "full-approval"
+    for step in jobs["full-source"]["steps"]:
+        if "pytest -q tests packaging" in step.get(
+            "run", ""
+        ) or "npm test --" in step.get("run", ""):
+            assert step["env"]["NEBULA_FULL_SUITE_APPROVAL"] == "RUN_FULL_SUITE"
+            assert (
+                step["env"]["NEBULA_FULL_SUITE_REASON"] == "${{ inputs.review_reason }}"
+            )
 
 
 def test_playwright_workers_revalidate_the_parent_selection():

@@ -1,11 +1,12 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DialogProvider } from "./components/DialogSystem";
 import { ThemeProvider } from "./state/ThemeContext";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
+import { mockChatViewport } from "./test/chatViewport";
 
 // Sending from the composer to a cloud provider: the operator is asked to
 // share tool results exactly when Core would refuse without consent, and a
@@ -73,6 +74,7 @@ function core(route: Route, sessions: Wire[]) {
     const path = new URL(String(input)).pathname;
     const routed = await route(path, init);
     if (routed) return routed;
+    if (path.endsWith("/task-plans")) return json({ plans: [], directives: [] });
     if (path.endsWith("/credentials/env%3AOPEN_ROUTER_API_KEY/status")) {
       return json({ reference: "env:OPEN_ROUTER_API_KEY", persistence: "environment", available: true, state: "available" });
     }
@@ -97,10 +99,11 @@ function completions(fetchMock: ReturnType<typeof core>) {
 }
 
 async function send(user: ReturnType<typeof userEvent.setup>, fetchMock: ReturnType<typeof core>, text: string) {
+  window.history.replaceState({}, "", "/sessions?view=chat&session=session-1");
   render(
-    <MemoryRouter initialEntries={["/sessions?view=chat&session=session-1"]}>
+    <BrowserRouter>
       <ThemeProvider><WorkspaceProvider><DialogProvider><App /></DialogProvider></WorkspaceProvider></ThemeProvider>
-    </MemoryRouter>,
+    </BrowserRouter>,
   );
   const composer = await screen.findByRole("textbox", { name: "Message the analyst assistant" }, { timeout: 5_000 });
   await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/sessions/session-1/context"))).toBe(true));
@@ -121,12 +124,13 @@ function notice() {
 
 describe("sending to a cloud provider", () => {
   beforeEach(() => {
+    mockChatViewport();
     localStorage.clear();
     sessionStorage.clear();
     window.history.replaceState({}, "", "/");
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   it("asks to share tool results for a Subagents turn with no command runtime, then sends with consent", { timeout: 20_000 }, async () => {
     const fetchMock = core((path, init) => path.endsWith("/chat/completions") && init?.method === "POST" ? answered() : undefined, [session(true)]);

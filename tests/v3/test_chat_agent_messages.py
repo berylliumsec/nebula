@@ -95,7 +95,7 @@ def test_peer_discovery_is_opted_in_main_agent_and_project_scoped(tmp_path):
     _session(store, project.id, "Archived", archived_at="2026-09-22T10:00:00Z")
     _session(store, project.id, "Temporary", temporary_assistant=True)
     _session(store, project.id, "Side chat", side_chat=True)
-    _session(store, project.id, "Settings assistant", control_assistant=True)
+    settings = _session(store, project.id, "Settings assistant", control_assistant=True)
     store.create(
         ChatSession(
             engagement_id=project.id,
@@ -126,7 +126,14 @@ def test_peer_discovery_is_opted_in_main_agent_and_project_scoped(tmp_path):
             "backend": "provider",
             "model": "model-a",
             "state": "routing",
-        }
+        },
+        {
+            "session_id": settings.id,
+            "title": "Settings assistant",
+            "backend": "provider",
+            "model": "model-a",
+            "state": "idle",
+        },
     ]
 
 
@@ -139,7 +146,7 @@ def test_new_choice_uses_project_default_and_existing_choice_is_authoritative(tm
         resolve_agent_messaging_choice(
             store, project.id, None, None, control_assistant=True
         )
-        is False
+        is True
     )
     disabled = _session(store, project.id, "Old off", allow_agent_messaging=False)
     enabled = _session(store, project.id, "Old on")

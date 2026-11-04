@@ -1,9 +1,11 @@
 """The reconciled PR must upgrade either previously published migration leaf."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, Table, create_engine, inspect
 
 from nebula.v3.database import Database
@@ -17,6 +19,9 @@ def test_reconciled_butler_migrations_preserve_either_existing_leaf(tmp_path, pr
     path = tmp_path / "core.db"
     engine = create_engine(f"sqlite+pysqlite:///{path}")
     stamp = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    head = ScriptDirectory(
+        str(Path(__file__).parents[2] / "src/nebula/v3/migrations")
+    ).get_current_head()
     try:
         if previous:
             _run_migration(engine, command.upgrade, previous)
@@ -68,7 +73,7 @@ def test_reconciled_butler_migrations_preserve_either_existing_leaf(tmp_path, pr
             with engine.connect() as connection:
                 assert connection.exec_driver_sql(
                     "SELECT version_num FROM alembic_version"
-                ).scalars().all() == ["0025_merge_project_and_lookups"]
+                ).scalars().all() == [head]
                 if previous:
                     assert (
                         connection.exec_driver_sql(

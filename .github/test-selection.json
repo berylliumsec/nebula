@@ -1,22 +1,50 @@
 {
-  "reviewed_by": "Codex focused review after independent causal validation",
-  "reason": "Seven collected Python cases cover the global and project covering status indexes, create/update projections, migration backfill and downgrade, roster and peer ordering, authenticated HTTP roster, and the actual MCP agent.list and Work tool paths. The synthetic LAN load receipt compares old and new Core on the same 2 GB fixture with concurrent reads and writes.",
-  "exclusions": "No UI, native, or browser code changes. Frontend, native, and Playwright suites do not measure this storage lookup. The production app shell, authenticated health, actual HTTP roster, and both MCP gateway tools are probed in the real Core LAN load. No live providers or production data are used.",
+  "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
+  "reason": "Independently validated repairs for API shapes, durable settings, tool catalogs, model and goal limits, lifecycle fixtures, transcript layout, and explicit manual full-run guards. All frontend tests passed locally; full browser baseline and manual full source/native evidence are recorded separately.",
+  "exclusions": "Focused PR CI covers changed regression files and two browser journeys across eight permanent desktop/mobile Chromium/WebKit profiles each. Separate explicit full runs cover all frontend/Python/native tests and the entire browser catalog. No live providers, real credentials, deployments, or physical devices. Native tests run in the manual full job; local GTK and model/browser-download limits are documented.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 0,
+    "python": 655,
+    "frontend": 64,
     "native": 0,
-    "playwright": 0
+    "playwright": 16
   },
   "python": [
-    "tests/v3/test_chat_turn_status_lookup.py",
-    "tests/v3/test_chat_turn_status_migration.py",
-    "tests/v3/test_work.py::test_agent_roster_matches_dashboard_scope_and_refreshes_links",
-    "tests/v3/test_work.py::test_work_agents_api_lists_active_sessions_across_projects",
-    "tests/v3/test_work_gateway.py::test_builtin_work_gateway_is_default_on_scoped_and_retains_updates"
+    "tests/test_test_selection.py",
+    "tests/v3/test_all_tool_failure_guidance.py",
+    "tests/v3/test_api.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_browser_security.py",
+    "tests/v3/test_butler_migration_merge.py",
+    "tests/v3/test_butler_tool_failures.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_context_assembly.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_stream_follow.py",
+    "tests/v3/test_chat_subagent_lifecycle.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_cli.py",
+    "tests/v3/test_conversation_search.py",
+    "tests/v3/test_generic_crud_exposure.py",
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_subagent_choice_sticks.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/App.sendConsent.test.tsx",
+    "ui/src/App.subagentChoice.test.tsx",
+    "ui/src/App.test.tsx",
+    "ui/src/components/AssistantSetupLinks.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/pages/chatDraftNavigation.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
-  "change_digest": "dbdb76939a3153c46490b27e61d7e21d1a629ac6ae1c70631d461083075dc054"
+  "playwright": [
+    "area:icon-pack",
+    "area:butler-private-settings"
+  ],
+  "python_node": true,
+  "change_digest": "a3ce62eb562d5a3f4ef4f492079db1062b033829342c3d69110879fe8501c009",
+  "python_browser": true,
+  "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }

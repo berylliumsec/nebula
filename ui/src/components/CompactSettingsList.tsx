@@ -52,6 +52,7 @@ export const settingIcons: Record<string, LucideIcon> = {
   "settings.runners": Boxes,
   "settings.network-scope": Globe2,
   "settings.operators": UserRound,
+  "settings.typesafe": ShieldCheck,
   "settings.devices": Smartphone,
   "settings.appearance": Moon,
   "settings.release": RefreshCw,

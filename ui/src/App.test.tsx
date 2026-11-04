@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { BrowserRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DialogProvider } from "./components/DialogSystem";
 import { ThemeProvider } from "./state/ThemeContext";
 import { WorkspaceProvider } from "./state/WorkspaceContext";
+import { mockChatViewport } from "./test/chatViewport";
 
 vi.mock("./components/CodeMirrorSurface", () => ({
   CodeMirrorSurface: ({ value, onChange }: { value: string; onChange(value: string): void }) => (
@@ -14,8 +15,9 @@ vi.mock("./components/CodeMirrorSurface", () => ({
 }));
 
 function renderApp(route = "/") {
+  window.history.replaceState({}, "", route);
   return render(
-    <MemoryRouter initialEntries={[route]}>
+    <BrowserRouter>
       <LocationProbe />
       <ThemeProvider>
         <WorkspaceProvider>
@@ -24,7 +26,7 @@ function renderApp(route = "/") {
           </DialogProvider>
         </WorkspaceProvider>
       </ThemeProvider>
-    </MemoryRouter>,
+    </BrowserRouter>,
   );
 }
 
@@ -44,6 +46,12 @@ function selectElementText(element: HTMLElement) {
 
 function unmatchedCoreResponse(input: RequestInfo | URL) {
   const pathname = new URL(String(input)).pathname;
+  if (pathname.endsWith("/task-plans")) {
+    return new Response(JSON.stringify({ plans: [], directives: [] }), { status: 200 });
+  }
+  if (pathname.endsWith("/storage")) {
+    return new Response(JSON.stringify({ sources: [], devices: [], volumes: [], incidents: [], actions: [], dispatches: [] }), { status: 200 });
+  }
   if (pathname.endsWith("/goal")) {
     return new Response(JSON.stringify({ detail: "Goal not found" }), { status: 404 });
   }
@@ -57,17 +65,18 @@ function unmatchedCoreResponse(input: RequestInfo | URL) {
 
 describe("Nebula workspace", () => {
   beforeEach(() => {
+    mockChatViewport();
     localStorage.clear();
     sessionStorage.clear();
     window.history.replaceState({}, "", "/");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Core offline")));
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   it("exposes every primary workspace destination", async () => {
     renderApp();
-    for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
+    for (const label of ["Workbench", "Findings", "Reports", "Projects", "Settings"]) {
       expect(screen.getByRole("link", { name: label })).toBeVisible();
     }
     expect(await screen.findByRole("tab", { name: "Terminal" }, { timeout: 5_000 })).toBeVisible();
@@ -108,7 +117,7 @@ describe("Nebula workspace", () => {
     await user.click(await screen.findByRole("button", { name: "Enter focus mode" }));
     const workbench = document.querySelector(".sessions-page");
     expect(workbench).toHaveClass("full-screen");
-    expect(screen.getByRole("button", { name: "Exit full screen workbench" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Exit focus mode" })).toBeVisible();
 
     await user.keyboard("{Escape}");
     expect(workbench).not.toHaveClass("full-screen");
@@ -365,7 +374,7 @@ describe("Nebula workspace", () => {
     expect(screen.queryByRole("textbox", { name: "Message the analyst assistant" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
     expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show session details" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Chat tools" })).toBeVisible();
     await user.keyboard("{Escape}");
     expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/chat/completions") && init?.method === "POST")).toBe(false);
 
@@ -1207,7 +1216,7 @@ describe("Nebula workspace", () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const active = { ...entity, id: "session-1", engagement_id: "engagement-1", title: "Active investigation", provider_profile_id: null, model: null, metadata: {} };
     const stale = { ...entity, id: "session-2", engagement_id: "engagement-1", title: "Already removed", provider_profile_id: null, model: null, metadata: {} };
-    let firstList = true;
+    let staleDeleted = false;
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
@@ -1222,10 +1231,12 @@ describe("Nebula workspace", () => {
         recovery_action: "Stop the response and retry",
         recovery_destination: "/sessions?session=session-1",
       }), { status: 409 });
-      if (path.endsWith("/chat-sessions/session-2") && init?.method === "DELETE") return new Response(JSON.stringify({ detail: "chat_sessions entity not found", error_id: "err_already_deleted", retryable: false }), { status: 404 });
+      if (path.endsWith("/chat-sessions/session-2") && init?.method === "DELETE") {
+        staleDeleted = true;
+        return new Response(JSON.stringify({ detail: "chat_sessions entity not found", error_id: "err_already_deleted", retryable: false }), { status: 404 });
+      }
       if (path.endsWith("/chat-sessions")) {
-        const response = firstList ? [active, stale] : [active];
-        firstList = false;
+        const response = staleDeleted ? [active] : [active, stale];
         return new Response(JSON.stringify(response), { status: 200 });
       }
       return unmatchedCoreResponse(input);
@@ -1378,7 +1389,7 @@ describe("Nebula workspace", () => {
     expect(within(folderDialog).getByText("/home/agent/apple_bug_bounty_program")).toBeVisible();
     await user.click(within(folderDialog).getByRole("button", { name: "Select folder" }));
     expect(screen.getByRole("textbox", { name: "Project folder" })).toHaveValue("/home/agent/apple_bug_bounty_program");
-    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(screen.getByRole("button", { name: "Create in Host mode" }));
 
     expect(await screen.findByTitle("New engagement")).toBeVisible();
     const createCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/api/v1/engagements") && init?.method === "POST");

@@ -38,7 +38,7 @@ from nebula.v3.domain import (
     RiskClass,
     ScopePolicy,
 )
-from nebula.v3.providers import ModelRequest, ModelResponse, ModelUsage
+from nebula.v3.providers import ModelMessage, ModelRequest, ModelResponse, ModelUsage
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_catalog import (
@@ -366,76 +366,96 @@ def _tool_profile() -> ProviderProfile:
     return ProviderProfile.model_validate(payload)
 
 
-def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(
-    tmp_path,
-):
-    def tool_provider(provider_id: str) -> ReportingProvider:
+def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(tmp_path):
+    def tool_provider(provider_id):
         provider = ReportingProvider(provider_id)
         provider.config.capabilities.tools = True
         return provider
 
-    # Measure what the agent-messaging tools add, then size a conversation
-    # that fits the target without them and not with them.
-    store, service, session, profile, provider = _chat(
-        tmp_path, tool_provider, history=[], profile=_tool_profile()
-    )
-    probe = service.prepare(
-        ChatCompletionRequest(
+    def conversation(name, history):
+        return _chat(
+            tmp_path / name, tool_provider, history=history, profile=_tool_profile()
+        )
+
+    def request(session, profile, messaging):
+        return ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
             include_knowledge=False,
-            allow_agent_messaging=True,
-            messages=[{"role": "user", "content": "probe"}],
+            allow_agent_messaging=messaging,
+            messages=[{"role": "user", "content": "Continue."}],
         )
-    )
-    reserved = probe.context_reserved_tokens
-    assert reserved is not None and reserved > 500
-    service._fail_closed_turn(
-        probe, status=chat_module.ChatTurnStatus.CANCELLED, error="probe"
-    )
-    limits = resolve_context_limits(profile)
-    history = _history(12, repeat=1)
-    per_message = (limits.target_input_tokens - reserved // 2) // len(history)
-    history = [
-        text + " padding" * max(0, (per_message * 3 - len(text)) // 8)
-        for text in history
-    ]
-    store.create_many(
-        [
-            ChatMessage(
-                id=f"sized-{sequence:02d}",
-                engagement_id=session.engagement_id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=content,
-            )
-            for sequence, content in enumerate(history, start=1)
-        ]
-    )
-    request = ChatCompletionRequest(
-        session_id=session.id,
-        provider_id=profile.id,
-        include_knowledge=False,
-        allow_agent_messaging=True,
-        messages=[{"role": "user", "content": "Continue."}],
-    )
-    without_tools = service.prepare(
-        request.model_copy(update={"allow_agent_messaging": False})
-    )
-    assert without_tools.context_snapshot is None
 
-    prepared = service.prepare(request)
+    # Each measurement gets its own transcript: prepare() persists its input.
+    probes = {}
+    for messaging in (False, True):
+        _, service, session, profile, _ = conversation(f"probe-{messaging}", [])
+        probe = service.prepare(request(session, profile, messaging))
+        assert probe.context_reserved_tokens is not None
+        probes[messaging] = probe
+        service._fail_closed_turn(
+            probe,
+            status=chat_module.ChatTurnStatus.CANCELLED,
+            error="measurement complete",
+        )
+    limits = resolve_context_limits(profile)
+    base_history = _history(12, repeat=1)
+
+    def history_with_padding(total):
+        each, remainder = divmod(total, len(base_history))
+        return [
+            text + " padding" * (each + (index < remainder))
+            for index, text in enumerate(base_history)
+        ]
+
+    def estimated(messaging, history):
+        probe = probes[messaging]
+        messages = [
+            ModelMessage(role="user" if index % 2 == 0 else "assistant", content=text)
+            for index, text in enumerate(history)
+        ] + [ModelMessage(role="user", content="Continue.")]
+        return (
+            estimate_messages(messages, probe.model_request.instructions or "")
+            + probe.context_reserved_tokens
+        )
+
+    assert estimated(False, base_history) <= limits.target_input_tokens
+    # Find the largest real estimate that fits with peer messaging disabled.
+    # One padding unit is one added word in one message, giving a precise edge.
+    low, high = 0, limits.target_input_tokens * 3
+    assert estimated(False, history_with_padding(high)) > limits.target_input_tokens
+    while low < high:
+        middle = (low + high) // 2
+        if estimated(False, history_with_padding(middle)) <= limits.target_input_tokens:
+            low = middle + 1
+        else:
+            high = middle
+    history = history_with_padding(low - 1)
+    off_estimate, on_estimate = estimated(False, history), estimated(True, history)
+    assert off_estimate <= limits.target_input_tokens < on_estimate
+
+    # The compared turns also have independent identical durable transcripts.
+    off_store, off_service, off_session, off_profile, _ = conversation(
+        "without-peers", history
+    )
+    without_tools = off_service.prepare(request(off_session, off_profile, False))
+    assert without_tools.context_snapshot is None
+    assert len(off_service.session_messages(off_session.id)) == len(history) + 1
+    off_service._fail_closed_turn(
+        without_tools,
+        status=chat_module.ChatTurnStatus.CANCELLED,
+        error="comparison complete",
+    )
+
+    store, service, session, profile, provider = conversation("with-peers", history)
+    prepared = service.prepare(request(session, profile, True))
     assert prepared.context_snapshot is not None
+    assert len(service.session_messages(session.id)) == len(history) + 1
     asyncio.run(service.complete(prepared))
-    routing = next(request for request in _turn_requests(provider) if request.tools)
-    # The request as sent, tools and routing instructions included, now
-    # fits the target the trigger is meant to keep.
+    routing = next(item for item in _turn_requests(provider) if item.tools)
     assert estimate_model_request(routing) <= limits.target_input_tokens
-    # A compacted tool turn also declares conversation.search, so its own
-    # reserve is the probe's plus that definition.
     assert prepared.context_reserved_tokens is not None
-    assert prepared.context_reserved_tokens > reserved
+    assert prepared.context_reserved_tokens > probes[True].context_reserved_tokens
     assert prepared.context_reserved_tokens >= (
         estimate_model_request(routing)
         - estimate_messages(routing.messages, prepared.model_request.instructions or "")

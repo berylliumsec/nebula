@@ -52,6 +52,10 @@ SERVICE_OWNED_KINDS = (
     "chat_turns",
     "chat_queues",
     "chat_decisions",
+    "chat_plan_directives",
+    "chat_task_plans",
+    "butler_global_states",
+    "butler_voice_settings",
     # Write-once values a turn or goal resumes from.
     "chat_snapshot_parts",
     "native_checkpoints",

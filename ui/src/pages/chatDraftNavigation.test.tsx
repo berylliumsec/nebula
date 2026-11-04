@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { BrowserRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { DialogProvider } from "../components/DialogSystem";
@@ -13,20 +13,22 @@ function LocationProbe() {
 }
 
 function renderApp() {
+  window.history.replaceState({}, "", "/sessions");
   return render(
-    <MemoryRouter initialEntries={["/sessions"]}>
+    <BrowserRouter>
       <LocationProbe />
       <ThemeProvider>
         <WorkspaceProvider>
           <DialogProvider><App /></DialogProvider>
         </WorkspaceProvider>
       </ThemeProvider>
-    </MemoryRouter>,
+    </BrowserRouter>,
   );
 }
 
 function unmatchedCoreResponse(input: RequestInfo | URL) {
   const path = new URL(String(input)).pathname;
+  if (path.endsWith("/task-plans")) return new Response(JSON.stringify({ plans: [], directives: [] }), { status: 200 });
   if (path.endsWith("/pending-turn")) return new Response("null", { status: 200 });
   if (path.endsWith("/goal")) return new Response(JSON.stringify({ detail: "Goal not found" }), { status: 404 });
   return new Response("[]", { status: 200 });
