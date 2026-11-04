@@ -69,12 +69,17 @@ snapshot through a new HTTP client, verified the exported snapshot's manifest
 hash, deleted the synthetic project and shut down Core. Temporary export ZIPs
 were removed. Test temporary directories remain under pytest's normal retention.
 
-## Missing required gate
+## Product-help verification in CI
 
-Product-help generation and the three selected source-digest, telemetry-search,
-and Chroma synchronization checks are blocked. The official ONNX embedding
-model download from `chroma-onnx-models.s3.amazonaws.com` receives HTTP proxy
-403. The existing bundled index has not been relabeled or supplied with fake
-embeddings. Rebuild it with `scripts/build_product_knowledge.py`, verify it, and
-run those three checks once the model is available. Until then the change is
-partially verified and must remain unmerged.
+The local model download from `chroma-onnx-models.s3.amazonaws.com` receives
+HTTP proxy 403, preventing a local product-help rebuild. This gate was completed
+in [CI run 41933636923](https://github.com/berylliumsec/nebula/actions/runs/41933636923):
+all 31 selected tests passed, including source-digest verification, telemetry
+search and synchronization of the current product-help digest into Chroma.
+The generated index is intentionally gitignored and rebuilt by the existing
+build hooks; no generated resource is missing from this source change.
+
+That CI run also passed repository-wide Ruff/format, the diagnostic audit,
+mypy across all 238 Core source files, and distribution builds. The focused
+selection and Playwright gate passed; excluded browser/native suites were
+skipped. There are no remaining acceptance gates for this diagnostic API change.

@@ -1,8 +1,8 @@
 {
-  "change_digest": "9a3d9ebde209e15e47c66bd4d82655dc3f722c3dcc490cb3b92659f323bfdb44",
+  "change_digest": "27537e7276b11ef769f020d0d18af5d64e6f512b1790e4167cf2ea15acda3fe0",
   "reviewed_by": "Codex focused Core telemetry review; fresh-context subagent validated both storage-fixture failures before repair",
   "reason": "31 collected cases: bounded telemetry, concurrency, request correlation, SQL privacy and failures, worker cancellation, event-loop lifecycle, SSE lifetime, authenticated non-loopback real-Core snapshot/export, existing diagnostics/chat timing/provider admission contracts, assistant discovery, and three required product-help digest/search/Chroma checks.",
-  "exclusions": "No unrelated or full suites, paid providers, commands, or production data. No browser layout, frontend behavior, native code, or new settings; catalog changes add search aliases only, so browser/mobile/production-UI gates are inapplicable. Python 3.12 only. Product-help generation is currently blocked locally by a proxy 403 fetching the ONNX embedding model; the three product-help checks remain required and the PR must stay unmerged until they pass.",
+  "exclusions": "No unrelated or full suites, paid providers, commands, or production data. No browser layout, frontend behavior, native code, or new settings; catalog changes add search aliases only, so browser/mobile/production-UI gates are inapplicable. Python 3.12 only. Local product-help generation is blocked by a proxy 403 fetching the ONNX model; CI run 41933636923 regenerated the intentionally gitignored index and passed all 31 selected cases, including source-digest/search/Chroma verification, plus distribution builds.",
   "expected_tests": {
     "python": 31,
     "frontend": 0,
