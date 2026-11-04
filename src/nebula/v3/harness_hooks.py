@@ -177,6 +177,38 @@ async def finish_terminal_hooks(runtime: Any, turn_id: str) -> None:
                 ConflictError
             ):  # diagnostic-expected: the late hook outcome won the fence
                 pass
+    unknown = [
+        item.id
+        for item in runtime.store.list_session_entities(
+            NativeHookExecution, turn.chat_session_id
+        )
+        if item.chat_turn_id == turn.chat_turn_id
+        and item.side_effects != "none"
+        and item.status == "interrupted"
+        and not (item.late_outcome and item.late_outcome.status == "complete")
+    ]
+    if unknown:
+        owner = runtime.store.get(ChatTurn, turn.chat_turn_id)
+        recovery = owner.request_snapshot.get("recovery", {})
+        runtime.store.update(
+            ChatTurn,
+            owner.id,
+            {
+                "request_snapshot": {
+                    **owner.request_snapshot,
+                    "recovery": {
+                        **recovery,
+                        "required": True,
+                        "cause": "harness_hook_interrupted",
+                        "unknown_hook_execution_ids": sorted(
+                            set(recovery.get("unknown_hook_execution_ids", []))
+                            | set(unknown)
+                        ),
+                    },
+                }
+            },
+            expected_revision=owner.revision,
+        )
     event = (
         "chat.turn.cancelled"
         if turn.status == HarnessTurnStatus.CANCELLED

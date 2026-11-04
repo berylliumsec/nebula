@@ -13600,7 +13600,11 @@ class ChatService:
                         turn.id,
                         {
                             "error": (
-                                "Core recovered the recorded hook outcome and will resume this response automatically."
+                                (
+                                    "Core recovered the recorded hook outcome. Review and retry the harness response."
+                                    if turn.backend == ChatBackend.HARNESS
+                                    else "Core recovered the recorded hook outcome and will resume this response automatically."
+                                )
                                 if not remaining
                                 and not recovery.get("unknown_tool_call_ids")
                                 else turn.error
@@ -13610,6 +13614,12 @@ class ChatService:
                                 "recovery": {
                                     **recovery,
                                     "unknown_hook_execution_ids": remaining,
+                                    "required": bool(
+                                        remaining
+                                        or recovery.get("unknown_tool_call_ids")
+                                    )
+                                    if turn.backend == ChatBackend.HARNESS
+                                    else recovery.get("required", True),
                                     "recorded_hook_outcome_ids": list(
                                         dict.fromkeys([*prior_recorded, *settled])
                                     ),
@@ -13891,6 +13901,11 @@ class ChatService:
                     "recovery": {
                         **(recovery or {}),
                         "unknown_hook_execution_ids": remaining,
+                        "required": bool(
+                            remaining or (recovery or {}).get("unknown_tool_call_ids")
+                        )
+                        if turn.backend == ChatBackend.HARNESS
+                        else (recovery or {}).get("required", True),
                         "last_reconciled_at": utc_now().isoformat(),
                     },
                 },

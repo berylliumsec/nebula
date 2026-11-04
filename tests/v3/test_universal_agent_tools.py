@@ -949,7 +949,10 @@ def test_completion_guard_failure_debits_known_usage_and_pauses_goal(
     asyncio.run(scenario())
 
 
-def test_retry_does_not_replay_a_hook_with_an_unknown_external_effect(tmp_path):
+@pytest.mark.parametrize("resolution", ["operator", "recorded"])
+def test_retry_does_not_replay_a_hook_with_an_unknown_external_effect(
+    tmp_path, resolution
+):
     from nebula.v3.domain import utc_now
     from nebula.v3.harnesses import HarnessConfigurationError
 
@@ -992,6 +995,49 @@ def test_retry_does_not_replay_a_hook_with_an_unknown_external_effect(tmp_path):
         )
     assert len(store.list_entities(HarnessTurn)) == 1
     assert adapter.opens == []
+    # The shared operator API can reconcile the fenced receipt before retry.
+    from nebula.v3.harness_hooks import finish_terminal_hooks
+
+    asyncio.run(finish_terminal_hooks(runtime, turn.id))
+    owner = store.get(ChatTurn, owner.id)
+    unknown = owner.request_snapshot["recovery"]["unknown_hook_execution_ids"]
+    assert len(unknown) == 1
+    if resolution == "operator":
+        chat.reconcile_interrupted_hook(
+            owner.id,
+            unknown[0],
+            outcome="complete",
+            detail="Verified synthetic effect",
+            expected_revision=owner.revision,
+        )
+    else:
+        from nebula.v3.domain import NativeHookLateOutcome
+
+        execution = store.get(NativeHookExecution, unknown[0])
+        store.update(
+            NativeHookExecution,
+            execution.id,
+            {
+                "late_outcome": NativeHookLateOutcome(
+                    status="complete", exit_code=0, stdout="", stderr="", error=None
+                ),
+            },
+            expected_revision=execution.revision,
+        )
+        chat.pending_turn(parent.id)
+    assert (
+        store.get(ChatTurn, owner.id).request_snapshot["recovery"]["required"] is False
+    )
+    _, _, retry = runtime.prepare_chat(
+        engagement_id=project.id,
+        profile_id=harness.id,
+        model=None,
+        prompt="Retry after reconciliation",
+        chat_session_id=parent.id,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    assert retry.id != turn.id
 
 
 @pytest.mark.parametrize("confirmed", [False, True])

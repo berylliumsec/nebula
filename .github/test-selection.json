@@ -3,7 +3,7 @@
   "reason": "Independent causal validation; exact Core parity, mixed delegation, guard/confinement/retry/usage regressions, two required product-help digest/synchronization checks, three frontend selection components and one real-Core journey across eight permanent browser profiles.",
   "exclusions": "Eight existing failures were reproduced on untouched origin/main at 5d93935: stale consent/effort and goal/message/scheduling fixtures. Exact passing regression nodes plus the new parity cases are selected; see docs/quality/universal-agent-tooling.md. No unrelated suites, paid providers, operator data or deployments. The browser selection is one changed journey across eight permanent profiles. Physical devices unavailable. Local WebKit/model-download network limits are reported separately.",
   "expected_tests": {
-    "python": 110,
+    "python": 111,
     "frontend": 17,
     "native": 0,
     "playwright": 8
@@ -116,7 +116,8 @@
     "tests/v3/test_universal_agent_tools.py::test_harness_child_question_can_wait_for_its_harness_parent",
     "tests/v3/test_universal_agent_tools.py::test_completion_guard_failure_debits_known_usage_and_pauses_goal[False]",
     "tests/v3/test_universal_agent_tools.py::test_completion_guard_failure_debits_known_usage_and_pauses_goal[True]",
-    "tests/v3/test_universal_agent_tools.py::test_retry_does_not_replay_a_hook_with_an_unknown_external_effect",
+    "tests/v3/test_universal_agent_tools.py::test_retry_does_not_replay_a_hook_with_an_unknown_external_effect[operator]",
+    "tests/v3/test_universal_agent_tools.py::test_retry_does_not_replay_a_hook_with_an_unknown_external_effect[recorded]",
     "tests/v3/test_universal_agent_tools.py::test_remote_harness_does_not_receive_core_notes_or_skills_without_consent[False]",
     "tests/v3/test_universal_agent_tools.py::test_remote_harness_does_not_receive_core_notes_or_skills_without_consent[True]"
   ],
@@ -129,7 +130,7 @@
   "playwright": [
     "area:universal-agents"
   ],
-  "change_digest": "a7e7cbf45b76f7218dc43cb698714748ace65adcc0cb574e0b87ffaeafb86e5f",
+  "change_digest": "c94c7fa4df051a439b44a5518b29f2112dd49bf171a6740eab9b83c6b09e2f63",
   "baseline_failures": [
     "tests/v3/test_chat_subagents.py::test_cloud_subagent_turn_asks_for_tool_result_consent_before_acceptance",
     "tests/v3/test_chat_subagents.py::test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level",

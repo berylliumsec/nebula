@@ -28,13 +28,13 @@ distinct from selected turn lifecycle hooks and vendor-native hooks.
 ## Candidate evidence (2026-11-04)
 
 Base: `5d93935ffcb5b084a62354a71f0e533d57672734`. Branch:
-`codex/universal-agent-tooling`. `.github/test-selection.json` selects 110 Python
-cases (108 Core regressions and two product-help gates), 17 frontend cases and
+`codex/universal-agent-tooling`. `.github/test-selection.json` selects 111 Python
+cases (109 Core regressions and two product-help gates), 17 frontend cases and
 one browser journey across eight permanent profiles. No full suite, paid vendor,
 production Core, source job or simulation was used.
 
 - **108 Core cases passed** using the exact non-product-help Python node IDs in
-  the selection. They include 29 new cases for all four runtime combinations,
+  the selection. They include 29 initially new cases for all four runtime combinations,
   guard rejection, hook receipts/cleanup, pagination, notes/research/catalog
   tools, assignments, skill snapshots/resources, retry confinement, native tool
   clamping, parent/child questions, goal ownership/usage and remote-data consent.
@@ -70,7 +70,18 @@ lifecycle and recovery behavior.
 Local WebKit installation was denied by network policy (403 from
 `cdn.playwright.dev` and `playwright.download.prss.microsoft.com`). The three
 committed iPhone/WebKit widths 320/390/430 remain selected for normal PR CI.
-No local WebKit pass is claimed.
+No local WebKit pass is claimed. Initial commit `e38a0f3b` subsequently passed
+all eight browser profiles in normal PR CI, including all three WebKit widths
+([browser run](https://github.com/berylliumsec/nebula/actions/runs/41828680366)).
+The same commit passed 110 selected Python checks, including both product-help
+checks in CI's regenerated checkout, and the 17 frontend checks
+([CI run](https://github.com/berylliumsec/nebula/actions/runs/41828680382)).
+A follow-up adds the existing operator reconciliation API and recorded late
+outcome recovery for fenced harness hooks; it releases the interrupted chat only
+after all unknown effects are resolved. This adds one parameterized regression
+case (30 new cases total). All 30 new cases passed locally after the follow-up,
+and six targeted provider/harness cleanup cases also passed. Final-head CI is
+reported on the PR.
 
 Product-help regeneration and both selected index/digest-to-Chroma checks were
 attempted. The embedding model download at
@@ -83,7 +94,7 @@ The normal CI tests may regenerate their own checkout, which does not replace
 committing the candidate's updated index.
 
 The PR must remain unmerged until the product-help artifact, Chroma synchronization
-and required WebKit evidence are available, per
+and required final-head evidence are available, per
 `.codex/rules/change-workflow.md` and the product-quality skill. Temporary Core
 instances and synthetic data are removed after evidence collection.
 
