@@ -15311,6 +15311,7 @@ test("assistant upgrade Core goal retries capacity once and keeps policy refusal
       await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
       const sessionId = new URL(page.url()).searchParams.get("session")!;
       await revealGoal();
+      if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
       await goalPanel.getByRole("button", {name: "Start"}).click();
       await expect.poll(async () => (await (await core.api.get(`chat/sessions/${sessionId}/goal`)).json()).current_step, {timeout: 30_000}).toBe(expectedStep);
       await expect.poll(async () => (await (await core.api.get(`chat/sessions/${sessionId}/goal`)).json()).status, {timeout: 30_000}).toBe("paused");

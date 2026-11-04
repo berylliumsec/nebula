@@ -1,5 +1,5 @@
 {
-  "change_digest": "308aaa29bdd82b1b17657f137b7db3aa998c9334ff0b67416bdaa98ce6ab246b",
+  "change_digest": "7c58b3a40c24a2b661c15168b5e59c8ff386e3091a9e16a79f910b7143fb3e7f",
   "reviewed_by": "Codex agent, focused Core capacity recovery review",
   "reason": "Core now continues a Core-owned harness goal once after a confirmed model overload when saved effects are settled. The selected Python cases cover one retry, repeated overload, completed reads, writes and unknown effects, policy refusal precedence, Codex error mapping, and product guidance indexing. The selected real-Core browser journey covers saved goal state, transcript, refresh, overload, and policy hold on the eight permanent desktop and mobile profiles with a production bundle and inert LAN fixture.",
   "exclusions": "No ui/src behavior or Rust code changed, so frontend component and native test lists are empty. Full Python and Playwright suites are excluded; the selected cases exercise the changed lifecycle and its operator-visible integration. Live providers, physical devices, and deployment are outside this branch validation.",
