@@ -149,6 +149,7 @@ jobs:
         run: npm --prefix ui run build
       - name: List selected tests and their runtime needs
         id: selected_tests
+        shell: bash
         env:
           PROJECT: ${{ matrix.project }}
           TEST_MATCH: ${{ matrix.test_match }}
@@ -157,8 +158,9 @@ jobs:
         run: |
           args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
           if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
-          if test "$PROJECT" = real-core && test "$TEST_SHARD" != 1/1; then args+=(--fully-parallel); fi
+          if test "$TEST_MATCH" = tests/real-core.spec.ts && test "$TEST_SHARD" != 1/1; then args+=(--fully-parallel); fi
           npm --prefix ui run test:e2e -- "${args[@]}" --list | tee "$RUNNER_TEMP/selected-tests.txt"
+          grep -Eq '^Total: [1-9][0-9]* tests? in ' "$RUNNER_TEMP/selected-tests.txt"
           if test "$TEST_MATCH" = tests/assistant-browser-viewer.spec.ts ||
              grep -Fq 'assistant upgrade linked reply opens a durable file and scoped website in the right pane from production LAN Core' "$RUNNER_TEMP/selected-tests.txt" ||
              grep -Fq 'assistant upgrade settings assistant saves all URL targets and starts headless browser on production LAN Core' "$RUNNER_TEMP/selected-tests.txt"; then
@@ -228,7 +230,7 @@ jobs:
           # This selected Core file is monolithic. Without fully-parallel
           # collection Playwright assigns all its tests to shard 1, leaving
           # later shards empty even though each runner still uses one worker.
-          if test "$PROJECT" = real-core && test "$TEST_SHARD" != 1/1; then
+          if test "$TEST_MATCH" = tests/real-core.spec.ts && test "$TEST_SHARD" != 1/1; then
             args+=(--fully-parallel)
           fi
           if test "$MANAGED_BROWSER" = true; then

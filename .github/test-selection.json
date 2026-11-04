@@ -1,12 +1,12 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated runtime, layout and navigation regressions are covered by 1317 Python, 178 frontend, one shared native contract and 527 focused browser cases. Browser coverage includes the original affected journeys, every newly observed phone Core journey across six Chromium/WebKit profiles, all thinking profiles, narrow MCP switching and 64 latest layout/status/Back cases across twelve profiles. Full Python/frontend/native and all 18 product browser specs are exercised by manual runs explicitly authorized by the user; release acceptance uses a disposable paired LAN Core and clean production bundle. Usage videos remain separate, and no operator data or live provider credentials are used.",
+  "reason": "Independently validated runtime, layout and navigation repairs are covered by 1319 Python, 181 frontend, one shared native contract and 539 focused browser cases. The 76 latest interface cases include retained runtime receipts, compact controls, delayed Back responses and policy activation during skill reads across twelve profiles. Manual full runs are explicitly user-authorized; nine extra CPU integration checks install real dependencies and reject skips. The live Qwen server is optional by user instruction; a deterministic contract fixture runs in CI.",
   "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
-    "python": 1317,
-    "frontend": 178,
+    "python": 1319,
+    "frontend": 181,
     "native": 1,
-    "playwright": 527
+    "playwright": 539
   },
   "python": [
     "tests/test_playwright_impact.py",
@@ -28,6 +28,7 @@
     "tests/v3/test_chat_subagent_lifecycle.py",
     "tests/v3/test_chat_subagents.py",
     "tests/v3/test_cli.py",
+    "tests/v3/test_control_plane_reads.py::test_cleanup_yields_and_only_discards_expired_detached_popups",
     "tests/v3/test_conversation_search.py",
     "tests/v3/test_generic_crud_exposure.py",
     "tests/v3/test_harness_adapters.py",
@@ -36,6 +37,7 @@
     "tests/v3/test_host_cpu_budget.py",
     "tests/v3/test_inference_timeouts_probe_budget.py",
     "tests/v3/test_install_routing.py",
+    "tests/v3/test_live_qwen_tool_calling.py::test_qwen_fixture_required_probe_safe_call_and_final_response",
     "tests/v3/test_operator_help.py",
     "tests/v3/test_packaging.py",
     "tests/v3/test_product_knowledge.py",
@@ -89,7 +91,7 @@
     "area:latest-browser-regressions"
   ],
   "python_node": true,
-  "change_digest": "9bb5533263adef97c4113bdcc224b4fcb1cc117b07098808cfe956e28449f30f",
+  "change_digest": "e8f81c53a198fc33b638c54fb5045cf73cad2333f91d9a4da7e63beb5c014576",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request.",
   "full_suite_integration_selection": {
@@ -108,6 +110,14 @@
     ],
     "reason": "The user requested all tests run and pass. Independent validation identified9 CPU-runnable checks skipped for missing tools/models/runtime. This manual job installs real pinned notebook/model dependencies and rootless Podman, and rejects every skip. A live vLLM Qwen endpoint is separately required for the final optional live-provider test.",
     "dispatch_workflow": ".github/workflows/ci.yml",
-    "full_scope": "integrations"
+    "full_scope": "integrations",
+    "live_qwen": "User explicitly authorized skipping live inference and requested a deterministic Qwen fixture; fixture acceptance is selected separately."
+  },
+  "full_suite_selection": {
+    "python": 5011,
+    "frontend": 1755,
+    "native": 54,
+    "playwright": 3338,
+    "matrix_entries": 190
   }
 }

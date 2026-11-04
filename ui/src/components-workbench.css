@@ -1901,6 +1901,9 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .settings-group[open] > summary { border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); }
 .settings-group-body { display: grid; gap: 28px; padding: 22px; }
 .settings-group-body > .settings-section { margin: 0; }
+.settings-skill-catalog { block-size: 160px; min-width: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; overflow-wrap: anywhere; }
+.settings-skill-catalog > :first-child { margin-top: 0; }
+.settings-skill-catalog > :last-child { margin-bottom: 0; }
 .settings-release-body > .release-panel { width: 100%; }
 .settings-bottom-grid { grid-template-columns: minmax(280px, .8fr) minmax(360px, 1.2fr); }
 .settings-section { margin-bottom: 0; scroll-margin-top: 74px; }

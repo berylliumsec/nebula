@@ -3273,6 +3273,67 @@ test("universal search reaches shared skills and focuses that section", async ({
   await expect(search).toBeFocused();
 });
 
+test("stabilization Settings skill reads keep policy activation stable", async ({page}, testInfo) => {
+  const heldReads = new Set<string>();
+  let releaseReads!: () => void;
+  const readGate = new Promise<void>(resolve => { releaseReads = resolve; });
+  const skills = Array.from({length: 40}, (_, index) => ({name: `review-${index}`, path: `/workspace/${"long-project-folder/".repeat(8)}.agents/skills/review-${index}/SKILL.md`, source: "project"}));
+  await page.route(/\/api\/v1\/skills(?:\/catalog)?(?:\?|$)/, async route => {
+    const path = new URL(route.request().url()).pathname;
+    heldReads.add(path);
+    await readGate;
+    await route.fulfill({json: path.endsWith("/catalog") ? {project_root: "/workspace/.agents/skills", managed_root: "/var/lib/nebula/.agents/skills"} : skills});
+  });
+  await page.route("**/api/v1/engagements/scratch-project/scope", route => route.fulfill({json: {
+    ...entity, id: "scope-scratch", engagement_id: "scratch-project", revision: 3,
+    allowed_cidrs: [], allowed_domains: [], allowed_urls: [], allowed_ports: [], allow_all_targets: true,
+    bypass_permissions: false, not_before: null, not_after: null, prohibited_actions: [], local_only: true, max_concurrency: 1, grants: [],
+  }}));
+  let pointerDown = false;
+  try {
+    await openWorkspace(page, "/settings#models-settings", "Settings");
+    await expect.poll(() => heldReads.size).toBe(2);
+    const catalog = page.getByRole("region", {name: "Shared skill catalogs"});
+    await expect(catalog).toHaveAttribute("aria-busy", "true");
+    const policy = page.locator("#project-policy-settings");
+    const summary = policy.locator(":scope > summary");
+    await summary.scrollIntoViewIfNeeded();
+    const flowTop = () => summary.evaluate(element => element.getBoundingClientRect().top - element.closest(".settings-detail")!.getBoundingClientRect().top);
+    const beforeTop = await flowTop();
+    const beforeHeight = await catalog.evaluate(element => element.getBoundingClientRect().height);
+    const bounds = (await summary.boundingBox())!;
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    pointerDown = true;
+    releaseReads();
+    await expect(catalog).toHaveAttribute("aria-busy", "false");
+    await expect(catalog).toContainText("review-39");
+    expect(Math.abs(await flowTop() - beforeTop)).toBeLessThanOrEqual(1);
+    expect(await catalog.evaluate(element => element.getBoundingClientRect().height)).toBe(beforeHeight);
+    await page.mouse.up();
+    pointerDown = false;
+    await expect(policy).toHaveAttribute("open");
+    await expect.poll(() => new URL(page.url()).hash).toBe("#project-policy-settings");
+    await expect(policy.getByRole("radio", {name: /All destinations/})).toBeChecked();
+
+    await page.locator("#models-settings > summary").click();
+    await catalog.scrollIntoViewIfNeeded();
+    await catalog.focus();
+    await expect(catalog).toBeFocused();
+    await page.keyboard.press("End");
+    await expect.poll(() => catalog.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    expect(await catalog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect((await new AxeBuilder({page}).include("#native-skill-settings").analyze()).violations).toEqual([]);
+    if (testInfo.project.use.hasTouch) expectTouchTarget((await summary.boundingBox())?.height);
+    await activateControl(summary);
+    await expect(policy).toHaveAttribute("open");
+    await expect(policy.getByRole("radio", {name: /All destinations/})).toBeChecked();
+  } finally {
+    releaseReads();
+    if (pointerDown) await page.mouse.up();
+  }
+});
+
 test("stabilization Projects is the sole Work navigation destination", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   if ((page.viewportSize()?.width ?? 1440) <= 760) {

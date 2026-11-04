@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
-import type { ProviderCatalogEntry, ProviderHealth } from "../api/types";
+import type { ProviderCatalogEntry, ProviderHealth, SkillCatalogInfo } from "../api/types";
 import { DialogProvider } from "../components/DialogSystem";
 import { SettingsPage } from "./SettingsPage";
 
@@ -89,6 +89,53 @@ function renderSettings(route = "/settings") {
     <RouterHash />
   </DialogProvider></MemoryRouter>);
 }
+
+describe("shared skill catalog loading", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workspace.providers = [] as never[];
+    workspace.providerCatalog = [openai] as never[];
+    workspace.engagement = {id: "skills-project"} as never;
+    window.history.replaceState(null, "", "/");
+  });
+
+  afterEach(() => {
+    workspace.api = undefined;
+    workspace.engagement = undefined;
+  });
+
+  it.each(["empty", "populated", "failed"] as const)("keeps the catalog surface through a delayed %s response", async outcome => {
+    let resolveCatalog!: (value: SkillCatalogInfo) => void;
+    let rejectCatalog!: (error: Error) => void;
+    const catalog = new Promise<SkillCatalogInfo>((resolve, reject) => { resolveCatalog = resolve; rejectCatalog = reject; });
+    workspace.api = {
+      discoverLocalProviders: vi.fn().mockResolvedValue([]),
+      getSkillCatalog: vi.fn().mockReturnValue(catalog),
+      listSkills: vi.fn().mockResolvedValue(outcome === "populated" ? [{name: "review", path: "/workspace/.agents/skills/review/SKILL.md", source: "project"}] : []),
+    } as unknown as ApiClient;
+    renderSettings("/settings#provider-settings");
+    const region = screen.getByRole("region", {name: "Shared skill catalogs"});
+    expect(region).toHaveAttribute("aria-busy", "true");
+    expect(region).toHaveTextContent("Reading skill catalogs…");
+    region.focus();
+    expect(region).toHaveFocus();
+    await act(async () => {
+      if (outcome === "failed") rejectCatalog(new Error("Catalog unavailable"));
+      else resolveCatalog({projectRoot: "/workspace/.agents/skills", managedRoot: "/var/lib/nebula/.agents/skills"});
+    });
+    expect(screen.getByRole("region", {name: "Shared skill catalogs"})).toBe(region);
+    expect(region).toHaveAttribute("aria-busy", "false");
+    expect(region).not.toHaveTextContent("Reading skill catalogs…");
+    if (outcome === "failed") expect(within(region).getByRole("alert")).toHaveTextContent("Catalog unavailable");
+    else {
+      expect(region).toHaveTextContent("/workspace/.agents/skills");
+      expect(region).toHaveTextContent("/var/lib/nebula/.agents/skills");
+      expect(region).toHaveTextContent(outcome === "populated" ? "review project" : "Add a folder containing SKILL.md");
+    }
+    await userEvent.click(screen.getByText("Project Policy", {selector: "summary strong"}));
+    expect(document.getElementById("project-policy-settings")).toHaveAttribute("open");
+  });
+});
 
 describe("settings page section routing", () => {
   beforeEach(() => {

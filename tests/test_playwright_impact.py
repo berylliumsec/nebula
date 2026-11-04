@@ -238,6 +238,14 @@ def test_full_manifest_covers_every_product_browser_spec_without_filters():
     assert {entry["test_match"] for entry in MANIFEST["full_include"]} == product_specs
     # Area greps can omit later cases in an otherwise catalogued file.
     assert all(not entry.get("grep") for entry in MANIFEST["full_include"])
+    core = [
+        entry for entry in MANIFEST["full_include"]
+        if entry["test_match"] == "tests/real-core.spec.ts"
+    ]
+    for project in {entry["project"] for entry in core}:
+        assert {entry["shard"] for entry in core if entry["project"] == project} == {
+            f"{shard}/6" for shard in range(1, 7)
+        }
 
 
 def test_browser_area_only_collects_named_browser_assistant_journeys():
@@ -326,7 +334,7 @@ def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():
     for selector, shards in (
         ("entry:core-api/real-core", {"1/4", "2/4", "3/4", "4/4"}),
         ("entry:desktop-shell/real-core", {"1/4", "2/4", "3/4", "4/4"}),
-        ("entry:full/real-core", {"1/1"}),
+        ("entry:full/real-core", {f"{shard}/6" for shard in range(1, 7)}),
     ):
         entries = selected_entries(MANIFEST, [selector])
         assert {entry["shard"] for entry in entries} == shards

@@ -217,6 +217,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [skillCatalog, setSkillCatalog] = useState<SkillCatalogInfo>();
   const [nativeSkills, setNativeSkills] = useState<HarnessSkillSummary[]>([]);
   const [skillCatalogError, setSkillCatalogError] = useState<string>();
+  const [skillCatalogLoading, setSkillCatalogLoading] = useState(false);
 
   useEffect(() => {
     if (!api || !["ready", "degraded"].includes(workspaceState)) {
@@ -240,10 +241,13 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
 
   useEffect(() => {
     if (!api || !engagement?.id || !["ready", "degraded"].includes(workspaceState)) {
-      setSkillCatalog(undefined); setNativeSkills([]); setSkillCatalogError(undefined); return;
+      setSkillCatalog(undefined); setNativeSkills([]); setSkillCatalogError(undefined); setSkillCatalogLoading(false); return;
     }
     const controller = new AbortController();
+    setSkillCatalog(undefined);
+    setNativeSkills([]);
     setSkillCatalogError(undefined);
+    setSkillCatalogLoading(true);
     void Promise.all([
       api.getSkillCatalog(engagement.id, controller.signal),
       api.listSkills(engagement.id, controller.signal),
@@ -253,6 +257,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer project load
       void logCaughtDiagnostic("interface.settings_page.skill_catalog_failed", "The skill catalog could not be loaded.", error, "settings_page");
       setSkillCatalogError(error instanceof Error ? error.message : "Skill catalog could not be loaded.");
+    }).finally(() => {
+      if (!controller.signal.aborted) setSkillCatalogLoading(false);
     });
     return () => controller.abort();
   }, [api, engagement?.id, workspaceState]);
@@ -874,9 +880,13 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       </section>
       <section className="settings-section" id="native-skill-settings" data-guide="shared-skills">
         <div className="section-heading"><div><h2>Shared skills</h2><p>Provider-neutral `.agents/skills` catalogs</p></div><ShowMeHow guide="project-skills" /></div>
-        {skillCatalogError && <DiagnosticErrorNotice error={skillCatalogError} fallback="Skill catalog could not be loaded." />}
-        {skillCatalog && <div className="provider-dialog-note"><p>Project: <code>{skillCatalog.projectRoot}</code></p><p>Managed: <code>{skillCatalog.managedRoot}</code></p></div>}
-        {nativeSkills.length ? <ul>{nativeSkills.map(skill => <li key={skill.path}><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}</small></li>)}</ul> : skillCatalog && <p className="setup-footnote">Add a folder containing <code>SKILL.md</code> to either catalog. Skills then appear in chat’s <code>$</code> picker.</p>}
+        <div className="settings-skill-catalog" role="region" aria-label="Shared skill catalogs" aria-busy={skillCatalogLoading} tabIndex={0}>
+          {skillCatalogLoading && <p className="setup-footnote">Reading skill catalogs…</p>}
+          {skillCatalogError && <DiagnosticErrorNotice error={skillCatalogError} fallback="Skill catalog could not be loaded." />}
+          {skillCatalog && <div className="provider-dialog-note"><p>Project: <code>{skillCatalog.projectRoot}</code></p><p>Managed: <code>{skillCatalog.managedRoot}</code></p></div>}
+          {nativeSkills.length ? <ul>{nativeSkills.map(skill => <li key={skill.path}><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}</small></li>)}</ul> : skillCatalog && <p className="setup-footnote">Add a folder containing <code>SKILL.md</code> to either catalog. Skills then appear in chat’s <code>$</code> picker.</p>}
+          {!skillCatalogLoading && !skillCatalog && !skillCatalogError && <p className="setup-footnote">{engagement ? "Skill catalogs are unavailable." : "Select a project to review shared skills."}</p>}
+        </div>
       </section>
       </SettingsGroup>
       <SettingsGroup id="automation-settings" title="Automation" summary="Harnesses, follow-up, and isolated runtimes" open={openAdvancedGroup === "automation-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "automation-settings"}>
