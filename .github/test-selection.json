@@ -1,12 +1,12 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated runtime and interface regressions are covered by focused Python, native and component tests, 174 affected mocked-browser cases, and the affected real-Core journeys across desktop/mobile Chromium and WebKit. Manual full-suite runs are explicitly authorized by the user and now include every product browser spec with its required runtime; release-only checks use a fresh disposable Core, private test token and production bundle. The final CPU diagnostics regressions and all product-help retrieval/index synchronization tests cover the last full-source failures. Phone regressions cover all newly observed real-Core cases across six Chromium/WebKit profiles.",
+  "reason": "Independently validated runtime and interface regressions are covered by focused Python, native and component tests, 174 affected mocked-browser cases, and the affected real-Core journeys across desktop/mobile Chromium and WebKit. Manual full-suite runs are explicitly authorized by the user and now include every product browser spec with its required runtime; release-only checks use a fresh disposable Core, private test token and production bundle. The final CPU diagnostics regressions and all product-help retrieval/index synchronization tests cover the last full-source failures. Phone regressions cover all newly observed real-Core cases across six Chromium/WebKit profiles. Complete-file thinking checks across eight profiles and the narrow MCP project-scope case verify the standalone regressions exposed by the full catalog. The complete packaging file verifies the paired CLI source/script boundary, and MissionControls verifies local-clock behavior with a deterministic clock.",
   "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
-    "python": 1275,
-    "frontend": 135,
+    "python": 1317,
+    "frontend": 142,
     "native": 1,
-    "playwright": 430
+    "playwright": 463
   },
   "python": [
     "tests/test_playwright_impact.py",
@@ -37,7 +37,7 @@
     "tests/v3/test_inference_timeouts_probe_budget.py",
     "tests/v3/test_install_routing.py",
     "tests/v3/test_operator_help.py",
-    "tests/v3/test_packaging.py::test_nebula3_runtime_has_no_conditional_import_fallbacks",
+    "tests/v3/test_packaging.py",
     "tests/v3/test_product_knowledge.py",
     "tests/v3/test_report_cpu_activation.py::test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery",
     "tests/v3/test_row_horizon.py",
@@ -63,6 +63,7 @@
     "ui/src/components/AssistantSetupLinks.test.tsx",
     "ui/src/components/ChatStudioRail.test.tsx",
     "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/MissionControls.test.tsx",
     "ui/src/components/PostToolAssistant.test.tsx",
     "ui/src/components/SideNav.test.tsx",
     "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx",
@@ -79,10 +80,11 @@
     "area:universal-agents",
     "area:test-suite-regressions",
     "area:test-suite-core-regressions",
-    "area:mobile-core-regressions"
+    "area:mobile-core-regressions",
+    "area:catalog-test-regressions"
   ],
   "python_node": true,
-  "change_digest": "cdde7c445666058f432fca99b2edff40ba0b95a8836fbd5bf738b934b8b4d054",
+  "change_digest": "21b10d166979933f0c0bcd4c8be9e95a919626f7392eb399c0661d5273e555b7",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }

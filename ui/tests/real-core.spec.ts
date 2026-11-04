@@ -8317,11 +8317,8 @@ for (const runtime of ["provider", "harness"] as const) {
       await dialog.getByRole("button", {name: runtime === "provider" ? "Save provider" : "Save harness", exact: true}).click();
       await expect(dialog).toHaveCount(0);
       await page.reload();
-      const providerEntry = page.getByRole("button", {name: /^Model providers /});
-      if (runtime === "provider") {
-        await expect(providerEntry.or(card).filter({visible: true}).first()).toBeVisible();
-        if (await providerEntry.isVisible()) await providerEntry.click();
-      }
+      await expect(settingsEntry.or(card).filter({visible: true}).first()).toBeVisible();
+      if (await settingsEntry.isVisible()) await settingsEntry.click();
       await expect(card).toBeVisible();
       await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
       await expect(models).toHaveValue(model!);
@@ -14259,9 +14256,16 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
         element.scrollTop = (element.scrollHeight - element.clientHeight) / 2;
       });
     };
-    await centerTranscript();
-    // Every saved answer is on screen exactly once, without a reload.
-    await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
+    const expectSavedTranscript = async () => {
+      // Core can settle the goal before the viewer receives its final history.
+      // Recenter against that growing list so both ends stay in the virtual window.
+      await expect.poll(async () => {
+        await centerTranscript();
+        return page.locator(".chat-message.assistant").count();
+      }, {timeout: 20_000}).toBe(saved.length);
+    };
+    // Every saved answer is mounted exactly once, without a reload.
+    await expectSavedTranscript();
     await expect(page.locator(".chat-message.assistant").filter({ hasText: "finished after the viewer detached." })).toHaveCount(goalAnswers.length);
     await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 20_000 });
     await expectNoChatStreamFailure(page);
@@ -14269,8 +14273,7 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
     await page.reload();
     await expect(page.locator(".chat-message.assistant").first()).toBeVisible({timeout: 20_000});
-    await centerTranscript();
-    await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
+    await expectSavedTranscript();
     await testInfo.attach("core-started-goal-turns", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, goalAnswers: goalAnswers.length }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("core-started-goal-turns.png") });
   }, [
