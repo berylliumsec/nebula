@@ -68,6 +68,9 @@ body { font-size: var(--type-body); line-height: var(--leading-ui); }
   min-height: 60px;
 }
 :where(.provider-dialog, .modal-surface) > footer .button { min-height: var(--control-height); }
+@media (pointer: coarse) {
+  :where(.provider-dialog, .modal-surface) > footer .button { min-height: var(--touch-target); }
+}
 
 /* Primary reading content */
 .page-header p,

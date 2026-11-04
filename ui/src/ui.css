@@ -76,6 +76,9 @@
    would stack the fixed-width companion above the conversation. */
 .sessions-page.chat-focus .session-workspace.chat-companion-open:not(.expanded) { display: grid !important; }
 .sessions-page.chat-focus .session-workspace > :is(.side-chat-divider, .side-chat-pane, .chat-side-terminal, .side-chat-resize-handle) { display: none !important; }
+/* Numbered tool tabs keep their split slot, like legacy companions. */
+.sessions-page.chat-focus .session-workspace.side-tool-active { display: grid !important; }
+.sessions-page.chat-focus .session-workspace.side-tool-active > .side-chat-divider { display: block !important; }
 .sessions-page.chat-focus .conversation-toolbar { flex: 0 0 auto; min-height: 64px; padding: 8px 20px; border-bottom: 1px solid var(--border-soft); border-radius: 0; }
 .sessions-page.chat-focus .conversation-toolbar .session-conversations-toggle,
 .sessions-page.chat-focus .conversation-toolbar .session-toolbar-actions > :not(.workbench-full-screen-toggle),
@@ -200,6 +203,12 @@
   :root .main-content > .sessions-page.chat-active:not(.full-screen) { padding-block: 4px; }
   .main-content:has(> .sessions-page.chat-active:not(.full-screen)) > .workspace-notices { max-height: min(24%, 44px); }
   .chat-panel > .chat-composer { margin-block: 2px; max-height: calc(100% - 4px); }
+  /* Keep the transcript measurable when recovery, search and composition cannot
+     fit together. The panel scrolls to each control instead of clipping it. */
+  .chat-panel { overflow-y: auto; overscroll-behavior: contain; }
+  .chat-panel > .chat-thread { min-height: 96px; flex: 1 0 96px; }
+  .chat-panel > .chat-composer { flex: 0 0 auto; max-height: none; overflow: visible; }
+  .chat-panel > .assistant-search { max-height: 160px; overflow-y: auto; }
 }
 
 /* Recovery and composition form one scrollable surface in short app windows. */

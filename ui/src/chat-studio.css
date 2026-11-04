@@ -61,6 +61,9 @@
 }
 .chat-studio .chat-scroll { padding-block: 26px 34px; }
 .chat-studio .chat-message { margin-bottom: 25px; }
+/* A transformed virtual row owns its stacking context. Keep the operator's
+   floating actions above the following row while they are being used. */
+.chat-virtual-item:has(.chat-message.operator:is(:hover, :focus-within)) { z-index: 1; }
 .chat-studio .chat-catch-up {
   padding: 13px 2px;
   border-top: 1px solid var(--border-soft);

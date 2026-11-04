@@ -2065,8 +2065,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       if (document.visibilityState === "hidden") return;
       void api.getChatTaskPlans(sessionId, controller.signal).then(result => {
         if (!controller.signal.aborted) {
-          setTaskPlans(result.plans);
-          setPlanDirectives(result.directives);
+          setTaskPlans(current => sameJson(current, result.plans) ? current : result.plans);
+          setPlanDirectives(current => sameJson(current, result.directives) ? current : result.directives);
         }
       }).catch(error => {
         if (!controller.signal.aborted) void logCaughtDiagnostic("interface.chat.task_plans_refresh_failed", "Task plan activity could not be refreshed.", error, "chat-planning");
@@ -4631,7 +4631,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const addToolTab = (kind: SideToolKind) => {
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     updateSearchParams(params => {
-      if (params.get("session") !== sessionId) return;
+      if ((params.get("session") ?? "") !== sessionId) return;
       if (appendSideToolTab(params, kind, id)) {
         if (kind === "browser") params.set(`panelBrowserEngine.${id}`, "native");
       } else setChatError("Close a side tab before opening another.");
@@ -6907,7 +6907,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   </div>;
                   const item = transcriptItems[virtualItem.index - virtualMessageOffset];
                   if (!item) return null;
-                  return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
+                  return <div className="chat-virtual-item" key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
                     {item.kind === "message" ? renderTranscriptMessage(item.message) : <ChatSubagentTranscriptGroup
                       groupKey={item.key}
                       messages={item.messages}

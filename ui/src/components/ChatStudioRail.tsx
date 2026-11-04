@@ -41,10 +41,14 @@ export function ChatStudioRail({
         aria-controls="chat-studio-goal-editor" onClick={onToggleGoal}>
         {goalEditorOpen ? "Hide full goal" : goal ? "View full goal and evidence gates" : "Create goal"} <ArrowUpRight size={14} aria-hidden="true" />
       </button>}
-      {!canEditGoal && objective && <details className="chat-studio-goal-details">
+      {!canEditGoal && goal && <details className="chat-studio-goal-details">
         <summary>View full goal</summary>
-        <p>{objective}</p>
-        {harnessGoal?.currentStep && <p>Current step: {harnessGoal.currentStep}</p>}
+        <p>{goal.objective}</p>
+      </details>}
+      {harnessGoal && <details className="chat-studio-goal-details">
+        <summary>{goal ? "View native harness goal" : "View full goal"}</summary>
+        <p>{harnessGoal.objective}</p>
+        {harnessGoal.currentStep && <p>Current step: {harnessGoal.currentStep}</p>}
       </details>}
     </section>
 
