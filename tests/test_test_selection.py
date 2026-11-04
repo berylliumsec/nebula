@@ -261,7 +261,14 @@ def test_manual_full_runs_require_fresh_explicit_approval():
         (ROOT / ".github/workflows/regression-integrations.yml").read_text()
     )
     # Public model downloads and real rootless runtimes stay manual-only.
-    assert set(integrations.get("on", integrations.get(True))) == {"workflow_dispatch"}
+    assert set(integrations.get("on", integrations.get(True))) == {
+        "workflow_dispatch",
+        "workflow_call",
+    }
+    assert jobs["full-integrations"]["needs"] == "full-approval"
+    assert jobs["full-integrations"]["if"] == (
+        "inputs.full_scope == 'all' || inputs.full_scope == 'integrations'"
+    )
     integration_jobs = integrations["jobs"]
     assert integration_jobs["integration-checks"]["needs"] == "approval"
     approval = integration_jobs["approval"]["steps"][0]

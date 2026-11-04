@@ -11,6 +11,14 @@ on:
         description: Who requested these nine checks and why
         required: true
         type: string
+  workflow_call:
+    inputs:
+      full_approval:
+        required: true
+        type: string
+      review_reason:
+        required: true
+        type: string
 
 permissions:
   contents: read

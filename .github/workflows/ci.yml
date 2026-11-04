@@ -18,7 +18,7 @@ on:
         description: Full regression layer
         type: choice
         default: all
-        options: [all, source, native]
+        options: [all, source, native, integrations]
 
 permissions:
   contents: read
@@ -143,6 +143,14 @@ jobs:
         with:
           name: full-native-test-results
           path: ${{ runner.temp }}/full-tests-native*.txt
+
+  full-integrations:
+    needs: full-approval
+    if: inputs.full_scope == 'all' || inputs.full_scope == 'integrations'
+    uses: ./.github/workflows/regression-integrations.yml
+    with:
+      full_approval: ${{ inputs.full_approval }}
+      review_reason: ${{ inputs.review_reason }}
 
   selection:
     runs-on: ubuntu-latest

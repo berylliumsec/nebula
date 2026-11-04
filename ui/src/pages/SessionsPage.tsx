@@ -1876,6 +1876,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
   const explicitNewConversationRef = useRef(false);
   const pendingSessionNavigationRef = useRef<string | undefined>(undefined);
+  const chatToolsRestorationRef = useRef<string | undefined>(undefined);
   const sessionSelectionGenerationRef = useRef(0);
   const chatSwitchMeasuresRef = useRef<ChatSwitchMeasure[]>([]);
   const reconciledTerminalHarnessTurnsRef = useRef(new Set<string>());
@@ -4155,6 +4156,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setResolvedApproval(undefined);
     setConversationOpen(true);
     if (updateUrl) {
+      if (intent === "restore") chatToolsRestorationRef.current = id;
       pendingSessionNavigationRef.current = id;
       openSessionChatView(id);
     }
@@ -4974,7 +4976,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const pendingNavigation = pendingSessionNavigationRef.current;
     if (pendingNavigation) {
       if (requestedSessionId === pendingNavigation) pendingSessionNavigationRef.current = undefined;
-      else return;
+      else if (latestSearchParams().get(embeddedSideChat ? "sideChat" : "session") === pendingNavigation) return;
+      // A newer URL can replace our write before React commits its location.
+      else pendingSessionNavigationRef.current = undefined;
     }
     if (!requestedSessionId) {
       explicitNewConversationRef.current = false;
@@ -6639,7 +6643,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [chatToolsOpen]);
-  useEffect(() => { setChatToolsOpen(false); }, [sessionId, view]);
+  useEffect(() => { setChatToolsOpen(false); }, [view, routeProjectId]);
+  useEffect(() => {
+    // Hydrating the chat already named by the URL is not a new navigation.
+    // Initial recent-chat restoration carries that intent when it writes the URL.
+    const restoring = chatToolsRestorationRef.current === requestedSessionId;
+    chatToolsRestorationRef.current = undefined;
+    if (!restoring) setChatToolsOpen(false);
+  }, [requestedSessionId]);
   const focusAction = <button className="icon-button subtle workbench-full-screen-toggle" type="button"
             aria-label={fullScreen ? "Exit focus mode" : "Enter focus mode"}
             title={fullScreen ? "Exit focus mode" : "Enter focus mode"}

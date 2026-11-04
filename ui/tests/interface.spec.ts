@@ -9558,7 +9558,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
       const completed = await harnessCompleted();
       await route.fulfill({json: {
         schema: "nebula.session-state/v1", session_id: "chat-harness-completion", revision: completed ? 2 : 1,
-        turn_id: harnessTurnId, harness_turn_id: harnessTurnId, execution: completed ? "idle" : "running", busy: !completed,
+        turn_id: "chat-turn-completion", harness_turn_id: harnessTurnId, execution: completed ? "idle" : "running", busy: !completed,
         detail: completed ? "Verification completed successfully." : "A harness turn is currently running.",
         connection: "connected", actions: completed ? [] : ["stop", "steer"], pending: [], decisions: [],
       }});

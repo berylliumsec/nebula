@@ -5843,6 +5843,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     await browser.getByRole("button", { name: "Select folder" }).click();
     await expect(switcher.getByLabel("Project folder", { exact: true })).toHaveValue(paginatedFolder);
     await switcher.getByRole("button", { name: "Create in Host mode" }).click();
+    await expect(page).toHaveURL(/\/projects\/[^/]+\/workbench(?:[?#]|$)/);
     await showProjectNavigation(page);
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Linked Folder Acceptance");
 
@@ -10787,7 +10788,8 @@ test.describe("Butler Voice saved conversation", () => {
 
   test("assistant upgrade Butler Voice keeps two spoken turns in one saved conversation on production LAN Core", async ({page}, testInfo) => {
     test.setTimeout(180_000);
-    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), tls: true});
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), tls: true,
+      fixtureScript: path.resolve(import.meta.dirname, "fixtures/available_host_core.py")});
     const stub = await startLocalModelStub({responseContent: "First voice answer retained."});
     const api = await playwrightRequest.newContext({
       baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
@@ -13578,7 +13580,8 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
 
 test("assistant upgrade popup forks history and discards on real Core", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
-  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    fixtureScript: path.resolve(import.meta.dirname, "fixtures/available_host_core.py")});
   const modelStub = await startLocalModelStub({responseContent: "**Core is continuing in Project A** and finished after the viewer detached."});
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   await withOwnedCleanup(async () => {

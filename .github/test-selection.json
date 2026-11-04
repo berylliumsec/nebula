@@ -1,10 +1,10 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated runtime, layout and navigation regressions are covered by 1317 Python, 156 frontend, one shared native contract and 527 focused browser cases. Browser coverage includes the original affected journeys, every newly observed phone Core journey across six Chromium/WebKit profiles, all thinking profiles, narrow MCP switching and 64 latest layout/status/Back cases across twelve profiles. Full Python/frontend/native and all 18 product browser specs are exercised by manual runs explicitly authorized by the user; release acceptance uses a disposable paired LAN Core and clean production bundle. Usage videos remain separate, and no operator data or live provider credentials are used.",
+  "reason": "Independently validated runtime, layout and navigation regressions are covered by 1317 Python, 178 frontend, one shared native contract and 527 focused browser cases. Browser coverage includes the original affected journeys, every newly observed phone Core journey across six Chromium/WebKit profiles, all thinking profiles, narrow MCP switching and 64 latest layout/status/Back cases across twelve profiles. Full Python/frontend/native and all 18 product browser specs are exercised by manual runs explicitly authorized by the user; release acceptance uses a disposable paired LAN Core and clean production bundle. Usage videos remain separate, and no operator data or live provider credentials are used.",
   "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
     "python": 1317,
-    "frontend": 156,
+    "frontend": 178,
     "native": 1,
     "playwright": 527
   },
@@ -63,6 +63,7 @@
     "ui/src/components/AssistantSetupLinks.test.tsx",
     "ui/src/components/ChatStudioRail.test.tsx",
     "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/ManagedAssistantBrowser.test.tsx",
     "ui/src/components/MissionControls.test.tsx",
     "ui/src/components/PostToolAssistant.test.tsx",
     "ui/src/components/SideNav.test.tsx",
@@ -88,7 +89,7 @@
     "area:latest-browser-regressions"
   ],
   "python_node": true,
-  "change_digest": "480ca4a83aba80e24359b6bb02e1527534f8868f218d43d1f2fdb8bf3c6b6261",
+  "change_digest": "9bb5533263adef97c4113bdcc224b4fcb1cc117b07098808cfe956e28449f30f",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request.",
   "full_suite_integration_selection": {
@@ -105,6 +106,8 @@
       "tests/v3/test_sandbox_integration.py::test_real_rootless_runtime_opens_and_removes_container_terminal",
       "tests/v3/test_human_terminal_integration.py::test_real_kali_terminal_is_root_writable_networked_and_ephemeral"
     ],
-    "reason": "The user requested all tests run and pass. Independent validation identified9 CPU-runnable checks skipped for missing tools/models/runtime. This manual job installs real pinned notebook/model dependencies and rootless Podman, and rejects every skip. A live vLLM Qwen endpoint is separately required for the final optional live-provider test."
+    "reason": "The user requested all tests run and pass. Independent validation identified9 CPU-runnable checks skipped for missing tools/models/runtime. This manual job installs real pinned notebook/model dependencies and rootless Podman, and rejects every skip. A live vLLM Qwen endpoint is separately required for the final optional live-provider test.",
+    "dispatch_workflow": ".github/workflows/ci.yml",
+    "full_scope": "integrations"
   }
 }
