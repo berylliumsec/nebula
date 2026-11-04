@@ -119,7 +119,7 @@ class ButlerReportBroker:
         del scope, approval
         if (
             invocation.origin != ToolCallOrigin.CHAT
-            or invocation.requested_by != "chat-assistant"
+            or invocation.requested_by not in {"chat-assistant", "harness-gateway"}
             or invocation.chat_turn_id is None
             or invocation.chat_session_id is None
             or invocation.run_id != invocation.chat_turn_id
@@ -143,7 +143,9 @@ class ButlerReportBroker:
             turn_id=invocation.chat_turn_id,
             idempotency_key=invocation.idempotency_key or invocation.id,
             body=body,
-            source="provider_tool",
+            source="harness_adapter"
+            if invocation.runtime_session_kind == "harness"
+            else "provider_tool",
             expected_project_id=invocation.engagement_id,
             expected_session_id=invocation.chat_session_id,
         )

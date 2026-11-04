@@ -139,7 +139,7 @@ def search_archived_conversation(
         "tool": CONVERSATION_SEARCH_TOOL_NAME,
         "query": query,
     }
-    if snapshot is None:
+    if snapshot is None and session.backend.value != "harness":
         return {
             **base,
             "archived_through": None,
@@ -157,15 +157,16 @@ def search_archived_conversation(
     # messages are unchanged, so a retraction here means it no longer serves.
     covered = {
         reference.source_id
-        for reference in snapshot.source_references
+        for reference in (snapshot.source_references if snapshot is not None else [])
         if reference.source_kind == "chat_message"
     }
-    boundary = snapshot.compacted_through
+    boundary = snapshot.compacted_through if snapshot is not None else None
     archived = sorted(
         (
             message
             for message in store.list_session_entities(ChatMessage, session.id)
-            if message.id in covered and not message_is_replaced(message)
+            if (message.id in covered or session.backend.value == "harness")
+            and not message_is_replaced(message)
         ),
         key=lambda item: (item.sequence, item.created_at, item.id),
     )

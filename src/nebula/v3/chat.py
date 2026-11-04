@@ -5355,6 +5355,24 @@ class ChatService:
                 else False,
             }
         )
+        if (
+            scoped_session is not None
+            and request.allow_subagents
+            and not (
+                request.subagent_provider_id or request.subagent_harness_profile_id
+            )
+        ):
+            saved_child = scoped_session.metadata.get("provider_subagent")
+            if isinstance(saved_child, dict):
+                request = request.model_copy(
+                    update={
+                        "subagent_provider_id": saved_child.get("provider_profile_id"),
+                        "subagent_harness_profile_id": saved_child.get(
+                            "harness_profile_id"
+                        ),
+                        "subagent_model": saved_child.get("model"),
+                    }
+                )
         settings_only = request.control_assistant
         if request.backend != ChatBackend.PROVIDER or request.provider_id is None:
             raise ChatConfigurationError(
@@ -5590,6 +5608,19 @@ class ChatService:
                 or self.subagents.depth(session) < SUBAGENT_DEPTH_CEILING
             )
         )
+        child_runtime = None
+        if subagents_enabled and (
+            request.subagent_provider_id or request.subagent_harness_profile_id
+        ):
+            assert engagement_id is not None
+            child_runtime = self.subagents.validate_harness_setting(
+                engagement_id,
+                request.subagent_provider_id or "",
+                request.subagent_model or "",
+                request.max_active_subagents,
+                request.subagent_reasoning_effort,
+                request.subagent_harness_profile_id,
+            )
         agent_messaging_enabled = bool(
             request.allow_agent_messaging
             and not subagent_child
@@ -6599,6 +6630,7 @@ class ChatService:
                     "browser_session_id": browser_session_id,
                     "application_model_context": model_context,
                     "allow_subagents": subagents_enabled,
+                    "provider_subagent": child_runtime,
                     "subagent_child": child_messaging,
                     "allow_agent_messaging": agent_messaging_enabled,
                     "work_enabled": work_enabled,
@@ -13568,7 +13600,11 @@ class ChatService:
                         turn.id,
                         {
                             "error": (
-                                "Core recovered the recorded hook outcome and will resume this response automatically."
+                                (
+                                    "Core recovered the recorded hook outcome. Review and retry the harness response."
+                                    if turn.backend == ChatBackend.HARNESS
+                                    else "Core recovered the recorded hook outcome and will resume this response automatically."
+                                )
                                 if not remaining
                                 and not recovery.get("unknown_tool_call_ids")
                                 else turn.error
@@ -13578,6 +13614,12 @@ class ChatService:
                                 "recovery": {
                                     **recovery,
                                     "unknown_hook_execution_ids": remaining,
+                                    "required": bool(
+                                        remaining
+                                        or recovery.get("unknown_tool_call_ids")
+                                    )
+                                    if turn.backend == ChatBackend.HARNESS
+                                    else recovery.get("required", True),
                                     "recorded_hook_outcome_ids": list(
                                         dict.fromkeys([*prior_recorded, *settled])
                                     ),
@@ -13859,6 +13901,11 @@ class ChatService:
                     "recovery": {
                         **(recovery or {}),
                         "unknown_hook_execution_ids": remaining,
+                        "required": bool(
+                            remaining or (recovery or {}).get("unknown_tool_call_ids")
+                        )
+                        if turn.backend == ChatBackend.HARNESS
+                        else (recovery or {}).get("required", True),
                         "last_reconciled_at": utc_now().isoformat(),
                     },
                 },
@@ -16201,6 +16248,15 @@ class ChatService:
             "tools_enabled": prepared.source_request.tools_enabled,
             "mcp_server_ids": list(prepared.source_request.mcp_server_ids),
             "hook_ids": list(prepared.source_request.hook_ids),
+            "provider_subagent": (
+                prepared.source_request.harness_provider_subagent()
+                if prepared.source_request.allow_subagents
+                and (
+                    prepared.source_request.subagent_provider_id
+                    or prepared.source_request.subagent_harness_profile_id
+                )
+                else None
+            ),
             # Absent means the model's own default, which is a real choice and
             # must survive a reload as one.
             "reasoning_effort": prepared.source_request.reasoning_effort,

@@ -83,6 +83,7 @@ from .chat import (
     ChatPrivacyError,
     ChatRequestMessage,
     ChatService,
+    _turn_end_hook_payload,
     HarnessKnowledgeSearchResult,
     resolve_chat_model_content,
 )
@@ -101,6 +102,7 @@ from .chat_subagents import (
     harness_subagent_instructions,
     subagent_capabilities_schema,
     subagent_limit,
+    subagent_specs,
 )
 from .chat_agent_messages import AgentMessageService
 from .work import WorkCheckIn, WorkCreate, WorkGetRequest, WorkListRequest, WorkService
@@ -109,6 +111,7 @@ from .butler_memory import BUTLER_MEMORY_INSTRUCTION
 from .credentials import CredentialError, CredentialStore
 from .artifacts import ArtifactStore
 from .domain import (
+    BrowserSession,
     AgentRun,
     Approval,
     ApprovalStatus,
@@ -691,7 +694,7 @@ def _gateway_subagent_tools(
     return {
         "subagent.capabilities": (
             "List the child runtime and the capabilities this conversation may assign to its subagents.",
-            {"type": "object", "properties": {}, "additionalProperties": False},
+            subagent_specs()["list_subagent_capabilities"].input_schema,
         ),
         "subagent.start": (
             "Delegate one independent, multi-step task to a parallel subagent on the "
@@ -900,6 +903,8 @@ def _session_native_capabilities(
         if isinstance(raw, dict)
         else profile.native_capabilities
     )
+    if session.metadata.get("core_guarded_tools"):
+        return HarnessNativeCapabilities()
     if _session_execution_mode(session) == "host":
         return capabilities
     # Only host sessions run in the linked project workspace, so a session that
@@ -920,7 +925,8 @@ def _gateway_only_core_planned_session(
     session: HarnessSession, kind: HarnessKind
 ) -> bool:
     return kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP} and (
-        (
+        session.metadata.get("core_guarded_tools") is True
+        or (
             kind == HarnessKind.GROK_ACP
             and session.metadata.get("core_plan_isolated") is True
         )
@@ -8835,6 +8841,8 @@ class HarnessRuntimeService:
             str, RuntimeToolComponents | AutomationToolComponents
         ] = {}
         self._gateway_oci_tool_maps: dict[str, dict[str, str]] = {}
+        self._gateway_core_components: dict[str, RuntimeToolComponents | None] = {}
+        self._connection_core_bindings: dict[str, str] = {}
         self._gateway_execution_gates: dict[str, asyncio.Semaphore] = {}
         self._gateway_target_gates: dict[tuple[str, str, str], asyncio.Semaphore] = {}
         self._broker_approval_ids: set[str] = set()
@@ -9398,6 +9406,8 @@ class HarnessRuntimeService:
         )
         self._gateways.clear()
         self._gateway_tool_maps.clear()
+        self._gateway_core_components.clear()
+        self._connection_core_bindings.clear()
         self._gateway_oci_tool_maps.clear()
         self._gateway_oci_components.clear()
         self._broker_approval_ids.clear()
@@ -10844,6 +10854,11 @@ class HarnessRuntimeService:
         content_blocks: list[ChatContentBlock] | None = None,
         provider_subagent: dict[str, Any] | None = None,
         pending_provider_subagent: dict[str, Any] | None = None,
+        hook_ids: list[str] | None = None,
+        skill_selections: list[dict[str, str]] | None = None,
+        allowed_tool_names: list[str] | None = None,
+        allow_mcp_catalog: bool = True,
+        ssh_environment_ids: list[str] | None = None,
         allow_agent_messaging: bool | None = None,
         control_assistant: bool = False,
         butler_initiated: bool = False,
@@ -10859,6 +10874,126 @@ class HarnessRuntimeService:
 
         saved_chat = (
             self.store.get(ChatSession, chat_session_id) if chat_session_id else None
+        )
+        saved_tools = (
+            saved_chat.metadata.get("core_tool_selection", {}) if saved_chat else {}
+        )
+        if allowed_tool_names is None and "allowed_tool_names" in saved_tools:
+            allowed_tool_names = saved_tools["allowed_tool_names"]
+        if not allow_mcp_catalog or saved_tools.get("allow_mcp_catalog") is False:
+            allow_mcp_catalog = False
+        if ssh_environment_ids is None and "ssh_environment_ids" in saved_tools:
+            ssh_environment_ids = saved_tools["ssh_environment_ids"]
+        if skill_selections is None:
+            skill_selections = saved_tools.get("skill_selections")
+        from .native_hooks import discover_native_hooks, snapshot_native_hook
+        from .skill_catalog import (
+            SkillSelection,
+            discover_skills,
+            native_skill_roots,
+            snapshot_skill,
+        )
+        from .mcp import catalog_mcp_profiles
+        from .tool_catalog import on_demand_enabled
+        from .environments import resolve_ssh_environments
+
+        workspace = self.workspace_resolver(engagement_id)
+        browser_ids = {
+            item.get("source_id")
+            for item in context_attachments or []
+            if item.get("source_kind") == "browser_page" and item.get("source_id")
+        }
+        if len(browser_ids) > 1:
+            raise HarnessConfigurationError(
+                "attach one browser session per conversation"
+            )
+        browser_session_id = next(iter(browser_ids), None)
+        if (
+            browser_session_id
+            and self.store.get(BrowserSession, browser_session_id).engagement_id
+            != engagement_id
+        ):
+            raise HarnessConfigurationError(
+                "browser context belongs to another project"
+            )
+        selected_hooks = list(
+            hook_ids
+            if hook_ids is not None
+            else (saved_chat.metadata.get("hook_ids", []) if saved_chat else [])
+        )
+        if len(selected_hooks) != len(set(selected_hooks)):
+            raise HarnessConfigurationError("lifecycle hook IDs must be unique")
+        if saved_chat and selected_hooks:
+            from .domain import NativeHookExecution
+
+            unresolved = [
+                item
+                for item in self.store.list_session_entities(
+                    NativeHookExecution, saved_chat.id
+                )
+                if item.hook_id in selected_hooks
+                and item.side_effects != "none"
+                and item.status in {"running", "interrupted"}
+                and not (item.late_outcome and item.late_outcome.status == "complete")
+            ]
+            if unresolved:
+                raise HarnessConfigurationError(
+                    "A selected lifecycle hook has an unknown effect outcome. Review and reconcile its saved execution before retrying."
+                )
+        hook_catalog = discover_native_hooks(workspace) if selected_hooks else []
+        hook_snapshots = [
+            snapshot_native_hook(identity, hook_catalog) for identity in selected_hooks
+        ]
+        managed_skills = (
+            self.provider_subagents.chat.managed_skill_root
+            if self.provider_subagents is not None
+            else None
+        )
+        skill_catalog = (
+            discover_skills(native_skill_roots(workspace, managed_skills))
+            if skill_selections
+            else []
+        )
+        core_skills = [
+            snapshot_skill(SkillSelection.model_validate(item), skill_catalog)
+            for item in skill_selections or []
+        ]
+        from .skill_catalog import skill_instructions
+
+        core_data_allowed = profile.privacy.local_only or (
+            profile.privacy.permits_sensitive_data
+            and (allow_remote_mcp or profile.privacy.auto_share_tool_results)
+        )
+        if core_skills and not core_data_allowed:
+            raise HarnessConfigurationError(
+                "Core skill instructions require permission to share project data and explicit operator confirmation for a remote harness"
+            )
+        runtime_context = (runtime_context or "") + skill_instructions(core_skills)
+        project = self.store.get(Engagement, engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, project.scope_policy_id)
+            if project.scope_policy_id
+            else ScopePolicy(engagement_id=engagement_id)
+        )
+        catalog_profiles = (
+            catalog_mcp_profiles(
+                self.store,
+                exclude=mcp_server_ids or [],
+                engagement_id=engagement_id,
+                bypass_permissions=scope.bypass_permissions,
+            )
+            if allow_mcp_catalog and on_demand_enabled(scope) and not control_assistant
+            else ()
+        )
+        if not profile.privacy.local_only and not (
+            profile.privacy.permits_sensitive_data
+            and (allow_remote_mcp or profile.privacy.auto_share_tool_results)
+        ):
+            catalog_profiles = ()
+        ssh_hosts = (
+            resolve_ssh_environments(self.store, ssh_environment_ids)
+            if ssh_environment_ids is not None
+            else ()
         )
         planning_enabled = bool(
             planning_enabled
@@ -11371,6 +11506,12 @@ class HarnessRuntimeService:
             if isinstance(oci_snapshot, dict)
             else []
         )
+        if (
+            ssh_environment_ids is None
+            and "run_command" in oci_tool_names
+            and not control_assistant
+        ):
+            ssh_hosts = resolve_ssh_environments(self.store, None)
         native_capabilities = HarnessNativeCapabilities.model_validate(
             session.metadata.get("native_capabilities", {})
         )
@@ -11444,6 +11585,12 @@ class HarnessRuntimeService:
                     )
                 )
             )
+        from .working_notes import read_working_notes, working_notes_block
+
+        if core_data_allowed:
+            runtime_context += "\n\n" + working_notes_block(
+                read_working_notes(self.store, chat.id)
+            )
         assistant_scope = (
             "\n\nYou are Butler, the second-in-command for the selected Nebula project. "
             "Respond to the operator's text or voice request; start or change work only when asked. "
@@ -11494,6 +11641,24 @@ class HarnessRuntimeService:
             request_snapshot={
                 "operator_decisions": operator_decisions,
                 "runtime": "harness",
+                "hook_snapshots": [
+                    item.model_dump(mode="json") for item in hook_snapshots
+                ],
+                "project_workspace_path": project_workspace_path,
+                "browser_session_id": browser_session_id,
+                "skill_snapshots": [
+                    item.model_dump(mode="json") for item in core_skills
+                ],
+                "allowed_tool_names": allowed_tool_names,
+                "allow_mcp_catalog": allow_mcp_catalog,
+                "mcp_catalog_snapshot": [
+                    item.model_dump(mode="json") for item in catalog_profiles
+                ],
+                "ssh_environment_ids": [item.id for item in ssh_hosts],
+                "ssh_environment_snapshot": [
+                    item.model_dump(mode="json") for item in ssh_hosts
+                ],
+                "allow_subagents": bool(subagent_setting),
                 "harness_profile_id": profile_id,
                 "harness_session_id": session.id,
                 "context_management": "runtime_managed",
@@ -11581,7 +11746,20 @@ class HarnessRuntimeService:
                 },
             },
         )
-        chat_turn = chat_turn.model_copy(update={"harness_turn_id": harness_turn.id})
+        chat_turn = chat_turn.model_copy(
+            update={
+                "harness_turn_id": harness_turn.id,
+                **(
+                    {
+                        "execution_owner_id": "harness-runtime",
+                        "execution_claim_id": chat_turn.id,
+                        "execution_claimed_at": utc_now(),
+                    }
+                    if goal is not None
+                    else {}
+                ),
+            }
+        )
         prior_messages = self._chat_messages(
             engagement_id, chat.id, include_replaced=True
         )
@@ -11647,6 +11825,40 @@ class HarnessRuntimeService:
                     },
                 )
             )
+        latest_chat = self.store.get(ChatSession, chat.id)
+        chat = self.store.update(
+            ChatSession,
+            chat.id,
+            {
+                "metadata": {
+                    **latest_chat.metadata,
+                    "hook_ids": selected_hooks,
+                    "core_tool_selection": {
+                        "allowed_tool_names": allowed_tool_names,
+                        "allow_mcp_catalog": allow_mcp_catalog,
+                        "ssh_environment_ids": [item.id for item in ssh_hosts],
+                        "skill_selections": skill_selections or [],
+                    },
+                }
+            },
+            expected_revision=latest_chat.revision,
+        )
+        guarded_commands = allowed_tool_names is not None or any(
+            {"tool.before", "tool.after"}.intersection(item.manifest.events)
+            for item in hook_snapshots
+        )
+        latest_session = self.store.get(HarnessSession, session.id)
+        self.store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **latest_session.metadata,
+                    "core_guarded_tools": guarded_commands,
+                }
+            },
+            expected_revision=latest_session.revision,
+        )
         return chat, chat_turn, harness_turn
 
     def _verified_provider_subagent(
@@ -12564,9 +12776,36 @@ class HarnessRuntimeService:
             )
         async with AsyncExitStack() as held_locks:
             await held_locks.enter_async_context(lock)
+            from .harness_hooks import (
+                HarnessHookBlocked,
+                finish_terminal_hooks,
+                run_turn_hooks,
+            )
+            from .native_hooks import NativeHookError
+
+            # Cover exits before the vendor stream starts as well as its normal
+            # cleanup. Read the final durable turn after any session rollover.
+            async def finish_hooks() -> None:
+                await finish_terminal_hooks(self, turn.id)
+
+            held_locks.push_async_callback(finish_hooks)
             try:
+                await run_turn_hooks(self, turn, "chat.turn.started")
                 turn = await self._ensure_harness_plan(turn, session)
-            except PlanningBlocked as exc:
+            except asyncio.CancelledError:
+                self._settle_orphaned_queued_turn(
+                    turn,
+                    "The harness turn stopped before its start guards completed.",
+                    reason="core_shutdown" if self._closed else "producer_cancelled",
+                )
+                raise
+            except (
+                PlanningBlocked,
+                HarnessHookBlocked,
+                NativeHookError,
+                OSError,
+                ValueError,
+            ) as exc:
                 # diagnostic-expected: the interrupted turn and blocked event are persisted.
                 self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, str(exc))
                 yield self._persist_activity(
@@ -12732,6 +12971,15 @@ class HarnessRuntimeService:
                 ),
             )
             final_message = ""
+            guarded_answer = bool(
+                turn.chat_turn_id
+                and any(
+                    "chat.turn.completed" in item.get("manifest", {}).get("events", [])
+                    for item in self.store.get(
+                        ChatTurn, turn.chat_turn_id
+                    ).request_snapshot.get("hook_snapshots", [])
+                )
+            )
             usage = ChatTokenUsage()
             usage_reported = False
             external_turn_id: str | None = None
@@ -12924,11 +13172,14 @@ class HarnessRuntimeService:
                         and event.payload.get("withdrawn") is True
                     ):
                         await self._retire_withdrawn_request(event)
-                    yield self._persist_activity(turn, session, event)
+                    if not (
+                        guarded_answer and event.type in {"message_delta", "completed"}
+                    ):
+                        yield self._persist_activity(turn, session, event)
                     if interrupted_reason or terminal_error:
                         break
                 if interrupted_reason or terminal_error:
-                    if interrupted_reason:
+                    if interrupted_reason and not guarded_answer:
                         self._keep_stopped_answer(
                             turn.id, final_message, usage, stopped_by_harness=True
                         )
@@ -12976,9 +13227,29 @@ class HarnessRuntimeService:
                 # that all durable chat state is ready to reload. Complete the
                 # owning chat/run first so a reconnect can never observe a
                 # terminal harness turn before its final assistant message.
+                await run_turn_hooks(
+                    self,
+                    turn,
+                    "chat.turn.completed",
+                    _turn_end_hook_payload("stop", None, final_message),
+                )
                 self._complete_owner(
                     turn, final_message, usage, usage_reported=usage_reported
                 )
+                if guarded_answer:
+                    yield self._persist_activity(
+                        turn,
+                        session,
+                        HarnessEvent(
+                            type="completed",
+                            origin=turn.origin,
+                            harness_profile_id=session.harness_profile_id,
+                            harness_session_id=session.id,
+                            harness_turn_id=turn.id,
+                            model=session.model,
+                            message=final_message,
+                        ),
+                    )
                 turn = self.store.get(HarnessTurn, turn.id)
                 turn = self.store.update(
                     HarnessTurn,
@@ -13051,7 +13322,8 @@ class HarnessRuntimeService:
                     remaining = MAX_NORMALIZED_TEXT - len(final_message)
                     if remaining > 0:
                         final_message += tail.delta[:remaining]
-                self._keep_stopped_answer(turn.id, final_message, usage)
+                if not guarded_answer:
+                    self._keep_stopped_answer(turn.id, final_message, usage)
                 await self._interrupt_connection(
                     session.id, connection, stage="turn-cancel"
                 )
@@ -13146,7 +13418,11 @@ class HarnessRuntimeService:
                     ),
                 )
             finally:
+                self._account_terminal_chat_usage(
+                    turn, usage, usage_reported=usage_reported or not prompt_accepted
+                )
                 self._active.pop(session.id, None)
+                self._gateway_core_components.pop(turn.id, None)
                 self._gateway_execution_gates.pop(turn.id, None)
                 self._gateway_target_gates = {
                     key: gate
@@ -13814,6 +14090,28 @@ class HarnessRuntimeService:
                 allow_agent_messaging=(
                     original_chat_turn.request_snapshot.get("allow_agent_messaging")
                     is True
+                ),
+                goal_id=original_chat_turn.goal_id,
+                hook_ids=[
+                    item["id"]
+                    for item in original_chat_turn.request_snapshot.get(
+                        "hook_snapshots", []
+                    )
+                ],
+                skill_selections=[
+                    {"name": item["name"], "path": item["path"]}
+                    for item in original_chat_turn.request_snapshot.get(
+                        "skill_snapshots", []
+                    )
+                ],
+                allowed_tool_names=original_chat_turn.request_snapshot.get(
+                    "allowed_tool_names"
+                ),
+                allow_mcp_catalog=original_chat_turn.request_snapshot.get(
+                    "allow_mcp_catalog", True
+                ),
+                ssh_environment_ids=original_chat_turn.request_snapshot.get(
+                    "ssh_environment_ids", []
                 ),
                 planning_enabled=True if blocked_plan is not None else None,
             )
@@ -15057,6 +15355,48 @@ class HarnessRuntimeService:
                         },
                     }
                 )
+        core = self._core_tool_components(current, turn) if turn is not None else None
+        if core is not None:
+            assert turn is not None and turn.chat_turn_id is not None
+            existing_names = {item["name"] for item in tools} | set(
+                _GATEWAY_RETRIEVAL_SCHEMAS
+            )
+            allowed = self.store.get(ChatTurn, turn.chat_turn_id).request_snapshot.get(
+                "allowed_tool_names"
+            )
+            for name, spec in sorted(core.specs.items()):
+                if name in existing_names or spec.source_id:
+                    continue
+                always = {
+                    "tool_catalog.search",
+                    "tool_catalog.load",
+                    "tool_catalog.call",
+                    "message_parent",
+                    "read_parent_messages",
+                    "plan.submit",
+                    "skill.read_resource",
+                }
+                if self.store.get(ChatTurn, turn.chat_turn_id).goal_id:
+                    always.update(
+                        {
+                            "report_progress",
+                            "report_attention",
+                            "goal.complete",
+                            "goal.block",
+                        }
+                    )
+                if allowed is not None and name not in allowed and name not in always:
+                    continue
+                tools.append(
+                    {
+                        "name": name,
+                        "description": spec.description,
+                        "inputSchema": spec.input_schema,
+                        "annotations": {
+                            "readOnlyHint": spec.risk_class == RiskClass.LOCAL_READ
+                        },
+                    }
+                )
         for name, schema in _GATEWAY_RETRIEVAL_SCHEMAS.items():
             tools.append(
                 {
@@ -15164,6 +15504,51 @@ class HarnessRuntimeService:
                         },
                     }
                 )
+        if turn is not None and turn.chat_turn_id:
+            allowed = self.store.get(ChatTurn, turn.chat_turn_id).request_snapshot.get(
+                "allowed_tool_names"
+            )
+            if allowed is not None:
+                from .mcp import mcp_tool_runtime_name
+
+                required = {
+                    "tool_catalog.search",
+                    "tool_catalog.load",
+                    "tool_catalog.call",
+                    "message_parent",
+                    "read_parent_messages",
+                    "plan.submit",
+                    "skill.read_resource",
+                }
+                if self.store.get(ChatTurn, turn.chat_turn_id).goal_id:
+                    required.update(
+                        {
+                            "report_progress",
+                            "report_attention",
+                            "goal.complete",
+                            "goal.block",
+                        }
+                    )
+                if _session_provider_subagent(current) is not None:
+                    required.update(_GATEWAY_SUBAGENT_NAMES)
+                aliases = {
+                    **_GATEWAY_AGENT_MESSAGE_TO_PROVIDER,
+                    **{name: name.replace(".", "_") for name in _GATEWAY_WORK_SCHEMAS},
+                }
+
+                def permitted(item: dict[str, Any]) -> bool:
+                    name = item["name"]
+                    canonical = oci_mapping.get(name, aliases.get(name, name))
+                    if name in mapping:
+                        profile, tool = mapping[name]
+                        canonical = mcp_tool_runtime_name(profile.id, tool.name)
+                    return (
+                        canonical in allowed
+                        or name in required
+                        or canonical in required
+                    )
+
+                tools = [item for item in tools if permitted(item)]
         self._gateway_tool_maps[session.id] = mapping
         self._gateway_oci_tool_maps[session.id] = oci_mapping
         cursor = (params or {}).get("cursor")
@@ -15195,6 +15580,17 @@ class HarnessRuntimeService:
         if index < len(tools):
             result["nextCursor"] = str(index)
         return result
+
+    def _core_tool_components(
+        self, session: HarnessSession, turn: HarnessTurn
+    ) -> RuntimeToolComponents | None:
+        if turn.id not in self._gateway_core_components:
+            from .harness_core_tools import core_components
+
+            self._gateway_core_components[turn.id] = core_components(
+                self, session, turn
+            )
+        return self._gateway_core_components[turn.id]
 
     def _active_gateway_turn(self, session_id: str) -> HarnessTurn:
         active = self._active.get(session_id)
@@ -15328,10 +15724,10 @@ class HarnessRuntimeService:
             if not Draft7Validator(offer["inputSchema"]).is_valid(arguments):
                 raise refused_before_execution(
                     InvalidToolArguments(
-                        "subagent.capabilities accepts an empty arguments object"
+                        "subagent.capabilities accepts category, cursor and limit"
                     )
                 )
-            result = service.available_capabilities(turn.chat_turn_id)
+            result = service.available_capabilities(turn.chat_turn_id, **arguments)
         except Exception as exc:
             self._finish_gateway_call(call.id, error=exc)
             raise
@@ -15747,6 +16143,18 @@ class HarnessRuntimeService:
                 "structuredContent": value,
                 "isError": False,
             }
+        core = self._core_tool_components(session, turn)
+        if (
+            core is not None
+            and name in core.specs
+            and name not in _GATEWAY_RETRIEVAL_SCHEMAS
+        ):
+            from .harness_core_tools import call_core_tool
+
+            async def execute_core() -> dict[str, Any]:
+                return await call_core_tool(self, session, turn, core, name, arguments)
+
+            return await self._run_gateway_work(session, turn, execute_core())
         if name == "browser.companion":
             current = self.store.get(HarnessSession, session.id)
             companion_id = current.metadata.get("browser_companion_session_id")
@@ -17379,13 +17787,31 @@ class HarnessRuntimeService:
         browser_binding = browser_binding if isinstance(browser_binding, str) else None
         subagent_binding = self._subagent_binding(session)
         knowledge_binding = turn.metadata.get("knowledge_access") is True
+        core_binding = hashlib.sha256(
+            json.dumps(
+                {
+                    "snapshot": self.store.get(
+                        ChatTurn, turn.chat_turn_id
+                    ).request_snapshot
+                    if turn.chat_turn_id
+                    else {},
+                    "guarded": session.metadata.get("core_guarded_tools"),
+                    "goal": self.store.get(ChatTurn, turn.chat_turn_id).goal_id
+                    if turn.chat_turn_id
+                    else None,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
         existing = self._connections.get(session.id)
         if existing is not None:
             stale_reason = (
                 # Vendor MCP catalogs are fixed when the connection opens. Resume
                 # the saved external thread with a fresh gateway between turns,
                 # keeping the durable conversation and native transcript intact.
-                "browser_binding_changed"
+                "core_tools_changed"
+                if self._connection_core_bindings.get(session.id) != core_binding
+                else "browser_binding_changed"
                 if self._connection_browser_bindings.get(session.id) != browser_binding
                 # Provider subagent tools and their instructions change the
                 # catalog the same way.
@@ -17615,6 +18041,7 @@ class HarnessRuntimeService:
             await gateway.close()
             raise
         self._connections[session.id] = connection
+        self._connection_core_bindings[session.id] = core_binding
         self._connection_browser_bindings[session.id] = browser_binding
         self._connection_subagent_bindings[session.id] = subagent_binding
         self._connection_knowledge_bindings[session.id] = knowledge_binding
@@ -19120,6 +19547,77 @@ class HarnessRuntimeService:
                 expected_revision=run_owner.revision,
             )
 
+    def _account_terminal_chat_usage(
+        self, turn: HarnessTurn, usage: ChatTokenUsage, *, usage_reported: bool
+    ) -> None:
+        """Debit consumed tokens even when a completion guard rejects an answer."""
+        if not turn.chat_turn_id:
+            return
+        owner = self.store.get(ChatTurn, turn.chat_turn_id)
+        if owner.status == ChatTurnStatus.COMPLETE or owner.request_snapshot.get(
+            "harness_usage_accounted"
+        ):
+            return
+        settled = self.store.get(HarnessTurn, turn.id)
+        if settled.status not in {
+            HarnessTurnStatus.FAILED,
+            HarnessTurnStatus.CANCELLED,
+            HarnessTurnStatus.INTERRUPTED,
+        }:
+            return
+        with self.store.transaction() as transaction:
+            transaction.update(
+                HarnessTurn,
+                settled.id,
+                {"usage": usage},
+                expected_revision=settled.revision,
+            )
+            transaction.update(
+                ChatTurn,
+                owner.id,
+                {
+                    "usage": usage,
+                    "request_snapshot": {
+                        **owner.request_snapshot,
+                        "harness_usage_accounted": True,
+                        "harness_usage_reported": usage_reported,
+                    },
+                },
+                expected_revision=owner.revision,
+            )
+            if owner.goal_id:
+                goal = self.store.get(ChatGoal, owner.goal_id)
+                metadata = dict(goal.metadata)
+                if not usage_reported:
+                    metadata["usage_unknown"] = True
+                changes: dict[str, Any] = {
+                    "usage": ChatTokenUsage(
+                        input_tokens=goal.usage.input_tokens + usage.input_tokens,
+                        output_tokens=goal.usage.output_tokens + usage.output_tokens,
+                        total_tokens=goal.usage.total_tokens + usage.total_tokens,
+                    ),
+                    "metadata": metadata,
+                }
+                if goal.execution_claim_id == owner.id:
+                    changes.update(
+                        execution_owner_id=None,
+                        execution_claim_id=None,
+                        execution_claimed_at=None,
+                    )
+                if goal.status == ChatGoalStatus.RUNNING:
+                    now = utc_now()
+                    changes.update(
+                        status=ChatGoalStatus.PAUSED,
+                        paused_at=now,
+                        active_since=None,
+                        elapsed_seconds=goal.active_elapsed_seconds(now),
+                        blocked_reason=settled.error
+                        or "The harness turn ended before its response was accepted.",
+                    )
+                transaction.update(
+                    ChatGoal, goal.id, changes, expected_revision=goal.revision
+                )
+
     def _complete_owner(
         self,
         turn: HarnessTurn,
@@ -19191,7 +19689,44 @@ class HarnessRuntimeService:
                                 "execution_claimed_at": None,
                             }
                         )
-                    if goal.status == ChatGoalStatus.RUNNING:
+                    proposal = chat_turn.request_snapshot.get(
+                        "goal_completion_proposal"
+                    )
+                    if proposal is not None:
+                        from .chat_goal_tools import GoalCompletionProposal
+                        from .chat_goals import ChatGoalService
+
+                        completion = GoalCompletionProposal.model_validate(proposal)
+                        if (
+                            goal.status != ChatGoalStatus.RUNNING
+                            or goal.execution_claim_id != chat_turn.id
+                            or ChatGoalService(self.store).has_working_subagents(
+                                chat_turn.session_id
+                            )
+                        ):
+                            raise ChatHistoryConflict(
+                                "the goal changed or still has working subagents before completion"
+                            )
+                        now = utc_now()
+                        changes.update(
+                            {
+                                "status": ChatGoalStatus.COMPLETED,
+                                "completed_at": now,
+                                "completion_summary": completion.completion_summary,
+                                "completion_evidence": [
+                                    {
+                                        "kind": "agent_reported",
+                                        "detail": detail,
+                                        "turn_id": chat_turn.id,
+                                    }
+                                    for detail in completion.completion_evidence
+                                ],
+                                "active_since": None,
+                                "elapsed_seconds": goal.active_elapsed_seconds(now),
+                                "blocked_reason": None,
+                            }
+                        )
+                    if goal.status == ChatGoalStatus.RUNNING and proposal is None:
                         now = utc_now()
                         changes.update(
                             {

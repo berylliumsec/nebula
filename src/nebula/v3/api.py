@@ -10920,6 +10920,14 @@ def create_app(
                     if request.harness_skill is not None
                     else None
                 ),
+                hook_ids=request.hook_ids
+                if "hook_ids" in request.model_fields_set
+                else None,
+                skill_selections=request.skill_selections
+                + ([request.skill] if request.skill else []),
+                allowed_tool_names=request.allowed_tool_names,
+                allow_mcp_catalog=request.allow_mcp_catalog,
+                ssh_environment_ids=request.ssh_environment_ids,
                 provider_subagent=request.harness_provider_subagent(),
                 pending_provider_subagent=request.harness_pending_provider_subagent(),
                 allow_agent_messaging=request.allow_agent_messaging,
@@ -12696,7 +12704,13 @@ def create_app(
                     if current.backend == ChatBackend.HARNESS
                     else metadata.get("allow_subagents")
                 )
-            if current.backend == ChatBackend.HARNESS:
+            if (
+                current.backend == ChatBackend.HARNESS
+                or request.subagent_provider_id is not None
+                or request.subagent_harness_profile_id is not None
+                or metadata.get("provider_subagent")
+            ):
+                metadata["allow_subagents"] = enabled
                 if enabled:
                     saved = metadata.get("provider_subagent") or {}
                     provider_id = request.subagent_provider_id or str(

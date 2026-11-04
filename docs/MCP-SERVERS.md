@@ -155,15 +155,20 @@ available on demand. Their full schemas are not sent with the request. A
 server that is disabled, has not been probed, or has no usable tool left is not
 offered and does not fail the turn. The on-demand servers join only a turn that
 already uses tools, such as a command-runtime chat or one with a ticked server,
-so a plain chat stays one. A harness chat hands only its ticked servers to the
-harness.
+so a plain provider chat stays one. A managed harness exposes its ticked servers
+through its gateway and can discover eligible unselected sources through Core's
+on-demand catalog. Both paths retain project policy, data-transfer consent,
+tool approvals and narrowed child assignments. Notebook MCP requires explicit
+selection on both backends and is excluded from automatic discovery.
 
-The assistant receives a compact directory of every on-demand tool's name,
+The provider assistant receives a compact directory of every on-demand tool's name,
 server, and short purpose on each routing request. Nebula derives the purpose
 from the tool description supplied by the MCP server; an empty purpose means
 the server supplied none. The directory omits parameter schemas and lives in
 the request instructions, so conversation compaction does not remove it. The
-assistant also sees three fixed catalog tools:
+provider assistant also sees three fixed catalog tools. Managed harnesses expose
+the same catalog tools through their Core gateway and can search before loading
+an eligible tool's schema:
 
 - `tool_catalog.search` finds MCP tools by what they do.
 - `tool_catalog.load` returns the full description and input schema for up to

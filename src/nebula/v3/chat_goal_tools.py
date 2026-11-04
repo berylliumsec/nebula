@@ -110,7 +110,7 @@ class GoalCompletionBroker:
         if (
             invocation.tool_name != GOAL_COMPLETE_TOOL_NAME
             or invocation.origin != ToolCallOrigin.CHAT
-            or invocation.requested_by != "chat-assistant"
+            or invocation.requested_by not in {"chat-assistant", "harness-gateway"}
             or not invocation.chat_turn_id
             or not invocation.chat_session_id
             or invocation.run_id != invocation.chat_turn_id
