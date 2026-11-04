@@ -8256,7 +8256,7 @@ for (const runtime of ["provider", "harness"] as const) {
       await page.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Add Grok", exact: true}).click();
       const dialog = runtime === "provider"
         ? page.getByRole("dialog", {name: new RegExp(`^(Add model provider|Edit ${name})$`)})
-        : page.getByRole("dialog", {name: new RegExp(`^(Add Grok ACP|Edit ${name})$`)});
+        : page.getByRole("dialog", {name: /^(Add Grok ACP|Edit harness)$/});
       const profileName = dialog.getByRole("textbox", {name: runtime === "provider" ? "Profile name" : "Name", exact: true});
       if (runtime === "provider") {
         await dialog.getByRole("combobox", {name: "Provider type", exact: true}).selectOption("vllm");

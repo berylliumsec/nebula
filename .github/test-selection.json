@@ -82,7 +82,7 @@
     "area:mobile-core-regressions"
   ],
   "python_node": true,
-  "change_digest": "5c0e7483f121fdd45ab626f621e995d49241e33e13795f87b72456d29b75b024",
+  "change_digest": "cdde7c445666058f432fca99b2edff40ba0b95a8836fbd5bf738b934b8b4d054",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }
