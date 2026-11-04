@@ -81,7 +81,7 @@
     "area:test-suite-core-regressions"
   ],
   "python_node": true,
-  "change_digest": "c4c683bb3b1f68a8a849c88f498dd49a180695c9d5404477b6510771c4aa4fba",
+  "change_digest": "082b026be161577c887c206176e0d2b071db5c8295b2b6898d4a1176eff7c9b5",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }

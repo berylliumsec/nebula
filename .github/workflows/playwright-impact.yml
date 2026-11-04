@@ -203,7 +203,7 @@ jobs:
             export NEBULA_RELEASE_COMMIT="$(git rev-parse HEAD)"
             release_host="$(node -e 'const interfaces = Object.values(require("node:os").networkInterfaces()).flat(); const address = interfaces.find(value => value && value.family === "IPv4" && !value.internal)?.address; if (!address) process.exit(1); process.stdout.write(address);')"
             export NEBULA_RELEASE_ORIGIN="http://$release_host:19487"
-            poetry run python ui/tests/fixtures/release_core.py \
+            NEBULA_BUILD_COMMIT="$NEBULA_RELEASE_COMMIT" poetry run python ui/tests/fixtures/release_core.py \
               --root "$release_fixture/data" --static-dir ui/dist \
               --token-file "$NEBULA_RELEASE_TOKEN_FILE" --port 19487 \
               > "$release_fixture/core.log" 2>&1 &
