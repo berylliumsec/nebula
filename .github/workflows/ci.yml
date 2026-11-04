@@ -90,7 +90,7 @@ jobs:
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
           poetry run pytest --collect-only -q tests packaging
-          poetry run pytest -q tests packaging --junitxml="$RUNNER_TEMP/full-tests-python.xml"
+          poetry run pytest -q tests packaging -vv --durations=20 --junitxml="$RUNNER_TEMP/full-tests-python.xml"
       - name: Collect and run every frontend test
         if: success() || failure()
         working-directory: ui

@@ -167,6 +167,56 @@ def _compactions(provider) -> list[ModelRequest]:
     ]
 
 
+@pytest.mark.parametrize("durable_session", [False, True])
+def test_first_turn_keeps_capacity_reserved_for_unused_archive_tools(
+    tmp_path, durable_session
+):
+    _, service, session, profile, provider = _chat(
+        tmp_path,
+        lambda provider_id: ReportingProvider(provider_id),
+        history=[],
+    )
+    instructions = "Preserve the operator's complete question."
+    message = chat_module.ChatRequestMessage(
+        role=ChatRole.USER, content="Explain this evidence. " + "bounded context " * 300
+    )
+    required = estimate_messages(
+        [ModelMessage(role="user", content=message.content)], instructions
+    )
+    limits = resolve_context_limits(profile, model="model-a")
+    reserved = limits.input_capacity - required - 100
+    archive_reserve = 200
+    assert required + reserved > limits.target_input_tokens
+    assert required + reserved < limits.input_capacity
+    assert required + reserved + archive_reserve > limits.input_capacity
+
+    def assemble(current):
+        return asyncio.run(
+            service._model_context(
+                profile=profile,
+                provider=provider,
+                model="model-a",
+                requested_output_tokens=None,
+                messages=[current],
+                stored_messages=[],
+                session=session if durable_session else None,
+                instructions=instructions,
+                reserved_tokens=reserved,
+                archive_reserved_tokens=archive_reserve,
+            )
+        )
+
+    messages, sent_instructions, _, snapshot, _ = assemble(message)
+    assert messages == [message]
+    assert sent_instructions == instructions
+    assert snapshot is None
+    assert provider.requests == []
+
+    oversized = message.model_copy(update={"content": message.content + " x" * 300})
+    with pytest.raises(chat_module.ContextCapacityError, match="current message"):
+        assemble(oversized)
+
+
 def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path):
     store, service, session, profile, provider = _chat(
         tmp_path,

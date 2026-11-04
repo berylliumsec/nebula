@@ -1,5 +1,12 @@
-import {expect, test} from "@playwright/test";
+import {writeFile} from "node:fs/promises";
+import {expect, test, type TestInfo} from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+
+async function attachBuild(info: TestInfo, name: string, evidence: unknown) {
+  const path = info.outputPath(`${name}.json`);
+  await writeFile(path, JSON.stringify(evidence, null, 2));
+  await info.attach(name, {path, contentType: "application/json"});
+}
 
 test("a saved MCP selection keeps its healthy harness connection across turns and reload", async ({page, request}, info) => {
   const origin = String(info.project.use.baseURL);
@@ -41,7 +48,7 @@ test("a saved MCP selection keeps its healthy harness connection across turns an
   await expect(page.locator(".chat-message.assistant").last()).toContainText("MCP continuity confirmed.");
   await page.reload();
   await expect(page.locator(".chat-message.assistant")).toHaveCount(3);
-  await info.attach("mcp-continuity-build", {body: JSON.stringify({origin, bundleSha256: fixture.bundle_sha256, profile: info.project.name, evidence}), contentType: "application/json"});
+  await attachBuild(info, "mcp-continuity-build", {origin, bundleSha256: fixture.bundle_sha256, profile: info.project.name, evidence});
 });
 
 test("all parent and child runtimes retain lifecycle guards and saved choices", async ({page, request}, info) => {
@@ -96,6 +103,6 @@ test("all parent and child runtimes retain lifecycle guards and saved choices", 
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     }
   }
-  await info.attach("candidate-build", {body: JSON.stringify({origin, bundleSha256: fixture.bundle_sha256, project: info.project.name, viewport: page.viewportSize()}), contentType: "application/json"});
+  await attachBuild(info, "candidate-build", {origin, bundleSha256: fixture.bundle_sha256, project: info.project.name, viewport: page.viewportSize()});
   await page.screenshot({path: info.outputPath("mixed-agent-guards.png")});
 });

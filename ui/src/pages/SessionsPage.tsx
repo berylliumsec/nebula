@@ -278,6 +278,23 @@ function sessionViewFromParam(value: string | null): SessionView | undefined {
 function latestSearchParams(): URLSearchParams {
   return new URLSearchParams(window.location.search);
 }
+
+function conversationActionsPosition(bounds: Pick<DOMRect, "top" | "bottom" | "right">, expectedHeight: number) {
+  const viewport = window.visualViewport;
+  const top = viewport?.offsetTop ?? 0;
+  const left = viewport?.offsetLeft ?? 0;
+  const width = viewport?.width ?? window.innerWidth;
+  const height = viewport?.height ?? window.innerHeight;
+  const above = Math.max(0, bounds.top - top - 13);
+  const below = Math.max(0, top + height - bounds.bottom - 13);
+  const openAbove = below < expectedHeight && above > below;
+  return {
+    left: Math.max(left + 8, Math.min(bounds.right - 228, left + width - 236)),
+    top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
+    openAbove,
+    maxHeight: Math.min(430, openAbove ? above : below),
+  };
+}
 const readableContextStatuses = new Set<ContextStatus["status"]>(["not_needed", "ready", "stale", "failed", "runtime_managed"]);
 
 function isReadableContextStatus(value: ContextStatus, expectedOwnerId: string): boolean {
@@ -983,7 +1000,7 @@ function useWorkbenchState() {
   const [deletingSessionId, setDeletingSessionId] = useState<string>();
   const [deletingAllSessions, setDeletingAllSessions] = useState(false);
   const [sessionActionsId, setSessionActionsId] = useState<string>();
-  const [sessionActionsPosition, setSessionActionsPosition] = useState<{ left: number; openAbove: boolean; top: number }>();
+  const [sessionActionsPosition, setSessionActionsPosition] = useState<ReturnType<typeof conversationActionsPosition>>();
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameError, setRenameError] = useState<string>();
@@ -3366,7 +3383,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
 
   const toggleConversationPanel = () => {
-    if (sideChatId && matchMedia("(max-width: 1100px)").matches) {
+    if (sidePanelOpen && matchMedia("(max-width: 1100px)").matches) {
       setMobileListOpen((current) => !current);
       return;
     }
@@ -6407,14 +6424,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         return;
       }
       const menuHeight = sessionActionsMenuRef.current?.getBoundingClientRect().height ?? 310;
-      const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
-      const next = {
-        left: Math.max(8, Math.min(bounds.right - 228, window.innerWidth - 236)),
-        openAbove,
-        top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
-      };
+      const next = conversationActionsPosition(bounds, menuHeight);
       setSessionActionsPosition(current => current && current.left === next.left && current.top === next.top
-        && current.openAbove === next.openAbove ? current : next);
+        && current.openAbove === next.openAbove && current.maxHeight === next.maxHeight ? current : next);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
@@ -6641,7 +6653,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           {view === "chat" ? <div className="chat-tools-menu" ref={chatToolsRef}>
             <button ref={chatToolsButtonRef} className="icon-button subtle" type="button" aria-label="Chat tools" title="Chat tools" aria-expanded={chatToolsOpen} aria-controls="chat-tools-panel" onClick={() => setChatToolsOpen(open => !open)}><LayoutGrid size={18} aria-hidden="true" /></button>
             {chatToolsOpen && <div className="chat-tools-panel" id="chat-tools-panel" role="group" aria-label="Chat tools" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setChatToolsOpen(false); chatToolsButtonRef.current?.focus(); } }}>
-              {api && engagement && <button className="workbench-menu-item" type="button" onClick={() => { addToolTab("assistance"); setChatToolsOpen(false); }}><Sparkles size={17} aria-hidden="true" /><span><strong>Tool assistance</strong><small>Open a new side tab</small></span></button>}
+              {api && engagement && <button className="workbench-menu-item" type="button" data-guide="tool-assistance" onClick={() => { addToolTab("assistance"); setChatToolsOpen(false); }}><Sparkles size={17} aria-hidden="true" /><span><strong>Tool assistance</strong><small>Open a new side tab</small></span></button>}
               <button className="workbench-menu-item" type="button" aria-pressed={Boolean(sideChatId)} disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))} onClick={() => { void openSideChat(); setChatToolsOpen(false); }}><GitFork size={17} aria-hidden="true" /><span><strong>Side chats</strong><small>{sideChatId ? `Switch between ${sideChats.length} chats` : "Open beside chat"}</small></span></button>
               <button className="workbench-menu-item" type="button" disabled={sideChatBusy || !api || !sessionId} onClick={() => { void openSideChat(true); setChatToolsOpen(false); }}><MessageSquarePlus size={17} aria-hidden="true" /><span><strong>New side chat</strong><small>Keep existing side chats</small></span></button>
               {api && engagement && <button className="workbench-menu-item" type="button" data-guide="terminal-toggle" onClick={() => { addToolTab("terminal"); setChatToolsOpen(false); }}><SquareTerminal size={17} aria-hidden="true" /><span><strong>Terminal</strong><small>Open a new side tab</small></span></button>}
@@ -7151,14 +7163,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     return;
                   }
                   const bounds = event.currentTarget.getBoundingClientRect();
-                  const menuWidth = 228;
                   const menuHeight = session.backend === "harness" ? 350 : 310;
-                  const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
-                  setSessionActionsPosition({
-                    left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
-                    openAbove,
-                    top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
-                  });
+                  setSessionActionsPosition(conversationActionsPosition(bounds, menuHeight));
                   setSessionActionsId(session.id);
                 }}
               >{deletingSessionId === session.id || archivingSessionId === session.id || prioritySessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
@@ -7167,7 +7173,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 className="session-actions-menu"
                 role="menu"
                 aria-label={`Actions for ${session.title}`}
-                style={{ left: sessionActionsPosition.left, top: sessionActionsPosition.top, transform: sessionActionsPosition.openAbove ? "translateY(-100%)" : undefined }}
+                style={{ left: sessionActionsPosition.left, top: sessionActionsPosition.top, maxHeight: sessionActionsPosition.maxHeight, transform: sessionActionsPosition.openAbove ? "translateY(-100%)" : undefined }}
                 onKeyDown={(event) => {
                   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
                   event.preventDefault();
@@ -7210,7 +7216,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     {kind: "notebook", label: "Notebook", icon: NotebookPen},
                     {kind: "details", label: "Chat details", icon: PanelRight},
                     {kind: "assistance", label: "Tool assistance", icon: Sparkles},
-                  ] as const).map(({kind, label, icon: Icon}) => <button key={kind} className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); addToolTab(kind); }}><Icon size={17} aria-hidden="true" /><span><strong>{label}</strong><small>Open a new side tab</small></span></button>)}
+                  ] as const).map(({kind, label, icon: Icon}) => <button key={kind} className="workbench-menu-item" type="button" role="menuitem" data-guide={kind === "assistance" ? "tool-assistance" : undefined} onClick={() => { setMobileConversationMenuOpen(false); addToolTab(kind); }}><Icon size={17} aria-hidden="true" /><span><strong>{label}</strong><small>Open a new side tab</small></span></button>)}
                 </>}
               </div>}
             </div>

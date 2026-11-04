@@ -187,6 +187,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/nebula-security-proxy"
           "$RUNNER_TEMP/nebula-security-proxy/bin/pip" install 'mitmproxy==12.2.3'
       - name: Run selected entry serially
+        shell: bash
         env:
           PROJECT: ${{ matrix.project }}
           TEST_MATCH: ${{ matrix.test_match }}
@@ -196,6 +197,26 @@ jobs:
           SECURITY_PROXY: ${{ steps.selected_tests.outputs.security_proxy }}
           NEBULA_UI_TEST_COMMAND: npm run preview -- --host 0.0.0.0 --port 1420
         run: |
+          if test "$TEST_MATCH" = tests/release-live.spec.ts; then
+            release_fixture="$(mktemp -d "$RUNNER_TEMP/nebula-release-XXXXXX")"
+            export NEBULA_RELEASE_TOKEN_FILE="$release_fixture/token"
+            export NEBULA_RELEASE_COMMIT="$(git rev-parse HEAD)"
+            release_host="$(node -e 'const interfaces = Object.values(require("node:os").networkInterfaces()).flat(); const address = interfaces.find(value => value && value.family === "IPv4" && !value.internal)?.address; if (!address) process.exit(1); process.stdout.write(address);')"
+            export NEBULA_RELEASE_ORIGIN="http://$release_host:19487"
+            poetry run python ui/tests/fixtures/release_core.py \
+              --root "$release_fixture/data" --static-dir ui/dist \
+              --token-file "$NEBULA_RELEASE_TOKEN_FILE" --port 19487 \
+              > "$release_fixture/core.log" 2>&1 &
+            release_pid=$!
+            trap 'kill "$release_pid" 2>/dev/null || true; wait "$release_pid" 2>/dev/null || true; mkdir -p ui/test-results; cp "$release_fixture/core.log" ui/test-results/release-core.log; rm -rf "$release_fixture"' EXIT
+            release_ready=false
+            for attempt in {1..100}; do
+              if curl --fail --silent "$NEBULA_RELEASE_ORIGIN/web-build.json" > /dev/null; then release_ready=true; break; fi
+              if ! kill -0 "$release_pid" 2>/dev/null; then cat "$release_fixture/core.log"; exit 1; fi
+              sleep 0.2
+            done
+            test "$release_ready" = true
+          fi
           if test "$TEST_MATCH" = tests/universal-agents.spec.ts; then
             export NEBULA_MODEL_TEST_HOST="$(node -e 'const interfaces = Object.values(require("node:os").networkInterfaces()).flat(); const address = interfaces.find(value => value && value.family === "IPv4" && !value.internal)?.address; if (!address) process.exit(1); process.stdout.write(address);')"
             export NEBULA_REQUIRE_LAN_TESTS=1

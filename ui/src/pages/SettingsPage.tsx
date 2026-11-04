@@ -302,7 +302,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       focusTarget?.focus({ preventScroll: true });
       // Hash navigation must settle before the newly focused control can be tapped.
       // Smooth scrolling can move a phone target between touch hit testing and click.
-      group.scrollIntoView?.({ block: "start", behavior: "instant" });
+      (target ?? group).scrollIntoView?.({ block: "start", behavior: "instant" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [embeddedTarget, locationHash, openAdvancedGroup, settingsSection]);

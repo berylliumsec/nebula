@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 
 import uvicorn
@@ -47,9 +48,29 @@ from nebula.v3.harnesses import (
     HarnessTurnFailedError,
     HarnessGoalSnapshot,
 )
+from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
 from nebula.v3.ssh_environments import SshProbeResult
 from nebula.v3.storage import NebulaStore
 from nebula.v3.setup import bootstrap_scratch_project
+
+
+class InertHostLoadMonitor(HostLoadMonitor):
+    """Admit inert turns independently of unrelated browser workers' CPU use."""
+
+    def cached(self) -> HostLoadSnapshot:
+        return self.sample()
+
+    def sample(self) -> HostLoadSnapshot:
+        # A fresh epoch also lets long multi-turn journeys pass the start budget.
+        return HostLoadSnapshot(
+            sampled_at=time.monotonic(),
+            cpu_capacity=4,
+            cpu_ratio=0.0,
+            memory_available_ratio=1.0,
+            busy=False,
+            reason=None,
+            measurements_available=True,
+        )
 
 
 async def wait_for_committed_progress(
@@ -806,5 +827,6 @@ if __name__ == "__main__":
         static_dir=args.static_dir,
         bootstrap_workspace=True,
         allow_insecure_device_pairing=True,
+        host_load_gate=HostLoadGate(InertHostLoadMonitor()),
     )
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="error")

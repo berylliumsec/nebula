@@ -182,6 +182,28 @@ it("chooses the current conversation's check-in ahead of another active item", (
 });
 
 describe("the minimized Project Snapshot", () => {
+  it.each([false, true])("clears the composer by default and respects a saved position (%s)", saved => {
+    const composer = document.createElement("form");
+    composer.className = "chat-composer";
+    document.body.append(composer);
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === composer) return new DOMRect(37, 235, 770, 148);
+      if (this.classList.contains("project-snapshot-launcher")) return new DOMRect(532, 244, 300, 58);
+      return original.call(this);
+    });
+    try {
+      if (saved) writeLauncher({ x: 532, y: 244 });
+      panel({ minimized: true });
+      const launcher = document.querySelector<HTMLElement>(".project-snapshot-launcher")!;
+      expect(parseFloat(launcher.style.top)).toBe(saved ? 244 : 165);
+      expect(readLauncher()).toEqual(saved ? { x: 532, y: 244 } : undefined);
+    } finally {
+      composer.remove();
+      bounds.mockRestore();
+    }
+  });
+
   it("hands focus to the way back", async () => {
     const user = userEvent.setup();
     const { props } = panel({ minimized: true });

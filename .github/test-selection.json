@@ -1,14 +1,15 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independent causal validation covers repaired runtime regressions and browser geometry, empty-chat tool tabs, native goal disclosure, idle polling and diagnostics catalogs. Focused Python regressions and real-Core saved-MCP continuity run on PR; the user explicitly authorized complete source, native and browser suites, which are separately dispatched manually.",
-  "exclusions": "No real operator data, live providers, deployments or physical devices. Mocked geometry checks are supplemented by real-Core production LAN browser coverage on hosted CI. Exact browser regression selections and final full-suite evidence are refreshed before PR and merge.",
+  "reason": "Independently validated runtime and interface regressions are covered by focused Python, native and component tests, 174 affected mocked-browser cases, and the affected real-Core journeys across desktop/mobile Chromium and WebKit. Manual full-suite runs are explicitly authorized by the user and now include every product browser spec with its required runtime; release-only checks use a fresh disposable Core, private test token and production bundle.",
+  "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
-    "python": 1157,
-    "frontend": 101,
+    "python": 1199,
+    "frontend": 135,
     "native": 1,
-    "playwright": 206
+    "playwright": 316
   },
   "python": [
+    "tests/test_playwright_impact.py",
     "tests/test_test_selection.py",
     "tests/v3/test_all_tool_failure_guidance.py",
     "tests/v3/test_api.py",
@@ -60,7 +61,10 @@
     "ui/src/components/AssistantSetupLinks.test.tsx",
     "ui/src/components/ChatStudioRail.test.tsx",
     "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/PostToolAssistant.test.tsx",
     "ui/src/components/SideNav.test.tsx",
+    "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx",
+    "ui/src/pages/SettingsPage.test.tsx",
     "ui/src/pages/chatDraftNavigation.test.tsx",
     "ui/src/pages/sidePanelTabs.test.ts"
   ],
@@ -71,10 +75,11 @@
     "area:icon-pack",
     "area:butler-private-settings",
     "area:universal-agents",
-    "area:test-suite-regressions"
+    "area:test-suite-regressions",
+    "area:test-suite-core-regressions"
   ],
   "python_node": true,
-  "change_digest": "ae19fdbc8d1d4fb522999dddaf4023980d09b0bbd94a7c5d3b83c28690fdd6f0",
+  "change_digest": "a145621c8d317140aae109ed090bf080c35cc5d8b77f56f0ec68ab0d47139ae5",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }

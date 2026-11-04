@@ -375,7 +375,9 @@ async function guideEntry(page: Page) {
   // Quiet Lens keeps secondary top-bar actions behind its visible menu.
   const topMenu = page.getByRole("button", {name: "Open top menu"});
   if (!await guides.isVisible() && await topMenu.isVisible()) {
-    await topMenu.click();
+    await topMenu.focus();
+    // Escape suppresses hover/focus reveal until the menu is activated again.
+    await topMenu.press("Enter");
   }
   if ((page.viewportSize()?.width ?? 1440) <= 760 && !await guides.isVisible()) {
     await page.getByRole("button", {name: "More workbench views", exact: true}).click();
@@ -5798,11 +5800,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
     if (lanAddress) expect(new URL(page.url()).hostname).toBe(lanAddress);
-    // Pairing can finish while the shell is still opening its navigation.
-    // Wait for the actual project control before interacting with it.
-    await expect(page.getByRole("button", {name: "Switch project", exact: true})).toBeVisible({timeout: 20_000});
-    await page.getByRole("button", {name: "Switch project", exact: true}).click();
-    const switcher = page.getByRole("dialog", {name: "Project switcher"});
+    const switcher = await openProjectSwitcherFromShell(page);
     await switcher.getByRole("button", { name: "New project" }).click();
     await switcher.getByLabel("Name", { exact: true }).fill("Linked Folder Acceptance");
     await switcher.getByRole("button", { name: "Browse folders" }).click();
@@ -10564,7 +10562,9 @@ test("assistant upgrade Butler briefs named agent evidence on production LAN Cor
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
     await openNebulaAssistantFromShell(page);
     const butler = page.getByRole("dialog", {name: "Butler"});
+    await butler.getByRole("button", {name: /^Work/}).click();
     await expect(butler.getByRole("group", {name: "Assistant work requests"})).toBeVisible({timeout: 30_000});
+    await butler.getByRole("button", {name: "Chat", exact: true}).click();
     await butler.getByRole("textbox", {name: "Ask Butler a question"}).fill(question);
     const send = butler.getByRole("button", {name: "Send to Butler"});
     await expect(send).toBeEnabled();
@@ -11394,7 +11394,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     await expect(scheduledActivity.getByText(/provider check saved its actions and outcome/)).toBeVisible();
     await oversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
     await expect(oversight.getByText(path.join(core.dataDir, ".butler", "BUTLER.md"))).toBeVisible();
-    await expect(oversight.getByText(/Butler checks once every 5 minutes/)).toBeVisible();
+    await expect(oversight.getByText(/Butler checks every 5 minutes/)).toBeVisible();
     await page.goto(`${core.origin}/settings#butler-oversight`);
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await expect(restored.getByRole("region", {name: "Butler scheduled activity"})).toBeVisible();
@@ -11565,7 +11565,7 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
       name: "Goal report model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
       privacy: {local_only: true, residency: [], permits_sensitive_data: false},
-      metadata: {default_model: "security-model"},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
     }});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
     const provider = await providerResponse.json() as {id: string; revision: number};
@@ -13225,6 +13225,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
       const dialog = page.getByRole("dialog");
       await dialog.getByRole("textbox", {name: "Name", exact: true}).fill(`${vendor} Work`);
       await dialog.getByRole("textbox", {name: vendor === "Grok" ? "Absolute Grok executable path" : "Absolute executable path", exact: true}).fill("/bin/true");
+      await dialog.getByRole("checkbox", {name: /Model runtime is local/}).check();
       await dialog.getByRole("combobox", {name: "Harness permissions"}).selectOption("unrestricted");
       await expect(dialog.getByText(/Requires Host mode and project authorization Allow all/)).toBeVisible();
       await dialog.getByText("Account folder", {exact: true}).click();
@@ -14280,7 +14281,7 @@ test("assistant upgrade provider completes a goal from its own tool call on prod
       name: "Goal completion fixture", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
       privacy: {local_only: true, residency: [], permits_sensitive_data: false},
-      metadata: {default_model: "security-model"},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
     }});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
     const provider = await providerResponse.json() as {id: string; revision: number};
@@ -14625,10 +14626,10 @@ test("production chat companions open a workspace file in a disposable Core", as
     await code.getByRole("button", { name: "Hide Code editor" }).click();
     await page.getByRole("button", { name: "Chat tools" }).click();
     await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Browser/ }).click();
-    await expect(page.getByRole("region", { name: "Browser beside chat" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Browser 1 beside chat", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Chat tools" }).click();
     await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Notes/ }).click();
-    const notes = page.getByRole("region", { name: "Notes beside chat" });
+    const notes = page.getByRole("region", { name: "Notes 1 beside chat", exact: true });
     await expect(notes).toBeVisible();
     await notes.getByRole("button", { name: "Create note" }).click();
     await notes.getByRole("textbox", { name: "Note title" }).fill("Companion acceptance note");
@@ -15197,7 +15198,7 @@ test("assistant upgrade harness goal works on production LAN Core across new and
     expect(new URL(page.url()).searchParams.get("session")).toBe(existingSessionId);
     await goalPanel.getByRole("button", {name: "Start"}).click({timeout: 10_000});
     await expect.poll(async () => (await (await core.api.get(`chat/sessions/${existingSessionId}/goal`)).json()).status).toBe("paused");
-    await expect(goalPanel).toContainText("stopped or failed", {timeout: 15_000});
+    await expect(goalPanel).toContainText("Inert goal fixture failed once", {timeout: 15_000});
     await goalPanel.getByRole("button", {name: "Resume"}).click();
     await expect.poll(async () => (await (await core.api.get(`chat/sessions/${existingSessionId}/goal`)).json()).status).toBe("paused");
     await expect(goalPanel).toContainText("Goal step budget is exhausted.", {timeout: 15_000});

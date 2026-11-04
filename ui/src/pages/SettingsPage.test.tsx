@@ -161,6 +161,9 @@ describe("settings page section routing", () => {
       return frames.length;
     });
     const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const originalScroll = HTMLElement.prototype.scrollIntoView;
+    const scroll = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scroll;
     try {
       render(<MemoryRouter initialEntries={["/settings"]}><DialogProvider>
         <SettingsPage />
@@ -170,8 +173,13 @@ describe("settings page section routing", () => {
       const lens = screen.getByRole("dialog", { name: "Setting lens" });
       lens.focus();
       act(() => { for (const callback of [...frames]) callback(0); });
-      expect(within(lens).getByRole("heading", { name: "Operator profiles" })).toHaveFocus();
+      const heading = within(lens).getByRole("heading", { name: "Operator profiles" });
+      expect(heading).toHaveFocus();
+      expect(scroll.mock.contexts).toContain(heading.closest("section"));
+      expect(scroll).toHaveBeenCalledWith({ block: "start", behavior: "instant" });
     } finally {
+      if (originalScroll) HTMLElement.prototype.scrollIntoView = originalScroll;
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
       request.mockRestore();
       cancel.mockRestore();
     }

@@ -2989,20 +2989,23 @@ reloadTest("theme picker Quiet Lens reveals real navigation and keeps multiline 
   const composerInput = composerFrame.locator(".chat-composer-input");
   const composer = composerFrame.getByRole("textbox", { name: "Message the analyst assistant" });
   await expect(composer).toBeVisible();
-  if ((page.viewportSize()?.width ?? 1440) > 760) {
+  const hoverComposer = await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
+  if (hoverComposer) {
     await page.mouse.move(360, 310);
     await expect(composerInput).toHaveCSS("opacity", "0");
     const composerLens = composerFrame.locator(".chat-composer-lens");
     await expect(composerLens).toHaveCSS("opacity", "0.72");
-    const upperContour = await topHandle.locator("ellipse").boundingBox();
-    const lowerContour = await composerLens.locator("ellipse").boundingBox();
-    expect(upperContour && lowerContour).toBeTruthy();
-    expect(lowerContour!.height).toBeCloseTo(upperContour!.height, 1);
-    expect(lowerContour!.width).toBeGreaterThan(100);
-    const upperStroke = await topHandle.locator("ellipse").evaluate(element => getComputedStyle(element).strokeWidth);
-    const lowerStroke = await composerLens.locator("ellipse").evaluate(element => getComputedStyle(element).strokeWidth);
-    expect(lowerStroke).toBe(upperStroke);
-    await page.screenshot({ path: testInfo.outputPath("quiet-lens-composer-contour.png") });
+    if ((page.viewportSize()?.width ?? 1440) > 760) {
+      const upperContour = await topHandle.locator("ellipse").boundingBox();
+      const lowerContour = await composerLens.locator("ellipse").boundingBox();
+      expect(upperContour && lowerContour).toBeTruthy();
+      expect(lowerContour!.height).toBeCloseTo(upperContour!.height, 1);
+      expect(lowerContour!.width).toBeGreaterThan(100);
+      const upperStroke = await topHandle.locator("ellipse").evaluate(element => getComputedStyle(element).strokeWidth);
+      const lowerStroke = await composerLens.locator("ellipse").evaluate(element => getComputedStyle(element).strokeWidth);
+      expect(lowerStroke).toBe(upperStroke);
+      await page.screenshot({ path: testInfo.outputPath("quiet-lens-composer-contour.png") });
+    }
     await composerFrame.hover();
     await expect(composerInput).toHaveCSS("opacity", "1");
     await expect(composerLens).toHaveCSS("opacity", "0");
@@ -4519,6 +4522,9 @@ test("conversation More actions remain usable on mobile Workbench navigation", a
   await trigger.click();
   const menu = page.getByRole("menu", { name: "Actions for Conversation action review" });
   await expect(menu).toBeVisible();
+  const menuBounds = (await menu.boundingBox())!;
+  expect(menuBounds.y).toBeGreaterThanOrEqual(0);
+  expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   await expect(menu.getByRole("menuitem", { name: "Copy link" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "Export transcript" })).toBeFocused();
@@ -12820,6 +12826,20 @@ test("shared actions keep Chat tools and focus controls reachable", async ({ pag
   await openWorkspace(page, "/?view=chat", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   await expect(page.getByRole("button", { name: "More Workbench actions" })).toHaveCount(0);
+  if (mobile) await page.getByRole("button", { name: "Conversation actions" }).click();
+  else await page.getByRole("button", { name: "Chat tools" }).click();
+  const assistanceLauncher = mobile
+    ? page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Tool assistance/ })
+    : page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Tool assistance/ });
+  await expect(assistanceLauncher).toHaveAttribute("data-guide", "tool-assistance");
+  await assistanceLauncher.click();
+  const assistance = page.getByRole("region", { name: "Tool assistance 1 beside chat" });
+  const assistanceControls = assistance.getByRole("group", { name: "Post-tool assistance" });
+  await expect(assistanceControls).toHaveAttribute("data-guide", "tool-assistance");
+  await expect(assistanceControls.getByRole("checkbox", { name: "Suggest next steps" })).toBeVisible();
+  await assistance.getByRole("button", { name: "Close Tool assistance 1 tab" }).click();
+  await expect(assistance).toHaveCount(0);
+  await page.mouse.move(0, 0);
   if (mobile) {
     await page.getByRole("button", { name: "More workbench views" }).click();
     await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
@@ -12840,7 +12860,10 @@ test("shared actions keep Chat tools and focus controls reachable", async ({ pag
     const details = page.getByRole("region", { name: "Chat details 1 beside chat" });
     await expect(details).toBeVisible();
     await details.getByRole("button", { name: "Close Chat details 1 tab" }).click();
-    await page.getByRole("toolbar", { name: "Workbench controls" }).getByRole("button", { name: "Enter focus mode" }).focus();
+    await expect(details).toHaveCount(0);
+    const enterFocus = page.getByRole("toolbar", { name: "Workbench controls" }).getByRole("button", { name: "Enter focus mode" });
+    await enterFocus.focus();
+    await expect(enterFocus).toBeFocused();
     await page.keyboard.press("Enter");
   }
   await expect(page.locator(".sessions-page")).toHaveClass(/full-screen/);
@@ -12889,7 +12912,7 @@ test("stabilization Grok harness delete explains a conflict beside the card and 
   await expect(card).toHaveCount(0);
   expect(attempts).toBe(2);
 });
-test("stabilization compact Workbench header icons", async ({ page }, testInfo) => {
+reloadTest("stabilization compact Workbench header icons", async ({ page }, testInfo) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
   await expect(page.getByRole('button', {name: 'New chat', exact: true})).toHaveCount(1);
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
@@ -13289,7 +13312,11 @@ reloadTest("stabilization terminal long output keeps the prompt and typed input 
     await expect(rows).not.toContainText("listing-row-149");
   }
   await input.focus();
-  for (let index = 0; index < 20; index++) await page.keyboard.press("Shift+PageUp");
+  // Short landscape terminals expose only a few rows per page. Traverse the
+  // bounded fixture history rather than assuming twenty pages reaches its top.
+  for (let index = 0; index < 150 && !(await rows.innerText()).includes("listing-row-0"); index++) {
+    await page.keyboard.press("Shift+PageUp");
+  }
   await expect(rows).toContainText("listing-row-0");
   await page.keyboard.type("visible-input");
   await expect(shell.locator(".xterm-rows")).toContainText("visible-input");
@@ -14919,7 +14946,7 @@ test("stabilization Project Snapshot floats over chat and minimizes", async ({ p
   await expect(opener).toBeFocused();
 });
 
-test("stabilization focus mode keeps an empty chat beside its code editor", async ({ page }, testInfo) => {
+reloadTest("stabilization focus mode keeps an empty chat beside its code editor", async ({ page }, testInfo) => {
   await setInitialZeroDark(page);
   await openWorkspace(page, "/?view=chat", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;

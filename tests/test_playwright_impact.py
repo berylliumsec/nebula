@@ -227,6 +227,19 @@ def test_full_manifest_covers_every_permanent_playwright_project():
     } <= {"mock", "real-core", "real-core-sandbox"}
 
 
+def test_full_manifest_covers_every_product_browser_spec_without_filters():
+    ui_root = ROOT / "ui"
+    product_specs = {
+        path.relative_to(ui_root).as_posix()
+        for pattern in ("*.spec.ts", "*.spec.tsx")
+        for path in (ui_root / "tests").rglob(pattern)
+        if "usage" not in path.relative_to(ui_root / "tests").parts
+    }
+    assert {entry["test_match"] for entry in MANIFEST["full_include"]} == product_specs
+    # Area greps can omit later cases in an otherwise catalogued file.
+    assert all(not entry.get("grep") for entry in MANIFEST["full_include"])
+
+
 def test_browser_area_only_collects_named_browser_assistant_journeys():
     entries = MANIFEST["areas"]["browser"]
     assert {entry["project"] for entry in entries} == {
