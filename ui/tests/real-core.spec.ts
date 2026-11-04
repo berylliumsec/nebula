@@ -11945,7 +11945,8 @@ test("project execution mode settings assistant opens every catalog setting from
   page.setDefaultTimeout(10_000);
   expect(settingCatalog).toHaveLength(25);
   let modelStub: LocalModelStub | undefined;
-  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4(),
+    fixtureScript: path.resolve(import.meta.dirname, "fixtures/available_host_core.py") });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   await withOwnedCleanup(async () => {
     modelStub = await startLocalModelStub();
