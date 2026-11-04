@@ -3102,3 +3102,5 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .host-cpu-form input, .host-cpu-form select { min-height: 44px; width: 180px; max-width: 100%; }
 .host-cpu-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .host-cpu-actions .button { min-height: 44px; min-width: 44px; }
+.host-cpu-form .host-cpu-enable { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; }
+.host-cpu-form .host-cpu-enable input { width: 44px; height: 44px; flex: 0 0 44px; margin: 0; }

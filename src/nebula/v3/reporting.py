@@ -42,6 +42,7 @@ from reportlab.platypus import (
 
 from .artifacts import ArtifactStore
 from .cpu_workers import CpuWorkerPool
+from .report_cpu_executor import ReportCpuExecutor
 from .domain import (
     Artifact,
     Asset,
@@ -94,7 +95,7 @@ class ReportRenderService:
         artifact_store: ArtifactStore,
         operator_id: Callable[[], str] | None = None,
         font_root: str | Path | None = None,
-        cpu_workers: CpuWorkerPool | None = None,
+        cpu_workers: CpuWorkerPool | ReportCpuExecutor | None = None,
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store

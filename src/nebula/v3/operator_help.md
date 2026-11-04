@@ -421,13 +421,28 @@ A saved or queued chat is not proof its runtime started.
 Missing optional counters remain unknown and do not permanently strand work.
 
 Settings → Setup → CPU budget saves one policy on the connected Core host,
-shared across its projects and browsers. Automatic uses half the detected CPU
-capacity; Custom selects a positive finite CPU-equivalent limit up to that
-capacity. Butler reads `nebula.work.host_cpu_budget` or scheduled
+shared across its projects and browsers. Enable background PDF workers starts
+one Core-owned pool for saved-report PDF generation on Linux. Automatic uses
+roughly half the available CPUs, with a minimum of one and maximum of four;
+Custom selects whole worker CPUs within those bounds. Core verifies each owned
+worker's Linux CPU affinity and reports its live count. This pool does not limit
+chat runtimes, arbitrary external tools, LLMs or GPUs.
+
+Butler reads `nebula.work.host_cpu_budget` or scheduled
 `nebula.global.host_cpu_budget`, then uses Settings GET/PUT
-`/api/v1/host-cpu-budget` with `host_id`, `expected_revision` and `cpu_limit`
-(`null` for Automatic). Read back the saved revision and application state.
-Only `apply_state=applied` and an observed `applied_cpu_limit` prove the active
-experimental shared executor changed. A saved inactive policy does not enable
-that executor or limit execution paths outside it. Reload before retrying a
-revision or host conflict; retry saving a pending or failed application.
+`/api/v1/host-cpu-budget` with fresh `host_id`, `expected_revision`, `cpu_limit`
+(`null` for Automatic) and `enabled`. Include `enabled=true` or `enabled=false`
+only for an explicit activation or disable request; omitting it preserves the
+current enabled state. Existing policies migrate to disabled. Read back the
+saved revision, `executor_state`, `worker_count` and `apply_state`. A saved enable
+request can still be starting, draining or failed. Report running only after
+`executor_state=running` and `apply_state=applied`; disabled requires
+`executor_state=disabled` and zero owned workers. Poll fresh Core reads while a
+transition is pending. Unavailable worker counts remain unknown, never zero.
+Lower limits repin the old workers before draining;
+accepted jobs finish before the old pool exits and a replacement starts.
+Disabling drains accepted work and stops the processes, then restores standard
+PDF generation. Startup failure is retryable by saving again; disabling permits
+standard export. Unsupported hosts explain why activation is unavailable.
+Reload before retrying a revision or host conflict. Externally injected quota
+executors expose their budget but cannot be started or stopped by this control.

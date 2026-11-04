@@ -3574,15 +3574,15 @@
         "ui/src/api/hostCpuBudget.ts::request::GET \"host-cpu-budget\"",
         "ui/src/api/hostCpuBudget.ts::request::\"PUT\" \"host-cpu-budget\""
       ],
-      "core_owner": "Host-local CPU policy file and optional observed shared-executor quota",
+      "core_owner": "Host-local enabled policy, Core-owned PDF worker lifecycle and observed Linux CPU affinity",
       "butler": {
         "discover": "nebula.settings.catalog and nebula.settings.api_schema",
         "read": "nebula.work.host_cpu_budget; nebula.settings.api_request GET host-cpu-budget",
         "change": "nebula.settings.api_request PUT host-cpu-budget"
       },
-      "authority": "Explicit host CPU setting request; observed host_id and expected_revision; finite 0.01..host-capacity limit or null for Automatic. Core persists and reads back policy and application state; saving an inactive policy never enables the experimental executor.",
-      "observed_result_test": "tests/v3/test_host_cpu_budget.py::test_butler_discovers_reads_and_saves_the_host_policy_with_readback",
-      "result": "One policy is shared across projects and browsers on this Core host, isolated from other hosts, with saved/inactive/pending/failed states distinguished from observed quota application.",
+      "authority": "Explicit host CPU budget request; enabling/disabling additionally requires an explicit activation request. Use fresh host_id/expected_revision and enabled only when requested; omission preserves state. Core persists and reads back policy. Running requires observed live workers/affinity with executor_state=running and apply_state=applied; disabled requires zero workers. Resize/disable drains accepted PDF work.",
+      "observed_result_test": "tests/v3/test_report_cpu_activation.py::test_butler_activates_and_reads_actual_running_then_disabled_workers",
+      "result": "One PDF worker pool shared across this host’s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
       "status": "supported"
     }
   ],

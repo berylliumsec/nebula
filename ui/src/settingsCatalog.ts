@@ -234,11 +234,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.setup",
     label: "Terminal and Core setup",
-    description: "Choose a verified runtime, configure this host's automatic or custom CPU budget, or inspect current host pressure",
+    description: "Choose a verified runtime, enable background PDF workers with this host's CPU budget, or inspect current host pressure",
     category: "Setup",
     scope: "Workspace",
     target: "setup-settings",
-    keywords: ["setup", "terminal", "core", "remote core", "connection", "readiness", "kali", "host load", "host-load", "CPU", "memory", "capacity", "fresh host load", "sample age", "deferred jobs", "queued chats", "CPU budget", "per host", "automatic", "custom CPU limit", "applied quota", "nebula.work.host_load", "nebula.global.host_load", "nebula.work.host_cpu_budget", "nebula.global.host_cpu_budget"],
+    keywords: ["setup", "terminal", "core", "remote core", "connection", "readiness", "kali", "host load", "host-load", "CPU", "memory", "capacity", "fresh host load", "sample age", "deferred jobs", "queued chats", "CPU budget", "per host", "automatic", "custom CPU limit", "applied quota", "enable background PDF workers", "disable workers", "Linux CPU affinity", "draining", "worker activation", "nebula.work.host_load", "nebula.global.host_load", "nebula.work.host_cpu_budget", "nebula.global.host_cpu_budget"],
   },
 ];
 
