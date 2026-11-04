@@ -384,3 +384,22 @@ def test_workflow_gates_every_matrix_lane():
         assert jobs["gate"]["steps"][0]["env"][f"HAS_{index}"] == (
             "${{ needs.plan.outputs.has_" + str(index) + " }}"
         )
+
+
+def test_first_user_selection_covers_only_the_onboarding_journey():
+    entries = selected_entries(MANIFEST, ["area:first-user"])
+    assert len(entries) == 8
+    assert {entry["project"] for entry in entries} == {
+        "assistant-real-desktop", "assistant-real-compact",
+        *(f"assistant-real-{engine}-{width}" for engine in ("chromium", "webkit")
+          for width in (320, 390, 430)),
+    }
+    for entry in entries:
+        assert entry["test_match"] == "tests/real-core.spec.ts"
+        assert entry["grep"] == (
+            "assistant upgrade first-time user configures a provider uploads a document and analyses it"
+        )
+        assert entry["runtime"] == "real-core"
+        assert entry["shard"] == "1/1"
+    assert "first-user" in areas(plan(["ui/src/components/ChatAttachments.tsx"]))
+    assert "first-user" in areas(plan(["ui/src/components/PairingGate.tsx"]))
