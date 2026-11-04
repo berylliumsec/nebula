@@ -44,6 +44,7 @@ from nebula.v3.harnesses import (
     HarnessEvent,
     HarnessHealth,
     HarnessTransportError,
+    HarnessTurnFailedError,
     HarnessGoalSnapshot,
 )
 from nebula.v3.ssh_environments import SshProbeResult
@@ -183,6 +184,36 @@ class InertConnection(HarnessConnection):
                         raise RuntimeError("Core did not save the advisory task plan")
             yield HarnessEvent(type="message_delta", delta="PLANNED_READ_COMPLETE")
             yield HarnessEvent(type="completed", message="PLANNED_READ_COMPLETE")
+            return
+        if self.runtime.scenario == "goal_capacity":
+            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            marker = self.runtime.fixture_root / f"capacity-{turn.chat_session_id}"
+            if "CAPACITY_ONCE" in prompt:
+                marker.write_text("once")
+            elif "CAPACITY_ALWAYS" in prompt:
+                marker.write_text("always")
+            elif "CYBER_POLICY" in prompt:
+                raise HarnessTurnFailedError(
+                    "This content was flagged for possible cybersecurity risk.",
+                    reason_code="permission_denied",
+                    vendor_error_info="cyberPolicy",
+                )
+            if marker.exists() and (
+                marker.read_text() == "always"
+                or not turn.metadata.get("automatic_capacity_retry_attempt")
+            ):
+                raise HarnessTurnFailedError(
+                    "Selected model is at capacity. Please try a different model.",
+                    reason_code="dependency_unavailable",
+                    vendor_error_info="serverOverloaded",
+                )
+            answer = "CAPACITY_RECOVERED"
+            yield HarnessEvent(type="message_delta", delta=answer)
+            yield HarnessEvent(
+                type="usage",
+                usage=ChatTokenUsage(input_tokens=4, output_tokens=5, total_tokens=9),
+            )
+            yield HarnessEvent(type="completed", message=answer)
             return
         if self.runtime.scenario == "goal":
             turn = self.runtime._active_gateway_turn(self.request.session.id)
@@ -399,11 +430,12 @@ class InertAdapter(HarnessAdapter):
             kind=profile.kind,
             authentication_state="verified",
             capabilities=HarnessCapabilities(
-                detailed_usage=self.runtime.scenario == "goal",
+                detailed_usage=self.runtime.scenario in {"goal", "goal_capacity"},
                 mcp=profile.kind == HarnessKind.CODEX_APP_SERVER
                 or profile.capabilities.mcp,
                 models=["fixture", "fixture-next"]
-                if self.runtime.scenario in {"settings", "daybreak", "goal"}
+                if self.runtime.scenario
+                in {"settings", "daybreak", "goal", "goal_capacity"}
                 else ["fixture"],
                 interruption=True,
                 model_options=[
@@ -414,7 +446,7 @@ class InertAdapter(HarnessAdapter):
                             HarnessRuntimeOption(id="high", label="High"),
                             *(
                                 [HarnessRuntimeOption(id="max", label="Max")]
-                                if self.runtime.scenario == "goal"
+                                if self.runtime.scenario in {"goal", "goal_capacity"}
                                 else []
                             ),
                         ],
@@ -427,7 +459,8 @@ class InertAdapter(HarnessAdapter):
                     )
                     for model in ["fixture", "fixture-next"]
                 ]
-                if self.runtime.scenario in {"settings", "daybreak", "goal"}
+                if self.runtime.scenario
+                in {"settings", "daybreak", "goal", "goal_capacity"}
                 else [],
             ),
         )
@@ -544,6 +577,7 @@ if __name__ == "__main__":
             "sidebar",
             "agent_messaging",
             "goal",
+            "goal_capacity",
             "navigation",
             "planning",
             "planning_legacy",
@@ -696,7 +730,7 @@ if __name__ == "__main__":
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},
                 capabilities=HarnessCapabilities(
-                    detailed_usage=args.scenario == "goal",
+                    detailed_usage=args.scenario in {"goal", "goal_capacity"},
                     mcp=args.scenario not in {"planning", "planning_legacy"},
                 ),
                 native_capabilities=HarnessNativeCapabilities(
@@ -744,7 +778,7 @@ if __name__ == "__main__":
                 native_capabilities=HarnessNativeCapabilities(shell=True),
             )
         )
-    if args.scenario == "goal" and not any(
+    if args.scenario in {"goal", "goal_capacity"} and not any(
         profile.id == "inert-codex" for profile in store.list_entities(HarnessProfile)
     ):
         store.create(

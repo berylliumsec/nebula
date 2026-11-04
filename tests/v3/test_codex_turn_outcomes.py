@@ -436,6 +436,7 @@ def test_codex_failed_turn_after_final_answer_saves_the_answer(tmp_path):
     [
         ("usageLimitExceeded", "quota_exhausted"),
         ("serverOverloaded", "dependency_unavailable"),
+        ("cyberPolicy", "permission_denied"),
         (
             {"responseTooManyFailedAttempts": {"httpStatusCode": 500}},
             "dependency_unavailable",

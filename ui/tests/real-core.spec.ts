@@ -15259,6 +15259,96 @@ test("assistant upgrade harness goal works on production LAN Core across new and
   }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
+test("assistant upgrade Core goal retries capacity once and keeps policy refusals paused on production LAN", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "goal_capacity");
+  await withOwnedCleanup(async () => {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    expect((await core.api.post("harnesses/inert-codex/health")).ok()).toBe(true);
+    const manifest = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>; builtAt: string};
+    const entry = Object.keys(manifest.assets).find(name => name.startsWith("assets/index-") && name.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(manifest.assets[entry!]);
+    const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Capacity recovery browser"}})).json() as {secret: string; confirmation_code: string};
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Capacity recovery browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+
+    const goalPanel = page.getByRole("region", {name: "Conversation goal"});
+    const settingsDialog = page.getByRole("dialog", {name: "Assistant settings"});
+    const revealGoal = async () => {
+      const pointerFine = await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
+      if (pointerFine) await page.locator(".chat-composer").hover();
+      const rail = page.getByRole("region", {name: "Goal", exact: true});
+      if (!await goalPanel.isVisible() && await rail.isVisible()) {
+        if (pointerFine) await page.locator(".chat-studio-rail").hover();
+        const reveal = rail.getByRole("button", {name: /Create goal|View full goal and evidence gates/});
+        if (await reveal.isVisible()) await reveal.click({timeout: 10_000});
+      }
+      if (!await goalPanel.isVisible()) await clickAssistantSettings(page);
+      if (!await goalPanel.isVisible() && await rail.isVisible()) {
+        if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+        if (pointerFine) await page.locator(".chat-studio-rail").hover();
+        await rail.getByRole("button", {name: /Create goal|View full goal and evidence gates/}).click({timeout: 10_000});
+      }
+      await expect(goalPanel).toBeVisible({timeout: 15_000});
+      const expand = goalPanel.getByRole("button", {name: "Expand goal controls"});
+      if (await expand.isVisible()) await expand.click();
+    };
+    const createAndStart = async (objective: string, expectedStep: number) => {
+      if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      await revealGoal();
+      if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+      await goalPanel.getByRole("button", {name: "Add goal"}).click();
+      await goalPanel.getByRole("textbox", {name: "Objective"}).fill(objective);
+      await goalPanel.getByRole("textbox", {name: "Completion criteria"}).fill("A saved response or clear hold is visible");
+      await goalPanel.getByText("Limits", {exact: true}).click();
+      await goalPanel.getByRole("spinbutton", {name: "Step budget"}).fill("2");
+      await goalPanel.getByRole("button", {name: "Save draft"}).click();
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+      const sessionId = new URL(page.url()).searchParams.get("session")!;
+      await revealGoal();
+      if (await settingsDialog.isVisible()) await settingsDialog.getByRole("button", {name: "Close assistant settings"}).click();
+      await goalPanel.getByRole("button", {name: "Start"}).click();
+      await expect.poll(async () => (await (await core.api.get(`chat/sessions/${sessionId}/goal`)).json()).current_step, {timeout: 30_000}).toBe(expectedStep);
+      await expect.poll(async () => (await (await core.api.get(`chat/sessions/${sessionId}/goal`)).json()).status, {timeout: 30_000}).toBe("paused");
+      return sessionId;
+    };
+
+    const recoveredId = await createAndStart("CAPACITY_ONCE: return the synthetic result", 2);
+    const recovered = await (await core.api.get(`chat/sessions/${recoveredId}/goal`)).json() as {current_step: number; blocked_reason: string};
+    expect(recovered.current_step).toBe(2);
+    expect(recovered.blocked_reason).toBe("Goal step budget is exhausted.");
+    const savedMessages = await (await core.api.get(`chat/sessions/${recoveredId}/messages`)).json() as Array<{role: string}>;
+    expect(savedMessages.filter(message => message.role === "assistant")).toHaveLength(1);
+    await page.reload();
+    await revealGoal();
+    await expect(goalPanel).toContainText("step 2/2");
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("CAPACITY_RECOVERED");
+
+    const exhaustedId = await createAndStart("CAPACITY_ALWAYS: keep the goal paused after the bounded retry", 2);
+    const exhausted = await (await core.api.get(`chat/sessions/${exhaustedId}/goal`)).json() as {current_step: number; blocked_reason: string};
+    expect(exhausted.current_step).toBe(2);
+    expect(exhausted.blocked_reason).toContain("at capacity");
+    await expect(goalPanel).toContainText("at capacity");
+
+    const policyId = await createAndStart("CYBER_POLICY: keep the refusal visible", 1);
+    const policy = await (await core.api.get(`chat/sessions/${policyId}/goal`)).json() as {current_step: number; blocked_reason: string};
+    expect(policy.current_step).toBe(1);
+    expect(policy.blocked_reason).toContain("cybersecurity risk");
+    await page.reload();
+    await revealGoal();
+    await expect(goalPanel).toContainText("cybersecurity risk");
+    await expect.poll(async () => (await (await core.api.get(`chat/sessions/${policyId}/goal`)).json()).current_step, {timeout: 5_000}).toBe(1);
+    expect((await new AxeBuilder({page}).include(".chat-goal-panel").analyze()).violations).toEqual([]);
+    console.log(`Core capacity fixture: ${core.origin}, production build ${manifest.builtAt}, ${testInfo.project.name}`);
+    await testInfo.attach("core-capacity-recovery-lan", {body: JSON.stringify({origin: core.origin, build: "production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), recoveredId, exhaustedId, policyId, outcome: "capacity retry, bounded repeated failure, policy hold, reload"}), contentType: "application/json"});
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
+});
+
 test("assistant upgrade shell goal draft remains editable with skills on production LAN Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});

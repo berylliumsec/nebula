@@ -46,6 +46,7 @@ from nebula.v3.harnesses import (
     HarnessConfigurationError,
     HarnessEvent,
     HarnessGoalSnapshot,
+    HarnessTurnFailedError,
 )
 from nebula.v3.storage import ConflictError
 from tests.v3.test_harnesses import FakeConnection, _runtime
@@ -806,7 +807,383 @@ def test_failed_harness_turn_pauses_goal_until_explicit_resume(tmp_path):
             != ChatTurnStatus.COMPLETE
         )
         goal = goals.get(created.session.id)
-        assert "stopped or failed" in (goal.blocked_reason or "")
+        assert "uncertain transport loss" in (goal.blocked_reason or "")
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_model_capacity_continues_goal_once_from_saved_state(tmp_path):
+    attempts = 0
+
+    class CapacityOnceConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str, images=None
+        ) -> AsyncIterator[HarnessEvent]:
+            nonlocal attempts
+            attempts += 1
+            self.prompts.append(prompt)
+            yield HarnessEvent(
+                type="started",
+                external_session_id="capacity-session",
+                external_turn_id=f"capacity-turn-{attempts}",
+            )
+            yield HarnessEvent(
+                type="usage",
+                usage=ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+            if attempts == 1:
+                raise HarnessTurnFailedError(
+                    "Selected model is at capacity. Please try a different model.",
+                    reason_code="dependency_unavailable",
+                    vendor_error_info="serverOverloaded",
+                )
+            yield HarnessEvent(type="completed", message="Recovered goal result")
+
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+
+        async def open_capacity(request):
+            connection = CapacityOnceConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_capacity
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=2)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        async with asyncio.timeout(10):
+            while True:
+                turns = store.list_session_entities(ChatTurn, created.session.id)
+                if (
+                    len(turns) == 2
+                    and turns[-1].status == ChatTurnStatus.COMPLETE
+                    and goals.get(created.session.id).status == ChatGoalStatus.PAUSED
+                ):
+                    break
+                await asyncio.sleep(0.01)
+        assert attempts == 2
+        assert turns[0].status == ChatTurnStatus.INTERRUPTED
+        retry = store.get(HarnessTurn, turns[1].harness_turn_id)
+        assert retry.metadata["automatic_capacity_retry_attempt"] == 1
+        assert retry.metadata["retry_of_turn_id"] == turns[0].harness_turn_id
+        assert "Read the current goal" in retry.metadata["user_prompt"]
+        assert goals.get(created.session.id).current_step == 2
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_repeated_model_capacity_pauses_without_retry_loop(tmp_path):
+    attempts = 0
+
+    class CapacityConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str, images=None
+        ) -> AsyncIterator[HarnessEvent]:
+            nonlocal attempts
+            attempts += 1
+            yield HarnessEvent(
+                type="started",
+                external_session_id="capacity-session",
+                external_turn_id=f"capacity-turn-{attempts}",
+            )
+            yield HarnessEvent(
+                type="usage",
+                usage=ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+            raise HarnessTurnFailedError(
+                "Selected model is at capacity. Please try a different model.",
+                reason_code="dependency_unavailable",
+                vendor_error_info="serverOverloaded",
+            )
+
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+
+        async def open_capacity(request):
+            connection = CapacityConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_capacity
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=None)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        async with asyncio.timeout(10):
+            while True:
+                turns = store.list_session_entities(ChatTurn, created.session.id)
+                if (
+                    len(turns) == 2
+                    and all(t.status == ChatTurnStatus.INTERRUPTED for t in turns)
+                    and goals.get(created.session.id).status == ChatGoalStatus.PAUSED
+                ):
+                    break
+                await asyncio.sleep(0.01)
+        assert attempts == 2
+        assert "at capacity" in (goals.get(created.session.id).blocked_reason or "")
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_capacity_continuation_uses_completed_tool_receipt(tmp_path):
+    attempts = 0
+
+    class CompletedToolConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str, images=None
+        ) -> AsyncIterator[HarnessEvent]:
+            nonlocal attempts
+            attempts += 1
+            self.prompts.append(prompt)
+            yield HarnessEvent(
+                type="started",
+                external_session_id="tool-session",
+                external_turn_id=f"tool-turn-{attempts}",
+            )
+            yield HarnessEvent(
+                type="usage",
+                usage=ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+            if attempts == 1:
+                yield HarnessEvent(
+                    type="tool_started",
+                    server_id="codex",
+                    tool_name="read",
+                    item_id="recorded-tool",
+                    item_kind="tool",
+                    payload={"arguments": {}},
+                )
+                yield HarnessEvent(
+                    type="tool_completed",
+                    server_id="codex",
+                    tool_name="read",
+                    item_id="recorded-tool",
+                    item_kind="tool",
+                    payload={"result": "saved receipt"},
+                )
+                raise HarnessTurnFailedError(
+                    "Selected model is at capacity. Please try a different model.",
+                    reason_code="dependency_unavailable",
+                    vendor_error_info="serverOverloaded",
+                )
+            yield HarnessEvent(type="completed", message="Continued after receipt")
+
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+
+        async def open_connection(request):
+            connection = CompletedToolConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_connection
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=2)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        async with asyncio.timeout(10):
+            while True:
+                turns = store.list_session_entities(ChatTurn, created.session.id)
+                if len(turns) == 2 and turns[-1].status == ChatTurnStatus.COMPLETE:
+                    break
+                await asyncio.sleep(0.01)
+        first = store.get(HarnessTurn, turns[0].harness_turn_id)
+        assert attempts == 2
+        assert len(first.tool_call_ids) == 1
+        assert store.get(ToolCall, first.tool_call_ids[0]).status.value == "complete"
+        assert (
+            "Do not repeat a completed action"
+            in store.get(HarnessTurn, turns[1].harness_turn_id).metadata["user_prompt"]
+        )
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_capacity_after_completed_write_stays_paused(tmp_path):
+    attempts = 0
+
+    class CompletedWriteConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str, images=None
+        ) -> AsyncIterator[HarnessEvent]:
+            nonlocal attempts
+            attempts += 1
+            yield HarnessEvent(
+                type="started",
+                external_session_id="write-session",
+                external_turn_id="write-turn",
+            )
+            yield HarnessEvent(
+                type="usage",
+                usage=ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+            yield HarnessEvent(
+                type="tool_started",
+                server_id="codex",
+                tool_name="commandExecution",
+                item_id="recorded-write",
+                item_kind="tool",
+                payload={"arguments": {"command": "fixture"}},
+            )
+            yield HarnessEvent(
+                type="tool_completed",
+                server_id="codex",
+                tool_name="commandExecution",
+                item_id="recorded-write",
+                item_kind="tool",
+                payload={"result": "saved receipt"},
+            )
+            raise HarnessTurnFailedError(
+                "Selected model is at capacity. Please try a different model.",
+                reason_code="dependency_unavailable",
+                vendor_error_info="serverOverloaded",
+            )
+
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+
+        async def open_connection(request):
+            connection = CompletedWriteConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_connection
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=2)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        await asyncio.sleep(0.1)
+        turns = store.list_session_entities(ChatTurn, created.session.id)
+        first = store.get(HarnessTurn, turns[0].harness_turn_id)
+        assert attempts == 1
+        assert len(turns) == 1
+        assert store.get(ToolCall, first.tool_call_ids[0]).status.value == "complete"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_capacity_with_unresolved_native_effect_stays_paused(tmp_path):
+    attempts = 0
+
+    class UncertainCommandConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str, images=None
+        ) -> AsyncIterator[HarnessEvent]:
+            nonlocal attempts
+            attempts += 1
+            yield HarnessEvent(
+                type="started",
+                external_session_id="command-session",
+                external_turn_id="command-turn",
+            )
+            yield HarnessEvent(
+                type="item_upsert",
+                item_id="unresolved-command",
+                item_kind="command",
+                item_status="running",
+                title="Command",
+            )
+            raise HarnessTurnFailedError(
+                "Selected model is at capacity. Please try a different model.",
+                reason_code="dependency_unavailable",
+                vendor_error_info="serverOverloaded",
+            )
+
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+
+        async def open_connection(request):
+            connection = UncertainCommandConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_connection
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=2)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        await asyncio.sleep(0.1)
+        assert attempts == 1
+        assert len(store.list_session_entities(ChatTurn, created.session.id)) == 1
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "This content was flagged for possible cybersecurity risk.",
+        "Selected model is at capacity. Cybersecurity policy denied this request.",
+    ],
+)
+def test_cyber_policy_refusal_does_not_route_or_retry_goal(tmp_path, message):
+    attempts = 0
+
+    class CyberRefusalConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str, images=None
+        ) -> AsyncIterator[HarnessEvent]:
+            nonlocal attempts
+            attempts += 1
+            yield HarnessEvent(
+                type="started",
+                external_session_id="cyber-session",
+                external_turn_id=f"cyber-turn-{attempts}",
+            )
+            raise HarnessTurnFailedError(
+                message,
+                reason_code="permission_denied",
+                vendor_error_info="cyberPolicy",
+            )
+
+    async def scenario() -> None:
+        store, _engagement, _profile, _mcp, adapter, runtime = _runtime(tmp_path)
+
+        async def open_refusal(request):
+            connection = CyberRefusalConnection(request)
+            adapter.connections.append(connection)
+            return connection
+
+        adapter.open = open_refusal
+        goals = ChatGoalService(store, runtime)
+        created = _new_goal(goals, step_budget=None)
+        goals.write(
+            created.session.id,
+            GoalWrite(expected_revision=created.goal.revision, action="start"),
+        )
+        await runtime.dispatch_running_goal(created.session.id, "Begin work")
+        await _wait_for_goal(goals, created.session.id, ChatGoalStatus.PAUSED)
+        turns = store.list_session_entities(ChatTurn, created.session.id)
+        assert len(turns) == 1
+        assert attempts == 1
+        failed = store.get(HarnessTurn, turns[0].harness_turn_id)
+        assert failed.metadata["diagnostic_reason_code"] == "permission_denied"
+        assert failed.metadata["diagnostic"]["vendor_error_info"] == "cyberPolicy"
+        assert message in (goals.get(created.session.id).blocked_reason or "")
         await runtime.shutdown()
 
     asyncio.run(scenario())
