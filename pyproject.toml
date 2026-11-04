@@ -31,6 +31,7 @@ from = "src"
 
 [tool.poetry.scripts]
 nebula-core = "nebula.v3.cli:main"
+nebula-chat = "nebula.chat_cli:main"
 nebula-browserd = "nebula.v3.browserd:main"
 
 [tool.poetry.dependencies]

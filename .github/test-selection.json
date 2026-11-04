@@ -1,11 +1,11 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independent root-cause validation and focused regressions cover repaired API/storage startup scans, CPU diagnostics, help ranking, stable harness capability fingerprints, and stale fixture contracts. The explicit manual full run collects all 4967 Python tests, all frontend tests and all native tests; the separate full browser run covers every catalog entry. Universal agent checks include real-Core pairing, saved MCP selections, stable transport reuse and reload.",
-  "exclusions": "No live providers, real operator data, deployments, or physical devices. Focused PR jobs run changed test files and relevant product regressions; full native/source/browser coverage is separately manually dispatched under the explicit user request. Local model/Chromium download and LAN browser policy limits are covered on hosted CI. The current full frontend result is 1745 passed; final UI repairs are verified separately before merge.",
+  "reason": "Independent causal validation covers repaired runtime regressions and browser geometry, empty-chat tool tabs, native goal disclosure, idle polling and diagnostics catalogs. Focused Python regressions and real-Core saved-MCP continuity run on PR; the user explicitly authorized complete source, native and browser suites, which are separately dispatched manually.",
+  "exclusions": "No real operator data, live providers, deployments or physical devices. Mocked geometry checks are supplemented by real-Core production LAN browser coverage on hosted CI. Exact browser regression selections and final full-suite evidence are refreshed before PR and merge.",
   "expected_tests": {
     "python": 1157,
-    "frontend": 64,
-    "native": 0,
+    "frontend": 101,
+    "native": 16,
     "playwright": 32
   },
   "python": [
@@ -56,18 +56,24 @@
     "ui/src/App.sendConsent.test.tsx",
     "ui/src/App.subagentChoice.test.tsx",
     "ui/src/App.test.tsx",
+    "ui/src/api/visiblePoll.test.ts",
     "ui/src/components/AssistantSetupLinks.test.tsx",
+    "ui/src/components/ChatStudioRail.test.tsx",
     "ui/src/components/CompactSettingsList.test.tsx",
-    "ui/src/pages/chatDraftNavigation.test.tsx"
+    "ui/src/components/SideNav.test.tsx",
+    "ui/src/pages/chatDraftNavigation.test.tsx",
+    "ui/src/pages/sidePanelTabs.test.ts"
   ],
-  "native": [],
+  "native": [
+    "diagnostics::tests"
+  ],
   "playwright": [
     "area:icon-pack",
     "area:butler-private-settings",
     "area:universal-agents"
   ],
   "python_node": true,
-  "change_digest": "0408a34f16ded64d237494a415bb549bb836fd12942c2d5666ccf607e5166fef",
+  "change_digest": "fee7ff58bc1c5afeb38f24bc1b8a8698faff81e90f994da7655f2592d8b043ed",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }

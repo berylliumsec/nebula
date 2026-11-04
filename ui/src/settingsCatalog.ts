@@ -207,11 +207,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.devices",
     label: "Paired devices",
-    description: "Pair, inspect, and revoke browsers and mobile devices",
+    description: "Pair, inspect, and revoke browsers, mobile devices, and Butler CLI terminals",
     category: "Identity & Security",
     scope: "Security",
     target: "device-pairing-settings",
-    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke"],
+    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke", "CLI", "terminal", "nebula-chat", "headless"],
   },
   {
     id: "settings.release",
