@@ -80,6 +80,12 @@ Native-install users launch the desktop with `nebula`; `nebula-core` is reserved
 for diagnostics, migrations, headless serving, imports, exports, and other
 administration.
 
+`nebula-core headless` starts Core without a GUI, browser or frontend build.
+`nebula-chat` (also `nebula-core chat`) pairs a terminal device with an existing
+Core and opens the selected project's saved Butler conversation. See the
+[headless and terminal guide](CLI.md) for HTTPS, host invitations, project
+selection, streaming, reconnect and revocation.
+
 The browser token is carried in the URL fragment, consumed into memory, and
 removed immediately. Tauri sends its 256-bit one-time token through the Core
 process's stdin instead of a URL or process argument.

@@ -21,6 +21,7 @@ from typing import Annotated, Any
 
 import typer
 import uvicorn
+from nebula.chat_cli import app as chat_app
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import select
@@ -108,6 +109,7 @@ maintenance_app = typer.Typer(
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(diagnostics_app, name="diagnostics")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(chat_app, name="chat")
 app.add_typer(maintenance_app, name="maintenance")
 
 
@@ -639,6 +641,54 @@ def serve(
             "Nebula Core API stopped.",
             outcome="success",
         )
+
+
+@app.command()
+def headless(
+    host: Annotated[
+        str, typer.Option(help="Bind address; use 0.0.0.0 for remote clients.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=0, max=65535)] = 8765,
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+    token: Annotated[
+        str | None,
+        typer.Option(
+            envvar="NEBULA_V3_API_TOKEN", help="Host administration bearer token."
+        ),
+    ] = None,
+    allow_remote: Annotated[
+        bool, typer.Option(help="Acknowledge accepting remote paired clients.")
+    ] = False,
+    tls_cert: Annotated[
+        Path | None, typer.Option(help="Core HTTPS certificate chain.")
+    ] = None,
+    tls_key: Annotated[
+        Path | None, typer.Option(help="Core HTTPS private key.")
+    ] = None,
+) -> None:
+    """Run Core without a desktop, browser or frontend build; chat via paired CLI."""
+    if not _is_loopback(host) and (
+        not allow_remote or tls_cert is None or tls_key is None
+    ):
+        raise typer.BadParameter(
+            "remote headless Core requires --allow-remote, --tls-cert and --tls-key"
+        )
+    serve(
+        host=host,
+        port=port,
+        token=token,
+        data_dir=data_dir,
+        allow_remote=allow_remote,
+        allow_browser_diagnostics=False,
+        handshake_stdout=False,
+        static_dir=None,
+        open_browser=False,
+        diagnostics_level=None,
+        tls_cert=tls_cert,
+        tls_key=tls_key,
+        allow_insecure_device_pairing=False,
+        allow_unauthenticated_remote=False,
+    )
 
 
 @app.command()

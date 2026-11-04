@@ -37,6 +37,17 @@ def test_packaged_product_index_has_current_source_digest():
     )
 
 
+def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    for question, expected in (
+        ("How can I chat with Butler from a paired CLI terminal?", "nebula-chat"),
+        ("Run Nebula Core headless without a desktop or browser", "headless"),
+        ("Create a terminal pairing invitation on the Core host", "invite"),
+    ):
+        matches = search_product_knowledge(question)
+        assert any(expected in str(item["text"]) for item in matches), question
+
+
 def test_product_passages_keep_short_sentences_at_chunk_boundaries(
     tmp_path, monkeypatch
 ):
