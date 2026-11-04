@@ -192,7 +192,8 @@ def test_product_search_finds_chat_planning_guidance(monkeypatch):
         "Can Butler switch the main agent to Grok while keeping advisory planning and a provider subagent?"
     )
     assert any(
-        "Butler can save a different main harness and provider subagent"
+        "Butler can save the main runtime" in str(item["text"])
+        and "provider or harness child runtime independently on the same chat"
         in str(item["text"])
         for item in grok_matches
     )
@@ -213,7 +214,7 @@ def test_product_search_explains_pins_flags_and_butler_archive(monkeypatch):
     )
     assert any(
         "Butler's own collapsed Archived section" in str(item["text"])
-        and "pin a chat" in str(item["text"])
+        and "pin or flag one chat" in str(item["text"])
         for item in matches
     )
 

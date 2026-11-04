@@ -2559,7 +2559,7 @@ def create_app(
             except (OSError, ValueError) as exc:
                 emit_diagnostic(
                     "warning",
-                    "host_cpu",
+                    "runtime",
                     "host_cpu.startup_failed",
                     "Host CPU policy could not be loaded; other Core services remain available.",
                     outcome="degraded",
@@ -4218,7 +4218,7 @@ def create_app(
             return await host_cpus.status()
         except (OSError, ValueError) as exc:
             record_caught_exception(
-                "host_cpu",
+                "runtime",
                 "host_cpu.read_failed",
                 "Host CPU policy could not be read.",
                 exc,
@@ -4248,7 +4248,7 @@ def create_app(
             raise HTTPException(422, str(exc)) from exc
         except OSError as exc:
             record_caught_exception(
-                "host_cpu",
+                "runtime",
                 "host_cpu.save_failed",
                 "Host CPU policy could not be saved.",
                 exc,

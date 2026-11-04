@@ -1,9 +1,9 @@
 {
   "reviewed_by": "Codex after independent causal validation by troubleshooting subagents",
-  "reason": "Independently validated runtime and interface regressions are covered by focused Python, native and component tests, 174 affected mocked-browser cases, and the affected real-Core journeys across desktop/mobile Chromium and WebKit. Manual full-suite runs are explicitly authorized by the user and now include every product browser spec with its required runtime; release-only checks use a fresh disposable Core, private test token and production bundle.",
+  "reason": "Independently validated runtime and interface regressions are covered by focused Python, native and component tests, 174 affected mocked-browser cases, and the affected real-Core journeys across desktop/mobile Chromium and WebKit. Manual full-suite runs are explicitly authorized by the user and now include every product browser spec with its required runtime; release-only checks use a fresh disposable Core, private test token and production bundle. The final CPU diagnostics regressions and all product-help retrieval/index synchronization tests cover the last full-source failures.",
   "exclusions": "No real operator data, live model-provider credentials, physical devices or operator deployments. The manual full runs cover all Python, frontend, native and 18 product browser specs; usage-video scripts remain separate. Local LAN and WebKit are unavailable under cloud policy and are exercised on hosted runners. A required hosted gate must pass before merge.",
   "expected_tests": {
-    "python": 1199,
+    "python": 1275,
     "frontend": 135,
     "native": 1,
     "playwright": 316
@@ -33,10 +33,12 @@
     "tests/v3/test_harness_adapters.py",
     "tests/v3/test_harnesses.py",
     "tests/v3/test_history_content_fidelity.py",
+    "tests/v3/test_host_cpu_budget.py",
     "tests/v3/test_inference_timeouts_probe_budget.py",
     "tests/v3/test_install_routing.py",
     "tests/v3/test_operator_help.py",
     "tests/v3/test_packaging.py::test_nebula3_runtime_has_no_conditional_import_fallbacks",
+    "tests/v3/test_product_knowledge.py",
     "tests/v3/test_report_cpu_activation.py::test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery",
     "tests/v3/test_row_horizon.py",
     "tests/v3/test_sandbox.py",
@@ -79,7 +81,7 @@
     "area:test-suite-core-regressions"
   ],
   "python_node": true,
-  "change_digest": "a145621c8d317140aae109ed090bf080c35cc5d8b77f56f0ec68ab0d47139ae5",
+  "change_digest": "c4c683bb3b1f68a8a849c88f498dd49a180695c9d5404477b6510771c4aa4fba",
   "python_browser": true,
   "full_suite_authorization": "User on 2026-11-04 explicitly requested: fix and make sure all tests run and pass, then pr and merge. Manual dispatch only; reason and one-command local flags record this request."
 }
