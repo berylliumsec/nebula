@@ -74,7 +74,10 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
         ("Full-screen terminal chat F4 commands activity", "F4"),
         ("How do I see selectable slash commands in nebula-chat?", "Typing `/`"),
         ("How can I tell which nebula-chat conversations are running or idle?", "RUN"),
-        ("Does nebula-chat show feedback while opening a selected conversation?", "LOADING"),
+        (
+            "Does nebula-chat show feedback while opening a selected conversation?",
+            "LOADING",
+        ),
     ):
         matches = search_product_knowledge(question)
         assert any(expected in str(item["text"]) for item in matches), question

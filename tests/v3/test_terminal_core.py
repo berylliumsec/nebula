@@ -856,13 +856,17 @@ def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core)
     )
     delayed = data["delayed_read"]
     terminal = data["start"](
-        "shell", "--project", "Terminal Project", "--chat", "Harness chat",
-        tty=True, columns=132, rows=30,
+        "shell",
+        "--project",
+        "Terminal Project",
+        "--chat",
+        "Harness chat",
+        tty=True,
+        columns=132,
+        rows=30,
     )
     try:
-        terminal.expect_screen(
-            "Terminal Project / Harness chat", "/help for commands"
-        )
+        terminal.expect_screen("Terminal Project / Harness chat", "/help for commands")
         delayed["path"] = "/api/v1/engagements"
         terminal.send("/projects")
         terminal.expect_screen("LOADING  Running /projects…", "Harness chat")

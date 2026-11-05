@@ -1,5 +1,5 @@
 {
-  "change_digest": "62fbd108da87858b0889142fc0666b0cb0cb73c737280de380ee0a0df7f56192",
+  "change_digest": "0ca4d5085247ebeb91f7fe435163684f48bfd2c08bec16a685f06cddb48161be",
   "reviewed_by": "Codex; independent fresh-context validation of the terminal selection feedback fault",
   "reason": "The full-screen paired terminal client lacked a transient navigation state after Enter or a command shortcut, so its picker vanished and the old chat could still say Ready while Core catalog, detail, history, and status reads were pending. Focused TUI tests cover immediate feedback, the picker/input boundary, cancellation and error cleanup. A paired TLS LAN Core test holds real project and chat reads to verify LOADING on the visible terminal screen and its removal when the selected chat is ready. Product guidance, destination discovery, index digest, and Chroma synchronization are checked for the new loading explanation.",
   "exclusions": "The client-only transient status does not change Core routes, durable session state, browser UI, or native runtime. Browser Playwright profiles and native tests are not applicable to the Python terminal display. The LAN Core uses only synthetic projects and paired credentials; no production Core is restarted or changed.",
