@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import lru_cache
+from io import StringIO
 from typing import Any
 
 import httpx
 from prompt_toolkit.application import Application
 from prompt_toolkit.completion import FuzzyWordCompleter, PathCompleter
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.history import DummyHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
     ConditionalContainer,
     Dimension,
@@ -31,10 +34,72 @@ from prompt_toolkit.layout import (
 from prompt_toolkit.layout.containers import DynamicContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, TextArea
+from rich.console import Console
+from rich.markdown import Markdown
 
 from .transport import ClientError, terminal_text
 from .ui import COMMANDS, CancelledInput, InterruptedPrompt, TerminalUI
+
+SIDEBAR_WIDTH = 32
+SIDEBAR_MIN_COLUMNS = 110
+
+
+def _edge(text: str, width: int, *, tail: bool = False) -> str:
+    """Keep a terminal label within its cell budget, including wide glyphs."""
+    if width <= 0:
+        return ""
+    if get_cwidth(text) <= width:
+        return text
+    budget = width - 1
+    if not tail:
+        result = ""
+        for char in text:
+            if get_cwidth(result + char) > budget:
+                break
+            result += char
+        return result + "…"
+    result = ""
+    for char in reversed(text):
+        if get_cwidth(char + result) > budget:
+            break
+        result = char + result
+    return "…" + result
+
+
+def _middle(text: str, width: int) -> str:
+    """Keep distinctive suffixes visible in long project and chat names."""
+    if get_cwidth(text) <= width:
+        return text
+    suffix_width = min(11, max(3, width // 2))
+    prefix = _edge(text, width - suffix_width)
+    suffix = _edge(text, suffix_width + 1, tail=True)
+    return prefix[:-1] + "…" + suffix[1:]
+
+
+def _plain_title(value: Any) -> str:
+    """Keep generated Markdown titles readable in one-line navigation."""
+    first_line = terminal_text(value or "Conversation").splitlines()[0]
+    clean = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", first_line)
+    clean = re.sub(r"^#{1,6}\s+", "", clean)
+    clean = clean.replace("**", "").replace("__", "").replace("`", "")
+    return " ".join(clean.strip(" *|#").split()) or "Conversation"
+
+
+@lru_cache(maxsize=96)
+def _readable_markdown(source: str, width: int) -> str:
+    """Render Markdown to selectable text at a comfortable reading width."""
+    output = StringIO()
+    Console(file=output, width=width, force_terminal=False, no_color=True).print(
+        Markdown(source)
+    )
+    lines: list[str] = []
+    for line in output.getvalue().splitlines():
+        clean = line.rstrip()
+        if clean or (lines and lines[-1]):
+            lines.append(clean)
+    return "\n".join(lines).strip("\n")
 
 
 @dataclass
@@ -66,6 +131,8 @@ class TuiUI(TerminalUI):
         self._activity: list[str] = []
         self._notice = ""
         self._streaming = False
+        self._source_view = False
+        self._render_width = 0
         self._mode = "main"
         self._picker: Picker | None = None
         self._main_future: asyncio.Future[str] | None = None
@@ -90,7 +157,7 @@ class TuiUI(TerminalUI):
         self.composer = TextArea(
             multiline=True,
             wrap_lines=True,
-            height=Dimension(min=3, max=6),
+            height=Dimension(min=2, preferred=2, max=4),
             prompt="> ",
             completer=FuzzyWordCompleter(["/" + item for item in COMMANDS]),
             style="class:composer",
@@ -105,14 +172,14 @@ class TuiUI(TerminalUI):
         )
         self._sidebar = Window(
             FormattedTextControl(self._sidebar_text),
-            width=Dimension(min=22, preferred=30, max=36),
-            wrap_lines=True,
+            width=SIDEBAR_WIDTH,
+            wrap_lines=False,
             style="class:sidebar",
         )
         self._activity_window = Window(
             FormattedTextControl(self._activity_text),
-            height=Dimension(min=3, max=5),
-            wrap_lines=True,
+            height=1,
+            wrap_lines=False,
             style="class:activity",
         )
         keys = KeyBindings()
@@ -155,8 +222,19 @@ class TuiUI(TerminalUI):
         ):
             keys.add(key)(lambda _event, name=command: self._shortcut(name))
 
+        @keys.add("f10")
+        def toggle_source(_event: Any) -> None:
+            if self._mode == "main":
+                self._source_view = not self._source_view
+                self._render()
+
         modal_visible = Condition(lambda: self._modal_visible)
-        wide = Condition(lambda: self.app.output.get_size().columns >= 72)
+        wide = Condition(
+            lambda: (
+                self.app.output.get_size().columns >= SIDEBAR_MIN_COLUMNS
+                and self.app.output.get_size().rows >= 18
+            )
+        )
         root = FloatContainer(
             content=HSplit(
                 [
@@ -216,6 +294,7 @@ class TuiUI(TerminalUI):
                 }
             ),
         )
+        self.app.after_render += self._check_render_width
 
     @property
     def status(self) -> str:
@@ -261,13 +340,31 @@ class TuiUI(TerminalUI):
             self._render()
             return
         self._render_scheduled = True
-        loop.call_later(0.04, self._render)
+        loop.call_later(0.08, self._render)
+
+    def _reading_width(self) -> int:
+        columns = self.app.output.get_size().columns
+        sidebar = SIDEBAR_WIDTH if columns >= SIDEBAR_MIN_COLUMNS else 0
+        return max(12, min(100, columns - sidebar - 4))
+
+    def _check_render_width(self, _app: Application[None]) -> None:
+        if self._render_width != self._reading_width():
+            self._schedule_render()
 
     def _render(self) -> None:
         self._render_scheduled = False
-        value = "\n\n".join(
-            (f"{kind}\n{text}" if kind else text) for kind, text in self._entries
-        )[-120_000:]
+        width = self._reading_width()
+        self._render_width = width
+        parts = []
+        for kind, source in self._entries:
+            if not kind:
+                parts.append(source.strip("\n"))
+                continue
+            body = source if self._source_view else _readable_markdown(source, width)
+            parts.append(
+                kind + "\n" + "\n".join("  " + line for line in body.splitlines())
+            )
+        value = "\n\n".join(parts)[-120_000:]
         self.transcript.text = value
         self.transcript.buffer.cursor_position = len(value)
         self._invalidate()
@@ -285,46 +382,87 @@ class TuiUI(TerminalUI):
                 break
 
     def _header_text(self) -> str:
-        progress = self._status.rsplit(" · ", 1)[-1][:36]
-        return f" Nebula  [{progress}]  {self._context} "
+        width = self.app.output.get_size().columns
+        progress = self._status.rsplit(" · ", 1)[-1]
+        status = "[" + _edge(progress, min(26, max(8, width // 3))) + "]"
+        left = " Nebula  " + _middle(
+            self._context, max(0, width - get_cwidth(status) - 11)
+        )
+        left = _edge(left, max(0, width - get_cwidth(status) - 1))
+        return (
+            left + " " * max(1, width - get_cwidth(left) - get_cwidth(status)) + status
+        )
+
+    def _rail_rows(
+        self, rows: list[dict[str, Any]], selected: str, slots: int, key: str
+    ) -> list[str]:
+        active = next((row for row in rows if row.get("id") == selected), None)
+        ordered = ([active] if active is not None else []) + [
+            row for row in rows if row is not active
+        ]
+        visible = ordered[: slots - 1] if len(ordered) > slots else ordered[:slots]
+        lines = [
+            (" › " if row.get("id") == selected else "   ")
+            + _middle(
+                _plain_title(row.get(key) or row.get("name") or row.get("id"))
+                if key == "title"
+                else terminal_text(row.get(key) or row.get("name") or row.get("id")),
+                SIDEBAR_WIDTH - 4,
+            )
+            for row in visible
+        ]
+        if len(ordered) > slots:
+            lines.append(f"   +{len(ordered) - len(visible)} more")
+        return lines
 
     def _sidebar_text(self) -> str:
-        lines = [" CORE", " " + (self._core or "Connecting"), "", " PROJECTS"]
+        rows = self.app.output.get_size().rows
+        project_slots = min(6, max(2, (rows - 12) // 3))
+        chat_slots = max(1, min(9, rows - 12 - project_slots))
+        lines = [
+            " CORE",
+            "  " + _middle(self._core or "Connecting", SIDEBAR_WIDTH - 3),
+            "",
+            " PROJECTS · F2",
+        ]
         if self._projects:
             lines.extend(
-                (" › " if row.get("id") == self._project else "   ")
-                + terminal_text(row.get("name") or row.get("id"))[:32]
-                for row in self._projects[:7]
+                self._rail_rows(self._projects, self._project, project_slots, "name")
             )
         else:
-            lines.append("   F2 Browse")
-        lines.extend(["", " CONVERSATIONS"])
+            lines.append("   Browse projects")
+        lines.extend(["", " CONVERSATIONS · F3"])
         if self._chats:
-            lines.extend(
-                (" › " if row.get("id") == self._chat else "   ")
-                + terminal_text(row.get("title") or row.get("name") or "Conversation")[
-                    :32
-                ]
-                for row in self._chats[:10]
-            )
+            lines.extend(self._rail_rows(self._chats, self._chat, chat_slots, "title"))
         else:
-            lines.append("   F3 Browse")
-        lines.extend(["", " F2 Projects", " F3 Chats", " F4 Commands"])
+            lines.append("   Browse conversations")
         return "\n".join(lines)
 
     def _activity_text(self) -> str:
-        items = self._activity[-3:]
-        return " ACTIVITY  " + ("  ·  ".join(items) if items else "Ready")
+        width = self.app.output.get_size().columns
+        if self._notice:
+            detail = "ACTION  " + self._notice
+        elif self._streaming:
+            detail = "WORKING  " + (
+                self._activity[-1] if self._activity else "Waiting for Core"
+            )
+        else:
+            detail = self._activity[-1] if self._activity else "Ready"
+        return _edge(" " + detail, width - 1)
 
     def _footer_text(self) -> str:
         width = self.app.output.get_size().columns if hasattr(self, "app") else 80
-        if self._notice:
-            return " " + self._notice[: max(1, width - 2)]
-        if width < 72:
-            return " F2 Projects  F3 Chats  F4 Menu  ^C Stop"
-        if width < 100:
-            return " F1 Help  F2 Projects  F3 Chats  F4 Menu  F5 Activity  ^C Stop  ^D Quit"
-        return " F1 Help  F2 Projects  F3 Chats  F4 Commands  F5 Activity  F6 Follow  F8 Approvals  Tab Scroll  ^C Stop  ^D Quit"
+        source = "Render" if self._source_view else "Source"
+        if width < 60:
+            hint = f" F1 Help  F2 Projects  F10 {source}"
+        elif width < 110:
+            hint = f" F1 Help  F2 Projects  F3 Chats  F8 Approvals  F10 {source}"
+        else:
+            hint = (
+                " F1 Help  F2 Projects  F3 Chats  F4 Commands  F5 Activity"
+                f"  F8 Approvals  F10 {source}  Tab Read  ^C Stop  ^D Quit"
+            )
+        return _edge(hint, width - 1)
 
     def open_view(
         self, project: dict[str, Any], session: dict[str, Any] | None
@@ -359,7 +497,7 @@ class TuiUI(TerminalUI):
         self._context = (
             self._project_label
             + " / "
-            + terminal_text((session or {}).get("title") or "New conversation")
+            + _plain_title((session or {}).get("title") or "New conversation")
         )
         self._invalidate()
 
@@ -377,7 +515,7 @@ class TuiUI(TerminalUI):
             self._context = (
                 self._project_label
                 + " / "
-                + terminal_text(selected.get("title") or "Conversation")
+                + _plain_title(selected.get("title") or "Conversation")
             )
         self._invalidate()
 
@@ -425,7 +563,11 @@ class TuiUI(TerminalUI):
         self._schedule_render()
 
     def markdown(self, value: str) -> None:
-        self.say(value)
+        clean = terminal_text(value)
+        if clean:
+            self._entries.append(("Assistant", clean))
+            self._prune_entries()
+            self._schedule_render()
 
     def submission(self, text: str, *, queued: bool = False) -> None:
         self._streaming = not queued
@@ -438,6 +580,7 @@ class TuiUI(TerminalUI):
 
     def finish_turn(self) -> None:
         self._streaming = False
+        self.activity("Ready")
         self._invalidate()
 
     def mark_submission(self, state: str) -> None:

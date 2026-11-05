@@ -14,13 +14,13 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
+import pyte
 import pytest
 import uvicorn
-import pyte
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -81,16 +81,37 @@ class Provider(ApiChatProvider):
         if current is not None and "hold response" in str(current.content):
             self.holding.set()
             await asyncio.Event().wait()
+        answer = (
+            "**Synthetic provider answer.**\n\n"
+            "| Goal | State |\n|---|---|\n| HEIF | Paused |\n\n"
+            "[parent](/projects/terminal-project/workbench?view=chat&session=synthetic)"
+            if current is not None and "markdown layout" in str(current.content)
+            else "Synthetic provider answer."
+        )
         return ModelResponse(
             provider_id=self.config.id,
             model=request.model or "model-a",
-            text="Synthetic provider answer.",
+            text=answer,
             usage=ModelUsage(input_tokens=5, output_tokens=4, total_tokens=9),
             finish_reason="stop",
         )
 
     async def stream(self, request):
         yield ModelStreamEvent(type=StreamEventType.STARTED)
+        current = next(
+            (item for item in reversed(request.messages) if item.role == "user"), None
+        )
+        if current is not None and "markdown layout" in str(current.content):
+            result = await self.complete(request)
+            midpoint = len(result.text) // 2
+            yield ModelStreamEvent(
+                type=StreamEventType.TEXT_DELTA, delta=result.text[:midpoint]
+            )
+            yield ModelStreamEvent(
+                type=StreamEventType.TEXT_DELTA, delta=result.text[midpoint:]
+            )
+            yield ModelStreamEvent(type=StreamEventType.COMPLETED, response=result)
+            return
         yield ModelStreamEvent(
             type=StreamEventType.TEXT_DELTA, delta="Synthetic provider "
         )
@@ -238,6 +259,25 @@ class TerminalProcess:
             f"Terminal did not show {marker!r}:\n{self.output.decode(errors='replace')[-6000:]}"
         )
 
+    def expect_screen(self, *markers, absent=(), timeout=25):
+        assert self.screen is not None and self.screen_stream is not None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            display = "\n".join(self.screen.display)
+            if all(marker in display for marker in markers) and all(
+                marker not in display for marker in absent
+            ):
+                return display
+            ready, _, _ = select.select([self.output_fd], [], [], 0.05)
+            if ready:
+                data = os.read(self.output_fd, 65536)
+                if not data:
+                    break
+                self.output.extend(data)
+                assert self.decoder is not None
+                self.screen_stream.feed(self.decoder.decode(data))
+        pytest.fail(f"Terminal screen did not settle: {markers!r}; {display}")
+
     def send(self, text, expect=None):
         os.write(
             self.input_fd, (text + ("\r" if self.master is not None else "\n")).encode()
@@ -248,8 +288,22 @@ class TerminalProcess:
     def close(self):
         if self.process.poll() is None:
             self.send("/quit")
+            if self.master is not None:
+                deadline = time.monotonic() + 10
+                while self.process.poll() is None and time.monotonic() < deadline:
+                    ready, _, _ = select.select([self.master], [], [], 0.05)
+                    if ready:
+                        try:
+                            data = os.read(self.master, 65536)
+                        except OSError:
+                            break
+                        if not data:
+                            break
+                        self.output.extend(data)
+                        if self.screen_stream is not None and self.decoder is not None:
+                            self.screen_stream.feed(self.decoder.decode(data))
             try:
-                self.process.wait(timeout=10)
+                self.process.wait(timeout=1 if self.master is not None else 10)
             except subprocess.TimeoutExpired:
                 self.process.terminate()
                 self.process.wait(timeout=10)
@@ -276,7 +330,7 @@ def lan_core(tmp_path, monkeypatch):
     subject = x509.Name(
         [x509.NameAttribute(NameOID.COMMON_NAME, "Synthetic terminal Core")]
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -502,6 +556,7 @@ def lan_core(tmp_path, monkeypatch):
             str(certificate),
         ],
         input=invitation["secret"] + "\n" + invitation["confirmation_code"] + "\n",
+        check=False,
         text=True,
         capture_output=True,
         env=env,
@@ -665,10 +720,16 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
     terminal.expect("Message or /command")
     terminal.expect("New conversation")
     terminal.send("New conversation", expect="/help for commands")
-    terminal.send("Answer a synthetic TUI question", expect="You · sending")
-    terminal.expect("Core accepted turn")
+    terminal.send("Answer a synthetic markdown layout question", expect="You · sending")
     terminal.expect("Synthetic provider answer.")
-    terminal.expect("Response complete.")
+    terminal.expect_screen(
+        "Synthetic provider answer.",
+        "HEIF",
+        "Response complete.",
+        absent=("**Synthetic", "|---|", "/projects/terminal-project/workbench"),
+    )
+    os.write(terminal.input_fd, b"\x1b[21~")  # F10 restores copyable source.
+    terminal.expect_screen("F10 Render", "**Synthetic provider answer.**")
     sessions = (
         data["admin"]
         .get("chat-sessions", params={"engagement_id": "terminal-project"})
@@ -686,7 +747,8 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
         "user",
         "assistant",
     ]
-    assert messages[-1]["content"] == "Synthetic provider answer."
+    assert messages[-1]["content"].startswith("**Synthetic provider answer.**")
+    assert "| HEIF | Paused |" in messages[-1]["content"]
     terminal.close()
     print(
         json.dumps(
@@ -694,7 +756,12 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
                 "origin": data["origin"],
                 "build": "candidate Python TUI and real authenticated TLS LAN Core",
                 "fixture": "inert provider, synthetic project and credential",
-                "checks": ["visible acceptance", "streamed answer", "saved readback"],
+                "checks": [
+                    "visible acceptance",
+                    "rendered streamed Markdown",
+                    "source toggle",
+                    "saved readback",
+                ],
                 "result": "passed",
             }
         )
