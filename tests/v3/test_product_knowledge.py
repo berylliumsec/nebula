@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-from nebula.v3.product_knowledge import search_product_knowledge
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
+from nebula.v3.product_knowledge import search_product_knowledge
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -72,6 +72,7 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
         ),
         ("Choose skills and goals from the terminal Assistant shell", "shell"),
         ("Show live progress in a full-screen terminal agent chat", "F4"),
+        ("How do I see selectable slash commands in nebula-chat?", "Typing `/`"),
     ):
         matches = search_product_knowledge(question)
         assert any(expected in str(item["text"]) for item in matches), question

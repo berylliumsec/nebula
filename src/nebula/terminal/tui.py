@@ -17,8 +17,8 @@ from typing import Any
 
 import httpx
 from prompt_toolkit.application import Application
-from prompt_toolkit.completion import FuzzyWordCompleter, PathCompleter
-from prompt_toolkit.filters import Condition
+from prompt_toolkit.completion import CompleteEvent, FuzzyWordCompleter, PathCompleter
+from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
@@ -33,6 +33,7 @@ from prompt_toolkit.layout import (
 )
 from prompt_toolkit.layout.containers import DynamicContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, TextArea
@@ -40,7 +41,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from .transport import ClientError, terminal_text
-from .ui import COMMANDS, CancelledInput, InterruptedPrompt, TerminalUI
+from .ui import CancelledInput, InterruptedPrompt, SlashCommandCompleter, TerminalUI
 
 SIDEBAR_WIDTH = 32
 SIDEBAR_MIN_COLUMNS = 110
@@ -159,7 +160,7 @@ class TuiUI(TerminalUI):
             wrap_lines=True,
             height=Dimension(min=2, preferred=2, max=4),
             prompt="> ",
-            completer=FuzzyWordCompleter(["/" + item for item in COMMANDS]),
+            completer=SlashCommandCompleter(lambda: self.command_names),
             style="class:composer",
         )
         self.composer.control.key_bindings = composer_keys
@@ -203,6 +204,26 @@ class TuiUI(TerminalUI):
         @keys.add("tab")
         def toggle_focus(_event: Any) -> None:
             if self._mode == "main":
+                buffer = self.composer.buffer
+                state = buffer.complete_state
+                if state is not None and state.completions:
+                    completion = state.current_completion or state.completions[0]
+                    buffer.apply_completion(completion)
+                    return
+                # Completion refreshes asynchronously while typing. A quick
+                # slash, prefix, Tab sequence must not move focus instead.
+                matches = (
+                    list(
+                        buffer.completer.get_completions(
+                            buffer.document, CompleteEvent(completion_requested=True)
+                        )
+                    )
+                    if buffer.completer is not None
+                    else []
+                )
+                if matches:
+                    buffer.apply_completion(matches[0])
+                    return
                 self.app.layout.focus(
                     self.composer
                     if self.app.layout.current_control == self.transcript.control
@@ -264,6 +285,16 @@ class TuiUI(TerminalUI):
             ),
             floats=[
                 Float(
+                    xcursor=True,
+                    ycursor=True,
+                    transparent=True,
+                    content=CompletionsMenu(
+                        max_height=8,
+                        scroll_offset=1,
+                        extra_filter=has_focus(self.composer.buffer),
+                    ),
+                ),
+                Float(
                     content=ConditionalContainer(
                         DynamicContainer(lambda: self._modal_container),
                         filter=modal_visible,
@@ -272,7 +303,7 @@ class TuiUI(TerminalUI):
                     right=2,
                     top=2,
                     bottom=2,
-                )
+                ),
             ],
         )
         self.app: Application[None] = Application(
@@ -291,6 +322,8 @@ class TuiUI(TerminalUI):
                     "composer": "bg:#18222e #ffffff",
                     "footer": "bg:#263445 #c5d2df",
                     "selected": "reverse bold",
+                    "completion-menu": "bg:#263445 #ffffff",
+                    "completion-menu.completion.current": "bg:#42617e #ffffff bold",
                 }
             ),
         )
@@ -452,6 +485,9 @@ class TuiUI(TerminalUI):
 
     def _footer_text(self) -> str:
         width = self.app.output.get_size().columns if hasattr(self, "app") else 80
+        state = self.composer.buffer.complete_state
+        if self._mode == "main" and state is not None and state.completions:
+            return _edge(" ↑↓ Select  Tab Insert  Enter Run", width - 1)
         source = "Render" if self._source_view else "Source"
         if width < 60:
             hint = f" F1 Help  F2 Projects  F10 {source}"
@@ -645,10 +681,26 @@ class TuiUI(TerminalUI):
         if self._main_future is None or self._main_future.done():
             return
         value = self.composer.text
+        if value == "/":
+            state = self.composer.buffer.complete_state
+            if state is not None and state.completions:
+                self.composer.buffer.complete_next()
+                return
         if not value.strip():
             return
         self.composer.text = ""
         self._main_future.set_result(value)
+
+    def set_commands(self, names: list[str]) -> None:
+        previous = self.command_names
+        super().set_commands(names)
+        if self.command_names != previous and self.app.is_running:
+            buffer = self.composer.buffer
+            if buffer.text.startswith("/") and not any(
+                char.isspace() for char in buffer.text
+            ):
+                buffer.start_completion(select_first=False)
+            self._invalidate()
 
     def _shortcut(self, name: str) -> None:
         if (

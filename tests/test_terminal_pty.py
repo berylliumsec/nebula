@@ -234,3 +234,65 @@ asyncio.run(main())
         read(b"SHORTCUT:/commands|unsent draft")
         process.wait(timeout=3)
         assert process.returncode == 0
+
+
+def test_full_screen_slash_menu_appears_and_selects_a_context_command():
+    code = """
+import asyncio,json
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_view({'id':'project','name':'Project'},None)
+    ui.set_commands(['status','stop'])
+    value=await ui.ask('You',main=True)
+    await ui.close()
+    print('VALUE:'+json.dumps(value),flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command") as (
+        process,
+        master,
+        output,
+        read,
+    ):
+        os.write(master, b"/")
+        read("/status", rendered=True)
+        display = "\n".join(read.screen.display)
+        assert "/stop" in display
+        assert "Tab Insert" in display
+        assert b"VALUE:" not in output
+        os.write(master, b"\x1b[B\x1b[B\r")
+        read(b'VALUE:"/stop"')
+        process.wait(timeout=3)
+        assert process.returncode == 0
+
+
+def test_full_screen_tab_inserts_slash_choice_before_running_it():
+    code = """
+import asyncio,json
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_view({'id':'project','name':'Project'},None)
+    ui.set_commands(['projects','status'])
+    value=await ui.ask('You',main=True)
+    await ui.close()
+    print('VALUE:'+json.dumps(value),flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command") as (
+        process,
+        master,
+        output,
+        read,
+    ):
+        os.write(master, b"/s")
+        read("/status", rendered=True)
+        os.write(master, b"\t")
+        assert b"VALUE:" not in output
+        os.write(master, b"\r")
+        read(b'VALUE:"/status"')
+        process.wait(timeout=3)
+        assert process.returncode == 0

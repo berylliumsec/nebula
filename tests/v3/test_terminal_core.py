@@ -285,12 +285,19 @@ class TerminalProcess:
         if expect:
             self.expect(expect)
 
-    def close(self):
+    def close(self, *, send_quit=True, send_eof=False):
         if self.process.poll() is None:
-            self.send("/quit")
+            if send_quit:
+                self.send("/quit")
             if self.master is not None:
                 deadline = time.monotonic() + 10
+                next_eof = 0.0
                 while self.process.poll() is None and time.monotonic() < deadline:
+                    if send_eof and time.monotonic() >= next_eof:
+                        # The main input future is absent while a command runs.
+                        # Keep trying Ctrl-D until the next prompt opens.
+                        os.write(self.input_fd, b"\x04")
+                        next_eof = time.monotonic() + 0.2
                     ready, _, _ = select.select([self.master], [], [], 0.05)
                     if ready:
                         try:
@@ -761,6 +768,49 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
                     "rendered streamed Markdown",
                     "source toggle",
                     "saved readback",
+                ],
+                "result": "passed",
+            }
+        )
+    )
+
+
+def test_paired_full_screen_slash_menu_tracks_chat_context(lan_core):
+    data = lan_core
+    terminal = data["start"]("shell", "--project", "Terminal Project", tty=True)
+    terminal.expect("New conversation")
+    terminal.send("New conversation", expect="/help for commands")
+
+    os.write(terminal.input_fd, b"/")
+    terminal.expect_screen("/model", "/chats", absent=("/history", "/stop"))
+    os.write(terminal.input_fd, b"st\t\r")
+    terminal.expect("New conversation.")
+
+    terminal.send("Hello from the slash-menu fixture", expect="Response complete.")
+    os.write(terminal.input_fd, b"/")
+    terminal.expect_screen("/history", "/status", absent=("/stop",))
+    terminal.position = len(terminal.output)
+    os.write(terminal.input_fd, b"his\t\r")
+    terminal.expect("Hello from the slash-menu fixture")
+    terminal.expect("Synthetic provider answer.")
+
+    terminal.close(send_quit=False, send_eof=True)
+    reopened = data["start"]("shell", tty=True)
+    reopened.expect("/help for commands")
+    os.write(reopened.input_fd, b"/")
+    reopened.expect_screen("/history", "/status", absent=("/stop",))
+    reopened.close(send_quit=False, send_eof=True)
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and disposable authenticated TLS LAN Core",
+                "fixture": "synthetic project and inert provider",
+                "checks": [
+                    "new-chat command filtering",
+                    "keyboard selection and Core dispatch",
+                    "saved-chat command filtering",
+                    "reconnect restores the saved-chat menu",
                 ],
                 "result": "passed",
             }

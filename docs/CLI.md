@@ -28,8 +28,11 @@ Pair as described below, then run `nebula-chat` or
 The shell checks Core terminal protocol 1. On an interactive TTY it opens a
 full-screen view with a project/chat rail, transcript, live activity, and
 composer. F2 browses projects, F3 browses conversations, F4 opens a searchable
-command menu, F5 shows detailed activity, and F8 opens pending approvals. Tab
-focuses the transcript for scrolling; Ctrl-C stops a supported selected turn.
+command menu, F5 shows detailed activity, and F8 opens pending approvals. Typing
+`/` at the start of the composer opens a selectable command list for the current
+conversation. Keep typing to filter it, use Up/Down and Enter to run a selection,
+or Tab to insert it without running. When no command list is open, Tab focuses
+the transcript for scrolling. Ctrl-C stops a supported selected turn.
 The view updates as Core accepts, queues, and works on a turn, before the first
 answer text arrives. Progress and requests for action stay visible during input.
 

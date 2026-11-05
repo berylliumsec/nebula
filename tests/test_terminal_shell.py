@@ -10,6 +10,7 @@ import json
 import httpx
 import pytest
 
+from nebula.terminal import workflows
 from nebula.terminal.attachments import excerpt
 from nebula.terminal.settings import select_skill
 from nebula.terminal.shell import Shell
@@ -21,7 +22,6 @@ from nebula.terminal.transport import (
     Settings,
     terminal_text,
 )
-from nebula.terminal import workflows
 
 CORE = "https://core.example:8765"
 PROJECT = {"id": "project-a", "name": "Project A"}
@@ -107,6 +107,55 @@ def make_shell(tmp_path, handler, *, ui=None, saved=True):
         "provider_type": "vllm",
     }
     return shell
+
+
+def test_slash_commands_follow_selected_conversation_state(tmp_path):
+    shell = make_shell(tmp_path, lambda request: pytest.fail(str(request.url)))
+    shell.view = None
+    assert shell.available_commands() == [
+        "projects",
+        "core",
+        "help",
+        "commands",
+        "quit",
+    ]
+
+    shell.view = View(copy.deepcopy(PROJECT), None, copy.deepcopy(CONFIG))
+    fresh = shell.available_commands()
+    assert fresh[:3] == ["model", "settings", "skills"]
+    assert "model" in fresh and "goal" in fresh
+    assert "history" not in fresh and "stop" not in fresh
+
+    shell.view.session = copy.deepcopy(SESSION)
+    saved = shell.available_commands()
+    assert "history" in saved and "chat" in saved and "schedule" in saved
+    assert "approvals" not in saved and "input" not in saved
+    shell._known_busy = True
+    shell._pending_kinds = {"approval"}
+    busy = shell.available_commands()
+    assert busy[:4] == ["approvals", "status", "follow", "stop"]
+    assert "input" not in busy
+
+    shell._pending_kinds = {"input"}
+    shell.view.config["backend"] = "harness"
+    harness = shell.available_commands()
+    assert harness[0] == "input"
+    assert "steer" in harness and "schedule" not in harness
+
+    shell.view.session["metadata"] = {"control_assistant": True}
+    assert "chat" not in shell.available_commands()
+
+    shell._pending_kinds.clear()
+    shell.note_attention(
+        [
+            {"session_id": "another-chat", "kind": "approval"},
+            {"session_id": "chat-a", "kind": "question"},
+        ]
+    )
+    assert "input" in shell.available_commands()
+    assert "approvals" not in shell.available_commands()
+    shell.note_attention([])
+    assert "input" not in shell.available_commands()
 
 
 def response(data, status=200):
