@@ -18,9 +18,9 @@ import pyte
 
 
 @contextmanager
-def terminal(code, *, ready=b"You:"):
+def terminal(code, *, ready=b"You:", columns=80, rows=24):
     master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
     process = subprocess.Popen(
         [sys.executable, "-u", "-c", code],
         stdin=slave,
@@ -31,7 +31,7 @@ def terminal(code, *, ready=b"You:"):
     )
     os.close(slave)
     output = bytearray()
-    screen = pyte.Screen(80, 24)
+    screen = pyte.Screen(columns, rows)
     screen_stream = pyte.Stream(screen)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
@@ -56,6 +56,7 @@ def terminal(code, *, ready=b"You:"):
         )
         return bytes(output)
 
+    read_until.screen = screen
     try:
         read_until(ready)
         yield process, master, output, read_until
@@ -94,7 +95,7 @@ def test_bracketed_multiline_paste_waits_for_explicit_send():
 
 
 def test_escape_enter_adds_newline_and_unicode_survives_resize():
-    with terminal(CODE) as (process, master, output, read):
+    with terminal(CODE) as (process, master, _output, read):
         os.write(master, "alpha Ω".encode() + b"\x1b\r")
         read("alpha Ω".encode())
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 40, 0, 0))
@@ -113,7 +114,7 @@ async def main():
     except CancelledInput: print('CANCELLED_MENU',flush=True)
 asyncio.run(main())
 """
-    with terminal(code) as (process, master, output, read):
+    with terminal(code) as (process, master, _output, read):
         os.write(master, b"unsent\x03")
         read(b"CANCELLED_MENU")
         process.wait(timeout=3)
@@ -156,6 +157,39 @@ def test_full_screen_progress_paste_and_narrow_resize():
         read(b'VALUE:"first line\\nsecond line"')
         process.wait(timeout=3)
         assert process.returncode == 0
+
+
+def test_full_screen_renders_markdown_and_toggles_original_source():
+    code = """
+import asyncio
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    project={'id':'project','name':'Apple Bug Bounty'}
+    session={'id':'butler','title':'Butler'}
+    ui.open_view(project,session)
+    ui.set_navigation('https://core.example:8765',[project],[session])
+    ui.show_history([{'role':'assistant','content':'**Paused** [parent](/projects/project/workbench?view=chat&session=butler)\\n\\n| Goal | State |\\n|---|---|\\n| HEIF | Running |','metadata':{}}])
+    await ui.ask('You',main=True)
+    await ui.close()
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command", columns=120, rows=30) as (
+        _process,
+        master,
+        _output,
+        read,
+    ):
+        read("Paused parent", rendered=True)
+        display = "\n".join(read.screen.display)
+        assert "› Butler" in display
+        assert "HEIF" in display and "Running" in display
+        assert "**Paused**" not in display
+        assert "/projects/project/workbench" not in display
+        os.write(master, b"\x1b[21~")  # F10
+        read("**Paused**", rendered=True)
+        assert "F10 Render" in "\n".join(read.screen.display)
 
 
 def test_full_screen_searchable_keyboard_menu():

@@ -112,3 +112,25 @@ to this terminal surface. Local product-help generation is blocked by the
 environment proxy's HTTP 403 to the Chroma model archive; hosted CI must pass
 the current source digest, retrieval and Chroma synchronization checks before
 merge. The Linux/macOS Python 3.11–3.13 client matrix must also pass.
+
+## TUI readability follow-up — November 5, 2026
+
+The full-screen terminal now renders saved and streamed Markdown into selectable
+text at a bounded reading width. F10 switches to the original source for copying
+link targets and Markdown. The rail keeps distinctive title suffixes and includes
+the selected project and Butler conversation. Generated Markdown titles are cleaned
+for one-line navigation. The activity strip and composer use less vertical space.
+Core still owns transcript and navigation data; the client only changes their
+presentation.
+
+The reviewed selection in `.github/test-selection.json` collected and passed 17
+Python tests on macOS/Python 3.12. It included PTY screen/resize/source checks
+and three paired, authenticated TLS LAN Core journeys with isolated synthetic
+state and inert provider/harness fixtures. The TUI journey checked a streamed
+Markdown table, a clean rendered screen, F10 source, and Core saved-message
+readback. Its disposable origin was `https://192.168.1.239:58135`; the adjacent
+direct-chat and queue/approval journeys used ports 58087 and 58167. Ruff check
+and format passed on touched files. The standalone wheel and source archive
+built on macOS; the wheel's TUI module matched the reviewed source SHA-256.
+Browser/device matrices do not apply to this Python terminal surface. Linux
+and other Python-version CI results remain required before merge.

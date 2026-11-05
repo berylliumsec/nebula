@@ -1,8 +1,8 @@
 {
-  "change_digest": "13c582fc0037824b4f5a16b9cd9cbc972efd745faa3dfcd5cc4a34d5b2fbb7ae",
-  "reviewed_by": "Codex; independent fresh-context archive and decoded-SQL diagnosis before repair",
-  "reason": "Repeated PostgreSQL restore must recreate public even when its TOC lists the schema; pg_restore assumes initdb already created it. The actual restore case covers two archive/restore cycles and candidate-only objects; deployment failure/retry and retention checks cover integration.",
-  "exclusions": "No Core schema/data-copy, CLI, browser/native interface, provider, catalog or full-suite changes. Actual dump/restore uses dedicated PostgreSQL16; other cases use disposable files.",
+  "change_digest": "2a4747bf15a078095b2d79073bf54a35cf37608a32f85d8fa37b7c9685e31091",
+  "reviewed_by": "Codex; independent fresh-context TUI root-cause validation before repair",
+  "reason": "Terminal-only presentation change: render saved and streamed Markdown, keep long transcript lines readable, preserve raw source via F10, and show distinct rail labels, clean generated titles, and the selected project and Butler. Focused TUI contracts, PTY screen tests, and the existing paired TLS LAN Core journeys cover those paths and their entry point.",
+  "exclusions": "No Core state, API, provider, browser, mobile, or native interface changes. Browser Playwright and frontend tests do not apply to the Python terminal client. LAN tests use synthetic data and inert provider/harness fixtures; physical-device checks do not apply to a terminal interface.",
   "expected_tests": {
     "python": 17,
     "frontend": 0,
@@ -10,8 +10,9 @@
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_postgres_backup.py",
-    "tests/test_simulation_deployer_retention.py"
+    "tests/test_terminal_tui.py",
+    "tests/test_terminal_pty.py",
+    "tests/v3/test_terminal_core.py"
   ],
   "frontend": [],
   "native": [],

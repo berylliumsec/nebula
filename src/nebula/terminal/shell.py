@@ -267,18 +267,32 @@ class Shell:
         """Keep the visible rail useful without making chat depend on its catalog."""
         if not isinstance(self.ui, TuiUI) or self.view is None:
             return
+        view = self.view
         try:
             projects = await self.api.page("engagements", offset=0)
             chats = await self.api.page(
                 "chat-sessions",
                 offset=0,
-                engagement_id=self.view.project_id,
+                engagement_id=view.project_id,
                 recent_first="true",
             )
+            if self.view is not view:
+                return
+            visible_projects = projects
+            if not any(row.get("id") == view.project_id for row in projects):
+                visible_projects = [view.project, *projects]
+            visible_chats = [row for row in chats if main_chat(row)]
+            selected = view.session
+            if (
+                selected is not None
+                and (selected.get("metadata") or {}).get("control_assistant")
+                and not any(row.get("id") == selected["id"] for row in visible_chats)
+            ):
+                visible_chats.insert(0, selected)
             self.ui.set_navigation(
                 self.settings.core or "",
-                projects,
-                [row for row in chats if main_chat(row)],
+                visible_projects,
+                visible_chats,
             )
         except (ClientError, httpx.HTTPError):
             self.ui.activity("Navigation list unavailable; F2/F3 retries")
