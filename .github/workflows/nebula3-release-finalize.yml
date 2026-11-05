@@ -175,6 +175,9 @@ jobs:
           Nebula-$VERSION-linux-x86_64.AppImage.sig
           "
           for name in $required; do test -s "release-assets/$name"; done
+          test "$(find release-assets -maxdepth 1 -name 'nebula_client-*.whl' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -name 'nebula_client-*.tar.gz' | wc -l)" -eq 1
+          (cd release-assets && sha256sum --check nebula-client-SHA256SUMS)
           test "$(find release-assets -maxdepth 1 -type f -name '*.cyclonedx.json' | wc -l)" -eq 2
           test "$(find release-assets -maxdepth 1 -type f -name '*.spdx.json' | wc -l)" -eq 2
           test "$(find release-assets -maxdepth 1 -type f -name 'SHA256SUMS-*' | wc -l)" -eq 1
