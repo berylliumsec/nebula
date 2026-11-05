@@ -68,7 +68,7 @@ describe("PostToolAssistant", () => {
     view.unmount();
   });
 
-  it("keeps runtime selection out of the Workbench and enables the saved harness", async () => {
+  it.each(["icon", "panel"] as const)("keeps runtime selection out of the %s controls and enables the saved harness", async triggerVariant => {
     const user = userEvent.setup();
     const config: PostToolAssistantConfig = {
       suggestNextSteps: false,
@@ -79,9 +79,15 @@ describe("PostToolAssistant", () => {
       cloudConfirmed: false,
     };
     const { api, setPostToolAssistant } = apiFor(config);
-    render(<PostToolAssistant api={api} engagementId="project-1" providers={[]} harnesses={[harness]} onRun={vi.fn()} />);
+    render(<PostToolAssistant api={api} engagementId="project-1" providers={[]} harnesses={[harness]} onRun={vi.fn()} triggerVariant={triggerVariant} />);
 
-    await user.click(screen.getByRole("button", { name: "Tool assistance" }));
+    if (triggerVariant === "icon") {
+      const opener = screen.getByRole("button", { name: "Tool assistance" });
+      expect(opener).toHaveAttribute("data-guide", "tool-assistance");
+      await user.click(opener);
+    } else {
+      expect(screen.getByRole("group", { name: "Post-tool assistance" })).toHaveAttribute("data-guide", "tool-assistance");
+    }
     const suggestions = await screen.findByRole("checkbox", { name: "Suggest next steps" });
     expect(screen.queryByRole("combobox", { name: /analysis backend/i })).toBeNull();
     await user.click(suggestions);

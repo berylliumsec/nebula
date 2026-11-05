@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cancelActiveAssistantMessage,
   cancelStreamingAssistantMessage,
+  reconcileAuthoritativeMessages,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
   savedAssistantState,
@@ -55,6 +56,36 @@ describe("reconcileCompletedAssistantMessage", () => {
     });
     expect(result[1].metadata?.progress_prefix_utf16_length).toBe(progress.length);
     expect(result[1].content).toBe(`${progress}\n\nFinal answer.`);
+  });
+});
+
+describe("reconcileAuthoritativeMessages", () => {
+  it("keeps the completed row identity while authoritative content and metadata replace the stream", () => {
+    const completed = reconcileCompletedAssistantMessage([user, temporary], completion);
+    const authoritative: ReconciledConversationMessage = {
+      ...completed[1], runtimeId: undefined, content: "Core's saved answer", metadata: {saved: true},
+    };
+    const result = reconcileAuthoritativeMessages(completed, [authoritative]);
+    expect(result).toEqual([{...authoritative, runtimeId: "assistant-temp"}]);
+    expect(reconcileAuthoritativeMessages(result, [authoritative])).toEqual(result);
+    expect(authoritative.runtimeId).toBeUndefined();
+  });
+
+  it("does not transfer disclosure identity to a different native turn or message role", () => {
+    const previous = {...temporary, id: "assistant-final", runtimeId: "assistant-temp", harnessTurnId: "turn-1"};
+    const nextTurn = {...previous, runtimeId: undefined, harnessTurnId: "turn-2"};
+    const nextRole = {...previous, runtimeId: undefined, role: "user" as const};
+    expect(reconcileAuthoritativeMessages([previous], [nextTurn])[0]).toBe(nextTurn);
+    expect(reconcileAuthoritativeMessages([previous], [nextRole])[0]).toBe(nextRole);
+  });
+
+  it("honors Core ordering and removal without transferring identity to a copied message", () => {
+    const previous = {...temporary, id: "assistant-final", runtimeId: "assistant-temp", harnessTurnId: "turn-1"};
+    const copied = {...previous, id: "assistant-copy", sourceMessageId: previous.id, runtimeId: undefined};
+    const result = reconcileAuthoritativeMessages([user, previous], [copied, user]);
+    expect(result).toEqual([copied, user]);
+    expect(result[0]).toBe(copied);
+    expect(result.some(message => message.id === previous.id)).toBe(false);
   });
 });
 

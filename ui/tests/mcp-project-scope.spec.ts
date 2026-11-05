@@ -17,7 +17,7 @@ async function openProjectSwitcher(page: Page) {
   const trigger = page.getByRole("button", {name: "Switch project", exact: true});
   if (!await trigger.isVisible()) {
     const navigation = page.getByRole("button", {name: "Open navigation"});
-    if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) await navigation.hover();
+    if (await page.evaluate(() => matchMedia("(min-width: 761px) and (hover: hover) and (pointer: fine)").matches)) await navigation.hover();
     else await navigation.click();
     await expect(trigger).toBeVisible();
   }

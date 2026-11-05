@@ -92,7 +92,8 @@ test("codex_app_server thinking episodes remain visible without public summaries
     await page.getByRole("button", { name: "Show activity", exact: true }).click();
     const thinking = page.getByLabel("Harness thinking");
     await expect(thinking.locator("summary")).toBeVisible();
-    await expect(thinking.locator("summary")).toHaveText("Thinking");
+    await expect(thinking.locator("summary")).toContainText("Thinking · 1 update");
+    await expect(thinking.locator("summary")).toContainText("No public summaries for completed updates");
     await thinking.locator("summary").click();
     await expect(thinking.getByText("Codex did not provide a public summary for one reasoning episode.")).toBeVisible();
     const commentary = page.getByRole("region", { name: "Work summary" }).locator(".activity-ledger-entry-content details", { hasText: "Checked the public result while Codex kept reasoning private." });
@@ -100,11 +101,17 @@ test("codex_app_server thinking episodes remain visible without public summaries
     await expect(commentary).toContainText("Checked the public result while Codex kept reasoning private.");
   };
 
+  const openSnapshot = async () => {
+    if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) {
+      await page.locator("form.chat-composer").hover();
+    }
+    await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  };
   await page.goto("/projects/thinking-project/workbench?view=chat&session=codex-no-summary-chat");
   await openThinking();
   const [item] = await (await request.get(`${origin}/api/v1/engagements/thinking-child-project/work`, { headers: { Authorization: "Bearer model-test-token" } })).json();
   const [currentUpdate] = await (await request.get(`${origin}/api/v1/engagements/thinking-child-project/work/${item.id}/updates`, { headers: { Authorization: "Bearer model-test-token" } })).json();
-  await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  await openSnapshot();
   const progress = page.getByRole("region", { name: "Current progress" });
   await expect(progress).toContainText(currentUpdate.summary);
   await expect(progress).toContainText(`Next: ${currentUpdate.next_step}`);
@@ -119,7 +126,7 @@ test("codex_app_server thinking episodes remain visible without public summaries
   await expect(progress).toContainText(newSummary);
   await page.reload();
   await openThinking();
-  await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  await openSnapshot();
   await expect(page.getByRole("region", { name: "Current progress" })).toContainText(newSummary);
 });
 

@@ -35,6 +35,7 @@ from nebula.v3.chat import (
     HarnessKnowledgeMatch,
     HarnessKnowledgeSearchResult,
 )
+from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.domain import (
@@ -1106,6 +1107,9 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
         == session.metadata["runtime_options"]
     )
 
+    asyncio.run(
+        runtime.cancel_turn(harness_turn.id, reason="Settle the fixture response")
+    )
     updated_chat, _, updated_turn = runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
@@ -1303,7 +1307,13 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             finished.runtime_snapshot["mcp_snapshot"][0]["url"]
             == "https://mcp.invalid/api"
         )
-        assert len(adapter.opens) == 1
+        assert len(adapter.opens) == 2
+        assert adapter.opens[1].session.id == session.id
+        assert adapter.opens[1].session.external_session_id == "vendor-session-1"
+        assert (
+            adapter.opens[1].session.mcp_snapshot[0]["url"] == "https://mcp.invalid/api"
+        )
+        assert adapter.connections[0].closed is True
         assert adapter.opens[0].workspace.name == "vendor-workspace"
         assert adapter.opens[0].workspace != tmp_path
         assert adapter.opens[0].mcp_profiles == ()
@@ -1393,9 +1403,11 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
         owner_statuses: list[HarnessTurnStatus] = []
         complete_owner = runtime._complete_owner
 
-        def observed_complete_owner(turn, final_message, usage):
+        def observed_complete_owner(
+            turn, final_message, usage, *, usage_reported=False
+        ):
             owner_statuses.append(store.get(HarnessTurn, turn.id).status)
-            complete_owner(turn, final_message, usage)
+            complete_owner(turn, final_message, usage, usage_reported=usage_reported)
 
         runtime._complete_owner = observed_complete_owner
         chat, chat_turn, harness_turn = runtime.prepare_chat(
@@ -3173,6 +3185,13 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
             connection=None,
             task=None,
         )
+        assert not any(
+            tool["name"].startswith("knowledge.")
+            for tool in runtime._gateway_catalog(disabled_session, turn=disabled_turn)[
+                "tools"
+            ]
+        )
+        assert store.get(ChatTurn, disabled_turn.chat_turn_id).tool_call_ids == []
         denied = await runtime._gateway_call(
             disabled_session,
             "knowledge.list",
@@ -3180,7 +3199,7 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
         )
         assert denied["isError"] is True
         assert denied["structuredContent"]["schema"] == "nebula.tool-failure/v1"
-        assert denied["structuredContent"]["category"] == "permission_denied"
+        assert denied["structuredContent"]["category"] == "unavailable_tool"
         assert denied["structuredContent"]["side_effects"] == "none"
         runtime._active.pop(disabled_session.id)
         await runtime.close_session(disabled_session.id)
@@ -3239,6 +3258,7 @@ def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
             mcp_server_ids=[],
             include_knowledge=True,
             allow_cloud_knowledge=True,
+            allow_agent_messaging=False,
         )
         session = store.get(HarnessSession, harness_turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
@@ -3665,6 +3685,15 @@ def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
                 approval_policy="never",
             )
         )
+        # Destructive actions always need approval; force ASK on a local read
+        # to exercise the project's no-prompt override without that boundary.
+        mcp = store.get(McpServerProfile, "mcp-a")
+        store.update(
+            McpServerProfile,
+            mcp.id,
+            {"tool_overrides": {"read_file": McpApprovalMode.ASK}},
+            expected_revision=mcp.revision,
+        )
         _, _, turn = runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
@@ -3678,16 +3707,16 @@ def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
         ticket = await runtime._request_permission(
             turn.id,
             HarnessPermissionRequest(
-                vendor_request_id="mcp-delete-never",
+                vendor_request_id="mcp-read-never",
                 category="mcp",
-                vendor_name="mcp__workspace__delete_file",
+                vendor_name="mcp__workspace__read_file",
                 server_name="workspace",
-                tool_name="delete_file",
+                tool_name="read_file",
                 arguments={"path": "evidence.txt"},
             ),
         )
 
-        decision = await ticket.decision
+        decision = await asyncio.wait_for(ticket.decision, timeout=1)
         assert decision.allowed is True
         assert decision.reason == "Approved by the Project's no-prompt tool policy"
         assert ticket.approval_id is None
@@ -3699,7 +3728,7 @@ def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
 
         session = store.get(HarnessSession, turn.harness_session_id)
         snapshot = McpServerProfile.model_validate(session.mcp_snapshot[0])
-        snapshot.tool_overrides = {"delete_file": McpApprovalMode.DENY}
+        snapshot.tool_overrides = {"read_file": McpApprovalMode.DENY}
         store.update(
             HarnessSession,
             session.id,
@@ -3709,15 +3738,15 @@ def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
         denied = await runtime._request_permission(
             turn.id,
             HarnessPermissionRequest(
-                vendor_request_id="mcp-delete-explicit-deny",
+                vendor_request_id="mcp-read-explicit-deny",
                 category="mcp",
-                vendor_name="mcp__workspace__delete_file",
+                vendor_name="mcp__workspace__read_file",
                 server_name="workspace",
-                tool_name="delete_file",
+                tool_name="read_file",
                 arguments={"path": "evidence.txt"},
             ),
         )
-        assert (await denied.decision).allowed is False
+        assert (await asyncio.wait_for(denied.decision, timeout=1)).allowed is False
         assert denied.approval_id is None
 
     asyncio.run(scenario())
@@ -3746,7 +3775,7 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
             not in adapter.connections[0].prompts[0]
         )
         assert (
-            "BEGIN OPERATOR REQUEST\nDo not replay me\nEND OPERATOR REQUEST"
+            "BEGIN OPERATOR REQUEST\nDo not replay me"
             in adapter.connections[0].prompts[0]
         )
 
@@ -4038,7 +4067,7 @@ def test_linked_retry_refreshes_current_browser_binding(
 ):
     async def scenario():
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        chat, _, turn = runtime.prepare_chat(
+        chat, owner, turn = runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -4072,6 +4101,13 @@ def test_linked_retry_refreshes_current_browser_binding(
                 },
             },
             expected_revision=turn.revision,
+        )
+
+        store.update(
+            ChatTurn,
+            owner.id,
+            {"status": ChatTurnStatus.CANCELLED},
+            expected_revision=owner.revision,
         )
 
         async def drive(_):
@@ -4632,7 +4668,9 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         assert completion.status_code == 200, completion.text
         body = completion.json()
         assert body["backend"] == "harness"
-        assert body["message"]["content"] == "Harness answer for API inspection"
+        assert body["message"]["content"].startswith(
+            "Harness answer for API inspection"
+        )
         assert body["harness_session_id"]
         assert body["harness_turn_id"]
         replay = client.get(
@@ -4721,7 +4759,15 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         discussed = client.post(f"/api/v1/runs/{run_id}/discuss", headers=headers)
         assert discussed.status_code == 200
         assert discussed.json()["id"] == body["session_id"]
-        assert len(adapter.opens) == 2
+        assert len(adapter.opens) == 3
+        assert (
+            sum(
+                opened.session.id == body["harness_session_id"]
+                for opened in adapter.opens
+            )
+            == 2
+        )
+        assert adapter.connections[0].closed is True
 
 
 def test_harness_export_closes_references_without_machine_credentials(tmp_path):
@@ -4803,6 +4849,7 @@ def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_pat
         "harness_profile_id": profile.id,
         "model": "test-model",
         "include_knowledge": True,
+        "allow_agent_messaging": False,
         "messages": [{"role": "user", "content": "What harness marker is relevant?"}],
     }
 
@@ -4824,7 +4871,7 @@ def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_pat
             not in adapter.connections[0].prompts[0]
         )
         assert (
-            "BEGIN OPERATOR REQUEST\nWhat harness marker is relevant?\nEND OPERATOR REQUEST"
+            "BEGIN OPERATOR REQUEST\nWhat harness marker is relevant?"
             in adapter.connections[0].prompts[0]
         )
         assigned_gateway_tools = {
@@ -5156,7 +5203,7 @@ def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
         {"kind": "grok_acp"},
         expected_revision=profile.revision,
     )
-    chat, _, first = runtime.prepare_chat(
+    chat, owner, first = runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -5167,6 +5214,12 @@ def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
     )
     store.update(
         HarnessTurn, first.id, {"status": "complete"}, expected_revision=first.revision
+    )
+    store.update(
+        ChatTurn,
+        owner.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=owner.revision,
     )
     old = store.get(HarnessSession, first.harness_session_id)
     old = store.update(
@@ -5323,6 +5376,7 @@ def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
         harness_session_id=None,
         mcp_server_ids=[],
     )
+    asyncio.run(runtime.cancel_turn(turn.id, reason="Settle the fixture response"))
     original = store.get(HarnessSession, turn.harness_session_id)
     selected = profile
     model = original.model
@@ -5784,6 +5838,13 @@ def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
+        initial_session = store.get(HarnessSession, turn.harness_session_id)
+        assert (
+            resolve_request_snapshot(
+                store, chat_turn.request_snapshot, session_id=chat.id
+            )["mcp_catalog_snapshot"]
+            == []
+        )
         await runtime.start_chat_turn(turn.id)
         assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
 
@@ -5829,6 +5890,15 @@ def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
             chat_session_id=chat.id,
             harness_session_id=None,
             mcp_server_ids=None,
+        )
+        inherited_session = store.get(HarnessSession, turn2.harness_session_id)
+        assert inherited_session.id == initial_session.id
+        assert inherited_session.mcp_server_ids == [mcp.id]
+        assert (
+            resolve_request_snapshot(
+                store, chat_turn2.request_snapshot, session_id=chat.id
+            )["mcp_catalog_snapshot"]
+            == []
         )
         await runtime.start_chat_turn(turn2.id)
         assert len(vendor.opens) == 1

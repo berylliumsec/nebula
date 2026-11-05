@@ -4,15 +4,154 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      full_approval:
+        description: Type RUN_FULL_SUITE after explicit user approval
+        required: true
+        type: string
+      review_reason:
+        description: Who requested the full run and why
+        required: true
+        type: string
+      full_scope:
+        description: Full regression layer
+        type: choice
+        default: all
+        options: [all, source, native, integrations]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ inputs.full_scope || 'selected' }}
   cancel-in-progress: true
 
 jobs:
+  full-approval:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a fresh explicitly requested full run
+        env:
+          FULL_APPROVAL: ${{ inputs.full_approval }}
+          REVIEW_REASON: ${{ inputs.review_reason }}
+        run: |
+          test "$FULL_APPROVAL" = RUN_FULL_SUITE
+          test -n "$REVIEW_REASON"
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          printf '%s\n' "$REVIEW_REASON" >> "$GITHUB_STEP_SUMMARY"
+
+  full-source:
+    needs: full-approval
+    if: inputs.full_scope == 'all' || inputs.full_scope == 'source'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: nebula_migrations
+          POSTGRES_PASSWORD: nebula
+          POSTGRES_USER: nebula
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U nebula -d nebula_migrations"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install complete source-test boundaries
+        run: |
+          python -m pip install "poetry==2.1.3"
+          poetry install --with dev --no-interaction
+          npm --prefix ui ci
+          npm --prefix ui run build
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+          poetry run playwright install-deps chromium
+          poetry run python -m scripts.stage_playwright_runtime "$RUNNER_TEMP/playwright-browsers" --target x86_64-unknown-linux-gnu
+          python -m venv "$RUNNER_TEMP/nebula-security-proxy"
+          "$RUNNER_TEMP/nebula-security-proxy/bin/pip" install 'mitmproxy==12.2.3'
+      - name: Collect and run every Python test
+        env:
+          NEBULA_FULL_SUITE_APPROVAL: RUN_FULL_SUITE
+          NEBULA_FULL_SUITE_REASON: ${{ inputs.review_reason }}
+          NEBULA_TEST_POSTGRES_URL: postgresql+psycopg://nebula:nebula@127.0.0.1:5432/nebula_migrations
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
+          NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
+        run: |
+          poetry run pytest --collect-only -q tests packaging
+          poetry run pytest -q tests packaging -vv --durations=20 --junitxml="$RUNNER_TEMP/full-tests-python.xml"
+      - name: Collect and run every frontend test
+        if: success() || failure()
+        working-directory: ui
+        env:
+          NEBULA_FULL_SUITE_APPROVAL: RUN_FULL_SUITE
+          NEBULA_FULL_SUITE_REASON: ${{ inputs.review_reason }}
+        run: |
+          npx vitest list --json="$RUNNER_TEMP/full-tests-frontend-collection.json"
+          npm test -- --testTimeout=15000 --maxWorkers=2 --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/full-tests-frontend.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: full-source-test-results
+          path: |
+            ${{ runner.temp }}/full-tests-python.xml
+            ${{ runner.temp }}/full-tests-frontend*.json
+
+  full-native:
+    needs: full-approval
+    if: inputs.full_scope == 'all' || inputs.full_scope == 'native'
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+      - run: npm --prefix ui ci
+      - run: npm --prefix ui run build
+      - name: Prepare the compile-time sidecar fixture
+        run: |
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          mkdir -p ui/src-tauri/binaries build/nebula-core-metadata ui/src-tauri/resources/notebook-runtime
+          printf 'Generated full-test fixture.\n' > build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
+          printf 'Compile-time resource fixture; no executable notebook runtime.\n' > ui/src-tauri/resources/notebook-runtime/TEST_FIXTURE.txt
+          touch "ui/src-tauri/binaries/nebula-core-$target"
+          chmod +x "ui/src-tauri/binaries/nebula-core-$target"
+      - name: Collect and run every native test
+        shell: bash
+        run: |
+          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml -- --list 2>&1 | tee "$RUNNER_TEMP/full-tests-native-collection.txt"
+          cargo test --locked --manifest-path ui/src-tauri/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/full-tests-native.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: full-native-test-results
+          path: ${{ runner.temp }}/full-tests-native*.txt
+
+  full-integrations:
+    needs: full-approval
+    if: inputs.full_scope == 'all' || inputs.full_scope == 'integrations'
+    uses: ./.github/workflows/regression-integrations.yml
+    with:
+      full_approval: ${{ inputs.full_approval }}
+      review_reason: ${{ inputs.review_reason }}
+
   selection:
     runs-on: ubuntu-latest
     outputs:
@@ -30,7 +169,7 @@ jobs:
       - name: Validate reviewed test selection
         id: plan
         env:
-          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
           CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           python scripts/test_selection.py --baseline "$BASELINE" --candidate "$CANDIDATE" --output test-selection-receipt.json
@@ -306,9 +445,10 @@ jobs:
       - name: Prepare compile-time sidecar boundary
         run: |
           target="$(rustc -vV | sed -n 's/^host: //p')"
-          mkdir -p ui/src-tauri/binaries
+          mkdir -p ui/src-tauri/binaries ui/src-tauri/resources/notebook-runtime
           mkdir -p build/nebula-core-metadata
           printf 'Generated CI fixture for native shell tests.\n' > build/nebula-core-metadata/THIRD_PARTY_NOTICES.txt
+          printf 'Compile-time resource fixture; no executable notebook runtime.\n' > ui/src-tauri/resources/notebook-runtime/TEST_FIXTURE.txt
           touch "ui/src-tauri/binaries/nebula-core-$target"
           chmod +x "ui/src-tauri/binaries/nebula-core-$target"
       - name: Test native menus and sidecar boundary

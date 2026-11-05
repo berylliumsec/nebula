@@ -627,6 +627,8 @@ def test_gateway_preserves_mcp_schema_and_name_on_denial():
     }
 
     class Gateway:
+        _gateway_offered_tool = HarnessRuntimeService._gateway_offered_tool
+
         def _active_gateway_turn(self, session_id):
             return None
 

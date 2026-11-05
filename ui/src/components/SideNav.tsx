@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
 import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Plus, Search, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItemForPath, navigationItems } from "../navigation";
@@ -61,6 +61,39 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   const savingRef = useRef(false);
   const [error, setError] = useState<string>();
   useDialogPresence(open);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const fitToViewport = () => {
+      const menu = switcherMenu.current;
+      const trigger = switcherButton.current;
+      if (!menu || !trigger) return;
+      const anchor = trigger.getBoundingClientRect();
+      if (!anchor.width || !anchor.height) return;
+      const bounds = menu.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      const top = viewport?.offsetTop ?? 0;
+      const height = viewport?.height ?? window.innerHeight;
+      const available = bounds.bottom <= anchor.top + 1
+        ? bounds.bottom - top - 12
+        : top + height - bounds.top - 12;
+      // Zero opens above its dock; the usual sidebar opens below the trigger.
+      // Bound the scrollable form by that space, not by the whole viewport.
+      menu.style.maxHeight = `${Math.max(0, Math.min(height - 24, available))}px`;
+    };
+    fitToViewport();
+    const observer = new ResizeObserver(fitToViewport);
+    if (switcherButton.current) observer.observe(switcherButton.current);
+    window.addEventListener("resize", fitToViewport);
+    window.visualViewport?.addEventListener("resize", fitToViewport);
+    window.visualViewport?.addEventListener("scroll", fitToViewport);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fitToViewport);
+      window.visualViewport?.removeEventListener("resize", fitToViewport);
+      window.visualViewport?.removeEventListener("scroll", fitToViewport);
+    };
+  }, [open, creating, variant]);
 
   // The switcher is a dialog: focus moves to its first control when it opens,
   // Escape closes it (unless a modal such as the archive confirmation is above
@@ -174,8 +207,8 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
     }
   };
   return (
-    <aside className={`side-nav${variant === "zero" ? " zero-anchor-dock" : ""}`} data-shell="shared" aria-label="Primary navigation" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
-      {onToggleLens && <button className="quiet-lens-handle quiet-lens-side-handle" type="button" aria-label="Open navigation" aria-expanded={lensOpen} title="Open navigation" onMouseEnter={() => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onRevealLens?.(); }} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) onRevealLens?.(); }} onClick={onRevealLens}>
+    <aside className={`side-nav${variant === "zero" ? " zero-anchor-dock" : ""}`} data-shell="shared" aria-label="Primary navigation" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (window.matchMedia("(min-width: 761px) and (hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
+      {onToggleLens && <button className="quiet-lens-handle quiet-lens-side-handle" type="button" aria-label="Open navigation" aria-expanded={lensOpen} title="Open navigation" onMouseEnter={() => { if (window.matchMedia("(min-width: 761px) and (hover: hover) and (pointer: fine)").matches) onRevealLens?.(); }} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) onRevealLens?.(); }} onClick={onRevealLens}>
         <QuietLensVerticalContour />
       </button>}
       <div className="brand-lockup">

@@ -265,8 +265,12 @@ def test_project_never_policy_auto_approves_native_browser_actions(tmp_path):
         )
     )
     project, _ = _project(client, store)
-    store.create(
-        AutomationProjectPolicy(engagement_id=project.id, approval_policy="never")
+    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=project.id)
+    store.update(
+        AutomationProjectPolicy,
+        policy.id,
+        {"approval_policy": "never"},
+        expected_revision=policy.revision,
     )
     _, session = _synced_session(client, project)
     proposal = client.post(

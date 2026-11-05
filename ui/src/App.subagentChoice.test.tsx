@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DialogProvider } from "./components/DialogSystem";
@@ -75,6 +75,7 @@ function core(route: Route, providers: Wire[] = [{ ...provider, capability_verif
     const path = url.pathname;
     const routed = await route(path, init, url);
     if (routed) return routed;
+    if (path.endsWith("/task-plans")) return json({ plans: [], directives: [] });
     if (path.endsWith("/providers/provider-1/health")) return json({ provider_id: "provider-1", healthy: true, models: ["model-1"], detail: null });
     if (path.endsWith("/health")) return json({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" });
     if (path.endsWith("/engagements")) return json([project]);
@@ -93,10 +94,11 @@ function calls(fetchMock: ReturnType<typeof core>, suffix: string, method = "POS
 }
 
 function renderApp(route: string) {
+  window.history.replaceState({}, "", route);
   return render(
-    <MemoryRouter initialEntries={[route]}>
+    <BrowserRouter>
       <ThemeProvider><WorkspaceProvider><DialogProvider><App /></DialogProvider></WorkspaceProvider></ThemeProvider>
-    </MemoryRouter>,
+    </BrowserRouter>,
   );
 }
 

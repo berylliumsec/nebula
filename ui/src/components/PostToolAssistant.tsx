@@ -239,7 +239,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
         {triggerVariant === "menu" && <span><strong>Tool assistance</strong><small>Suggestions and project notes</small></span>}
         {(config.suggestNextSteps || config.takeNotes) && <span className="status-dot healthy" aria-label="Tool assistance enabled" />}
       </button>}
-      {controlsOpen && <div className="post-tool-menu-panel" id={menuId} role="group" aria-label="Post-tool assistance">
+      {controlsOpen && <div className="post-tool-menu-panel" id={menuId} role="group" aria-label="Post-tool assistance" data-guide={triggerVariant === "panel" ? "tool-assistance" : undefined}>
         <header><strong>Tool assistance</strong><small>Optional follow-up after completed work</small></header>
         <label><span><strong>Suggest next steps</strong><small>Propose a reviewed follow-up action</small></span><input aria-label="Suggest next steps" type="checkbox" checked={config.suggestNextSteps} disabled={savingToggle} onChange={() => void toggle("suggestNextSteps")} /></label>
         <label><span><strong>Take notes</strong><small>Draft a project note from the result</small></span><input aria-label="Take notes" type="checkbox" checked={config.takeNotes} disabled={savingToggle} onChange={() => void toggle("takeNotes")} /></label>

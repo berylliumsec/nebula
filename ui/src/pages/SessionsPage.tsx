@@ -212,6 +212,7 @@ import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } fro
 import {
   cancelActiveAssistantMessage,
   cancelStreamingAssistantMessage,
+  reconcileAuthoritativeMessages,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
   savedAssistantState,
@@ -277,6 +278,23 @@ function sessionViewFromParam(value: string | null): SessionView | undefined {
 // address bar synchronously, so writes compose from it instead of a snapshot.
 function latestSearchParams(): URLSearchParams {
   return new URLSearchParams(window.location.search);
+}
+
+function conversationActionsPosition(bounds: Pick<DOMRect, "top" | "bottom" | "right">, expectedHeight: number) {
+  const viewport = window.visualViewport;
+  const top = viewport?.offsetTop ?? 0;
+  const left = viewport?.offsetLeft ?? 0;
+  const width = viewport?.width ?? window.innerWidth;
+  const height = viewport?.height ?? window.innerHeight;
+  const above = Math.max(0, bounds.top - top - 13);
+  const below = Math.max(0, top + height - bounds.bottom - 13);
+  const openAbove = below < expectedHeight && above > below;
+  return {
+    left: Math.max(left + 8, Math.min(bounds.right - 228, left + width - 236)),
+    top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
+    openAbove,
+    maxHeight: Math.min(430, openAbove ? above : below),
+  };
 }
 const readableContextStatuses = new Set<ContextStatus["status"]>(["not_needed", "ready", "stale", "failed", "runtime_managed"]);
 
@@ -983,7 +1001,7 @@ function useWorkbenchState() {
   const [deletingSessionId, setDeletingSessionId] = useState<string>();
   const [deletingAllSessions, setDeletingAllSessions] = useState(false);
   const [sessionActionsId, setSessionActionsId] = useState<string>();
-  const [sessionActionsPosition, setSessionActionsPosition] = useState<{ left: number; openAbove: boolean; top: number }>();
+  const [sessionActionsPosition, setSessionActionsPosition] = useState<ReturnType<typeof conversationActionsPosition>>();
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameError, setRenameError] = useState<string>();
@@ -1859,6 +1877,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
   const explicitNewConversationRef = useRef(false);
   const pendingSessionNavigationRef = useRef<string | undefined>(undefined);
+  const chatToolsRestorationRef = useRef<string | undefined>(undefined);
   const sessionSelectionGenerationRef = useRef(0);
   const chatSwitchMeasuresRef = useRef<ChatSwitchMeasure[]>([]);
   const reconciledTerminalHarnessTurnsRef = useRef(new Set<string>());
@@ -2065,8 +2084,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       if (document.visibilityState === "hidden") return;
       void api.getChatTaskPlans(sessionId, controller.signal).then(result => {
         if (!controller.signal.aborted) {
-          setTaskPlans(result.plans);
-          setPlanDirectives(result.directives);
+          setTaskPlans(current => sameJson(current, result.plans) ? current : result.plans);
+          setPlanDirectives(current => sameJson(current, result.directives) ? current : result.directives);
         }
       }).catch(error => {
         if (!controller.signal.aborted) void logCaughtDiagnostic("interface.chat.task_plans_refresh_failed", "Task plan activity could not be refreshed.", error, "chat-planning");
@@ -2466,7 +2485,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setHistoryBeforeId(recent.beforeId);
       setHasOlderHistory(recent.hasOlder);
       setReplacedMessages(recent.replaced);
-      setMessages(recovered);
+      setMessages(current => sessionSelectionGenerationRef.current === generation
+        ? reconcileAuthoritativeMessages(current, recovered) : current);
       if (harnessProgress?.turnId === turnId) {
         setSending(false);
         setChatReconnecting(false);
@@ -2936,10 +2956,20 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (!api || !engagement) return;
     const requestedEngagementId = engagement.id;
     const selectionGeneration = sessionSelectionGenerationRef.current;
+    const parentSessionAtRead = searchParams.get("session");
+    const ownsSideSelection = () => {
+      const current = latestSearchParams();
+      return window.location.pathname === projectSurface(requestedEngagementId, "workbench")
+        && current.get("session") === parentSessionAtRead && current.get("sideChat") === requestedSessionId;
+    };
+    if (embeddedSideChat && !ownsSideSelection()) return;
     const listed = embeddedSideChat
       ? { items: requestedSessionId ? [await api.getChatSession(requestedSessionId)] : [], nextOffset: undefined }
       : await listWorkbenchConversationPage(api, requestedEngagementId);
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
+    // A completed side turn may finish this read after Back closed its pane.
+    // The current URL owns that intent even after this component unmounts.
+    if (embeddedSideChat && !ownsSideSelection()) return;
     // A read that started before a save may answer after it; keep the newer copy.
     setSessions((current) => mergeRecentListedSessions(current, listed.items, !listed.nextOffset));
     if (fullListProjectRef.current !== requestedEngagementId) setSessionNextOffset((current) => current === undefined ? listed.nextOffset : current);
@@ -3366,7 +3396,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
 
   const toggleConversationPanel = () => {
-    if (sideChatId && matchMedia("(max-width: 1100px)").matches) {
+    if (sidePanelOpen && matchMedia("(max-width: 1100px)").matches) {
       setMobileListOpen((current) => !current);
       return;
     }
@@ -4043,7 +4073,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     return () => window.clearTimeout(timer);
   }, [sessionId, loadingHistory, sessionReadReady, sending, pendingResponse, waitingCallback, pendingSubagentApproval, harnessInteractions, messages, embeddedSideChat, sessions, chatImagePreviews]);
 
-  const selectSession = async (id: string, updateUrl = true, preserveTranscript = false) => {
+  const selectSession = async (id: string, updateUrl = true, preserveTranscript = false, intent: "operator" | "restore" = "operator") => {
     explicitNewConversationRef.current = false;
     if (!id) {
       newConversation();
@@ -4128,6 +4158,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setResolvedApproval(undefined);
     setConversationOpen(true);
     if (updateUrl) {
+      if (intent === "restore") chatToolsRestorationRef.current = id;
       pendingSessionNavigationRef.current = id;
       openSessionChatView(id);
     }
@@ -4145,7 +4176,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     setToolCards(preview?.toolCards ?? []);
     // Restoring a URL session can finish after the operator opens the drawer.
     // Only a deliberate selection should dismiss it.
-    if (updateUrl) setMobileListOpen(false);
+    if (updateUrl && intent === "operator") setMobileListOpen(false);
     setActivityItems([]);
     setHarnessInteractions([]);
     setPendingResponse(undefined);
@@ -4631,7 +4662,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const addToolTab = (kind: SideToolKind) => {
     const id = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     updateSearchParams(params => {
-      if (params.get("session") !== sessionId) return;
+      if ((params.get("session") ?? "") !== sessionId) return;
       if (appendSideToolTab(params, kind, id)) {
         if (kind === "browser") params.set(`panelBrowserEngine.${id}`, "native");
       } else setChatError("Close a side tab before opening another.");
@@ -4947,7 +4978,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const pendingNavigation = pendingSessionNavigationRef.current;
     if (pendingNavigation) {
       if (requestedSessionId === pendingNavigation) pendingSessionNavigationRef.current = undefined;
-      else return;
+      else if (latestSearchParams().get(embeddedSideChat ? "sideChat" : "session") === pendingNavigation) return;
+      // A newer URL can replace our write before React commits its location.
+      else pendingSessionNavigationRef.current = undefined;
     }
     if (!requestedSessionId) {
       explicitNewConversationRef.current = false;
@@ -4968,7 +5001,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     const initial = newest.isSubagent && newest.parentSessionId
       ? sessions.find(session => session.id === newest.parentSessionId && !session.isSubagent) ?? newest
       : newest;
-    void selectSession(initial.id);
+    void selectSession(initial.id, true, false, "restore");
   }, [api, conversationOpen, engagement, requestedSessionId, sessionId, sessions, view]);
 
   const openAttachedChat = async (id: string) => {
@@ -5773,7 +5806,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           setHasOlderHistory(recent.hasOlder);
           setReplacedMessages(recent.replaced);
           setMessages(current => current.some(message => message.id === userId)
-            ? recovered : current);
+            ? reconcileAuthoritativeMessages(current, recovered) : current);
         }
       }
     } catch (error) {
@@ -6407,14 +6440,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         return;
       }
       const menuHeight = sessionActionsMenuRef.current?.getBoundingClientRect().height ?? 310;
-      const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
-      const next = {
-        left: Math.max(8, Math.min(bounds.right - 228, window.innerWidth - 236)),
-        openAbove,
-        top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
-      };
+      const next = conversationActionsPosition(bounds, menuHeight);
       setSessionActionsPosition(current => current && current.left === next.left && current.top === next.top
-        && current.openAbove === next.openAbove ? current : next);
+        && current.openAbove === next.openAbove && current.maxHeight === next.maxHeight ? current : next);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
@@ -6507,6 +6535,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     && Boolean(visibleHarnessProgress)
     && visibleHarnessProgress?.phase !== "ready"
     && visibleHarnessProgress?.phase !== "complete";
+  // Core owns execution state; a native session change is a separate receipt.
+  const harnessRuntimeChange = authoritativeState?.session_id === sessionId && harnessProgress?.phase === "command_runtime_session_created"
+    && harnessProgress.sessionId === harnessSessionId && harnessProgress.turnId === authoritativeState.harness_turn_id
+    ? harnessProgress : undefined;
+  const harnessProgressSession = harnessRuntimeChange ?? visibleHarnessProgress;
   const runnableLanguages = useMemo(() => new Set<ExecutionLanguage>(
     executionCapabilities?.runtimes
       .filter((runtime) => runtime.unrestrictedNetwork)
@@ -6612,7 +6645,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [chatToolsOpen]);
-  useEffect(() => { setChatToolsOpen(false); }, [sessionId, view]);
+  useEffect(() => { setChatToolsOpen(false); }, [view, routeProjectId]);
+  useEffect(() => {
+    // Hydrating the chat already named by the URL is not a new navigation.
+    // Initial recent-chat restoration carries that intent when it writes the URL.
+    const restoring = chatToolsRestorationRef.current === requestedSessionId;
+    chatToolsRestorationRef.current = undefined;
+    if (!restoring) setChatToolsOpen(false);
+  }, [requestedSessionId]);
   const focusAction = <button className="icon-button subtle workbench-full-screen-toggle" type="button"
             aria-label={fullScreen ? "Exit focus mode" : "Enter focus mode"}
             title={fullScreen ? "Exit focus mode" : "Enter focus mode"}
@@ -6641,7 +6681,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           {view === "chat" ? <div className="chat-tools-menu" ref={chatToolsRef}>
             <button ref={chatToolsButtonRef} className="icon-button subtle" type="button" aria-label="Chat tools" title="Chat tools" aria-expanded={chatToolsOpen} aria-controls="chat-tools-panel" onClick={() => setChatToolsOpen(open => !open)}><LayoutGrid size={18} aria-hidden="true" /></button>
             {chatToolsOpen && <div className="chat-tools-panel" id="chat-tools-panel" role="group" aria-label="Chat tools" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setChatToolsOpen(false); chatToolsButtonRef.current?.focus(); } }}>
-              {api && engagement && <button className="workbench-menu-item" type="button" onClick={() => { addToolTab("assistance"); setChatToolsOpen(false); }}><Sparkles size={17} aria-hidden="true" /><span><strong>Tool assistance</strong><small>Open a new side tab</small></span></button>}
+              {api && engagement && <button className="workbench-menu-item" type="button" data-guide="tool-assistance" onClick={() => { addToolTab("assistance"); setChatToolsOpen(false); }}><Sparkles size={17} aria-hidden="true" /><span><strong>Tool assistance</strong><small>Open a new side tab</small></span></button>}
               <button className="workbench-menu-item" type="button" aria-pressed={Boolean(sideChatId)} disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))} onClick={() => { void openSideChat(); setChatToolsOpen(false); }}><GitFork size={17} aria-hidden="true" /><span><strong>Side chats</strong><small>{sideChatId ? `Switch between ${sideChats.length} chats` : "Open beside chat"}</small></span></button>
               <button className="workbench-menu-item" type="button" disabled={sideChatBusy || !api || !sessionId} onClick={() => { void openSideChat(true); setChatToolsOpen(false); }}><MessageSquarePlus size={17} aria-hidden="true" /><span><strong>New side chat</strong><small>Keep existing side chats</small></span></button>
               {api && engagement && <button className="workbench-menu-item" type="button" data-guide="terminal-toggle" onClick={() => { addToolTab("terminal"); setChatToolsOpen(false); }}><SquareTerminal size={17} aria-hidden="true" /><span><strong>Terminal</strong><small>Open a new side tab</small></span></button>}
@@ -6907,7 +6947,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   </div>;
                   const item = transcriptItems[virtualItem.index - virtualMessageOffset];
                   if (!item) return null;
-                  return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
+                  return <div className="chat-virtual-item" key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
                     {item.kind === "message" ? renderTranscriptMessage(item.message) : <ChatSubagentTranscriptGroup
                       groupKey={item.key}
                       messages={item.messages}
@@ -7009,7 +7049,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 </div>
                 <footer className="chat-composer-toolbar"><div className="chat-composer-tools">{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{shellOnly && api && <button className="button quiet chat-composer-icon chat-goal-trigger" type="button" aria-label={providerGoal || providerGoalLoading || providerGoalError ? "Open goal" : "Create goal"} title={providerGoal ? `Open ${providerGoal.status} goal` : providerGoalError ? "Goal could not be loaded" : providerGoalLoading ? "Loading goal" : "Create goal"} aria-haspopup="dialog" aria-expanded={studioGoalOpen} data-status={providerGoal?.status} onClick={() => setStudioGoalOpen(true)}><Flag size={18} aria-hidden="true" /></button>}{!embeddedSideChat && !shellOnly && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button>{!shellOnly && <button ref={projectSnapshotButtonRef} className="button quiet chat-composer-icon" type="button" aria-label="Project Snapshot" title="Project Snapshot" aria-expanded={projectSnapshot === "floating"} disabled={!engagement} onClick={() => setProjectSnapshot(current => current === "floating" ? "closed" : "floating")}><LayoutDashboard size={18} aria-hidden="true" /></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} onChooseImageRuntime={() => setAssistantSettingsOpen(true)} imagesSupported={imageInputEnabled} imagesBusy={composerBusy} />}</div><div className="chat-composer-turn-actions">{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</div></footer>
               </form>
-              {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div></div>}
+              {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div>
+                <strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>
+                {harnessRuntimeChange && <><strong>{harnessPhaseLabel(harnessRuntimeChange.phase)}</strong><small>{harnessRuntimeChange.detail}</small></>}
+                {harnessProgressSession?.sessionId && <code title={harnessProgressSession.sessionId}>Session {harnessProgressSession.sessionId.slice(0, 8)}{harnessProgressSession.previousSessionId ? harnessProgressSession.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}
+              </div></div>}
             </div>
   );
 
@@ -7151,14 +7195,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     return;
                   }
                   const bounds = event.currentTarget.getBoundingClientRect();
-                  const menuWidth = 228;
                   const menuHeight = session.backend === "harness" ? 350 : 310;
-                  const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
-                  setSessionActionsPosition({
-                    left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
-                    openAbove,
-                    top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
-                  });
+                  setSessionActionsPosition(conversationActionsPosition(bounds, menuHeight));
                   setSessionActionsId(session.id);
                 }}
               >{deletingSessionId === session.id || archivingSessionId === session.id || prioritySessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
@@ -7167,7 +7205,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 className="session-actions-menu"
                 role="menu"
                 aria-label={`Actions for ${session.title}`}
-                style={{ left: sessionActionsPosition.left, top: sessionActionsPosition.top, transform: sessionActionsPosition.openAbove ? "translateY(-100%)" : undefined }}
+                style={{ left: sessionActionsPosition.left, top: sessionActionsPosition.top, maxHeight: sessionActionsPosition.maxHeight, transform: sessionActionsPosition.openAbove ? "translateY(-100%)" : undefined }}
                 onKeyDown={(event) => {
                   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
                   event.preventDefault();
@@ -7210,7 +7248,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     {kind: "notebook", label: "Notebook", icon: NotebookPen},
                     {kind: "details", label: "Chat details", icon: PanelRight},
                     {kind: "assistance", label: "Tool assistance", icon: Sparkles},
-                  ] as const).map(({kind, label, icon: Icon}) => <button key={kind} className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); addToolTab(kind); }}><Icon size={17} aria-hidden="true" /><span><strong>{label}</strong><small>Open a new side tab</small></span></button>)}
+                  ] as const).map(({kind, label, icon: Icon}) => <button key={kind} className="workbench-menu-item" type="button" role="menuitem" data-guide={kind === "assistance" ? "tool-assistance" : undefined} onClick={() => { setMobileConversationMenuOpen(false); addToolTab(kind); }}><Icon size={17} aria-hidden="true" /><span><strong>{label}</strong><small>Open a new side tab</small></span></button>)}
                 </>}
               </div>}
             </div>

@@ -135,6 +135,20 @@ export function reconcileCompletedAssistantMessage(
   return reconciled;
 }
 
+/** Core replaces saved content; the same message keeps its current UI row identity. */
+export function reconcileAuthoritativeMessages(
+  current: readonly ReconciledConversationMessage[],
+  authoritative: ReconciledConversationMessage[],
+): ReconciledConversationMessage[] {
+  const previousById = new Map(current.map(message => [message.id, message]));
+  return authoritative.map(message => {
+    const previous = previousById.get(message.id);
+    return previous?.runtimeId && previous.role === message.role && previous.harnessTurnId === message.harnessTurnId
+      ? {...message, runtimeId: previous.runtimeId}
+      : message;
+  });
+}
+
 /** Restore event-owned turns that ended before Core saved a final chat message. */
 export async function recoverHarnessHistory(
   messages: ReconciledConversationMessage[],

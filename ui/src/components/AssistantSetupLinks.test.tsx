@@ -29,5 +29,5 @@ it("makes advisory planning discoverable from the harness setting", () => {
   expect(searchable).toContain("provider");
   expect(searchable).toContain("codex");
   expect(searchable).toContain("grok");
-  expect(harnesses.description).toContain("normal tools available");
+  expect(harnesses.description).toContain("optional task plans");
 });

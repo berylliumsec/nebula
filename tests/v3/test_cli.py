@@ -413,7 +413,9 @@ def test_serve_reports_a_busy_port_without_a_traceback(tmp_path, monkeypatch):
             "nebula.v3.cli._services",
             lambda value=None, *, diagnostics_level=None: (tmp_path, None, None),
         )
-        monkeypatch.setattr("nebula.v3.cli.ChromaKnowledgeIndex", lambda path: None)
+        monkeypatch.setattr(
+            "nebula.v3.cli.ChromaKnowledgeIndex", lambda path, *, reranker: None
+        )
         monkeypatch.setattr(
             "nebula.v3.cli.default_runtime_platform", lambda **_kwargs: None
         )

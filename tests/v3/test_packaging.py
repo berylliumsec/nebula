@@ -49,6 +49,7 @@ def test_native_launcher_and_admin_command_contract():
     assert scripts == {
         "nebula-core": "nebula.v3.cli:main",
         "nebula-browserd": "nebula.v3.browserd:main",
+        "nebula-chat": "nebula.chat_cli:main",
     }
 
     linux_launcher = (ROOT / "packaging/linux/nebula").read_text(encoding="utf-8")
@@ -348,12 +349,13 @@ def test_updater_manifest_supports_validated_recovery_with_native_libraries(
     assert notebook.is_dir() and any(notebook.iterdir())
 
 
-def test_python_source_tree_contains_only_core_namespace():
+def test_python_source_tree_contains_only_core_and_paired_client():
     package_root = ROOT / "src/nebula"
     unexpected = sorted(
         path.name
         for path in package_root.iterdir()
-        if path.name not in {"__init__.py", "__pycache__", "v3"}
+        if path.name
+        not in {"__init__.py", "__pycache__", "chat_cli.py", "terminal", "v3"}
     )
     assert unexpected == []
 

@@ -694,8 +694,21 @@ def test_core_starts_and_recovers_beside_an_unreadable_record(
         # The periodic pass reads the same kinds again every 15 seconds.
         client.portal.call(services[0].fire_due_schedules)
         client.portal.call(services[0].recovery_tick)
-        # The temporary-conversation sweep runs beside the lifespan.
-        client.portal.call(asyncio.sleep, 0.2)
+        # The sweep runs beside recovery; wait for its durable result.
+        if name == "chat_sessions":
+
+            async def wait_for_popup_cleanup():
+                async with asyncio.timeout(5):
+                    while True:
+                        try:
+                            store.get(ChatSession, "readable")
+                        except NotFoundError:
+                            return
+                        await asyncio.sleep(0.02)
+
+            client.portal.call(wait_for_popup_cleanup)
+        else:
+            client.portal.call(asyncio.sleep, 0.2)
         assert client.get("/api/v1/setup/status", headers=AUTH).status_code == 200
         case.recovered(store)
 

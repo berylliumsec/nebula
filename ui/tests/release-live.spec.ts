@@ -1,4 +1,4 @@
-import {chmod, copyFile, mkdtemp, readFile} from "node:fs/promises";
+import {chmod, copyFile, mkdtemp, readFile, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {expect, request, test} from "@playwright/test";
@@ -51,7 +51,13 @@ test("stabilization deployed approval completes once and survives reconnect", as
     const invitation = await pairing.json();
     await page.goto(`${origin}/#pair=${encodeURIComponent(invitation.secret)}&code=${encodeURIComponent(invitation.confirmation_code)}`);
     await page.getByLabel("Device name").fill(`Release browser ${projectId}`);
-    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    // The invitation fragment is removed before redemption. Wait for the
+    // successful document reload before navigating away from the pairing gate.
+    const [pairedPage] = await Promise.all([
+      page.waitForNavigation({url: `${origin}/`, waitUntil: "load", timeout: 20_000}),
+      page.getByRole("button", {name: "Pair device", exact: true}).click(),
+    ]);
+    expect(pairedPage?.ok()).toBe(true);
     await expect(page).toHaveURL(`${origin}/`);
     await expect.poll(async () => {
       pairedDeviceId = (await (await api.get("auth/devices")).json()).find((device: {name: string}) => device.name === `Release browser ${projectId}`)?.id;
@@ -61,6 +67,9 @@ test("stabilization deployed approval completes once and survives reconnect", as
     await page.goto(`${origin}/projects/${projectId}/workbench?view=chat`);
     await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
     await page.getByRole("button", {name: "New chat", exact: true}).click();
+    if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) {
+      await page.locator(".chat-composer").hover();
+    }
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     await page.getByRole("combobox", {name: "Chat runtime", exact: true}).selectOption("harness");
     await page.getByRole("combobox", {name: "Chat harness", exact: true}).selectOption(harnessId!);
@@ -99,8 +108,12 @@ test("stabilization deployed approval completes once and survives reconnect", as
     const receipts = (await readFile(path.join(fixtureRoot, "stabilization_acp.receipts.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
     expect(receipts).toHaveLength(1);
     expect(receipts[0].allowed).toBe(true);
-    await info.attach("deployed-approval-receipt", {body: JSON.stringify({origin, commit, projectId, session, state, receipts}), contentType: "application/json"});
-    await info.attach("deployed-approval-reconnected", {body: await page.screenshot(), contentType: "image/png"});
+    const receiptPath = info.outputPath("deployed-approval-receipt.json");
+    await writeFile(receiptPath, JSON.stringify({origin, commit, profile: info.project.name, projectId, session, state, receipts}, null, 2));
+    await info.attach("deployed-approval-receipt", {path: receiptPath, contentType: "application/json"});
+    const screenshotPath = info.outputPath("deployed-approval-reconnected.png");
+    await page.screenshot({path: screenshotPath});
+    await info.attach("deployed-approval-reconnected", {path: screenshotPath, contentType: "image/png"});
   } finally {
     await page.context().setOffline(false);
     // Attach the receipt before cleanup, then remove the disposable conversation

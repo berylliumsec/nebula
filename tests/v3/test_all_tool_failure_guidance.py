@@ -348,7 +348,10 @@ def test_gateway_preserves_guided_error_and_actual_offered_usage():
         "required": ["path"],
     }
 
-    class Gateway:
+    class Gateway(HarnessRuntimeService):
+        def __init__(self):
+            pass
+
         def _active_gateway_turn(self, session_id):
             return None
 

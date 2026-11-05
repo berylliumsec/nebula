@@ -1,5 +1,55 @@
-import {expect, test} from "@playwright/test";
+import {writeFile} from "node:fs/promises";
+import {expect, test, type TestInfo} from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+
+async function attachBuild(info: TestInfo, name: string, evidence: unknown) {
+  const path = info.outputPath(`${name}.json`);
+  await writeFile(path, JSON.stringify(evidence, null, 2));
+  await info.attach(name, {path, contentType: "application/json"});
+}
+
+test("a saved MCP selection keeps its healthy harness connection across turns and reload", async ({page, request}, info) => {
+  const origin = String(info.project.use.baseURL);
+  if (process.env.NEBULA_REQUIRE_LAN_TESTS === "1") expect(new URL(origin).hostname).not.toMatch(/^(?:localhost|127\.|\[?::1\]?$)/);
+  const headers = {Authorization: "Bearer universal-test-token"};
+  const seeded = await request.post(`${origin}/fixture/mcp-seed`, {headers});
+  expect(seeded.ok(), await seeded.text()).toBe(true);
+  const fixture = await seeded.json();
+  const pairing = await (await request.post(`http://127.0.0.1:${new URL(origin).port}/api/v1/auth/pairings`, {headers, data: {name: "MCP continuity test"}})).json();
+  await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill("MCP continuity test");
+  await page.getByRole("button", {name: "Pair device", exact: true}).click();
+  await expect(page.getByLabel("Device name")).toBeHidden({timeout: 20000});
+  const payload = {
+    backend: "harness", engagement_id: fixture.project, session_id: fixture.harness,
+    harness_profile_id: "codex", model: "gpt-test", include_knowledge: false, mcp_server_ids: [fixture.mcp],
+    allow_agent_messaging: false,
+  };
+  const baseline = await request.post(`${origin}/api/v1/chat/completions`, {headers, data: {
+    ...payload, mcp_server_ids: [], messages: [{role: "user", content: "MCP continuity probe before settings change."}],
+  }});
+  expect(baseline.ok(), await baseline.text()).toBe(true);
+  const first = await request.post(`${origin}/api/v1/chat/completions`, {headers, data: {
+    ...payload, messages: [{role: "user", content: "MCP continuity probe first."}],
+  }});
+  expect(first.ok(), await first.text()).toBe(true);
+  const initial = await first.json();
+  const second = await request.post(`${origin}/api/v1/chat/completions`, {headers, data: {
+    ...payload, messages: [{role: "user", content: "MCP continuity probe next."}],
+  }});
+  expect(second.ok(), await second.text()).toBe(true);
+  expect((await second.json()).harness_session_id).toBe(initial.harness_session_id);
+  const evidence = await (await request.get(`${origin}/fixture/evidence/${fixture.harness}`, {headers})).json();
+  expect(evidence.harness).toEqual({
+    session_id: initial.harness_session_id, mcp_server_ids: [fixture.mcp], catalog_ids: [], connection_opens: 1,
+  });
+  await page.goto(`/projects/${fixture.project}/workbench?view=chat&session=${fixture.harness}`);
+  await expect(page.locator(".chat-message.assistant")).toHaveCount(3);
+  await expect(page.locator(".chat-message.assistant").last()).toContainText("MCP continuity confirmed.");
+  await page.reload();
+  await expect(page.locator(".chat-message.assistant")).toHaveCount(3);
+  await attachBuild(info, "mcp-continuity-build", {origin, bundleSha256: fixture.bundle_sha256, profile: info.project.name, evidence});
+});
 
 test("all parent and child runtimes retain lifecycle guards and saved choices", async ({page, request}, info) => {
   const origin = String(info.project.use.baseURL);
@@ -53,6 +103,6 @@ test("all parent and child runtimes retain lifecycle guards and saved choices", 
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     }
   }
-  await info.attach("candidate-build", {body: JSON.stringify({origin, bundleSha256: fixture.bundle_sha256, project: info.project.name, viewport: page.viewportSize()}), contentType: "application/json"});
+  await attachBuild(info, "candidate-build", {origin, bundleSha256: fixture.bundle_sha256, project: info.project.name, viewport: page.viewportSize()});
   await page.screenshot({path: info.outputPath("mixed-agent-guards.png")});
 });

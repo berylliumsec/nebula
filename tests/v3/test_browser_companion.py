@@ -716,7 +716,8 @@ def test_harness_image_capability_follows_discovered_model_modalities():
     assert {model.model: model.image_input for model in models} == {
         "vision": True,
         "text-only": False,
-        "unknown": False,
+        # Older Codex catalogs omit modalities but still accept image input.
+        "unknown": True,
     }
 
 
@@ -1824,8 +1825,13 @@ def test_browser_service_refusals_reach_the_model_classified(
     assert failure["side_effects"] == "none"
     assert failure["invalid_input"] == invalid_input
     assert failure["retry_safe"] is (category == "invalid_arguments")
-    for detail in ("no longer available", "outside the project", "uploads"):
+    for detail in (
+        "The browser tab is no longer available.",
+        "target is outside the project scope",
+        "Attached file references are only valid for uploads.",
+    ):
         assert detail not in entry["provider_result"]
+    assert failure["usage"]["description"] == companion_spec().description
     [replayed] = provider.requests[-1].tool_results
     assert replayed.output["category"] == category
     # Only the tab list reached the browser, and nothing was proposed.
@@ -1873,6 +1879,7 @@ def test_harness_gateway_reports_another_projects_browser_as_unavailable(tmp_pat
     """The harness gateway builds the companion tools inside the call."""
 
     import json
+    from types import SimpleNamespace
 
     from nebula.v3.harnesses import HarnessRuntimeService
     from nebula.v3.tool_failures import FAILURE_SCHEMA
@@ -1881,8 +1888,14 @@ def test_harness_gateway_reports_another_projects_browser_as_unavailable(tmp_pat
     other = store.create(Engagement(name="Other"))
     schema = companion_spec().input_schema
 
-    class Gateway:
-        def _gateway_catalog(self, harness_session, params=None):
+    class Gateway(HarnessRuntimeService):
+        def __init__(self):
+            pass
+
+        def _active_gateway_turn(self, session_id):
+            return None
+
+        def _gateway_catalog(self, harness_session, params=None, *, turn=None):
             return {
                 "tools": [
                     {
@@ -1900,7 +1913,7 @@ def test_harness_gateway_reports_another_projects_browser_as_unavailable(tmp_pat
     response = asyncio.run(
         HarnessRuntimeService._gateway_call(
             Gateway(),
-            None,
+            SimpleNamespace(id="harness-session"),
             "browser.companion",
             {"operation": "tabs", "url": "https://example.test/"},
         )

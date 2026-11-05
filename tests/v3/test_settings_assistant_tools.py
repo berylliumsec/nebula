@@ -362,6 +362,7 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(
     settings = runtime.chat_components(**common, settings_assistant=True)
     assert not BUTLER_TOOL_NAMES.intersection(ordinary.specs)
     assert set(settings.specs) == BUTLER_TOOL_NAMES | {
+        "workspace.find",
         "workspace.read",
         "workspace.search",
         "tool_output.read",

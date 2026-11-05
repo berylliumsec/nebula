@@ -150,17 +150,17 @@ describe("NewMissionButton", () => {
 
   it("builds the earliest start time from the operator's local clock", async () => {
     vi.stubEnv("TZ", "Etc/GMT+5");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-06-15T13:05:00Z").getTime());
     try {
       expect(new Date(2026, 5, 15, 8, 5).getTimezoneOffset()).toBe(300);
       expect(localDateTimeInputValue(new Date(2026, 5, 15, 8, 5))).toBe("2026-06-15T08:05");
       const user = userEvent.setup();
       await openDialog(user);
-      const before = localDateTimeInputValue(new Date(Date.now() + 60_000));
       await user.click(screen.getByText("Advanced"));
       const min = screen.getByLabelText("Start time").getAttribute("min");
-      const after = localDateTimeInputValue(new Date(Date.now() + 60_000));
-      expect([before, after]).toContain(min);
+      expect(min).toBe("2026-06-15T08:06");
     } finally {
+      clock.mockRestore();
       vi.unstubAllEnvs();
     }
   });

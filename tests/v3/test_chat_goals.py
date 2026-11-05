@@ -1509,7 +1509,7 @@ def test_child_budget_is_bounded_by_the_child_list_cap(tmp_path):
     goals_before = store.count(ChatGoal)
     sessions_before = store.count(ChatSession)
 
-    with pytest.raises(ConflictError, match="cannot list more than 32 children"):
+    with pytest.raises(ConflictError, match="goal child budget is exhausted"):
         service.start_child(
             "session", GoalCreate(objective="Child 33", completion_criteria=["x"])
         )

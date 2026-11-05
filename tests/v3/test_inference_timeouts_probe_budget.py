@@ -55,7 +55,12 @@ from nebula.v3.providers import (
 from nebula.v3.scope_import import ScopeImportService
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import IdempotencyBehavior, ToolSpec
-from tests.v3.test_chat import FakeProvider, _profile as _chat_profile, _source
+from tests.v3.test_chat import (
+    FakeProvider,
+    _complete_and_name,
+    _profile as _chat_profile,
+    _source,
+)
 from tests.v3.test_context import MemoryProvider, _message, _owner
 from tests.v3.test_context import _profile as _context_profile
 from tests.v3.test_scope_import import (
@@ -645,7 +650,7 @@ def test_naming_and_retrieval_planning_ask_for_no_reasoning(tmp_path, monkeypatc
             messages=[{"role": "user", "content": "What port is relevant?"}],
         )
     )
-    asyncio.run(service.complete(prepared))
+    asyncio.run(_complete_and_name(service, prepared))
 
     efforts = {
         request.metadata.get("operation") or "answer": request.reasoning_effort

@@ -15,15 +15,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from nebula.v3 import chat as chat_module
 from nebula.v3.api import create_app
+from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     ChatSession,
     ChatSubagent,
+    ChatTurn,
     Engagement,
     HarnessProfile,
+    McpServerProfile,
     NativeHookExecution,
     ProviderProfile,
+    utc_now,
 )
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.providers import ModelResponse, ToolCall, ToolChoice
@@ -120,6 +124,8 @@ def main():
         adapter.runtime = runtime
 
         async def script(connection, prompt):
+            if "MCP continuity probe" in prompt:
+                return "MCP continuity confirmed."
             if "You are a subagent." not in prompt:
                 started = await connection.call(
                     "subagent.start",
@@ -203,6 +209,35 @@ def main():
                 "bundle_sha256": digest.hexdigest(),
             }
 
+        @app.post("/fixture/mcp-seed")
+        async def mcp_seed(request: Request):
+            fixture = await seed(request)
+            server = store.create(
+                McpServerProfile(
+                    name=f"continuity-{fixture['project']}",
+                    transport="streamable_http",
+                    url="https://mcp.invalid/api",
+                    enabled=True,
+                    metadata={"engagement_id": fixture["project"]},
+                    capabilities={
+                        "checked_at": utc_now(),
+                        "tools": [
+                            {
+                                "name": "read_marker",
+                                "input_schema": {"type": "object", "properties": {}},
+                                "read_only": True,
+                                "destructive": False,
+                                "idempotent": True,
+                                "open_world": False,
+                                "credentialed": False,
+                                "annotations_complete": True,
+                            }
+                        ],
+                    },
+                )
+            )
+            return {**fixture, "mcp": server.id}
+
         @app.get("/fixture/evidence/{identity}")
         async def evidence(identity: str, request: Request):
             authorize(request)
@@ -210,7 +245,28 @@ def main():
             records = store.find_entities(
                 ChatSubagent, {"parent_session_id": parent.id}
             )
+            turns = store.list_session_entities(
+                ChatTurn, parent.id, newest_first=True, limit=1
+            )
+            snapshot = (
+                resolve_request_snapshot(
+                    store, turns[0].request_snapshot, session_id=parent.id
+                )
+                if turns
+                else {}
+            )
             return {
+                "harness": {
+                    "session_id": parent.harness_session_id,
+                    "mcp_server_ids": snapshot.get("mcp_server_ids", []),
+                    "catalog_ids": [
+                        item["id"] for item in snapshot.get("mcp_catalog_snapshot", [])
+                    ],
+                    "connection_opens": sum(
+                        opened.session.id == parent.harness_session_id
+                        for opened in adapter.opens
+                    ),
+                },
                 "children": [
                     {
                         "backend": store.get(
@@ -225,7 +281,7 @@ def main():
                         ],
                     }
                     for child in records
-                ]
+                ],
             }
 
         controls = [

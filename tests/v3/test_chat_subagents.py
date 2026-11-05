@@ -311,6 +311,7 @@ def _setup(tmp_path: Path, provider: RoutedProvider):
             provider_type="vllm",
             is_local=True,
             model_allowlist=["model-a"],
+            metadata={"options": {"context_window": 32768}},
             capabilities={"streaming": True, "tool_calling": True},
             capability_verifications={
                 "model-a": ProviderCapabilityVerification(
@@ -1322,7 +1323,12 @@ def test_cloud_subagent_turn_asks_for_tool_result_consent_before_acceptance(
         provider.config = provider.config.model_copy(update={"local": False})
         store = NebulaStore(tmp_path / "cloud-subagents.db")
         project = store.create(
-            Engagement(id="project", name="Subagents", work_enabled=False)
+            Engagement(
+                id="project",
+                name="Subagents",
+                work_enabled=False,
+                assistant_defaults={"allow_agent_messaging": False},
+            )
         )
         store.create(
             ProviderProfile(
@@ -2283,7 +2289,9 @@ def test_subagents_use_the_models_choice_or_provider_default_without_an_override
         }
         assert chat.subagents.view(records["Routes"])["reasoning_effort"] is None
         parent = store.get(ChatTurn, parent_turn_id)
-        assert [entry["status"] for entry in _history(store, parent)[:3]] == [
+        assert [
+            entry["status"] for entry in _entries(store, parent, "start_subagent")
+        ] == [
             "complete",
             "complete",
             "failed",

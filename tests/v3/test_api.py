@@ -252,8 +252,10 @@ def test_goal_conversation_exists_before_its_first_message(api):
         "mcp_server_ids": [],
         "hook_ids": ["audit"],
         "reasoning_effort": None,
+        "planning_enabled": False,
         "allow_subagents": False,
         "subagent_reasoning_effort": None,
+        "provider_subagent": None,
         # An omitted choice inherits the project's durable default.
         "allow_agent_messaging": store.get(
             Engagement, "goal-first-project"
@@ -1684,7 +1686,7 @@ def test_artifact_content_and_openapi_contract(api):
     request_schema = schema["paths"]["/api/v1/engagements"]["post"]["requestBody"][
         "content"
     ]["application/json"]["schema"]
-    assert request_schema["$ref"].endswith("/Engagement")
+    assert request_schema["$ref"].endswith("/EngagementCreateRequest")
 
 
 def test_static_workspace_supports_spa_reload_without_masking_missing_assets(
@@ -2052,13 +2054,18 @@ def test_harness_delete_checks_only_entities_that_can_reference_it(api, monkeypa
         )
     )
     visited = []
-    original = store.iter_readable_entities
+    original = store.iter_reference_candidates
 
-    def record(model):
+    def record(model, references):
         visited.append(model.entity_kind)
-        return original(model)
+        assert references == [("harness_profile_id", harness.id, False)]
+        return original(model, references)
 
-    monkeypatch.setattr(store, "iter_readable_entities", record)
+    def reject_full_scan(_model):
+        raise AssertionError("harness deletion must use reference candidates")
+
+    monkeypatch.setattr(store, "iter_reference_candidates", record)
+    monkeypatch.setattr(store, "iter_readable_entities", reject_full_scan)
     response = client.delete(
         f"/api/v1/harnesses/{harness.id}",
         headers={**_auth(), "If-Match": str(harness.revision)},

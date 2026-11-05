@@ -28,6 +28,7 @@ _STOP_WORDS = {
     "that",
     "the",
     "this",
+    "tool",
     "use",
     "what",
     "when",

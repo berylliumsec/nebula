@@ -57,6 +57,19 @@ def _security_tool_manifest():
     )
 
 
+@pytest.fixture
+def notebook_build_resources(tmp_path, monkeypatch):
+    runtime = tmp_path / "notebook-runtime"
+    runtime.mkdir()
+    worker = Path(__file__).resolve().parents[2] / "packaging/notebook/worker.py"
+    (runtime / "worker.py").write_bytes(worker.read_bytes())
+    # Runtime commands are mocked; image preparation only copies this fixture.
+    uv = runtime / "uv"
+    uv.write_bytes(b"#!/bin/sh\nexit 0\n")
+    uv.chmod(0o755)
+    monkeypatch.setenv("NEBULA_NOTEBOOK_RUNTIME_DIR", str(runtime))
+
+
 def _request(tmp_path, **changes):
     values = {
         "image": DIGEST_IMAGE,
@@ -1219,7 +1232,7 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v10"}}}',
+            + '"org.nebula.human-terminal.recipe":"v11"}}}',
             "",
             0,
         )
@@ -1241,6 +1254,10 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
         "iputils-ping",
         "python3",
         "python3-debugpy",
+        "python3-venv",
+        "python3-pip",
+        "python3-ipykernel",
+        "python3-jupyter-client",
         "ripgrep",
         "git",
         "curl",
@@ -1303,7 +1320,9 @@ def test_human_terminal_rejects_missing_malformed_or_unsafe_tool_manifests(
         asyncio.run(preparer._security_tool_manifest("sha256:" + "d" * 64))
 
 
-def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
+def test_human_terminal_cold_preparation_pulls_builds_and_verifies(
+    monkeypatch, notebook_build_resources
+):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     progress = []
 
@@ -1358,7 +1377,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v10"}}}',
+            + '"org.nebula.human-terminal.recipe":"v11"}}}',
             "",
             0,
         )
@@ -1391,7 +1410,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert build[0][1] == "--platform=linux/amd64"
     assert build[0][2] == "--pull=false"
     assert build[0][3] == "--quiet"
-    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v10-")
+    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v11-")
     assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
     assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
     assert "COPY egress_helper.py /usr/local/bin/nebula-egress" in dockerfiles[0]
@@ -1408,7 +1427,9 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert "nebula-kali-tool-inventory.py" in dockerfiles[0]
 
 
-def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
+def test_human_terminal_cold_pull_failure_can_be_retried(
+    monkeypatch, notebook_build_resources
+):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     preparer = ContainerImagePreparer(
         runner=runner,
@@ -1456,7 +1477,7 @@ def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v10"}}}',
+            + '"org.nebula.human-terminal.recipe":"v11"}}}',
             "",
             0,
         )

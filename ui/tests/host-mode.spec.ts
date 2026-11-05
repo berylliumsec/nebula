@@ -20,7 +20,12 @@ test("warm chat adopts acknowledged host mode without losing its conversation", 
   await expect(page.getByText("Harness answer for Remember this fixture", { exact: true })).toBeVisible();
   const openPolicy = async () => {
     const search = page.getByRole("button", { name: "Search pages, actions, and settings" });
-    if (!await search.isVisible()) await page.getByRole("button", { name: "Open top menu", exact: true }).click();
+    if (!await search.isVisible()) {
+      const handle = page.getByRole("button", { name: "Open top menu", exact: true });
+      if (info.project.use.hasTouch) await handle.tap();
+      else await handle.hover();
+    }
+    await expect(search).toBeVisible();
     await search.click();
     await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
     await page.getByRole("option", { name: /Project policy and network scope/ }).click();

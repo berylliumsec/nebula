@@ -380,10 +380,8 @@ def test_parked_parent_resumes_across_a_core_update_that_changed_tool_specs(
             )
         )
         parked = store.get(ChatTurn, parent_turn_id)
-        assert (
-            parked.request_snapshot["automation_runtime_digest"]
-            == SUBAGENT_TOOLS_CONTRACT
-        )
+        runtime_digest = parked.request_snapshot["automation_runtime_digest"]
+        assert SUBAGENT_TOOLS_CONTRACT in runtime_digest.split("+")
         # What the Core before this one recorded: a hash of every ToolSpec
         # field, here without one a later Core added.
         legacy = hashlib.sha256(
@@ -405,7 +403,9 @@ def test_parked_parent_resumes_across_a_core_update_that_changed_tool_specs(
             {
                 "request_snapshot": {
                     **parked.request_snapshot,
-                    "automation_runtime_digest": f"subagents-{legacy[:16]}",
+                    "automation_runtime_digest": runtime_digest.replace(
+                        SUBAGENT_TOOLS_CONTRACT, f"subagents-{legacy[:16]}"
+                    ),
                 }
             },
             expected_revision=parked.revision,

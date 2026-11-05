@@ -293,8 +293,16 @@ function ProjectSnapshotLauncher({ position, onMove, onRestore }: {
     if (persist) writeLauncher(fitted);
   };
   useViewportChange(() => { if (position) place(position, false); }, Boolean(position));
-  // Minimizing hands focus to the way back.
-  useLayoutEffect(() => { show.current?.focus(); }, []);
+  // The first launcher placement keeps composition clear. A position the
+  // operator moved or saved remains theirs.
+  useLayoutEffect(() => {
+    const box = shell.current?.getBoundingClientRect();
+    const above = pageClearance().above;
+    if (!position && box && above !== undefined && box.bottom > above - 12) {
+      place({ x: box.left, y: above - box.height - 12 }, false);
+    }
+    show.current?.focus();
+  }, []);
 
   const origin = () => {
     const box = shell.current?.getBoundingClientRect();

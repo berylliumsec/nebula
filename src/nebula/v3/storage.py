@@ -949,7 +949,7 @@ class NebulaStore:
         """Select expired detached popups without loading ordinary/side chats."""
 
         statement = (
-            select(EntityRow.id)
+            select(EntityRow)
             .where(
                 EntityRow.kind == ChatSession.entity_kind,
                 EntityRow.payload["metadata"]["temporary_assistant"]
@@ -963,7 +963,10 @@ class NebulaStore:
             .order_by(*_entity_order(False))
         )
         with self.database.session() as session:
-            return list(session.scalars(statement))
+            return [
+                chat.id
+                for chat in readable_entities(session.scalars(statement), ChatSession)
+            ]
 
     def web_search_project_count(self) -> int:
         """Count cloud-enabled search policies without hydrating their envelopes."""

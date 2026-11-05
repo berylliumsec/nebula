@@ -2854,7 +2854,7 @@ def test_claude_native_capabilities_exclude_project_files_and_shell(
             None,
         )
         assert read_result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert skill_result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert skill_result["hookSpecificOutput"]["permissionDecision"] == "ask"
         assert write_result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
         allowed = await options["can_use_tool"]("Skill", {"skill": "review"}, None)

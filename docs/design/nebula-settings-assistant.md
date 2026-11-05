@@ -333,8 +333,12 @@ An active harness turn reports that the directive takes effect next turn. The
 saved plan and Butler reason remain visible in the chat activity after refresh.
 Butler's automatic one-task force requires the project's delegated action grant,
 current Core evidence, and a recorded reason.
-`nebula.work.handoff_goal` creates one provider draft only for a paused harness
-goal whose latest planning attempt stopped before admission with no tool calls.
+### Hand off a paused harness planning goal
+
+To hand off a paused harness planning goal to an eligible provider such as
+DeepSeek, interactive Butler uses `nebula.work.handoff_goal`. Core creates one
+provider draft only when the latest planning attempt stopped before admission
+with no tool calls.
 The source retains its queue and remains paused. Core checks pending approvals,
 selected provider model/tool verification, MCP selection, privacy scope, and
 remaining budgets before linking the goals atomically. A repeated request reads
@@ -344,6 +348,9 @@ The handoff carries neither approval nor queue authority. For a scheduled check,
 `nebula.global.handoff_goal` performs the same checked create and can start the
 new draft under an Act grant. When handoff is unavailable, Butler reports the
 hold and can select another eligible project.
+
+### Inspect conversation activity
+
 `nebula.work.timeline` accepts a listed conversation ID or an Assistant title and
 a bounded number of hours. Ambiguous titles return selectable conversations. The
 read-only result pages saved messages, provider tool steps, selected harness

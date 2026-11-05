@@ -246,10 +246,10 @@ class ButlerMemoryService:
         with self._lock:
             if self._collection is not None:
                 return self._collection
-            try:
-                import chromadb
-                from chromadb.config import Settings
+            import chromadb
+            from chromadb.config import Settings
 
+            try:
                 self.index_path.mkdir(parents=True, exist_ok=True, mode=0o700)
                 self.index_path.chmod(0o700)
                 client = chromadb.PersistentClient(

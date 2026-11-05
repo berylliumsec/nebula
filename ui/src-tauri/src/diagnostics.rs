@@ -58,6 +58,7 @@ const FEATURES: &[&str] = &[
     "chat",
     "knowledge",
     "harnesses",
+    "butler",
     "missions",
     "runtime",
     "debugger",

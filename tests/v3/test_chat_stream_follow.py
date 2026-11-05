@@ -293,7 +293,7 @@ def test_restart_recovery_settles_a_goal_turn_it_will_never_resume(tmp_path, pol
         GoalCreate(
             objective="Continue",
             completion_criteria=["Done"],
-            time_budget_seconds=60,
+            time_budget_seconds=1800,
         ),
     )
     goal = goals.write(
@@ -307,7 +307,10 @@ def test_restart_recovery_settles_a_goal_turn_it_will_never_resume(tmp_path, pol
         goals.write("chat", GoalWrite(expected_revision=goal.revision, action="cancel"))
     else:
         store.update(
-            ChatGoal, goal.id, {"elapsed_seconds": 60}, expected_revision=goal.revision
+            ChatGoal,
+            goal.id,
+            {"elapsed_seconds": 1800},
+            expected_revision=goal.revision,
         )
     service = ChatService(store)
     assert service.pending_turn("chat") is not None

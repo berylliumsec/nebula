@@ -1170,11 +1170,12 @@ def test_provider_skill_resources_are_exposed_only_through_bounded_reader(
     )
 
     assert prepared.tools_enabled is True
-    # Every turn with tools can also keep working notes.
-    assert set(prepared.tool_components.specs) == {
-        "skill.read_resource",
-        "notes.write",
+    specs = set(prepared.tool_components.specs)
+    assert {"skill.read_resource", "notes.write"} <= specs
+    assert {name for name in specs if name.startswith("skill.")} == {
+        "skill.read_resource"
     }
+    assert not {"run_command", "read_file", "write_file"} & specs
     snapshot = prepared.turn.request_snapshot["skill_snapshots"][0]
     assert snapshot["resources"][0]["relative_path"] == "references/checklist.md"
     result = asyncio.run(
@@ -2778,7 +2779,7 @@ def test_selected_context_is_bounded_hashed_sent_as_data_and_persisted(
     content = str(prepared.model_request.messages[-1].content)
     assert "BEGIN SELECTED CONTEXT" in content
     assert selected in content
-    completion = asyncio.run(service.complete(prepared))
+    completion = asyncio.run(_complete_and_name(service, prepared))
     assert store.get(ChatSession, completion.session_id).title == "Relevant HTTPS Port"
     persisted = service.session_messages(completion.session_id)
     assert persisted[0].content == "What does this mean?"
@@ -3505,6 +3506,7 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
         "allow_agent_messaging": False,
         "planning_enabled": False,
         "subagent_reasoning_effort": None,
+        "provider_subagent": None,
         "max_active_subagents": None,
         # Settled with the turn: what a tool-free request adds beside the
         # conversation. The fake provider reports too few tokens to calibrate.
@@ -3582,6 +3584,7 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         "allow_agent_messaging": False,
         "planning_enabled": False,
         "subagent_reasoning_effort": None,
+        "provider_subagent": None,
         "max_active_subagents": None,
         # Settled with the turn: what a tool-free request adds beside the
         # conversation. The fake provider reports too few tokens to calibrate.

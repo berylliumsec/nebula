@@ -1201,7 +1201,7 @@ def test_cloud_tool_turn_without_consent_is_a_typed_refusal_before_acceptance(
     assert body["code"] == "tool_result_consent_required"
     assert "explicit confirmation" in body["detail"]
     assert body["operator_detail"] == (
-        "This turn uses subagents and agent messaging, whose tool inputs and "
+        "This turn uses subagents, agent messaging and project Work, whose tool inputs and "
         "results would go to Cloud provider."
     )
     assert store.list_entities(ChatSession, include_temporary=True) == []

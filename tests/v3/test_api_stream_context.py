@@ -24,3 +24,38 @@ def test_stream_correlation_does_not_leak_and_closes_from_another_task():
         assert observed == ["stream-request", "closed"]
 
     asyncio.run(scenario())
+
+
+def test_quiet_chat_heartbeat_arrives_within_the_streaming_status_budget():
+    async def scenario():
+        release = asyncio.Event()
+        closed = asyncio.Event()
+
+        async def source():
+            try:
+                await release.wait()
+                assert diagnostics._request_id.get() == "quiet-chat"
+                yield b"event"
+            finally:
+                closed.set()
+
+        stream = _correlated_stream(
+            source(),
+            request_id="quiet-chat",
+            operation_id="quiet-operation",
+            heartbeat=True,
+        )
+        try:
+            assert (
+                await asyncio.wait_for(anext(stream), timeout=3) == b": keepalive\n\n"
+            )
+            assert diagnostics._request_id.get() is None
+            assert not closed.is_set()
+            release.set()
+            assert await asyncio.wait_for(anext(stream), timeout=3) == b"event"
+        finally:
+            await asyncio.create_task(stream.aclose())
+        assert closed.is_set()
+        assert diagnostics._request_id.get() is None
+
+    asyncio.run(scenario())

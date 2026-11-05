@@ -15098,8 +15098,11 @@ class ChatService:
 
         if estimate(messages) <= target:
             return messages, instructions, ChatTokenUsage(), None, session
-        target -= archive_reserved_tokens
-        capacity -= archive_reserved_tokens
+        if session is not None and stored_messages:
+            # Only durable history can add an archive and its search tool.
+            # A first turn may exceed the soft target while still fitting.
+            target -= archive_reserved_tokens
+            capacity -= archive_reserved_tokens
 
         current = messages[-1]
         if estimate([current]) > capacity:

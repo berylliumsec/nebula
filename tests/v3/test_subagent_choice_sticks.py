@@ -114,6 +114,7 @@ def _setup(tmp_path: Path):
             provider_type="vllm",
             is_local=True,
             model_allowlist=["model-a"],
+            metadata={"options": {"context_window": 32768}},
             capabilities={"streaming": True, "tool_calling": True},
             capability_verifications={
                 "model-a": ProviderCapabilityVerification(

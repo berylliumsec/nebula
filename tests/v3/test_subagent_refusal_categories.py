@@ -8,7 +8,7 @@ get the same answer for the same refusal:
 - the operator's running-at-once limit is ``capacity_reached``: wait for a
   subagent to finish, then retry;
 - a goal whose token budget is used up is ``budget_exhausted``: do not retry;
-- a rule (turned off, a subagent delegating, no provider model, messaging
+- a rule (turned off, delegation depth exhausted, no provider model, messaging
   from outside a subagent) is ``permission_denied``: do not repeat;
 - a bad argument is ``invalid_arguments``: correct it.
 
@@ -24,7 +24,10 @@ from pathlib import Path
 import pytest
 
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.chat_subagents import GOAL_BUDGET_SUBAGENT_NOTE
+from nebula.v3.chat_subagents import (
+    GOAL_BUDGET_SUBAGENT_NOTE,
+    SUBAGENT_DEPTH_CEILING,
+)
 from nebula.v3.domain import (
     ChatGoal,
     ChatGoalStatus,
@@ -307,12 +310,14 @@ def test_provider_subagent_rules_are_not_permitted(tmp_path: Path):
         spec = prepared.tool_components.specs["start_subagent"]
         arguments = {"task": "Nested.", "name": None, "context": None}
         parent_session = store.get(ChatSession, prepared.session.id)
-        child_session = _session(
-            store,
-            title="Subagent",
-            parent_session_id=parent_session.id,
-            metadata={"subagent_id": "child-record"},
-        )
+        child_session = parent_session
+        for depth in range(SUBAGENT_DEPTH_CEILING):
+            child_session = _session(
+                store,
+                title=f"Subagent {depth + 1}",
+                parent_session_id=child_session.id,
+                metadata={"subagent_id": f"child-record-{depth}"},
+            )
         child_turn = store.create(
             ChatTurn(
                 engagement_id="project",
@@ -353,9 +358,10 @@ def test_provider_subagent_rules_are_not_permitted(tmp_path: Path):
             assert caught.value.decision.rule == rule
             refused = _provider_envelope(spec, arguments, caught.value)
             assert refused["category"] == "permission_denied", rule
+            assert refused["policy_rule"] == rule
             assert refused["side_effects"] == "none"
             assert refused["retry_safe"] is False
-            assert "do not repeat" in refused["next_action"]
+            assert "do not retry unchanged" in refused["next_action"]
         # A child's message to its parent after its round ended is refused
         # the same way.
         with pytest.raises(ToolNotPermitted) as caught:

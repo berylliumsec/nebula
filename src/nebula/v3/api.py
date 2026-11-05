@@ -665,6 +665,8 @@ CUSTOM_RESOURCES = {
     "guide_progress",
     "chat_queues",
     "chat_decisions",
+    "chat_plan_directives",
+    "chat_task_plans",
     "action_intents",
     "automation_policies",
     "chat_turns",
@@ -710,6 +712,8 @@ CUSTOM_RESOURCES = {
     "chat_goals",
     "butler_goal_watches",
     "butler_project_states",
+    "butler_global_states",
+    "butler_voice_settings",
     "butler_incidents",
     "butler_decisions",
     "butler_authority_policies",
@@ -2053,16 +2057,8 @@ def create_app(
     from .notebook_mcp import NotebookMcpTools
 
     notebook_mcp = NotebookMcpTools(store, notebook_service)
-    project_offset = 0
-    while True:
-        existing_projects = store.list_entities(
-            Engagement, limit=1000, offset=project_offset
-        )
-        for existing_project in existing_projects:
-            notebook_mcp.register_profile(existing_project.id)
-        if len(existing_projects) < 1000:
-            break
-        project_offset += len(existing_projects)
+    for existing_project in store.iter_readable_entities(Engagement):
+        notebook_mcp.register_profile(existing_project.id)
     automation_tool_platform = (
         AutomationToolPlatform(
             manager=automation_runtime,
@@ -2569,7 +2565,7 @@ def create_app(
             except (OSError, ValueError) as exc:
                 emit_diagnostic(
                     "warning",
-                    "host_cpu",
+                    "runtime",
                     "host_cpu.startup_failed",
                     "Host CPU policy could not be loaded; other Core services remain available.",
                     outcome="degraded",
@@ -4245,7 +4241,7 @@ def create_app(
             return await host_cpus.status()
         except (OSError, ValueError) as exc:
             record_caught_exception(
-                "host_cpu",
+                "runtime",
                 "host_cpu.read_failed",
                 "Host CPU policy could not be read.",
                 exc,
@@ -4275,7 +4271,7 @@ def create_app(
             raise HTTPException(422, str(exc)) from exc
         except OSError as exc:
             record_caught_exception(
-                "host_cpu",
+                "runtime",
                 "host_cpu.save_failed",
                 "Host CPU policy could not be saved.",
                 exc,
@@ -14984,8 +14980,13 @@ async def _correlated_stream(
 ) -> AsyncIterator[bytes]:
     """Preserve request correlation after the HTTP response starts streaming."""
 
+    # Affected WebKit fetch readers release buffered data on the next write
+    # (https://bugs.webkit.org/show_bug.cgi?id=322545). Bound quiet-chat status
+    # latency while retaining the same pending Core-owned source read.
     iterator = aiter(
-        _with_heartbeats(stream, b": keepalive\n\n") if heartbeat else stream
+        _with_heartbeats(stream, b": keepalive\n\n", interval=1)
+        if heartbeat
+        else stream
     )
     try:
         while True:
@@ -16017,8 +16018,12 @@ def _register_crud_routes(
                     candidate = store.get(ScopePolicy, current.scope_policy_id)
                     if candidate.engagement_id == current.id:
                         owned_scope = candidate
-                owned_policies = store.list_entities(
-                    AutomationProjectPolicy, engagement_id=entity_id, limit=1_000
+                owned_policies = list(
+                    store.iter_reference_candidates(
+                        AutomationProjectPolicy,
+                        [("engagement_id", entity_id, False)],
+                        engagement_id=entity_id,
+                    )
                 )
                 owned_configuration_ids = [policy.id for policy in owned_policies]
                 if owned_scope is not None:

@@ -104,6 +104,10 @@
 .turnSteps li + li { margin-top: 3px; }
 .composer { display: flex; align-items: end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .composer textarea { flex: 1; min-width: 0; max-height: 140px; resize: vertical; background: transparent; color: inherit; font: inherit; font-size: 16px; }
+@media (max-height: 520px) {
+  .body { min-height: 0; }
+  .header, .viewTabs, .composer { flex-shrink: 0; }
+}
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   .launcher { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .backdrop:not([hidden]) { position: fixed; z-index: 84; inset: 0; display: block; width: 100%; height: 100%; border: 0; background: rgb(0 0 0 / 28%); cursor: default; }
