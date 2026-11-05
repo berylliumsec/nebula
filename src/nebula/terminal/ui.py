@@ -56,6 +56,7 @@ COMMANDS = {
     "stop": "Cancel the selected turn",
     "quit": "Exit; leave Core work running",
     "help": "Show commands",
+    "commands": "Browse commands",
 }
 
 
@@ -91,7 +92,8 @@ class TerminalUI:
             no_color="NO_COLOR" in os.environ,
             force_terminal=False if self.plain else None,
         )
-        self.status = ""
+        self._status = ""
+        self._last_activity = ""
         self.session: PromptSession[str] | None = None
         if not self.plain:
             self.session = PromptSession(
@@ -100,6 +102,25 @@ class TerminalUI:
                 completer=FuzzyWordCompleter(["/" + item for item in COMMANDS]),
                 bottom_toolbar=lambda: terminal_text(self.status),
             )
+
+    @property
+    def status(self) -> str:
+        return self._status
+
+    @status.setter
+    def status(self, value: str) -> None:
+        self._status = terminal_text(value)
+        if self.session is not None and self.session.app.is_running:
+            self.session.app.invalidate()
+
+    def activity(self, value: str) -> None:
+        clean = terminal_text(value).strip()
+        if clean and clean != self._last_activity:
+            self._last_activity = clean
+            self.say("Working: " + clean)
+
+    def submission(self, text: str, *, queued: bool = False) -> None:
+        self.say("Queued in Core: " if queued else "Sending to Core…")
 
     def say(self, text: Any = "") -> None:
         self.console.print(terminal_text(text), markup=False, highlight=False)
