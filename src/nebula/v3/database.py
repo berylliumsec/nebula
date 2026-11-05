@@ -176,6 +176,13 @@ class EntityRow(Base):
             "id",
         ),
         Index(
+            "ix_entities_kind_harness_session_created",
+            "kind",
+            "harness_session_id",
+            "created_at",
+            "id",
+        ),
+        Index(
             "ix_entities_chat_turn_status",
             "kind",
             "chat_turn_status",
@@ -218,6 +225,8 @@ class EntityRow(Base):
     # The JSON envelope remains authoritative. This nullable projection only
     # makes exact-conversation reads indexable for chat-owned entity families.
     chat_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Resolve names for a page of harness sessions without reading all turns.
+    harness_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # Active-turn readers use these projections without fetching large JSON envelopes.
     chat_turn_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     chat_turn_recovery_visible: Mapped[bool | None] = mapped_column(nullable=True)
