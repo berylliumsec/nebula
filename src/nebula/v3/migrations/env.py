@@ -8,7 +8,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import Connection
 
-from nebula.v3.database import Base
+from nebula.v3.database import Base, Database
 
 config = context.config
 if config.config_file_name is not None:
@@ -16,7 +16,9 @@ if config.config_file_name is not None:
 
 database_url = os.getenv("NEBULA_V3_DATABASE_URL")
 if database_url:
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+    config.set_main_option(
+        "sqlalchemy.url", Database._normalize_url(database_url).replace("%", "%%")
+    )
 
 target_metadata = Base.metadata
 

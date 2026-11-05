@@ -1,27 +1,34 @@
 {
-  "change_digest": "dcee3eb2a397baf9c4911be16927faa571e05e2c1907f625036564fbb6cfff22",
-  "reviewed_by": "Codex; original feedback mechanism independently validated by two fresh read-only diagnoses; failing PTY and LAN fixtures independently diagnosed",
-  "reason": "The paired CLI now uses a full-screen prompt_toolkit view and reports stream acceptance, tool progress, answers and actionable failures. Select deterministic TUI rendering/keyboard/resize tests, existing shell/packaging contracts, the disposable authenticated TLS LAN Core journey, and exact product-help/destination discovery checks. The client matrix runs these standalone tests on Linux and macOS with Python 3.11-3.13. PTY assertions replay ANSI output through the test-only pyte terminal emulator, avoiding false failures from valid partial redraws. An actual PTY F4 case verifies command access and preservation of an unsent draft.",
-  "exclusions": "No browser or native UI behavior changes: the settings catalog keyword edit has one direct frontend contract. Playwright mobile/desktop layouts are inapplicable to a terminal surface. No real providers, production Core, operator data, full suites, unrelated regression areas, or release tag.",
+  "change_digest": "75f3b2fd3620775f7a496cb5d50e4379318f20f102ccf9df8203c68def8a08a3",
+  "reviewed_by": "Codex with independent PostgreSQL diagnosis and dedicated migration/CLI subagents",
+  "reason": "Offline SQLite-to-PostgreSQL migration must copy every table and verify content before commit; PostgreSQL boot/concurrent event sequencing, driver packaging, native mission checkpoint continuity, actual authenticated LAN CLI restart, discovery and deployment dump/restore each have focused regressions. Synthetic PostgreSQL16 databases are isolated from production.",
+  "exclusions": "No browser layout, native desktop interaction, real provider, exploit/research workload, production data testing or full suites. PostgreSQL integration cases run in the dedicated reviewed database CI job; ordinary Python job omits those without a configured test server.",
   "expected_tests": {
-    "python": 57,
+    "python": 67,
     "frontend": 1,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_tui.py",
-    "tests/test_terminal_pty.py",
-    "tests/test_terminal_shell.py",
-    "tests/test_terminal_package.py",
-    "tests/v3/test_terminal_core.py",
+    "tests/v3/test_database_migration.py",
+    "tests/v3/test_database_migration_cli.py",
+    "tests/v3/test_postgresql_core.py",
+    "tests/v3/test_migrations.py::test_postgresql_upgrade_downgrade_and_immutable_operation_events",
+    "tests/v3/test_storage.py::test_schema_bootstrap_is_idempotent_and_refuses_a_newer_database",
+    "tests/v3/test_storage.py::test_event_sequence_is_atomic_between_threads",
+    "tests/v3/test_storage.py::test_find_entities_filters_payload_fields_in_sql_and_pages_in_order",
+    "tests/v3/test_storage.py::test_deleting_a_chat_run_or_archive_removes_budget_counters",
+    "tests/v3/test_packaging.py::test_core_build_fails_before_freezing_when_playwright_is_absent",
+    "tests/v3/test_packaging.py::test_core_archive_requires_playwright_module_and_driver",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_postgresql_migration_and_offline_cutover",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets"
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/test_simulation_deployer_retention.py",
+    "tests/test_simulation_postgres_backup.py"
   ],
   "frontend": [
-    "ui/src/settingsCatalog.terminal.test.ts"
+    "ui/src/settingsCatalog.postgresql.test.ts"
   ],
   "native": [],
   "playwright": []

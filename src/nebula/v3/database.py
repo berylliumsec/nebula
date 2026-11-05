@@ -31,6 +31,7 @@ from sqlalchemy import (
     inspect,
     insert,
     select,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -620,6 +621,11 @@ class Database:
     @staticmethod
     def _normalize_url(location: str | Path) -> str:
         value = str(location)
+        # SQLAlchemy's bare PostgreSQL scheme defaults to psycopg2. Core ships
+        # psycopg 3, so a normal server URL must select that packaged driver.
+        for scheme in ("postgresql://", "postgres://"):
+            if value.startswith(scheme):
+                return "postgresql+psycopg://" + value[len(scheme) :]
         if "://" in value or value == "sqlite://":
             return value
         if value == ":memory:":
@@ -713,7 +719,7 @@ class Database:
 
     @contextmanager
     def _bootstrap_serialization(self) -> Iterator[None]:
-        """Serialize schema/bootstrap decisions for one local database.
+        """Serialize schema/bootstrap decisions across constructors.
 
         The adjacent lock file is intentionally durable: the kernel owns the
         actual lock, so a crash releases it without stale-lock cleanup. Keeping
@@ -723,6 +729,30 @@ class Database:
         database_path = self._sqlite_database_path()
         key = str(database_path) if database_path is not None else self.url
         with _bootstrap_thread_lock(key):
+            if self.engine.dialect.name == "postgresql":
+                # Migrations use several committed transactions/connections.
+                # Hold a session advisory lock across the complete bootstrap,
+                # scoped to this database and schema. PostgreSQL releases it
+                # automatically if the constructor process disconnects.
+                with self.engine.connect().execution_options(
+                    isolation_level="AUTOCOMMIT"
+                ) as connection:
+                    connection.execute(
+                        text(
+                            "SELECT pg_advisory_lock("
+                            "hashtext('nebula:bootstrap'), hashtext(current_schema()))"
+                        )
+                    )
+                    try:
+                        yield
+                    finally:
+                        connection.execute(
+                            text(
+                                "SELECT pg_advisory_unlock("
+                                "hashtext('nebula:bootstrap'), hashtext(current_schema()))"
+                            )
+                        )
+                return
             if database_path is None:
                 yield
                 return

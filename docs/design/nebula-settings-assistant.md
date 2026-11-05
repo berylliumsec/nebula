@@ -72,6 +72,17 @@ Settings assistant and the complete destination catalog.
 | Complete a provider goal | A tool-enabled provider agent calls the offered `goal_complete` tool (`goal.complete` in Core) with a summary and concrete evidence after meeting the goal criteria. Core saves the completed goal with the final answer, labels the evidence agent-reported, and starts no further continuation; the goal panel shows the saved state after refresh | Core goal, turn ledger, final message and goal panel | Core unit and real Core browser |
 | Switch a saved harness chat to a provider | Chat → Assistant settings → Runtime → Provider checks the chosen provider and model, then Core changes the same chat's durable binding at an idle boundary. The chat ID, transcript, and paused goal stay in place; the next provider turn is saved there. An active response, running or blocked goal, working subagent, or queued follow-up gives an actionable refusal | Core chat binding and goal; React owns only the unsaved picker choice | Core unit, desktop/mobile browser, real Core and LAN |
 
+PostgreSQL storage migration is a host administration workflow. Butler can explain
+`nebula-core migrate-to-postgresql` and the procedure in
+`docs/postgresql-migration.md`, including source inspection, stopping Core, an
+empty target, verification, and restoring the previous configuration after a
+failed cutover. The command accepts its target through a protected URL file or
+`NEBULA_V3_DATABASE_URL`; Butler does not request database passwords in chat or
+perform the offline copy through a browser Settings action. A successful copy
+preserves source data and configuration until the administrator switches Core.
+The same data directory retains artifacts, workspaces, credentials and separate
+memory, checkpoint and vector stores.
+
 The setting catalog lists every Settings section, Butler's Voice control, and
 the Nebula-wide Butler instruction editor. Dedicated actions handle
 device appearance, provider and harness default models, post-tool preferences,

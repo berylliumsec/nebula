@@ -498,6 +498,11 @@ def serve(
         static_dir=static_dir,
         tool_platform=tool_platform,
         execution_data_root=root,
+        mission_checkpoint_path=(
+            root / "mission-checkpoints.db"
+            if store.database.engine.dialect.name == "postgresql"
+            else None
+        ),
         knowledge_index=knowledge_index,
         bootstrap_workspace=True,
         # The authenticated browser workspace served by a loopback Core owns
@@ -1026,8 +1031,8 @@ def migrate(
 
     root = _data_dir(data_dir)
     _diagnostic_manager(root)
-    database_url = os.getenv("NEBULA_V3_DATABASE_URL") or (
-        f"sqlite:///{(root / 'nebula.db').as_posix()}"
+    database_url = Database._normalize_url(
+        os.getenv("NEBULA_V3_DATABASE_URL") or root / "nebula.db"
     )
     config = Config()
     config.set_main_option(
@@ -1065,6 +1070,161 @@ def migrate(
     )
     safe_url = make_url(database_url).render_as_string(hide_password=True)
     _print({"status": "ok", "revision": "head", "database": safe_url})
+
+
+@app.command("migrate-to-postgresql")
+def migrate_to_postgresql(
+    data_dir: Annotated[
+        Path | None, typer.Option(help="Existing Core data directory.")
+    ] = None,
+    source: Annotated[
+        Path | None, typer.Option(help="SQLite source; defaults to DATA_DIR/nebula.db.")
+    ] = None,
+    target_url_file: Annotated[
+        Path | None,
+        typer.Option(
+            help="Read the PostgreSQL URL from this private file instead of NEBULA_V3_DATABASE_URL."
+        ),
+    ] = None,
+    inspect_only: Annotated[
+        bool,
+        typer.Option(
+            "--inspect",
+            help="Inspect the SQLite source without copying or configuring a target.",
+        ),
+    ] = False,
+    confirm_core_stopped: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-core-stopped",
+            help="Acknowledge that every Core using this SQLite source is stopped.",
+        ),
+    ] = False,
+    batch_size: Annotated[
+        int,
+        typer.Option(min=1, max=10_000, help="Maximum rows held by each copy batch."),
+    ] = 1_000,
+    receipt: Annotated[
+        Path | None,
+        typer.Option(help="Save a private verification receipt to a new file."),
+    ] = None,
+) -> None:
+    """Copy an existing SQLite Core database to an empty PostgreSQL database.
+
+    Stop Core and back up its complete data directory first. The source and Core
+    configuration are preserved. Only after verification, set
+    NEBULA_V3_DATABASE_URL for the Core service and restart with the same data
+    directory. See docs/postgresql-migration.md for setup and recovery.
+    """
+
+    from .database_migration import (
+        MigrationError,
+        inspect_sqlite_source,
+        migrate_sqlite_to_postgresql,
+    )
+
+    root = (
+        (
+            data_dir
+            or Path(
+                os.getenv("NEBULA_V3_DATA_DIR", Path.home() / ".local/share/nebula/v3")
+            )
+        )
+        .expanduser()
+        .resolve()
+    )
+    source_path = (source or root / "nebula.db").expanduser().resolve()
+    target_url = ""
+    try:
+        if inspect_only:
+            _print(inspect_sqlite_source(source_path))
+            return
+        if not confirm_core_stopped:
+            raise MigrationError(
+                "Stop every Core using the source, back up the complete data directory, "
+                "then repeat with --confirm-core-stopped."
+            )
+        if receipt is not None:
+            receipt = receipt.expanduser().absolute()
+            if receipt.exists() or receipt.is_symlink():
+                raise MigrationError(
+                    "Receipt already exists; choose a new --receipt file."
+                )
+            if not receipt.parent.is_dir():
+                raise MigrationError(
+                    "Receipt directory does not exist; create it first."
+                )
+        target_url = (
+            target_url_file.expanduser().read_text(encoding="utf-8").strip()
+            if target_url_file is not None
+            else os.getenv("NEBULA_V3_DATABASE_URL", "").strip()
+        )
+        if not target_url:
+            raise MigrationError(
+                "Set NEBULA_V3_DATABASE_URL or pass --target-url-file for an empty "
+                "PostgreSQL database."
+            )
+
+        def progress(event: dict[str, Any]) -> None:
+            typer.echo(json.dumps(event, sort_keys=True), err=True)
+
+        report = migrate_sqlite_to_postgresql(
+            source_path,
+            target_url,
+            batch_size=batch_size,
+            confirm_core_stopped=True,
+            progress=progress,
+        ).as_dict()
+    except MigrationError as exc:
+        # The migration boundary supplies operator-safe errors; never print a
+        # raw driver exception or a connection URL containing credentials.
+        message = str(exc)
+        if target_url:
+            message = message.replace(target_url, "[redacted connection URL]")
+            try:
+                password = make_url(target_url).password
+            except Exception:  # diagnostic-expected: malformed URLs receive the same credential-free failure.
+                password = None
+            if password:
+                message = message.replace(password, "[redacted]")
+        typer.echo(f"PostgreSQL migration failed: {message[:1_000]}", err=True)
+        raise typer.Exit(code=1) from None
+    except OSError:
+        typer.echo(
+            "PostgreSQL migration failed: a source, target URL, or receipt file could "
+            "not be read. Check its path and permissions.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except Exception:
+        typer.echo(
+            "PostgreSQL migration failed. Verify the source schema, PostgreSQL "
+            "connectivity, and an empty target before retrying. Core configuration "
+            "has not been changed.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    _print(report)
+    if receipt is not None:
+        try:
+            descriptor = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, sort_keys=True, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            typer.echo(
+                "The database copy was verified, but its receipt could not be saved. "
+                "Preserve the JSON result above before configuring Core.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+    typer.echo(
+        "Copy verified. Configure NEBULA_V3_DATABASE_URL for Core, then restart "
+        "with the same data directory and verify `nebula-core doctor --json`.",
+        err=True,
+    )
 
 
 @maintenance_app.command("prune-events")
