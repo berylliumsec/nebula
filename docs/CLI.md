@@ -25,11 +25,19 @@ Pair as described below, then run `nebula-chat` or
 
 ## Interactive Assistant
 
-The shell checks Core terminal protocol 1 and offers searchable project and
-conversation menus, including **New conversation** and **Butler**. It remembers
+The shell checks Core terminal protocol 1. On an interactive TTY it opens a
+full-screen view with a project/chat rail, transcript, live activity, and
+composer. F2 browses projects, F3 browses conversations, F4 opens a searchable
+command menu, F5 shows detailed activity, and F8 opens pending approvals. Tab
+focuses the transcript for scrolling; Ctrl-C stops a supported selected turn.
+The view updates as Core accepts, queues, and works on a turn, before the first
+answer text arrives. Progress and requests for action stay visible during input.
+
+Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
-Use a number or type a name/search. `/next` and `/back` browse numbered pages;
+Use arrow keys and search in the full-screen menus. With `NEBULA_CHAT_PLAIN=1`
+or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 `more` loads another catalog page.
 
 | Command | Workflow |
@@ -72,8 +80,9 @@ permissions, scope and data-sharing consent. Browser-owned actions, Voice,
 editors, notebooks and embedded terminals still use their existing interfaces.
 
 `NO_COLOR`, terminal resizing and plain numbered menus are supported. Set
-`NEBULA_CHAT_PLAIN=1` for simple terminal input. `/cancel` or Ctrl-C closes a menu
-without applying its pending choice. Noninteractive prompt execution is deferred.
+`NEBULA_CHAT_PLAIN=1` for a scrolling prompt. Ctrl-G or Ctrl-C closes a full-screen
+menu; `/cancel` or Ctrl-C closes a plain menu. Noninteractive prompt execution is
+deferred.
 
 ## Start headless Core
 

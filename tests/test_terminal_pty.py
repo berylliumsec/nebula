@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import fcntl
 import os
 import pty
@@ -13,9 +14,11 @@ import termios
 import time
 from contextlib import contextmanager
 
+import pyte
+
 
 @contextmanager
-def terminal(code):
+def terminal(code, *, ready=b"You:"):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
     process = subprocess.Popen(
@@ -28,10 +31,16 @@ def terminal(code):
     )
     os.close(slave)
     output = bytearray()
+    screen = pyte.Screen(80, 24)
+    screen_stream = pyte.Stream(screen)
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
-    def read_until(marker, timeout=8):
+    def read_until(marker, timeout=8, *, rendered=False):
         deadline = time.monotonic() + timeout
-        while marker not in output and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            current = "\n".join(screen.display) if rendered else bytes(output)
+            if marker in current:
+                return bytes(output)
             ready, _, _ = select.select([master], [], [], 0.05)
             if ready:
                 try:
@@ -41,11 +50,14 @@ def terminal(code):
                 if not chunk:
                     break
                 output.extend(chunk)
-        assert marker in output, output.decode(errors="replace")
+                screen_stream.feed(decoder.decode(chunk))
+        assert marker in ("\n".join(screen.display) if rendered else bytes(output)), (
+            output.decode(errors="replace")
+        )
         return bytes(output)
 
     try:
-        read_until(b"You:")
+        read_until(ready)
         yield process, master, output, read_until
     finally:
         if process.poll() is None:
@@ -104,5 +116,87 @@ asyncio.run(main())
     with terminal(code) as (process, master, output, read):
         os.write(master, b"unsent\x03")
         read(b"CANCELLED_MENU")
+        process.wait(timeout=3)
+        assert process.returncode == 0
+
+
+TUI_CODE = """
+import asyncio,json
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_view({'id':'project','name':'Project'},None)
+    async def progress():
+        await asyncio.sleep(0.2)
+        ui.activity('Searching Core')
+        ui.delta('Partial answer')
+    asyncio.create_task(progress())
+    value=await ui.ask('You',main=True)
+    await ui.close()
+    print('VALUE:'+json.dumps(value),flush=True)
+asyncio.run(main())
+"""
+
+
+def test_full_screen_progress_paste_and_narrow_resize():
+    with terminal(TUI_CODE, ready=b"Message or /command") as (
+        process,
+        master,
+        output,
+        read,
+    ):
+        read("Searching Core", rendered=True)
+        read("Partial answer", rendered=True)
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 42, 0, 0))
+        os.write(master, b"\x1b[200~first line\nsecond line\x1b[201~")
+        read(b"second line")
+        assert b"VALUE:" not in output
+        os.write(master, b"\r")
+        read(b'VALUE:"first line\\nsecond line"')
+        process.wait(timeout=3)
+        assert process.returncode == 0
+
+
+def test_full_screen_searchable_keyboard_menu():
+    code = """
+import asyncio
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    item=await ui.choose('Project',[{'id':'a','name':'Alpha'},{'id':'b','name':'Beta'}])
+    await ui.close()
+    print('PICK:'+item['id'],flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Search:") as (process, master, _output, read):
+        os.write(master, b"Beta\r")
+        read(b"PICK:b")
+        process.wait(timeout=3)
+        assert process.returncode == 0
+
+
+def test_full_screen_command_shortcut_preserves_unsent_draft():
+    code = """
+import asyncio
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    command=await ui.ask('You',main=True)
+    draft=ui.take_preserved_draft()
+    await ui.close()
+    print('SHORTCUT:'+command+'|'+draft,flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command") as (
+        process,
+        master,
+        _output,
+        read,
+    ):
+        os.write(master, b"unsent draft\x1bOS")
+        read(b"SHORTCUT:/commands|unsent draft")
         process.wait(timeout=3)
         assert process.returncode == 0

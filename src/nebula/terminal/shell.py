@@ -13,7 +13,8 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from .state import Cursor, Draft, View, main_chat, visible_message
 from .transport import ApiError, AsyncApi, ClientError, Settings, key, terminal_text
-from .ui import CancelledInput, InterruptedPrompt, TerminalUI
+from .tui import TuiUI
+from .ui import COMMANDS, CancelledInput, InterruptedPrompt, TerminalUI
 
 
 def named(items: list[dict[str, Any]], field: str = "name") -> list[dict[str, Any]]:
@@ -41,6 +42,8 @@ class Shell:
         self.profiles: dict[str, dict[str, Any]] = {}
         self.seen_attention: set[str] = set()
         self.running = True
+        self._last_progress = ""
+        self._known_busy = False
 
     @property
     def api(self) -> AsyncApi:
@@ -97,6 +100,10 @@ class Shell:
         self.view = None
         self.profiles.clear()
         self.seen_attention.clear()
+        self._last_progress = ""
+        self._known_busy = False
+        if isinstance(self.ui, TuiUI):
+            self.ui.open_core(self.settings.core or "")
         self.ui.say(f"Connected to {self.settings.core}")
         self.attention_task = asyncio.create_task(self.attention_loop())
 
@@ -236,6 +243,10 @@ class Shell:
         view.session = session
         self.views[identity] = view
         self.view = view
+        self._last_progress = ""
+        self._known_busy = False
+        if isinstance(self.ui, TuiUI):
+            self.ui.open_view(project, session)
         if session:
             await self.configuration()
             view.environments = (session.get("metadata") or {}).get(
@@ -249,6 +260,28 @@ class Shell:
             self.ui.say(f"{project['name']} — New conversation")
         self.remember()
         self.update_toolbar()
+        if isinstance(self.ui, TuiUI):
+            await self.refresh_navigation()
+
+    async def refresh_navigation(self) -> None:
+        """Keep the visible rail useful without making chat depend on its catalog."""
+        if not isinstance(self.ui, TuiUI) or self.view is None:
+            return
+        try:
+            projects = await self.api.page("engagements", offset=0)
+            chats = await self.api.page(
+                "chat-sessions",
+                offset=0,
+                engagement_id=self.view.project_id,
+                recent_first="true",
+            )
+            self.ui.set_navigation(
+                self.settings.core or "",
+                projects,
+                [row for row in chats if main_chat(row)],
+            )
+        except (ClientError, httpx.HTTPError):
+            self.ui.activity("Navigation list unavailable; F2/F3 retries")
 
     async def runtimes(self) -> list[dict[str, Any]]:
         view = self.current()
@@ -378,15 +411,18 @@ class Shell:
         )
         if rows:
             view.history_before = rows[0]["id"]
-        for item in rows:
-            if visible_message(item):
-                self.ui.say("You:" if item["role"] == "user" else "Assistant:")
-                self.ui.markdown(item.get("content", ""))
-                for block in item.get("content_blocks") or []:
-                    if block.get("type") == "image":
-                        self.ui.say(
-                            f"[Image: {block.get('alt') or block.get('artifact_id') or 'attachment'}]"
-                        )
+        if isinstance(self.ui, TuiUI):
+            self.ui.show_history(rows, older=more)
+        else:
+            for item in rows:
+                if visible_message(item):
+                    self.ui.say("You:" if item["role"] == "user" else "Assistant:")
+                    self.ui.markdown(item.get("content", ""))
+                    for block in item.get("content_blocks") or []:
+                        if block.get("type") == "image":
+                            self.ui.say(
+                                f"[Image: {block.get('alt') or block.get('artifact_id') or 'attachment'}]"
+                            )
         if len(rows) == 50:
             self.ui.say("/history more reads earlier messages.")
         return rows
@@ -406,6 +442,13 @@ class Shell:
 
     async def status(self) -> dict[str, Any]:
         state = await self.state()
+        self._known_busy = bool(state.get("busy"))
+        if not state.get("pending") and hasattr(self.ui, "clear_notice"):
+            self.ui.clear_notice()
+        if self._known_busy:
+            self.update_toolbar(str(state.get("detail") or "Working"))
+        else:
+            self.update_toolbar("Ready")
         self.ui.say(state.get("detail") or state.get("execution", "Ready"))
         for pending in state.get("pending", []):
             self.ui.say(
@@ -416,6 +459,14 @@ class Shell:
     def update_toolbar(self, detail: str = "") -> None:
         if self.view:
             view = self.view
+            if detail:
+                self._last_progress = terminal_text(detail)[:160]
+                if hasattr(self.ui, "activity"):
+                    self.ui.activity(self._last_progress)
+            elif self._known_busy or (
+                self.stream_task is not None and not self.stream_task.done()
+            ):
+                detail = self._last_progress or "Working"
             self.ui.status = " · ".join(
                 filter(
                     None,
@@ -533,6 +584,7 @@ class Shell:
             else None
         )
         if active:
+            self._known_busy = True
             if view.draft.images:
                 raise ClientError(
                     "Images cannot be queued during a response. Keep the attachment and send after it finishes."
@@ -561,12 +613,17 @@ class Shell:
                     "Queue save could not be confirmed. Read /queue before retrying."
                 )
             view.draft = Draft()
+            if hasattr(self.ui, "submission"):
+                self.ui.submission(text, queued=True)
             self.ui.say("Saved in Core's follow-up queue.")
             return
         await self.detach()
         view.cursor = Cursor()
         view.submitting = True
+        self._known_busy = True
         view.pending_draft, view.draft = view.draft, Draft()
+        if hasattr(self.ui, "submission"):
+            self.ui.submission(text)
         self.stream_task = asyncio.create_task(
             self.stream(view, "POST", "chat/completions", body)
         )
@@ -610,6 +667,8 @@ class Shell:
                         view.uncertain = False
                         if submission:
                             view.pending_draft = None
+                            if isinstance(self.ui, TuiUI):
+                                self.ui.mark_submission("accepted")
                         view.cursor.turn_id = (
                             payload.get("turn_id") or view.cursor.turn_id
                         )
@@ -631,18 +690,27 @@ class Shell:
                                     )
                                 },
                             }
+                            if isinstance(self.ui, TuiUI):
+                                self.ui.set_identity(view.project, view.session)
+                                asyncio.create_task(self.refresh_navigation())
                         if self.view is view:
                             self.remember()
                     if not view.cursor.accept(payload):
                         continue
                     if self.view is not view:
                         return
-                    if event in {"delta", "message_delta"}:
+                    assert view is not None
+                    if event == "started":
+                        self.update_toolbar("Core accepted turn")
+                    elif event in {"delta", "message_delta"}:
                         delta = terminal_text(payload.get("delta") or "")
                         view.cursor.text = (view.cursor.text + delta)[-1_000_000:]
                         self.ui.delta(delta)
                     elif event == "done":
                         finished = True
+                        self._known_busy = False
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.finish_turn()
                         final = (payload.get("message") or {}).get("content", "")
                         if final and final != view.cursor.text:
                             self.ui.say(
@@ -655,10 +723,16 @@ class Shell:
                         break
                     elif event == "cancelled":
                         finished = True
+                        self._known_busy = False
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.finish_turn()
                         self.ui.say("\nResponse stopped.")
                         break
                     elif event == "error":
                         finished = True
+                        self._known_busy = False
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.finish_turn()
                         raise ClientError(
                             payload.get("operator_detail")
                             or payload.get("detail")
@@ -686,10 +760,19 @@ class Shell:
                         )
                         self.update_toolbar("Waiting for input")
                         return
-                    elif event in {"callback_waiting", "waiting_callback"}:
+                    elif event in {
+                        "callback_required",
+                        "callback_waiting",
+                        "waiting_callback",
+                    }:
                         self.ui.say(
-                            "Core is waiting for a tool callback. Work continues on Core; /status reads its progress."
+                            str(
+                                payload.get("summary")
+                                or "Core is waiting for a tool callback."
+                            )
+                            + " Work continues on Core; /status reads its progress."
                         )
+                        self.update_toolbar("Waiting for tool callback")
                         return
                     elif event in {
                         "tool_started",
@@ -699,13 +782,20 @@ class Shell:
                         "planning",
                         "progress",
                     }:
-                        self.update_toolbar(
-                            str(
-                                payload.get("summary")
-                                or payload.get("message")
-                                or event.replace("_", " ")
-                            )[:160]
+                        detail = (
+                            payload.get("summary")
+                            or payload.get("detail")
+                            or payload.get("display_name")
+                            or payload.get("message")
+                            or event.replace("_", " ")
                         )
+                        if event == "queued" and payload.get("queue_position"):
+                            detail = f"Queued at position {payload['queue_position']}"
+                        elif event == "tool_started":
+                            detail = "Tool: " + str(detail)
+                        elif event == "tool_completed":
+                            detail = "Tool finished: " + str(detail)
+                        self.update_toolbar(str(detail)[:160])
                 if finished:
                     view.submitting = False
                     self.update_toolbar("Ready")
@@ -715,6 +805,8 @@ class Shell:
                 if submission and not accepted:
                     view.uncertain = True
                     self.restore_draft(view)
+                    if isinstance(self.ui, TuiUI):
+                        self.ui.mark_submission("uncertain")
                 view.submitting = False
                 raise
             except httpx.HTTPError:
@@ -724,6 +816,7 @@ class Shell:
                     and retries < 3
                     and self.view is view
                 ):
+                    assert view is not None
                     retries += 1
                     method, path, body = (
                         "GET",
@@ -761,7 +854,10 @@ class Shell:
                 view.submitting = False
                 if not accepted:
                     self.restore_draft(view)
+                    if isinstance(self.ui, TuiUI):
+                        self.ui.mark_submission("uncertain")
                 if self.view is view:
+                    self.update_toolbar("Connection lost")
                     self.ui.say(
                         "\nConnection lost. Nothing was resent. Review /status and /history, then /follow; use /chats if no conversation identity was confirmed."
                     )
@@ -769,8 +865,12 @@ class Shell:
             except ClientError as exc:
                 view.submitting = False
                 if not accepted:
+                    self._known_busy = False
                     self.restore_draft(view)
+                    if isinstance(self.ui, TuiUI):
+                        self.ui.mark_submission("failed")
                 if self.view is view:
+                    self.update_toolbar("Needs review" if accepted else "Failed")
                     self.ui.say("\n" + str(exc))
                 return
 
@@ -817,6 +917,8 @@ class Shell:
         )
         await self.detach()
         view.submitting = False
+        if isinstance(self.ui, TuiUI):
+            self.ui.finish_turn()
         self.ui.say(f"Turn {result['status']}.")
         await self.status()
 
@@ -885,6 +987,16 @@ class Shell:
             self.running = False
         elif name == "help":
             self.ui.help()
+        elif name == "commands":
+            choice = await self.ui.choose(
+                "Command",
+                [
+                    {"id": key, "name": f"/{key} — {description}"}
+                    for key, description in COMMANDS.items()
+                    if key != "commands"
+                ],
+            )
+            await self.command("/" + choice["id"])
         elif name == "draft":
             view = self.current()
             if view.pending_draft is None:
@@ -968,6 +1080,10 @@ class Shell:
                 try:
                     view = self.current()
                     text = await self.ui.ask("You", default=view.draft.text, main=True)
+                    if isinstance(self.ui, TuiUI):
+                        preserved = self.ui.take_preserved_draft()
+                        if preserved:
+                            view.draft.text = preserved
                     if not text.strip():
                         continue
                     if text.startswith("/"):
@@ -1007,5 +1123,18 @@ class Shell:
 def run_shell(
     settings: Settings, *, project: str | None = None, chat: str | None = None
 ) -> None:
-    with patch_stdout():
-        asyncio.run(Shell(settings).run(project, chat))
+    ui = TerminalUI()
+    if ui.plain:
+        with patch_stdout():
+            asyncio.run(Shell(settings, ui=ui).run(project, chat))
+        return
+
+    async def run_tui() -> None:
+        screen = TuiUI()
+        await screen.start()
+        try:
+            await Shell(settings, ui=screen).run(project, chat)
+        finally:
+            await screen.close()
+
+    asyncio.run(run_tui())

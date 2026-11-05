@@ -102,7 +102,7 @@ def test_clean_install_imports_no_core_and_exposes_shell(built_client, tmp_path)
         timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    code = "import sys,json; import nebula.chat_cli, nebula.terminal.shell; assert not any(m in sys.modules for m in ('nebula.v3','sqlalchemy','chromadb','playwright','PySide6')); import importlib.metadata as m; print(json.dumps(sorted(d.metadata['Name'] for d in m.distributions())))"
+    code = "import sys,json; import nebula.chat_cli, nebula.terminal.shell, nebula.terminal.tui; assert not any(m in sys.modules for m in ('nebula.v3','sqlalchemy','chromadb','playwright','PySide6')); import importlib.metadata as m; print(json.dumps(sorted(d.metadata['Name'] for d in m.distributions())))"
     result = subprocess.run(
         [str(python), "-I", "-c", code], text=True, capture_output=True, timeout=10
     )

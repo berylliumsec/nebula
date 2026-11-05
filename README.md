@@ -71,7 +71,7 @@ npm --prefix ui run dev:desktop
 
 ## Documentation
 
-For a lightweight network client with direct agent chats, skills, goals and
-Assistant controls, see [Headless Core and paired terminal Assistant](docs/CLI.md).
+For a lightweight full-screen terminal client with live agent progress, direct
+chats, skills, goals and Assistant controls, see [Headless Core and paired terminal Assistant](docs/CLI.md).
 
 Start with the [Nebula 3 guide](docs/NEBULA3.md), [system architecture](docs/ARCHITECTURE.md), or [usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md). The [documentation index](docs/README.md) groups setup, integrations, troubleshooting, technical reference, and release information.

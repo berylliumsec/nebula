@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import ipaddress
 import json
 import os
@@ -19,6 +20,7 @@ from uuid import uuid4
 import httpx
 import pytest
 import uvicorn
+import pyte
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -174,10 +176,17 @@ class TerminalProcess:
             *args,
         ]
         self.master = None
+        self.screen = pyte.Screen(80, 24) if tty else None
+        self.screen_stream = pyte.Stream(self.screen) if self.screen else None
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace") if tty else None
         if tty:
+            import fcntl
             import pty
+            import struct
+            import termios
 
             master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             self.master = master
             self.process = subprocess.Popen(
                 command,
@@ -214,12 +223,17 @@ class TerminalProcess:
             if found >= 0:
                 self.position = found + len(target)
                 return
+            if self.screen is not None and marker in "\n".join(self.screen.display):
+                self.position = len(self.output)
+                return
             ready, _, _ = select.select([self.output_fd], [], [], 0.05)
             if ready:
                 data = os.read(self.output_fd, 65536)
                 if not data:
                     break
                 self.output.extend(data)
+                if self.screen_stream is not None and self.decoder is not None:
+                    self.screen_stream.feed(self.decoder.decode(data))
         pytest.fail(
             f"Terminal did not show {marker!r}:\n{self.output.decode(errors='replace')[-6000:]}"
         )
@@ -639,6 +653,48 @@ def test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect(lan_
                     "reconnect without replay",
                     "harness input and follow",
                 ],
+                "result": "passed",
+            }
+        )
+    )
+
+
+def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
+    data = lan_core
+    terminal = data["start"]("shell", "--project", "Terminal Project", tty=True)
+    terminal.expect("Message or /command")
+    terminal.expect("New conversation")
+    terminal.send("New conversation", expect="/help for commands")
+    terminal.send("Answer a synthetic TUI question", expect="You · sending")
+    terminal.expect("Core accepted turn")
+    terminal.expect("Synthetic provider answer.")
+    terminal.expect("Response complete.")
+    sessions = (
+        data["admin"]
+        .get("chat-sessions", params={"engagement_id": "terminal-project"})
+        .json()
+    )
+    saved = next(
+        row
+        for row in sessions
+        if row["backend"] == "provider" and not row["metadata"].get("control_assistant")
+    )
+    messages = data["admin"].get(f"chat/sessions/{saved['id']}/messages").json()
+    assert [
+        row["role"] for row in messages if row["role"] in {"user", "assistant"}
+    ] == [
+        "user",
+        "assistant",
+    ]
+    assert messages[-1]["content"] == "Synthetic provider answer."
+    terminal.close()
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and real authenticated TLS LAN Core",
+                "fixture": "inert provider, synthetic project and credential",
+                "checks": ["visible acceptance", "streamed answer", "saved readback"],
                 "result": "passed",
             }
         )

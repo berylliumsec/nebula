@@ -117,6 +117,43 @@ def frame(event, **data):
     return f"event: {event}\ndata: {json.dumps({'type': event, **data})}\n\n".encode()
 
 
+def test_stream_reports_acceptance_and_tool_progress_before_answer(tmp_path):
+    class FeedbackUI(UI):
+        def activity(self, value):
+            self.output.append("Activity: " + value)
+
+        def submission(self, value, **kwargs):
+            self.output.append("Sending to Core")
+
+    frames = b"".join(
+        [
+            frame("started", turn_id="turn-a"),
+            frame("tool_started", turn_id="turn-a", display_name="Search index"),
+            frame("tool_completed", turn_id="turn-a", display_name="Search index"),
+            frame("delta", turn_id="turn-a", delta="Found it."),
+            frame("done", turn_id="turn-a", message={"content": "Found it."}),
+        ]
+    )
+
+    def handler(_request):
+        return httpx.Response(200, content=frames)
+
+    async def run():
+        ui = FeedbackUI()
+        shell = make_shell(tmp_path, handler, ui=ui)
+        await shell.stream(shell.current(), "GET", "chat/turns/turn-a/events")
+        assert "Activity: Core accepted turn" in ui.output
+        assert "Activity: Tool: Search index" in ui.output
+        assert "Activity: Tool finished: Search index" in ui.output
+        assert "Found it." in ui.output
+        assert ui.output.index("Activity: Tool: Search index") < ui.output.index(
+            "Found it."
+        )
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
 def test_provider_body_uses_saved_settings_and_excludes_harness_fields(tmp_path):
     def handler(request):
         assert request.url.path.endswith("assistant-config")

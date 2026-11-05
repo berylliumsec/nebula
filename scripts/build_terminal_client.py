@@ -21,6 +21,7 @@ CLIENT_FILES = (
     "terminal/transport.py",
     "terminal/state.py",
     "terminal/ui.py",
+    "terminal/tui.py",
     "terminal/shell.py",
     "terminal/settings.py",
     "terminal/workflows.py",

@@ -108,6 +108,13 @@ def test_catalog_covers_settings_destinations_without_secrets():
     assert "bulk chat actions" in chat_destination["aliases"]
     assert "Select conversations" in chat_destination["guide"]
     assert "Delete permanently" in chat_destination["guide"]
+    settings_destination = next(
+        item for item in result["destinations"] if item["id"] == "settings"
+    )
+    assert (
+        "full-screen terminal Assistant with live progress"
+        in settings_destination["guide"]
+    )
     assert (
         next(item for item in result["settings"] if item["id"] == "storage")["url"]
         == "/settings#storage-integration-settings"

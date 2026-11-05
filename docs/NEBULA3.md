@@ -82,8 +82,9 @@ administration.
 
 `nebula-core headless` starts Core without a GUI, browser or frontend build.
 `nebula-chat` (also `nebula-core chat`) pairs a terminal device with an existing
-Core. Run `nebula-chat` or `nebula-chat shell` for direct agent conversations,
-skills, goals, settings and pending actions; legacy `chat` opens Butler. The
+Core. Run `nebula-chat` or `nebula-chat shell` for a full-screen TUI with live
+progress, direct agent conversations, skills, goals, settings and pending actions;
+legacy `chat` opens Butler. The
 separate `nebula-client` Python package installs without Core dependencies. See the
 [headless and terminal guide](CLI.md) for HTTPS, host invitations, project
 selection, streaming, reconnect and revocation.

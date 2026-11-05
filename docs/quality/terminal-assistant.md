@@ -14,14 +14,16 @@ export paths refer to the client.
 | Discover/pair | A minimal client installs independently and uses normal TLS device pairing | Wheel metadata, Core pairing | Package and CLI tests, TLS LAN |
 | Select/create | Searchable project and chat menus include New conversation and Butler; first send saves a main conversation | Core | CLI and real Core |
 | Use | Models, skills, settings, attachments and goals are discoverable by name; unsupported controls explain why | Core catalogs and capabilities | Workflow contracts and real Core |
-| Stream/interrupt | Input remains available, event identities stay separate, and cancellation targets the selected turn | Core turn and stream | Terminal process and LAN tests |
+| Stream/interrupt | The full-screen transcript and activity show acceptance, work and answers before and during composition; event identities stay separate, and cancellation targets the selected turn | Core turn and stream; terminal presentation | Terminal process and LAN tests |
+| Resize/navigation | Searchable project/chat/command menus remain usable at narrow terminal widths; switching clears the visible transcript while Core keeps running | Core chat identity and terminal layout | PTY resize, keyboard and real Core |
 | Background/switch | Switching or exiting detaches the viewer; late output cannot enter another conversation | Core and terminal view identity | Async and process tests |
 | Reconnect | Saved history and settings reload; following never resends uncertain work | Core, stream cursor | Disconnect and real Core tests |
 | Mutate/retry | Revision conflicts require fresh review; success is read back; lost responses do not replay writes | Core | Workflow and LAN tests |
 | Delete/revoke | Explicit deletion and revocation clear stale selection and credentials | Core | CLI and real Core |
 
 Browser layouts, touch, Voice, local execution, editor, notebook and embedded
-browser controls are inapplicable. Acceptance uses the actual terminal entry
+browser controls are inapplicable. The interactive TTY uses a full-screen TUI;
+redirected input and `NEBULA_CHAT_PLAIN=1` use the scrolling prompt. Acceptance uses the actual terminal entry
 point over authenticated, non-loopback TLS with synthetic data and inert
 provider/harness fixtures. The package must exclude Core, database, model,
 browser and GUI dependencies. Linux and macOS package/terminal evidence is
@@ -81,3 +83,32 @@ regression adds two cases. Current-head CI and artifact evidence are recorded
 in PR #925 and must pass before merge. Release preparation stages the client
 distributions and finalization verifies their checksums. No release or deployment was triggered
 for this implementation.
+
+## Full-screen TUI follow-up
+
+An interactive TTY now opens a persistent project/chat rail, transcript, activity
+strip, and composer. Searchable overlays and F2/F3/F4 navigation keep the Core
+catalog available while answers stream. The plain prompt remains available for
+redirected input or `NEBULA_CHAT_PLAIN=1`. Core still owns transcripts, turns,
+goals, approvals, and execution; the TUI owns only visible state and unsent text.
+
+The reviewed follow-up selection collects 57 Python cases and one settings
+catalog case. On Linux/Python 3.12, 47 focused TUI, PTY and stream contracts,
+three clean client package checks, and the catalog case passed. A test-only VT
+screen emulator verifies visible progress after prompt_toolkit redraws unchanged
+cells. Ruff and focused client mypy passed.
+
+The final disposable authenticated TLS LAN run passed all three selected journeys:
+
+| Origin | Result |
+| --- | --- |
+| `https://172.26.91.245:52183` | Plain fallback: direct chats, skills, attachments, settings conflict, goal snapshots, reconnect and harness input |
+| `https://172.26.91.245:56487` | Full-screen TUI: visible turn acceptance, streamed answer and saved Core transcript readback |
+| `https://172.26.91.245:49265` | Durable queue, detach, reconnect, exact approval and PTY Ctrl-C cancellation |
+
+All fixtures used inert runtimes, synthetic data and normal pairing. Teardown
+stopped every disposable Core. Browser/device layout checks remain inapplicable
+to this terminal surface. Local product-help generation is blocked by the
+environment proxy's HTTP 403 to the Chroma model archive; hosted CI must pass
+the current source digest, retrieval and Chroma synchronization checks before
+merge. The Linux/macOS Python 3.11–3.13 client matrix must also pass.

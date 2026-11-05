@@ -58,6 +58,7 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
             "nebula-client",
         ),
         ("Choose skills and goals from the terminal Assistant shell", "shell"),
+        ("Show live progress in a full-screen terminal agent chat", "F4"),
     ):
         matches = search_product_knowledge(question)
         assert any(expected in str(item["text"]) for item in matches), question
