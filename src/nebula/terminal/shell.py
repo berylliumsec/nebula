@@ -12,8 +12,16 @@ import httpx
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from .state import Cursor, Draft, View, main_chat, visible_message
-from .transport import ApiError, AsyncApi, ClientError, Settings, key, terminal_text
-from .tui import TuiUI
+from .transport import (
+    ApiError,
+    AsyncApi,
+    ClientError,
+    Settings,
+    check_response,
+    key,
+    terminal_text,
+)
+from .tui import TuiUI, activity_label
 from .ui import COMMANDS, CancelledInput, InterruptedPrompt, TerminalUI
 
 
@@ -22,6 +30,17 @@ def named(items: list[dict[str, Any]], field: str = "name") -> list[dict[str, An
         {**item, "name": str(item.get(field) or item.get("id") or "Unnamed")}
         for item in items
     ]
+
+
+def conversation_states(rows: Any) -> dict[str, str]:
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict)
+        or not isinstance(row.get("session_id"), str)
+        or row.get("state") not in {"working", "waiting", "idle"}
+        for row in rows
+    ):
+        raise ClientError("Core returned unsupported conversation activity.")
+    return {row["session_id"]: row["state"] for row in rows}
 
 
 class Shell:
@@ -44,6 +63,11 @@ class Shell:
         self.running = True
         self._last_progress = ""
         self._known_busy = False
+        self._activity_project_id: str | None = None
+        self._activity_etag: str | None = None
+        self._conversation_states: dict[str, str] | None = None
+        self._activity_unavailable = False
+        self._activity_lock = asyncio.Lock()
         self._pending_kinds: set[str] = set()
 
     @property
@@ -187,6 +211,10 @@ class Shell:
         self.seen_attention.clear()
         self._last_progress = ""
         self._known_busy = False
+        self._activity_project_id = None
+        self._activity_etag = None
+        self._conversation_states = None
+        self._activity_unavailable = False
         self._pending_kinds.clear()
         if isinstance(self.ui, TuiUI):
             self.ui.open_core(self.settings.core or "")
@@ -203,6 +231,7 @@ class Shell:
         extras: list[dict[str, Any]] | None = None,
         field: str = "name",
         predicate: Any = None,
+        label: Any = None,
     ) -> dict[str, Any]:
         offset = 0
         complete = False
@@ -217,6 +246,8 @@ class Shell:
                     [item for item in batch if predicate is None or predicate(item)],
                     field,
                 )
+                if label is not None:
+                    matches = [{**item, "label": label(item)} for item in matches]
                 if matches or complete:
                     return matches
 
@@ -281,6 +312,18 @@ class Shell:
         self, selected: str | None = None, *, project: dict[str, Any] | None = None
     ) -> None:
         project = project or self.current().project
+        states: dict[str, str] | None = None
+        if selected is None and isinstance(self.ui, TuiUI):
+            try:
+                states = conversation_states(
+                    await self.api.request(
+                        "GET",
+                        "chat/session-activity",
+                        params={"engagement_id": project["id"]},
+                    )
+                )
+            except (ClientError, httpx.HTTPError, ValueError):
+                pass
         item = await self.collection(
             "Conversation",
             "chat-sessions",
@@ -288,6 +331,13 @@ class Shell:
             selected=selected,
             field="title",
             predicate=main_chat,
+            label=(
+                lambda row: (
+                    f"{activity_label((states or {}).get(row['id'])):>4}  {row['name']}"
+                )
+            )
+            if isinstance(self.ui, TuiUI)
+            else None,
             extras=[
                 {"id": "__new", "name": "New conversation"},
                 {"id": "__butler", "name": "Butler"},
@@ -370,10 +420,8 @@ class Shell:
                 visible_projects = [view.project, *projects]
             visible_chats = [row for row in chats if main_chat(row)]
             selected = view.session
-            if (
-                selected is not None
-                and (selected.get("metadata") or {}).get("control_assistant")
-                and not any(row.get("id") == selected["id"] for row in visible_chats)
+            if selected is not None and not any(
+                row.get("id") == selected["id"] for row in visible_chats
             ):
                 visible_chats.insert(0, selected)
             self.ui.set_navigation(
@@ -383,6 +431,73 @@ class Shell:
             )
         except (ClientError, httpx.HTTPError):
             self.ui.activity("Navigation list unavailable; F2/F3 retries")
+        await self.refresh_conversation_activity()
+
+    async def refresh_conversation_activity(self) -> None:
+        """Read Core's turn states for the selected project's terminal rail."""
+        async with self._activity_lock:
+            await self._read_conversation_activity()
+
+    async def _read_conversation_activity(self) -> None:
+        if not isinstance(self.ui, TuiUI) or self.view is None:
+            return
+        project_id = self.view.project_id
+        api = self.api
+        if self._activity_project_id != project_id:
+            self._activity_project_id = project_id
+            self._activity_etag = None
+            self._conversation_states = None
+            self._activity_unavailable = False
+            self.ui.set_conversation_activity(None)
+        try:
+            response = await api.client.get(
+                "chat/session-activity",
+                params={"engagement_id": project_id},
+                headers={"If-None-Match": self._activity_etag}
+                if self._activity_etag
+                else {},
+            )
+            if (
+                self._api is not api
+                or self.view is None
+                or self.view.project_id != project_id
+            ):
+                return
+            if response.status_code == 304:
+                return
+            check_response(response)
+            states = conversation_states(response.json())
+            previous = self._conversation_states
+            self._activity_etag = response.headers.get("etag")
+            self._conversation_states = states
+            self._activity_unavailable = False
+            self.ui.set_conversation_activity(states)
+            view = self.view
+            if view.session and (self.stream_task is None or self.stream_task.done()):
+                state = states.get(view.session_id)
+                if state is not None:
+                    self._known_busy = state != "idle"
+                    if state != (previous or {}).get(view.session_id):
+                        self.update_toolbar(
+                            {
+                                "working": "Running in Core",
+                                "waiting": "Waiting for action",
+                                "idle": "Ready",
+                            }[state]
+                        )
+        except (ClientError, httpx.HTTPError, ValueError):
+            if (
+                self._api is not api
+                or self.view is None
+                or self.view.project_id != project_id
+            ):
+                return
+            self._activity_etag = None
+            self._conversation_states = None
+            self.ui.set_conversation_activity(None)
+            if not self._activity_unavailable:
+                self.ui.activity("Conversation status unavailable; retrying")
+            self._activity_unavailable = True
 
     async def runtimes(self) -> list[dict[str, Any]]:
         view = self.current()
@@ -1047,14 +1162,13 @@ class Shell:
         offline = False
         while True:
             await asyncio.sleep(5)
+            await self.refresh_conversation_activity()
             try:
                 response = await self.api.client.get(
                     "chat/attention", headers={"If-None-Match": etag} if etag else {}
                 )
                 if response.status_code == 304:
                     continue
-                from .transport import check_response
-
                 check_response(response)
                 etag = response.headers.get("etag")
                 items = response.json()

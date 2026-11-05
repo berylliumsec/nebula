@@ -56,6 +56,7 @@ from nebula.v3.harnesses import (
     HarnessPermissionRequest,
     HarnessRuntimeService,
 )
+from nebula.v3.host_load import HostLoadGate, HostLoadMonitor, HostLoadSnapshot
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
 from nebula.v3.providers import (
     ModelResponse,
@@ -67,6 +68,19 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.workspace import WorkspaceService
 from tests.v3.test_chat_api import ApiChatProvider
 from tests.v3.test_knowledge_index import SecurityEmbeddingFunction
+
+
+class QuietHostLoadMonitor(HostLoadMonitor):
+    """Keep disposable Core admissions independent of this Mac's real CPU load."""
+
+    def __init__(self):
+        super().__init__(interval=0.1)
+
+    def sample(self):
+        self._cached = HostLoadSnapshot(
+            time.monotonic(), 8, 0.05, 0.5, False, None, True
+        )
+        return self._cached
 
 
 class Provider(ApiChatProvider):
@@ -186,7 +200,7 @@ class Adapter(HarnessAdapter):
 
 
 class TerminalProcess:
-    def __init__(self, config, env, *args, tty=False):
+    def __init__(self, config, env, *args, tty=False, columns=80, rows=24):
         command = [
             sys.executable,
             "-u",
@@ -197,7 +211,7 @@ class TerminalProcess:
             *args,
         ]
         self.master = None
-        self.screen = pyte.Screen(80, 24) if tty else None
+        self.screen = pyte.Screen(columns, rows) if tty else None
         self.screen_stream = pyte.Stream(self.screen) if self.screen else None
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace") if tty else None
         if tty:
@@ -207,7 +221,9 @@ class TerminalProcess:
             import termios
 
             master, slave = pty.openpty()
-            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            fcntl.ioctl(
+                slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0)
+            )
             self.master = master
             self.process = subprocess.Popen(
                 command,
@@ -277,6 +293,26 @@ class TerminalProcess:
                 assert self.decoder is not None
                 self.screen_stream.feed(self.decoder.decode(data))
         pytest.fail(f"Terminal screen did not settle: {markers!r}; {display}")
+
+    def expect_chat_state(self, title, state, timeout=25):
+        assert self.screen is not None and self.screen_stream is not None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            display = "\n".join(self.screen.display)
+            if any(
+                title in row and row.strip().endswith(state)
+                for row in display.splitlines()
+            ):
+                return display
+            ready, _, _ = select.select([self.output_fd], [], [], 0.05)
+            if ready:
+                data = os.read(self.output_fd, 65536)
+                if not data:
+                    break
+                self.output.extend(data)
+                assert self.decoder is not None
+                self.screen_stream.feed(self.decoder.decode(data))
+        pytest.fail(f"Terminal did not show {title!r} as {state!r}:\n{display}")
 
     def send(self, text, expect=None):
         os.write(
@@ -500,6 +536,7 @@ def lan_core(tmp_path, monkeypatch):
     app = create_app(
         store,
         auth_token="synthetic-terminal-admin",
+        host_load_gate=HostLoadGate(QuietHostLoadMonitor()),
         credential_store=credentials,
         artifact_store=artifacts,
         harness_runtime_service=runtime,
@@ -572,8 +609,10 @@ def lan_core(tmp_path, monkeypatch):
     assert paired.returncode == 0, paired.stdout + paired.stderr
     processes = []
 
-    def start(*args, tty=False):
-        process = TerminalProcess(config, env, *args, tty=tty)
+    def start(*args, tty=False, columns=80, rows=24):
+        process = TerminalProcess(
+            config, env, *args, tty=tty, columns=columns, rows=rows
+        )
         processes.append(process)
         return process
 
@@ -768,6 +807,74 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
                     "rendered streamed Markdown",
                     "source toggle",
                     "saved readback",
+                ],
+                "result": "passed",
+            }
+        )
+    )
+
+
+def test_paired_tui_marks_other_conversations_running_waiting_and_idle(lan_core):
+    data = lan_core
+    for session_id, title, backend, profile_id in (
+        ("observed-idle", "Observed idle", "provider", "provider-a"),
+        ("external-run", "External run", "provider", "provider-a"),
+    ):
+        data["store"].create(
+            ChatSession(
+                id=session_id,
+                engagement_id="terminal-project",
+                title=title,
+                backend=backend,
+                provider_profile_id=profile_id,
+                model="model-a",
+                metadata={"initial_title_state": "operator"},
+            )
+        )
+
+    watcher = data["start"](
+        "shell", "--project", "Terminal Project", tty=True, columns=132, rows=30
+    )
+    watcher.expect("Observed idle")
+    watcher.send("Observed idle", expect="/help for commands")
+    watcher.expect_chat_state("Observed idle", "IDLE")
+    watcher.expect_chat_state("External run", "IDLE")
+
+    other = data["start"](
+        "shell", "--project", "Terminal Project", "--chat", "External run"
+    )
+    other.expect("/help for commands")
+    other.send("hold response")
+    assert data["provider"].holding.wait(15), "Inert provider did not reach its hold"
+    watcher.expect_chat_state("External run", "RUN", timeout=20)
+    watcher.send("/chats", expect="Conversation")
+    watcher.expect_screen("RUN  External run")
+    os.write(watcher.input_fd, b"\x07")  # Ctrl-G closes the picker.
+    other.send("/stop", expect="Turn cancelled.")
+    watcher.expect_chat_state("External run", "IDLE", timeout=20)
+
+    other.send("/chats Harness chat", expect="Ready for your next message")
+    other.send("request fixture approval", expect="Action required")
+    watcher.expect_chat_state("Harness chat", "WAIT", timeout=20)
+    other.send("/approvals", expect="Pending approval")
+    other.send("Review the requested action", expect="Decision")
+    other.send("Reject", expect="Decision recorded: rejected")
+    other.expect("Response complete.")
+    watcher.expect_chat_state("Harness chat", "IDLE", timeout=20)
+    other.close()
+    watcher.close(send_quit=False, send_eof=True)
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and authenticated TLS LAN Core",
+                "fixture": "paired clients, synthetic project, inert provider and harness",
+                "checks": [
+                    "initial idle",
+                    "other client starts and stops a turn",
+                    "F3 status",
+                    "waiting approval",
+                    "completion returns to idle",
                 ],
                 "result": "passed",
             }

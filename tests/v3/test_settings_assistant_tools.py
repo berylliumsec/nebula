@@ -115,6 +115,8 @@ def test_catalog_covers_settings_destinations_without_secrets():
         "full-screen terminal Assistant with live progress"
         in settings_destination["guide"]
     )
+    assert "running conversation" in settings_destination["aliases"]
+    assert "RUN/WAIT/IDLE conversation status" in settings_destination["guide"]
     assert (
         next(item for item in result["settings"] if item["id"] == "storage")["url"]
         == "/settings#storage-integration-settings"

@@ -35,6 +35,12 @@ or Tab to insert it without running. When no command list is open, Tab focuses
 the transcript for scrolling. Ctrl-C stops a supported selected turn.
 The view updates as Core accepts, queues, and works on a turn, before the first
 answer text arrives. Progress and requests for action stay visible during input.
+The conversation rail labels each chat **RUN**, **WAIT**, or **IDLE** using Core's
+turn state. **WAIT** means Core needs a decision or intervention; `/status` shows
+the next action. A **?** means activity could not be read, so it must not be
+mistaken for idle. The rail refreshes every five seconds, and F3 reads fresh
+states when browsing conversations. At narrow terminal widths, use F3 to see
+those labels in the conversation picker.
 
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates

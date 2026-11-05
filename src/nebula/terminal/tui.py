@@ -47,6 +47,12 @@ SIDEBAR_WIDTH = 32
 SIDEBAR_MIN_COLUMNS = 110
 
 
+def activity_label(state: str | None) -> str:
+    if state is None:
+        return "?"
+    return {"working": "RUN", "waiting": "WAIT", "idle": "IDLE"}.get(state, "?")
+
+
 def _edge(text: str, width: int, *, tail: bool = False) -> str:
     """Keep a terminal label within its cell budget, including wide glyphs."""
     if width <= 0:
@@ -128,6 +134,7 @@ class TuiUI(TerminalUI):
         self._chat = ""
         self._projects: list[dict[str, Any]] = []
         self._chats: list[dict[str, Any]] = []
+        self._chat_activity: dict[str, str] | None = None
         self._entries: list[tuple[str, str]] = []
         self._activity: list[str] = []
         self._notice = ""
@@ -430,20 +437,35 @@ class TuiUI(TerminalUI):
         self, rows: list[dict[str, Any]], selected: str, slots: int, key: str
     ) -> list[str]:
         active = next((row for row in rows if row.get("id") == selected), None)
-        ordered = ([active] if active is not None else []) + [
-            row for row in rows if row is not active
-        ]
+        remaining = [row for row in rows if row is not active]
+        states = self._chat_activity
+        if key == "title" and states is not None:
+            priority = {"waiting": 0, "working": 1, "idle": 2}
+            remaining.sort(
+                key=lambda row: priority.get(states.get(str(row.get("id"))) or "", 3)
+            )
+        ordered = ([active] if active is not None else []) + remaining
         visible = ordered[: slots - 1] if len(ordered) > slots else ordered[:slots]
-        lines = [
-            (" › " if row.get("id") == selected else "   ")
-            + _middle(
+        lines = []
+        for row in visible:
+            label = (
+                activity_label((self._chat_activity or {}).get(str(row.get("id"))))
+                if key == "title"
+                else ""
+            )
+            title = _middle(
                 _plain_title(row.get(key) or row.get("name") or row.get("id"))
                 if key == "title"
                 else terminal_text(row.get(key) or row.get("name") or row.get("id")),
-                SIDEBAR_WIDTH - 4,
+                SIDEBAR_WIDTH - (8 if key == "title" else 4),
             )
-            for row in visible
-        ]
+            if label:
+                title += " " * max(0, SIDEBAR_WIDTH - 8 - get_cwidth(title))
+            lines.append(
+                (" › " if row.get("id") == selected else "   ")
+                + title
+                + (" " + label.rjust(4) if label else "")
+            )
         if len(ordered) > slots:
             lines.append(f"   +{len(ordered) - len(visible)} more")
         return lines
@@ -479,6 +501,18 @@ class TuiUI(TerminalUI):
             detail = "WORKING  " + (
                 self._activity[-1] if self._activity else "Waiting for Core"
             )
+        elif (
+            self._chat
+            and self._chat_activity
+            and self._chat_activity.get(self._chat) == "working"
+        ):
+            detail = "WORKING  Turn active in Core · F6 Follow"
+        elif (
+            self._chat
+            and self._chat_activity
+            and self._chat_activity.get(self._chat) == "waiting"
+        ):
+            detail = "WAITING  Check /status for the next action"
         else:
             detail = self._activity[-1] if self._activity else "Ready"
         return _edge(" " + detail, width - 1)
@@ -517,6 +551,7 @@ class TuiUI(TerminalUI):
         self._chat = ""
         self._projects = []
         self._chats = []
+        self._chat_activity = None
         self._context = "Choose a project"
         self._entries.clear()
         self._activity.clear()
@@ -527,6 +562,8 @@ class TuiUI(TerminalUI):
     def set_identity(
         self, project: dict[str, Any], session: dict[str, Any] | None
     ) -> None:
+        if self._project != project["id"]:
+            self._chat_activity = None
         self._project = project["id"]
         self._project_label = terminal_text(project.get("name") or "Project")
         self._chat = session["id"] if session else ""
@@ -535,6 +572,11 @@ class TuiUI(TerminalUI):
             + " / "
             + _plain_title((session or {}).get("title") or "New conversation")
         )
+        self._invalidate()
+
+    def set_conversation_activity(self, states: dict[str, str] | None) -> None:
+        """Show Core's project-scoped turn states; None means status is unknown."""
+        self._chat_activity = states
         self._invalidate()
 
     def set_navigation(
