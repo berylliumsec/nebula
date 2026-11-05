@@ -44,6 +44,7 @@ class Shell:
         self.running = True
         self._last_progress = ""
         self._known_busy = False
+        self._pending_kinds: set[str] = set()
 
     @property
     def api(self) -> AsyncApi:
@@ -55,6 +56,90 @@ class Shell:
         if self.view is None:
             raise ClientError("Choose a project with /projects.")
         return self.view
+
+    def available_commands(self) -> list[str]:
+        """Order commands for the selected local view without querying Core on input."""
+        view = self.view
+        if view is None:
+            return ["projects", "core", "help", "commands", "quit"]
+        available = set(COMMANDS)
+        busy = self._known_busy or view.submitting
+        if view.pending_draft is None:
+            available.discard("draft")
+        if not (view.draft.contexts or view.draft.images or view.draft.skill):
+            available.discard("attachments")
+        if view.session is None:
+            available -= {
+                "chat",
+                "history",
+                "context",
+                "activity",
+                "results",
+                "queue",
+                "schedule",
+                "approvals",
+                "input",
+                "follow",
+                "detach",
+                "steer",
+                "stop",
+            }
+        else:
+            if (view.session.get("metadata") or {}).get("control_assistant"):
+                available.discard("chat")
+            if view.config.get("backend") != "provider":
+                available.discard("schedule")
+            if "approval" not in self._pending_kinds:
+                available.discard("approvals")
+            if "input" not in self._pending_kinds:
+                available.discard("input")
+        if not busy:
+            available -= {"follow", "detach", "steer", "stop"}
+        elif view.config.get("backend") != "harness":
+            available.discard("steer")
+        if self.stream_task is None or self.stream_task.done():
+            available.discard("detach")
+        priority = (
+            ["approvals", "input", "status", "follow", "stop", "steer", "queue"]
+            if self._pending_kinds or busy
+            else [
+                "model",
+                "settings",
+                "skills",
+                "attach",
+                "goal",
+                "chats",
+                "butler",
+                "status",
+            ]
+            if view.session is None
+            else [
+                "new",
+                "chats",
+                "butler",
+                "history",
+                "status",
+                "model",
+                "settings",
+                "goal",
+                "attach",
+            ]
+        )
+        return [name for name in priority if name in available] + [
+            name for name in COMMANDS if name in available and name not in priority
+        ]
+
+    def note_attention(self, items: list[dict[str, Any]]) -> None:
+        if self.view is None or self.view.session is None:
+            return
+        kinds = {
+            "approval" if item["kind"] == "approval" else "input"
+            for item in items
+            if item["session_id"] == self.view.session_id
+        }
+        if kinds != self._pending_kinds:
+            self._pending_kinds = kinds
+            self.update_toolbar()
 
     async def connect(self, selected: str | None = None) -> None:
         cores = self.settings.data.get("cores", {})
@@ -102,6 +187,7 @@ class Shell:
         self.seen_attention.clear()
         self._last_progress = ""
         self._known_busy = False
+        self._pending_kinds.clear()
         if isinstance(self.ui, TuiUI):
             self.ui.open_core(self.settings.core or "")
         self.ui.say(f"Connected to {self.settings.core}")
@@ -245,6 +331,7 @@ class Shell:
         self.view = view
         self._last_progress = ""
         self._known_busy = False
+        self._pending_kinds.clear()
         if isinstance(self.ui, TuiUI):
             self.ui.open_view(project, session)
         if session:
@@ -457,6 +544,9 @@ class Shell:
     async def status(self) -> dict[str, Any]:
         state = await self.state()
         self._known_busy = bool(state.get("busy"))
+        self._pending_kinds = {
+            row.get("kind") for row in state.get("pending", []) if row.get("kind")
+        }
         if not state.get("pending") and hasattr(self.ui, "clear_notice"):
             self.ui.clear_notice()
         if self._known_busy:
@@ -471,6 +561,8 @@ class Shell:
         return state
 
     def update_toolbar(self, detail: str = "") -> None:
+        if hasattr(self.ui, "set_commands"):
+            self.ui.set_commands(self.available_commands())
         if self.view:
             view = self.view
             if detail:
@@ -723,6 +815,7 @@ class Shell:
                     elif event == "done":
                         finished = True
                         self._known_busy = False
+                        self._pending_kinds.clear()
                         if isinstance(self.ui, TuiUI):
                             self.ui.finish_turn()
                         final = (payload.get("message") or {}).get("content", "")
@@ -738,6 +831,7 @@ class Shell:
                     elif event == "cancelled":
                         finished = True
                         self._known_busy = False
+                        self._pending_kinds.clear()
                         if isinstance(self.ui, TuiUI):
                             self.ui.finish_turn()
                         self.ui.say("\nResponse stopped.")
@@ -762,6 +856,11 @@ class Shell:
                         and payload.get("item_status")
                         in {"waiting_approval", "waiting_input"}
                     ):
+                        self._pending_kinds.add(
+                            "approval"
+                            if event in {"approval_required", "approval"}
+                            else "input"
+                        )
                         self.ui.say(
                             "\nAction required: "
                             + str(
@@ -958,16 +1057,16 @@ class Shell:
 
                 check_response(response)
                 etag = response.headers.get("etag")
-                for item in response.json():
+                items = response.json()
+                self.note_attention(items)
+                for item in items:
                     if item["action_id"] not in self.seen_attention:
                         self.seen_attention.add(item["action_id"])
                         self.ui.say(
                             f"Action required in {item['engagement_name']} / {item['session_title']}: {item['kind']}. Use /chats, /approvals or /input."
                         )
                 if len(self.seen_attention) > 200:
-                    self.seen_attention = {
-                        item["action_id"] for item in response.json()
-                    }
+                    self.seen_attention = {item["action_id"] for item in items}
                 offline = False
             except (httpx.HTTPError, ClientError) as exc:
                 if not offline:
@@ -1007,7 +1106,7 @@ class Shell:
                 [
                     {"id": key, "name": f"/{key} — {description}"}
                     for key, description in COMMANDS.items()
-                    if key != "commands"
+                    if key != "commands" and key in self.available_commands()
                 ],
             )
             await self.command("/" + choice["id"])

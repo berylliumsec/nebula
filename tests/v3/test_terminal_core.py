@@ -285,9 +285,10 @@ class TerminalProcess:
         if expect:
             self.expect(expect)
 
-    def close(self):
+    def close(self, *, send_quit=True):
         if self.process.poll() is None:
-            self.send("/quit")
+            if send_quit:
+                self.send("/quit")
             if self.master is not None:
                 deadline = time.monotonic() + 10
                 while self.process.poll() is None and time.monotonic() < deadline:
@@ -761,6 +762,49 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
                     "rendered streamed Markdown",
                     "source toggle",
                     "saved readback",
+                ],
+                "result": "passed",
+            }
+        )
+    )
+
+
+def test_paired_full_screen_slash_menu_tracks_chat_context(lan_core):
+    data = lan_core
+    terminal = data["start"]("shell", "--project", "Terminal Project", tty=True)
+    terminal.expect("New conversation")
+    terminal.send("New conversation", expect="/help for commands")
+
+    os.write(terminal.input_fd, b"/")
+    terminal.expect_screen("/model", "/chats", absent=("/history", "/stop"))
+    os.write(terminal.input_fd, b"st\t\r")
+    terminal.expect("New conversation.")
+
+    terminal.send("Hello from the slash-menu fixture", expect="Response complete.")
+    os.write(terminal.input_fd, b"/")
+    terminal.expect_screen("/history", "/status", absent=("/stop",))
+    os.write(terminal.input_fd, b"his\t\r")
+    terminal.expect("Hello from the slash-menu fixture")
+    terminal.expect("Synthetic provider answer.")
+
+    terminal.close()
+    reopened = data["start"]("shell", tty=True)
+    reopened.expect("/help for commands")
+    os.write(reopened.input_fd, b"/")
+    reopened.expect_screen("/history", "/status", absent=("/stop",))
+    os.write(reopened.input_fd, b"quit\t\r")
+    reopened.close(send_quit=False)
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and disposable authenticated TLS LAN Core",
+                "fixture": "synthetic project and inert provider",
+                "checks": [
+                    "new-chat command filtering",
+                    "keyboard selection and Core dispatch",
+                    "saved-chat command filtering",
+                    "reconnect restores the saved-chat menu",
                 ],
                 "result": "passed",
             }

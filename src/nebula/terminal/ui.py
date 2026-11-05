@@ -9,7 +9,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import FuzzyWordCompleter, PathCompleter
+from prompt_toolkit.completion import (
+    CompleteEvent,
+    Completer,
+    Completion,
+    FuzzyWordCompleter,
+    PathCompleter,
+)
+from prompt_toolkit.document import Document
 from prompt_toolkit.history import DummyHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
@@ -60,6 +67,34 @@ COMMANDS = {
 }
 
 
+class SlashCommandCompleter(Completer):
+    """Offer commands only at the start of a slash command, not in message text."""
+
+    def __init__(self, names: Callable[[], tuple[str, ...]]):
+        self.names = names
+
+    def get_completions(
+        self, document: Document, complete_event: CompleteEvent
+    ) -> list[Completion]:
+        prefix = document.text_before_cursor
+        if (
+            document.text_after_cursor
+            or not prefix.startswith("/")
+            or any(char.isspace() for char in prefix)
+        ):
+            return []
+        query = prefix[1:].casefold()
+        return [
+            Completion(
+                "/" + name,
+                start_position=-len(prefix),
+                display_meta=COMMANDS[name],
+            )
+            for name in self.names()
+            if name.startswith(query)
+        ]
+
+
 def bindings() -> KeyBindings:
     keys = KeyBindings()
 
@@ -94,14 +129,18 @@ class TerminalUI:
         )
         self._status = ""
         self._last_activity = ""
+        self.command_names = tuple(COMMANDS)
         self.session: PromptSession[str] | None = None
         if not self.plain:
             self.session = PromptSession(
                 history=InMemoryHistory(),
                 key_bindings=bindings(),
-                completer=FuzzyWordCompleter(["/" + item for item in COMMANDS]),
+                completer=SlashCommandCompleter(lambda: self.command_names),
                 bottom_toolbar=lambda: terminal_text(self.status),
             )
+
+    def set_commands(self, names: list[str]) -> None:
+        self.command_names = tuple(name for name in names if name in COMMANDS)
 
     @property
     def status(self) -> str:

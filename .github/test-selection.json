@@ -1,18 +1,21 @@
 {
-  "change_digest": "2a4747bf15a078095b2d79073bf54a35cf37608a32f85d8fa37b7c9685e31091",
+  "change_digest": "8bc38b1afcd7657e55978e3a7de868b92cc3f651eba593226e830fc9214612ee",
   "reviewed_by": "Codex; independent fresh-context TUI root-cause validation before repair",
-  "reason": "Terminal-only presentation change: render saved and streamed Markdown, keep long transcript lines readable, preserve raw source via F10, and show distinct rail labels, clean generated titles, and the selected project and Butler. Focused TUI contracts, PTY screen tests, and the existing paired TLS LAN Core journeys cover those paths and their entry point.",
-  "exclusions": "No Core state, API, provider, browser, mobile, or native interface changes. Browser Playwright and frontend tests do not apply to the Python terminal client. LAN tests use synthetic data and inert provider/harness fixtures; physical-device checks do not apply to a terminal interface.",
+  "reason": "Typing slash in the Python terminal client now renders and filters a selectable command menu using selected chat, turn, and attention state. Three focused client tests cover command availability and PTY keyboard interaction; one paired TLS LAN Core test covers the real shell entry, command dispatch, saved chat, and reconnect. Two product-help tests cover the updated guidance and bundled source digest.",
+  "exclusions": "No browser UI, frontend, or native code changed, so frontend, Playwright, and Rust tests do not apply. The paired LAN test uses a synthetic project and inert provider; it does not access a live Core. A separate client wheel build verifies packaging.",
   "expected_tests": {
-    "python": 17,
+    "python": 6,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_tui.py",
-    "tests/test_terminal_pty.py",
-    "tests/v3/test_terminal_core.py"
+    "tests/test_terminal_shell.py::test_slash_commands_follow_selected_conversation_state",
+    "tests/test_terminal_pty.py::test_full_screen_slash_menu_appears_and_selects_a_context_command",
+    "tests/test_terminal_pty.py::test_full_screen_tab_inserts_slash_choice_before_running_it",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
+    "tests/v3/test_terminal_core.py::test_paired_full_screen_slash_menu_tracks_chat_context"
   ],
   "frontend": [],
   "native": [],
