@@ -169,12 +169,6 @@ def restore_database_backup(directory: Path, environment_file: Path) -> None:
     validate_database_backup(directory, environment_file)
     settings = configured_postgres(environment_file)
     if settings is not None:
-        listing = _run(["pg_restore", "--list", str(directory / DUMP)], settings) or b""
-        includes_public = any(
-            len(parts := line.split()) >= 6
-            and parts[3:6] == [b"SCHEMA", b"-", b"public"]
-            for line in listing.splitlines()
-        )
         # Decode the complete archive before touching the server. A failed decoder
         # must never leave psql at EOF with a partially restored transaction.
         with tempfile.NamedTemporaryFile(
@@ -198,9 +192,10 @@ BEGIN
   LOOP
     EXECUTE pg_catalog.format('DROP SCHEMA %I CASCADE', item.nspname);
   END LOOP;
-END $nebula_restore$;"""
-            if not includes_public:
-                reset += " CREATE SCHEMA public AUTHORIZATION CURRENT_USER;"
+END $nebula_restore$;
+CREATE SCHEMA public AUTHORIZATION CURRENT_USER;"""
+            # pg_restore assumes initdb's public schema already exists, even
+            # when its TOC lists public (for example after ownership changed).
             # Reset and restore all application schemas in one transaction,
             # including objects introduced only by the failed candidate.
             _run(

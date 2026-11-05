@@ -1,35 +1,19 @@
 {
-  "change_digest": "75f3b2fd3620775f7a496cb5d50e4379318f20f102ccf9df8203c68def8a08a3",
-  "reviewed_by": "Codex with independent PostgreSQL diagnosis and dedicated migration/CLI subagents",
-  "reason": "Offline SQLite-to-PostgreSQL migration must copy every table and verify content before commit; PostgreSQL boot/concurrent event sequencing, driver packaging, native mission checkpoint continuity, actual authenticated LAN CLI restart, discovery and deployment dump/restore each have focused regressions. Synthetic PostgreSQL16 databases are isolated from production.",
-  "exclusions": "No browser layout, native desktop interaction, real provider, exploit/research workload, production data testing or full suites. PostgreSQL integration cases run in the dedicated reviewed database CI job; ordinary Python job omits those without a configured test server.",
+  "change_digest": "13c582fc0037824b4f5a16b9cd9cbc972efd745faa3dfcd5cc4a34d5b2fbb7ae",
+  "reviewed_by": "Codex; independent fresh-context archive and decoded-SQL diagnosis before repair",
+  "reason": "Repeated PostgreSQL restore must recreate public even when its TOC lists the schema; pg_restore assumes initdb already created it. The actual restore case covers two archive/restore cycles and candidate-only objects; deployment failure/retry and retention checks cover integration.",
+  "exclusions": "No Core schema/data-copy, CLI, browser/native interface, provider, catalog or full-suite changes. Actual dump/restore uses dedicated PostgreSQL16; other cases use disposable files.",
   "expected_tests": {
-    "python": 67,
-    "frontend": 1,
+    "python": 17,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_database_migration.py",
-    "tests/v3/test_database_migration_cli.py",
-    "tests/v3/test_postgresql_core.py",
-    "tests/v3/test_migrations.py::test_postgresql_upgrade_downgrade_and_immutable_operation_events",
-    "tests/v3/test_storage.py::test_schema_bootstrap_is_idempotent_and_refuses_a_newer_database",
-    "tests/v3/test_storage.py::test_event_sequence_is_atomic_between_threads",
-    "tests/v3/test_storage.py::test_find_entities_filters_payload_fields_in_sql_and_pages_in_order",
-    "tests/v3/test_storage.py::test_deleting_a_chat_run_or_archive_removes_budget_counters",
-    "tests/v3/test_packaging.py::test_core_build_fails_before_freezing_when_playwright_is_absent",
-    "tests/v3/test_packaging.py::test_core_archive_requires_playwright_module_and_driver",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_postgresql_migration_and_offline_cutover",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
-    "tests/test_simulation_deployer_retention.py",
-    "tests/test_simulation_postgres_backup.py"
+    "tests/test_simulation_postgres_backup.py",
+    "tests/test_simulation_deployer_retention.py"
   ],
-  "frontend": [
-    "ui/src/settingsCatalog.postgresql.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": []
 }

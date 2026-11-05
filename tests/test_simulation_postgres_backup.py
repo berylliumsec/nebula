@@ -113,36 +113,42 @@ def test_actual_pg_dump_restore_roundtrip(tmp_path):
                 )
             )
             connection.execute(text("INSERT INTO backup_probe VALUES (1, 'durable')"))
-        backup.snapshot_postgres(tmp_path, settings)
-        with engine.begin() as connection:
-            connection.execute(text("UPDATE backup_probe SET value='changed'"))
-            connection.execute(
-                text(
-                    "CREATE TABLE candidate_only (id integer REFERENCES backup_probe(id))"
-                )
-            )
-            connection.execute(
-                text(
-                    "CREATE FUNCTION candidate_only_function() RETURNS integer LANGUAGE sql AS 'SELECT 1'"
-                )
-            )
-        backup.restore_database_backup(tmp_path, path)
-        with engine.begin() as connection:
-            assert connection.execute(
-                text("SELECT id,value FROM backup_probe")
-            ).all() == [(1, "durable")]
-            assert (
+        # A restore changes public's owner from pg_database_owner to the app
+        # role. Its next TOC lists public, but pg_restore still skips CREATE.
+        for cycle in range(2):
+            directory = tmp_path / f"cycle-{cycle}"
+            directory.mkdir()
+            backup.snapshot_postgres(directory, settings)
+            with engine.begin() as connection:
+                connection.execute(text("UPDATE backup_probe SET value='changed'"))
                 connection.execute(
-                    text("SELECT to_regclass('candidate_only')")
-                ).scalar()
-                is None
-            )
-            assert (
+                    text(
+                        "CREATE TABLE candidate_only (id integer REFERENCES backup_probe(id))"
+                    )
+                )
                 connection.execute(
-                    text("SELECT to_regprocedure('candidate_only_function()')")
-                ).scalar()
-                is None
-            )
+                    text(
+                        "CREATE FUNCTION candidate_only_function() RETURNS integer LANGUAGE sql AS 'SELECT 1'"
+                    )
+                )
+            backup.restore_database_backup(directory, path)
+            with engine.begin() as connection:
+                assert connection.execute(
+                    text("SELECT id,value FROM backup_probe")
+                ).all() == [(1, "durable")]
+                assert (
+                    connection.execute(
+                        text("SELECT to_regclass('candidate_only')")
+                    ).scalar()
+                    is None
+                )
+                assert (
+                    connection.execute(
+                        text("SELECT to_regprocedure('candidate_only_function()')")
+                    ).scalar()
+                    is None
+                )
+        with engine.begin() as connection:
             connection.execute(text("DROP TABLE backup_probe"))
     finally:
         engine.dispose()
