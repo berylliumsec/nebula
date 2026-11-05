@@ -64,7 +64,10 @@ CI gates the 41 standalone client tests on Linux and macOS with Python 3.11,
 reviewed 85-test selection, including three exact product-help checks for the
 current source digest, terminal discovery, and Chroma synchronization. Local
 product-help regeneration could not download the embedding model because the
-managed environment's enforced proxy rejects its S3 URL; CI must supply that
-evidence before merge. Release preparation stages the client distributions and
+managed environment's enforced proxy rejects its S3 URL. CI run
+`41941955782` generated the current index and passed all three product-help
+checks; its only test failure was an ANSI-sensitive help assertion, now
+normalized and verified with forced CI styling. Current-head CI must pass
+before merge. Release preparation stages the client distributions and
 finalization verifies their checksums. No release or deployment was triggered
 for this implementation.

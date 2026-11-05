@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from packaging.requirements import Requirement
+from rich.text import Text
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -113,10 +115,12 @@ def test_clean_install_imports_no_core_and_exposes_shell(built_client, tmp_path)
         text=True,
         capture_output=True,
         timeout=10,
+        env={**os.environ, "GITHUB_ACTIONS": "true"},
     )
+    help_text = Text.from_ansi(help_result.stdout).plain
     assert (
         help_result.returncode == 0
-        and "--project" in help_result.stdout
-        and "--chat" in help_result.stdout
-    )
+        and "--project" in help_text
+        and "--chat" in help_text
+    ), help_result.stdout + help_result.stderr
     assert not (tmp_path / "nebula.db").exists()
