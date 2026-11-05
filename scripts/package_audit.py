@@ -89,6 +89,10 @@ REQUIRED_MEMBERS = (
     # bundled Node driver must remain executable after extraction.
     ("playwright.sync_api",),
     ("playwright/driver/node",),
+    # PostgreSQL is a supported Core database, including in frozen releases.
+    ("psycopg",),
+    ("psycopg_binary",),
+    ("sqlalchemy.dialects.postgresql.psycopg",),
     ("nebula/v3/BUILD_INFO.json", "nebula.v3.BUILD_INFO.json"),
     ("nebula/v3/migrations/script.py.mako",),
     # The Kali workstation image build copies these files out of the bundle.

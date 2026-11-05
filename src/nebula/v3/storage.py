@@ -365,7 +365,7 @@ class StoreTransaction:
         if self.session.bind and self.session.bind.dialect.name == "postgresql":
             self.session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtext(:operation_id))"),
-                {"operation_id": operation_id},
+                {"operation_id": f"operation:{operation_id}"},
             )
         self._locked_operation_streams.add(operation_id)
 
@@ -669,6 +669,10 @@ class StoreTransaction:
 
         if not all((operation_id, operation_kind, engagement_id, event_type)):
             raise ValueError("operation event identifiers and type are required")
+        # The connection-based APIs take the same stream lock. Acquire it
+        # before either the retry lookup or MAX(sequence), including callers
+        # that have no goal row to lock first.
+        self.lock_operation_stream(operation_id)
         existing = None
         if idempotency_key:
             existing = self.session.scalar(
@@ -2656,8 +2660,9 @@ class NebulaStore:
         with self.database.session() as session:
             # Acquire the writer lock before inspecting children; a concurrent
             # restore or new turn cannot interleave with the checked deletion.
-            session.execute(text("BEGIN IMMEDIATE"))
-            row = session.get(EntityRow, engagement_id)
+            if self.database.engine.dialect.name == "sqlite":
+                session.execute(text("BEGIN IMMEDIATE"))
+            row = session.get(EntityRow, engagement_id, with_for_update=True)
             if row is None or row.kind != "engagements":
                 raise NotFoundError(f"engagements entity not found: {engagement_id}")
             if row.revision != expected_revision:

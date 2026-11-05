@@ -229,7 +229,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Diagnostics",
     scope: "Device",
     target: "diagnostics-settings",
-    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry", "performance", "bottlenecks", "latency", "SQL timing", "worker queue", "event loop", "public incidents", "Core health", "sensitive detail", "reveal detail", "copy detail", "remediation", "recovery action", "log level"],
+    keywords: ["diagnostics", "logging", "logs", "errors", "support bundle", "telemetry", "performance", "bottlenecks", "latency", "SQL timing", "worker queue", "event loop", "PostgreSQL", "SQLite", "database migration", "migrate-to-postgresql", "public incidents", "Core health", "sensitive detail", "reveal detail", "copy detail", "remediation", "recovery action", "log level"],
   },
   {
     id: "settings.setup",

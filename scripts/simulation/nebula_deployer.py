@@ -28,6 +28,14 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from nebula_deploy_gate import CoreClient, blockers, service_token
+from nebula_postgres_backup import (
+    BACKUP_FILES,
+    configured_postgres,
+    contains_database_backup,
+    restore_database_backup,
+    snapshot_postgres,
+    validate_database_backup,
+)
 
 
 INITIAL_COMMIT = "da8d9178ff2b7786e860e702dbee48944f2a8238"
@@ -643,6 +651,10 @@ def snapshot(label: str) -> Path:
     staging = BACKUPS / f".{label}.{os.getpid()}.partial"
     if staging.exists() or staging.is_symlink():
         raise RuntimeError("rollback staging path already exists")
+    postgres = configured_postgres(TOKEN_FILE)
+    sqlite_databases = tuple(
+        name for name in SQLITE_DATABASES if name != "nebula.db" or postgres is None
+    )
     database_paths = {DATA / relative for relative in SQLITE_DATABASES}
     excluded = database_paths | {
         Path(f"{database}-{suffix}")
@@ -652,11 +664,18 @@ def snapshot(label: str) -> Path:
 
     def ignore_sidecars(path: str, names: list[str]) -> list[str]:
         directory = Path(path)
-        return [name for name in names if directory / name in excluded]
+        return [
+            name
+            for name in names
+            if directory / name in excluded
+            or (directory == DATA and name in BACKUP_FILES)
+        ]
 
     try:
         shutil.copytree(DATA, staging, symlinks=True, ignore=ignore_sidecars)
-        for relative in SQLITE_DATABASES:
+        if postgres is not None:
+            snapshot_postgres(staging, postgres)
+        for relative in sqlite_databases:
             source_path = DATA / relative
             if not source_path.is_file() or source_path.is_symlink():
                 raise RuntimeError(f"rollback SQLite source is missing: {relative}")
@@ -696,8 +715,7 @@ def retain_single_rollback_snapshot(keep: Path) -> list[str]:
 
     if keep.parent != BACKUPS or keep.is_symlink() or not keep.is_dir():
         raise RuntimeError("current rollback snapshot is not a local directory")
-    database = keep / "nebula.db"
-    if database.is_symlink() or not database.is_file():
+    if not contains_database_backup(keep):
         raise RuntimeError("current rollback snapshot has no regular database")
     entries = sorted(BACKUPS.iterdir(), key=lambda path: path.name)
     if keep not in entries:
@@ -906,26 +924,63 @@ def rollback() -> dict[str, Any]:
     old_release = RELEASES / previous
     if not old_release.is_dir():
         raise RuntimeError("previous immutable release is missing")
+    validate_database_backup(backup, TOKEN_FILE)
     edge("stop")
     service("stop")
     require_stopped()
     preserved = BACKUPS / f"post-{time.time_ns()}"
+    record["post_state"] = str(preserved)
+    record["rollback_attempt"] = {"status": "preserving", "post_state": str(preserved)}
+    atomic_json(STATE, record)
     os.replace(DATA, preserved)
     try:
-        shutil.copytree(backup, DATA, symlinks=True)
+        postgres = configured_postgres(TOKEN_FILE)
+        if postgres is not None:
+            # File preservation alone cannot retain failed server database state.
+            snapshot_postgres(preserved, postgres)
+        restore_database_backup(backup, TOKEN_FILE)
+        shutil.copytree(
+            backup,
+            DATA,
+            symlinks=True,
+            ignore=lambda path, names: [
+                name for name in names if Path(path) == backup and name in BACKUP_FILES
+            ],
+        )
         switch_to(old_release)
         service("start")
         wait_ready(previous)
         edge("start")
-    except Exception:
+    except Exception as failure:
         service("stop")
-        raise
+        record["rollback_attempt"]["status"] = "incomplete"
+        try:
+            atomic_json(STATE, record)
+            if not DATA.exists():
+                shutil.copytree(
+                    preserved,
+                    DATA,
+                    symlinks=True,
+                    ignore=lambda path, names: [
+                        name
+                        for name in names
+                        if Path(path) == preserved and name in BACKUP_FILES
+                    ],
+                )
+        except OSError as recovery:
+            raise RuntimeError(
+                f"rollback incomplete; recover files and database from {preserved}"
+            ) from recovery
+        raise RuntimeError(
+            f"rollback incomplete; Core is stopped and failed state is preserved at {preserved}"
+        ) from failure
     record.update(
         {
             "active": previous,
             "pending": failed_commit if failed_commit != previous else None,
             "promoting": None,
             "post_state": str(preserved),
+            "rollback_attempt": {"status": "complete", "post_state": str(preserved)},
         }
     )
     atomic_json(STATE, record)

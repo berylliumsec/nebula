@@ -292,9 +292,9 @@ adequate real context window or reduce newly selected/requested context delibera
 
 ## migration-import-export | Upgrade, import, or export recovery
 
-Keywords: migration failed, migrate database, import 2x failed, legacy import, external chroma, export failed, restore bundle, backup data, nebula zip
+Keywords: migration failed, migrate database, PostgreSQL, SQLite write contention, migrate-to-postgresql, import 2x failed, legacy import, external chroma, export failed, restore bundle, backup data, nebula zip
 
-Sources: docs/MIGRATING-2-TO-3.md, docs/NEBULA3.md#import-and-export, src/nebula/v3/importer.py, src/nebula/v3/exporter.py
+Sources: docs/postgresql-migration.md, docs/MIGRATING-2-TO-3.md, docs/NEBULA3.md#import-and-export, src/nebula/v3/importer.py, src/nebula/v3/exporter.py
 
 Before upgrading, quit the desktop, stop manually started Core processes, and back
 up the complete Nebula 3 application-data directory, including the database,
@@ -302,6 +302,18 @@ artifacts, and workspaces. Never run two Core processes against the same local d
 directory while migrating. Administrators can run `nebula-core migrate` followed by
 `nebula-core doctor --json`, using the same `--data-dir PATH` for a copied or
 nondefault directory.
+
+For an existing SQLite Core, the host-only `nebula-core migrate-to-postgresql`
+command copies to an empty PostgreSQL database and verifies row counts and content
+digests before commit. First inspect with `--inspect`, stop every Core using the
+source, and back up the complete data directory. Supply the target through
+`--target-url-file` or `NEBULA_V3_DATABASE_URL`, and acknowledge the stopped source
+with `--confirm-core-stopped`. The command preserves the source and configuration;
+only after success, set Core's database URL and restart with the same data
+directory. Artifacts, workspaces, credentials, and separate memory/checkpoint/vector
+stores stay in their existing locations. See `docs/postgresql-migration.md` for
+setup, a private verification receipt, and cutover recovery. Browser Settings and
+Butler do not execute the offline copy or accept database credentials.
 
 If migration fails, leave the failed directory unchanged. Restore the pre-upgrade
 copy to a different directory and run doctor there. Do not restore only the SQLite

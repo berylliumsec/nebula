@@ -47,6 +47,19 @@ def test_product_search_finds_core_performance_telemetry(monkeypatch):
     assert "performance.json" in content
 
 
+def test_product_search_finds_postgresql_migration_and_offline_cutover(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    for question in (
+        "How do I migrate my existing SQLite Core database to PostgreSQL?",
+        "PostgreSQL migrate-to-postgresql empty target verification recovery",
+    ):
+        matches = search_product_knowledge(question)
+        content = "\n".join(str(item["text"]) for item in matches)
+        assert "migrate-to-postgresql" in content
+        assert "empty" in content.lower()
+        assert "data directory" in content.lower()
+
+
 def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     for question, expected in (

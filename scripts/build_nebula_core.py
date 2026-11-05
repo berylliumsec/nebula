@@ -25,7 +25,12 @@ from scripts.nebula3_version import check_versions
 from scripts.package_audit import FORBIDDEN_MODULES, inspect_pyinstaller_binary
 
 
-REQUIRED_RUNTIME_IMPORTS = ("playwright.sync_api",)
+REQUIRED_RUNTIME_IMPORTS = (
+    "playwright.sync_api",
+    "psycopg",
+    "psycopg_binary",
+    "sqlalchemy.dialects.postgresql.psycopg",
+)
 
 
 def require_runtime_imports() -> None:
@@ -214,6 +219,14 @@ def main() -> None:
         "chromadb",
         "--collect-all",
         "playwright",
+        # The dialect and psycopg implementation load dynamically. Include the
+        # binary package's bundled libpq as well as the Python driver modules.
+        "--collect-all",
+        "psycopg",
+        "--collect-all",
+        "psycopg_binary",
+        "--hidden-import",
+        "sqlalchemy.dialects.postgresql.psycopg",
         "--hidden-import",
         "chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2",
         "--hidden-import",
