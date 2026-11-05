@@ -1,0 +1,275 @@
+"""Scrollback-friendly asynchronous prompts and searchable numbered menus."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import FuzzyWordCompleter, PathCompleter
+from prompt_toolkit.history import DummyHistory, InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
+from rich.console import Console
+from rich.markdown import Markdown
+
+from .transport import ClientError, terminal_text
+
+
+class CancelledInput(Exception):
+    """The operator closed a menu without changing anything."""
+
+
+class InterruptedPrompt(CancelledInput):
+    """Ctrl-C at the main composer, distinct from closing a menu."""
+
+
+COMMANDS = {
+    "draft": "Review a previous submission retained in memory",
+    "core": "Switch paired Core",
+    "projects": "Browse or create a project",
+    "chats": "Browse saved conversations",
+    "new": "Start a new conversation",
+    "butler": "Open this project's Butler",
+    "chat": "Manage this conversation",
+    "history": "Read saved messages; /history more reads earlier messages",
+    "context": "Inspect context usage",
+    "activity": "Inspect activity and plans",
+    "results": "Read saved results",
+    "model": "Select a model and runtime",
+    "settings": "Change next-turn Assistant settings",
+    "skills": "Choose a skill for one turn",
+    "goal": "Create or manage this conversation's goal",
+    "agents": "Inspect agents and delegated work",
+    "approvals": "Review pending actions",
+    "input": "Answer a pending question",
+    "queue": "Manage durable follow-ups",
+    "schedule": "Manage a Core schedule",
+    "attach": "Attach a local document/image or Core file",
+    "attachments": "Review/remove pending attachments",
+    "status": "Read authoritative Core state",
+    "follow": "Follow current output",
+    "detach": "Detach the viewer; leave Core work running",
+    "steer": "Guide a supported active turn",
+    "stop": "Cancel the selected turn",
+    "quit": "Exit; leave Core work running",
+    "help": "Show commands",
+}
+
+
+def bindings() -> KeyBindings:
+    keys = KeyBindings()
+
+    @keys.add("enter")
+    def send(event: Any) -> None:
+        event.current_buffer.validate_and_handle()
+
+    @keys.add("escape", "enter")
+    def newline(event: Any) -> None:
+        event.current_buffer.insert_text("\n")
+
+    return keys
+
+
+class TerminalUI:
+    def __init__(self, *, plain: bool | None = None):
+        self.plain = (
+            plain
+            if plain is not None
+            else (
+                not sys.stdin.isatty()
+                or not sys.stdout.isatty()
+                or os.environ.get("TERM") == "dumb"
+                or os.getenv("NEBULA_CHAT_PLAIN") == "1"
+            )
+        )
+        self.console = Console(
+            markup=False,
+            highlight=False,
+            no_color="NO_COLOR" in os.environ,
+            force_terminal=False if self.plain else None,
+        )
+        self.status = ""
+        self.session: PromptSession[str] | None = None
+        if not self.plain:
+            self.session = PromptSession(
+                history=InMemoryHistory(),
+                key_bindings=bindings(),
+                completer=FuzzyWordCompleter(["/" + item for item in COMMANDS]),
+                bottom_toolbar=lambda: terminal_text(self.status),
+            )
+
+    def say(self, text: Any = "") -> None:
+        self.console.print(terminal_text(text), markup=False, highlight=False)
+
+    def delta(self, text: str) -> None:
+        self.console.print(
+            terminal_text(text), end="", markup=False, highlight=False, soft_wrap=True
+        )
+
+    def markdown(self, text: str) -> None:
+        clean = terminal_text(text)
+        self.console.print(clean if self.plain else Markdown(clean))
+
+    async def ask(
+        self,
+        label: str,
+        *,
+        default: str = "",
+        secret: bool = False,
+        choices: list[str] | None = None,
+        main: bool = False,
+        path: bool = False,
+    ) -> str:
+        try:
+            if self.plain:
+                if secret:
+                    import getpass
+
+                    value = await asyncio.to_thread(
+                        getpass.getpass, terminal_text(label) + ": "
+                    )
+                else:
+                    if default:
+                        self.say("Current value:\n" + default)
+                    value = await asyncio.to_thread(input, terminal_text(label) + ": ")
+                    if not value:
+                        value = default
+            else:
+                session = (
+                    PromptSession(history=DummyHistory()) if secret else self.session
+                )
+                assert session is not None
+                options: dict[str, Any] = {"default": default, "is_password": secret}
+                if path:
+                    options["completer"] = PathCompleter(expanduser=True)
+                elif choices is not None:
+                    options["completer"] = FuzzyWordCompleter(
+                        [terminal_text(value) for value in choices]
+                    )
+                value = await session.prompt_async(
+                    terminal_text(label) + ": ", **options
+                )
+            if value.strip() == "/cancel":
+                raise CancelledInput()
+            return value
+        except KeyboardInterrupt as exc:
+            raise (InterruptedPrompt() if main else CancelledInput()) from exc
+
+    async def confirm(self, text: str) -> bool:
+        return (
+            await self.ask(text + " [y/N]", choices=["yes", "no"])
+        ).strip().lower() in {"y", "yes"}
+
+    async def choose(
+        self,
+        title: str,
+        items: list[dict[str, Any]],
+        *,
+        selected: str | None = None,
+        more: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
+    ) -> dict[str, Any]:
+        if selected:
+            matches = [item for item in items if item["id"] == selected]
+            if not matches:
+                matches = [
+                    item
+                    for item in items
+                    if str(item["name"]).casefold() == selected.casefold()
+                ]
+            if len(matches) == 1:
+                return matches[0]
+            if not matches:
+                raise ClientError(f"No matching {title}. Choose from the listed names.")
+            items = matches
+        found, page = items, 0
+        while True:
+            visible = found[page * 20 : (page + 1) * 20]
+            self.say(title + (f" (page {page + 1})" if len(found) > 20 else ""))
+            for index, item in enumerate(visible, 1):
+                self.say(f"  {index}. {item.get('label') or item['name']}")
+            if not found:
+                self.say("  No matches. Enter another search or /cancel.")
+            self.say(
+                "Number or search; /next and /back browse; "
+                + ("more loads another catalog page; " if more else "")
+                + "/cancel closes."
+            )
+            answer = (
+                await self.ask(
+                    "Choose",
+                    choices=[str(item["name"]) for item in found]
+                    + ["/next", "/back", "/cancel"],
+                )
+            ).strip()
+            if answer == "/cancel":
+                raise CancelledInput()
+            if answer == "/next":
+                if (page + 1) * 20 < len(found):
+                    page += 1
+                else:
+                    self.say(
+                        "Last loaded page. Use more to load another catalog page."
+                        if more
+                        else "Last page."
+                    )
+                continue
+            if answer == "/back":
+                page = max(0, page - 1)
+                continue
+            if answer == "more" and more:
+                additions = await more()
+                page = len(items) // 20 if additions else page
+                items.extend(additions)
+                found = items
+                if not additions:
+                    more = None
+                continue
+            if answer.isdigit() and 1 <= int(answer) <= len(visible):
+                return visible[int(answer) - 1]
+            exact = [
+                item
+                for item in found
+                if str(item["name"]).casefold() == answer.casefold()
+            ]
+            if len(exact) == 1:
+                return exact[0]
+            found = [
+                item
+                for item in items
+                if answer.casefold() in str(item["name"]).casefold()
+            ]
+            page = 0
+            if len(found) == 1:
+                return found[0]
+
+    async def multiple(
+        self, title: str, items: list[dict[str, Any]], selected: list[str]
+    ) -> list[str]:
+        chosen = list(selected)
+        while True:
+            options = [
+                {
+                    **item,
+                    "name": ("[x] " if item["id"] in chosen else "[ ] ") + item["name"],
+                }
+                for item in items
+            ]
+            item = await self.choose(
+                title, [{"id": "__done", "name": "Done"}, *options]
+            )
+            if item["id"] == "__done":
+                return chosen
+            if item["id"] in chosen:
+                chosen.remove(item["id"])
+            else:
+                chosen.append(item["id"])
+
+    def help(self) -> None:
+        for name, detail in COMMANDS.items():
+            self.say(f"/{name} — {detail}")
+        self.say(
+            "Enter sends; Esc+Enter adds a line. Text while busy queues a follow-up. Ctrl-C stops the selected turn; Ctrl-D exits."
+        )

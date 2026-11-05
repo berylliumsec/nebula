@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nebula-client"
+dynamic = ["version"]
+description = "Lightweight paired terminal Assistant for Nebula Core"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = "BSD-2-Clause"
+license-files = ["LICENSE.md"]
+dependencies = ["httpx>=0.28,<1", "typer>=0.16,<1", "prompt-toolkit>=3.0.51,<4", "rich>=13,<15"]
+classifiers = ["Environment :: Console", "Operating System :: POSIX :: Linux", "Operating System :: MacOS"]
+
+[project.scripts]
+nebula-chat = "nebula.chat_cli:main"
+
+[tool.setuptools.dynamic]
+version = {file = ["VERSION"]}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nebula", "nebula.terminal"]
+
+[tool.setuptools]
+include-package-data = false

@@ -53,6 +53,11 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
         ("How can I chat with Butler from a paired CLI terminal?", "nebula-chat"),
         ("Run Nebula Core headless without a desktop or browser", "headless"),
         ("Create a terminal pairing invitation on the Core host", "invite"),
+        (
+            "Use a lightweight Python terminal client for remote agent conversations",
+            "nebula-client",
+        ),
+        ("Choose skills and goals from the terminal Assistant shell", "shell"),
     ):
         matches = search_product_knowledge(question)
         assert any(expected in str(item["text"]) for item in matches), question

@@ -354,7 +354,8 @@ def test_python_source_tree_contains_only_core_and_paired_client():
     unexpected = sorted(
         path.name
         for path in package_root.iterdir()
-        if path.name not in {"__init__.py", "__pycache__", "chat_cli.py", "v3"}
+        if path.name
+        not in {"__init__.py", "__pycache__", "chat_cli.py", "terminal", "v3"}
     )
     assert unexpected == []
 
