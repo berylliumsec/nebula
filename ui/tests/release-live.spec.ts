@@ -51,7 +51,13 @@ test("stabilization deployed approval completes once and survives reconnect", as
     const invitation = await pairing.json();
     await page.goto(`${origin}/#pair=${encodeURIComponent(invitation.secret)}&code=${encodeURIComponent(invitation.confirmation_code)}`);
     await page.getByLabel("Device name").fill(`Release browser ${projectId}`);
-    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    // The invitation fragment is removed before redemption. Wait for the
+    // successful document reload before navigating away from the pairing gate.
+    const [pairedPage] = await Promise.all([
+      page.waitForNavigation({url: `${origin}/`, waitUntil: "load", timeout: 20_000}),
+      page.getByRole("button", {name: "Pair device", exact: true}).click(),
+    ]);
+    expect(pairedPage?.ok()).toBe(true);
     await expect(page).toHaveURL(`${origin}/`);
     await expect.poll(async () => {
       pairedDeviceId = (await (await api.get("auth/devices")).json()).find((device: {name: string}) => device.name === `Release browser ${projectId}`)?.id;

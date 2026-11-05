@@ -115,6 +115,11 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "release-live-acceptance": [
+      {"area": "release-live-acceptance", "project": "desktop", "test_match": "tests/release-live.spec.ts", "runtime": "real-core", "shard": "1/1"},
+      {"area": "release-live-acceptance", "project": "compact", "test_match": "tests/release-live.spec.ts", "runtime": "real-core", "shard": "1/1"},
+      {"area": "release-live-acceptance", "project": "narrow", "test_match": "tests/release-live.spec.ts", "runtime": "real-core", "shard": "1/1"}
+    ],
     "latest-browser-regressions": [
       {"area":"latest-browser-regressions","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization\\ workspace\\ notices\\ leave\\ the\\ composer\\ reachable|assistant\\ live\\ guidance\\ releases\\ stale\\ busy\\ UI\\ when\\ Core\\ reports\\ a\\ terminal\\ Grok\\ turn|stabilization\\ completed\\ harness\\ output\\ keeps\\ one\\ continuous\\ transcript\\ scroll|browser\\ Assistant\\ stays\\ beside\\ the\\ page\\ through\\ an\\ answer\\ and\\ follow\\-up|assistant\\ upgrade\\ Back\\ keeps\\ a\\ late\\ side\\-chat\\ completion\\ closed|stabilization\\ Settings\\ skill\\ reads\\ keep\\ policy\\ activation\\ stable","runtime":"mock","shard":"1/1"},
       {"area":"latest-browser-regressions","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization\\ workspace\\ notices\\ leave\\ the\\ composer\\ reachable|assistant\\ live\\ guidance\\ releases\\ stale\\ busy\\ UI\\ when\\ Core\\ reports\\ a\\ terminal\\ Grok\\ turn|stabilization\\ completed\\ harness\\ output\\ keeps\\ one\\ continuous\\ transcript\\ scroll|browser\\ Assistant\\ stays\\ beside\\ the\\ page\\ through\\ an\\ answer\\ and\\ follow\\-up|assistant\\ upgrade\\ Back\\ keeps\\ a\\ late\\ side\\-chat\\ completion\\ closed|stabilization\\ Settings\\ skill\\ reads\\ keep\\ policy\\ activation\\ stable","runtime":"mock","shard":"1/1"},
