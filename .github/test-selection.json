@@ -1,23 +1,32 @@
 {
-  "change_digest": "2784c2df8c36a2c9ed0e16f0e1a34a726d3b502a338aa4f9bd8b133ef4854054",
+  "change_digest": "cfdb32857372800260d59b2a9d92766ba586e64ae0a8857d3ae17211befc94d9",
   "reviewed_by": "Codex; independent fresh-context TUI root-cause validation before repair",
-  "reason": "Typing slash in the Python terminal client now renders and filters a selectable command menu using selected chat, turn, and attention state. Three focused client tests cover command availability and PTY keyboard interaction; one paired TLS LAN Core test covers the real shell entry, command dispatch, saved chat, and reconnect. Two product-help tests cover the updated guidance and bundled source digest.",
-  "exclusions": "No browser UI, frontend, or native code changed, so frontend, Playwright, and Rust tests do not apply. The paired LAN test uses a synthetic project and inert provider; it does not access a live Core. A separate client wheel build verifies packaging.",
+  "reason": "The paired terminal client now shows Core-owned working, waiting, idle, and unknown states for visible conversations and in the F3 picker. Focused tests cover rail ordering and truncation, ETag polling, failure and project-switch isolation, Core activity semantics, a paired TLS LAN Core journey with another client starting and stopping a turn and an approval wait, plus current product guidance discovery and Chroma source-digest synchronization. The disposable Core now uses a fixture-owned idle host-load sampler so its turn-admission evidence is deterministic under real Mac CPU pressure. The Settings assistant catalog regression checks the new destination aliases and guidance. A focused rail test proves an older selected main chat remains visible even outside the recent catalog page. GitHub rejected macos-14 before runner allocation, so the CI macOS labels now use supported macos-15; the terminal-client matrix exercises that change.",
+  "exclusions": "No browser page, native runtime, or Core activity route changed. The UI catalog edit adds search keywords only; its focused frontend test covers discoverability. Browser Playwright profiles and native tests are not applicable to the Python terminal display. The paired LAN test uses synthetic projects and inert provider/harness fixtures, not live Core data. Updating CI runner labels does not change application behavior or require a broader test selection.",
   "expected_tests": {
-    "python": 6,
-    "frontend": 0,
+    "python": 13,
+    "frontend": 1,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_shell.py::test_slash_commands_follow_selected_conversation_state",
-    "tests/test_terminal_pty.py::test_full_screen_slash_menu_appears_and_selects_a_context_command",
-    "tests/test_terminal_pty.py::test_full_screen_tab_inserts_slash_choice_before_running_it",
+    "tests/test_terminal_tui.py::test_tui_sidebar_keeps_distinct_suffixes_and_selected_chat_visible",
+    "tests/test_terminal_tui.py::test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown",
+    "tests/test_terminal_tui.py::test_tui_generated_markdown_title_stays_readable_in_navigation",
+    "tests/test_terminal_tui.py::test_navigation_rail_includes_the_selected_butler",
+    "tests/test_terminal_tui.py::test_conversation_activity_poll_handles_304_failure_and_project_switch",
+    "tests/v3/test_terminal_core.py::test_paired_tui_marks_other_conversations_running_waiting_and_idle",
+    "tests/v3/test_terminal_core.py::test_paired_full_screen_tui_shows_progress_and_saved_answer",
+    "tests/v3/test_chat_api.py::test_chat_session_activity_reports_core_owned_turn_state",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
-    "tests/v3/test_terminal_core.py::test_paired_full_screen_slash_menu_tracks_chat_context"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
+    "tests/test_terminal_tui.py::test_navigation_rail_keeps_an_older_selected_chat"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/settingsCatalog.terminal.test.ts"
+  ],
   "native": [],
   "playwright": []
 }

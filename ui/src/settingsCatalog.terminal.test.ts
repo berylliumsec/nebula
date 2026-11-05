@@ -7,4 +7,7 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   expect(text).toContain("terminal tui");
   expect(text).toContain("live agent progress");
   expect(text).toContain("nebula-chat");
+  const pairing = settingCatalogText(settingCatalogEntry("settings.devices")).toLowerCase();
+  expect(pairing).toContain("running conversation");
+  expect(pairing).toContain("idle conversation");
 });
