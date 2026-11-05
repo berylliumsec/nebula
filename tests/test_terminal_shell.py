@@ -883,3 +883,87 @@ def test_explicit_startup_chat_overrides_remembered_selection(
         assert shell.settings.entry["selection"]["session_id"] == "requested-chat"
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("backend", ["provider", "harness"])
+def test_approval_resume_uses_exact_turn_backend_instead_of_cached_chat(
+    tmp_path, backend
+):
+    streams = []
+    decided = False
+    pending_id = "selected-turn"
+
+    def handler(request):
+        nonlocal decided
+        path = request.url.path
+        if path.endswith("/state"):
+            return response(
+                {
+                    "turn_id": "selected-turn",
+                    "pending": [
+                        {
+                            "id": "approval-a",
+                            "turn_id": "selected-turn",
+                            "kind": "approval",
+                            "text": "Review the requested action",
+                        }
+                    ],
+                }
+            )
+        if path == "/api/v1/approvals/approval-a":
+            return response(
+                {
+                    "id": "approval-a",
+                    "chat_session_id": "chat-a",
+                    "status": "approved" if decided else "pending",
+                    "exact_request": {"action": "synthetic"},
+                }
+            )
+        if path == "/api/v1/chat/sessions/chat-a/pending-turn":
+            return response(
+                {
+                    "id": pending_id,
+                    "session_id": "chat-a",
+                    "harness_turn_id": "vendor-turn" if backend == "harness" else None,
+                }
+            )
+        if path.endswith("/decision"):
+            assert json.loads(request.content) == {"decision": "approve"}
+            decided = True
+            return response({})
+        if path.startswith("/api/v1/chat/turns/"):
+            streams.append((request.method, path))
+            return httpx.Response(
+                200,
+                content=frame("started", turn_id="selected-turn", sequence=1)
+                + frame("done", message={"content": "Saved answer"}, sequence=2),
+            )
+        pytest.fail(f"Unexpected approval request: {request.method} {path}")
+
+    async def run():
+        nonlocal decided, pending_id
+        shell = make_shell(tmp_path, handler, ui=UI(choices=["approval-a", "approve"]))
+        shell.current().session["backend"] = (
+            "provider" if backend == "harness" else "harness"
+        )
+        draft = Draft(text="Next unsent turn")
+        shell.current().draft = draft
+        await workflows.approvals(shell, [])
+        await shell.stream_task
+        assert streams == [
+            (
+                "POST" if backend == "provider" else "GET",
+                "/api/v1/chat/turns/selected-turn/"
+                + ("resume" if backend == "provider" else "events"),
+            )
+        ]
+        assert shell.current().draft is draft
+        decided = False
+        pending_id = "newer-turn"
+        shell.ui = UI(choices=["approval-a"])
+        with pytest.raises(ClientError, match="pending turn changed"):
+            await workflows.approvals(shell, [])
+        assert not decided
+        await shell.api.close()
+
+    asyncio.run(run())

@@ -1,10 +1,10 @@
 {
-  "change_digest": "64e30fd1d90aa108efaeea1731cb8622cf3f2dd83f82e97efbfd575cb6885834",
+  "change_digest": "4146b2b7faed296e35a96dc1fab66da6f488da77838bdf9300c94e10e0f277b0",
   "reviewed_by": "Codex focused terminal workflows and independent request/stream causal validation",
-  "reason": "85 collected tests, including lifecycle, explicit startup selection, stale-edit review and menu cancellation/paging regressions, both attachment integrity contracts, and two paired direct-Assistant Core journeys: isolated terminal workflows, actual POSIX input, independent wheel/sdist and clean installation, legacy paired Butler client, actual headless TLS LAN Core, and three exact bundled product-help checks. Terminal-only subset is also selected on Linux/macOS Python 3.11-3.13 in the dedicated lightweight job; full Core runs only on Python 3.12.",
+  "reason": "87 collected tests, including lifecycle, explicit startup selection, exact approval-owner runtime routing, stale-edit review and menu cancellation/paging regressions, both attachment integrity contracts, and two paired direct-Assistant Core journeys: isolated terminal workflows, actual POSIX input, independent wheel/sdist and clean installation, legacy paired Butler client, actual headless TLS LAN Core, and three exact bundled product-help checks. Terminal-only subset is also selected on Linux/macOS Python 3.11-3.13 in the dedicated lightweight job; full Core runs only on Python 3.12.",
   "exclusions": "No unrelated suites, browser layout, frontend behavior, native editor, notebook, container execution or paid providers. The settings catalog adds discovery copy only, so browser/mobile and frontend bundle matrices do not apply. Product-help regeneration and Chroma synchronization run in CI; the enforced local environment policy denies the model download. Tests use only synthetic data and inert runtimes.",
   "expected_tests": {
-    "python": 85,
+    "python": 87,
     "frontend": 0,
     "native": 0,
     "playwright": 0

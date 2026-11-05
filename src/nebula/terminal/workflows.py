@@ -589,6 +589,18 @@ async def approvals(shell: Shell, args: list[str]) -> None:
         raise ClientError(
             "This approval belongs to another conversation. Refresh /status."
         )
+    turn = await shell.api.request(
+        "GET", f"chat/sessions/{key(view.session_id)}/pending-turn"
+    )
+    if (
+        not turn
+        or turn.get("id") != selected["turn_id"]
+        or turn.get("session_id") != view.session_id
+        or approval.get("chat_turn_id") not in {None, selected["turn_id"]}
+    ):
+        raise ClientError(
+            "The pending turn changed. Refresh /approvals before deciding."
+        )
     shell.ui.say("Exact requested action:")
     record(shell, approval.get("exact_request") or approval)
     decision = (
@@ -608,16 +620,19 @@ async def approvals(shell: Shell, args: list[str]) -> None:
         f"Decision recorded: {observed['status']}. This is not proof the action completed."
     )
     if decision != "stop":
-        if (view.session or {}).get("backend") == "provider":
-            await shell.detach()
-            view.cursor = Cursor(turn_id=selected["turn_id"])
-            shell.stream_task = asyncio.create_task(
-                shell.stream(
-                    view, "POST", f"chat/turns/{key(selected['turn_id'])}/resume"
-                )
+        await shell.detach()
+        view.cursor = Cursor(
+            turn_id=selected["turn_id"], harness_turn_id=turn.get("harness_turn_id")
+        )
+        provider = not turn.get("harness_turn_id")
+        shell.stream_task = asyncio.create_task(
+            shell.stream(
+                view,
+                "POST" if provider else "GET",
+                f"chat/turns/{key(selected['turn_id'])}/"
+                + ("resume" if provider else "events"),
             )
-        else:
-            await shell.follow()
+        )
 
 
 async def form(

@@ -29,8 +29,9 @@ reported separately; unavailable platform evidence remains an explicit gate.
 
 ## Implementation receipt
 
-The reviewed selection in `.github/test-selection.json` collects 85 tests.
-On Linux/Python 3.12, the following bounded run passed **82 tests** in 201.69s:
+The reviewed selection in `.github/test-selection.json` collects 87 tests.
+For the initial implementation on Linux/Python 3.12, the following bounded run
+passed **82 tests** in 201.69s:
 
 ```console
 .venv/bin/pytest -q -s --tb=short tests/test_terminal_shell.py tests/test_terminal_package.py tests/test_terminal_pty.py tests/v3/test_chat_cli.py tests/v3/test_chat_cli_core.py tests/v3/test_terminal_core.py
@@ -45,12 +46,19 @@ and inert provider/harness fixtures. No frontend was served.
 | `https://172.26.91.245:55529` | Actual headless entry point, invitation, pairing, project creation, saved Butler transcript, Core restart/reconnect, SIGINT and revocation |
 | `https://172.26.91.245:44965` | Main agent chat, one-turn skill, Core file excerpt, local document/image ingestion, settings readback/concurrent changes, retained goal skill snapshot, reconnect without replay, harness question and follow |
 | `https://172.26.91.245:56475` | Durable follow-up, detach/quit preserving work, reconnect, exact-turn stop, exact approval rejection, actual PTY Ctrl-C |
+| `https://172.26.91.245:45779` | Final approval-owner routing repair: repeated queue/detach/reconnect, exact rejection and PTY cancellation |
+
+After the approval-owner repair, its two provider/harness regression cases and
+the actual TLS journey passed together: **3 tests in 46.59s**. Both runtime cases
+also reject a stale pending owner before submitting a decision.
 
 The fixtures stop their Core and client processes on teardown. Request/stream
 contracts separately prove no POST replay after lost acceptance or failed
 reconciliation, distinct turn identities, late-event isolation, revision conflict
 review, hidden sensitive answers, and origin isolation. POSIX terminal tests cover
 bracketed paste, multiline Unicode input, resizing, and menu interruption.
+Approval continuation reads the exact Core-owned turn's backend, so a cached
+conversation binding or a later runtime selection cannot choose its endpoint.
 
 The independent builder produced `nebula_client-3.0.0b3-py3-none-any.whl`
 (about 39 KiB), a self-contained source distribution, and
@@ -59,15 +67,17 @@ terminal dependencies; imports and help load no Core, database, browser or GUI
 modules. Focused Ruff, client mypy (10 files), Core mypy, and diagnostic audits
 passed. The audit reports zero unclassified handlers or ignored results.
 
-CI gates the 41 standalone client tests on Linux and macOS with Python 3.11,
+CI gates the 43 standalone client tests on Linux and macOS with Python 3.11,
 3.12 and 3.13, and attaches wheel/source/checksums. Its Core job runs the full
-reviewed 85-test selection, including three exact product-help checks for the
+reviewed 87-test selection, including three exact product-help checks for the
 current source digest, terminal discovery, and Chroma synchronization. Local
 product-help regeneration could not download the embedding model because the
 managed environment's enforced proxy rejects its S3 URL. CI run
 `41941955782` generated the current index and passed all three product-help
 checks; its only test failure was an ANSI-sensitive help assertion, now
-normalized and verified with forced CI styling. Current-head CI must pass
-before merge. Release preparation stages the client distributions and
-finalization verifies their checksums. No release or deployment was triggered
+normalized and verified with forced CI styling. CI run `41942550346` subsequently
+passed its 85 tests and all six 41-test client jobs; the final approval-owner
+regression adds two cases. Current-head CI and artifact evidence are recorded
+in PR #925 and must pass before merge. Release preparation stages the client
+distributions and finalization verifies their checksums. No release or deployment was triggered
 for this implementation.
