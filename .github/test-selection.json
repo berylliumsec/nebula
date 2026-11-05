@@ -1,28 +1,23 @@
 {
-  "change_digest": "cfdb32857372800260d59b2a9d92766ba586e64ae0a8857d3ae17211befc94d9",
-  "reviewed_by": "Codex; independent fresh-context TUI root-cause validation before repair",
-  "reason": "The paired terminal client now shows Core-owned working, waiting, idle, and unknown states for visible conversations and in the F3 picker. Focused tests cover rail ordering and truncation, ETag polling, failure and project-switch isolation, Core activity semantics, a paired TLS LAN Core journey with another client starting and stopping a turn and an approval wait, plus current product guidance discovery and Chroma source-digest synchronization. The disposable Core now uses a fixture-owned idle host-load sampler so its turn-admission evidence is deterministic under real Mac CPU pressure. The Settings assistant catalog regression checks the new destination aliases and guidance. A focused rail test proves an older selected main chat remains visible even outside the recent catalog page. GitHub rejected macos-14 before runner allocation, so the CI macOS labels now use supported macos-15; the terminal-client matrix exercises that change.",
-  "exclusions": "No browser page, native runtime, or Core activity route changed. The UI catalog edit adds search keywords only; its focused frontend test covers discoverability. Browser Playwright profiles and native tests are not applicable to the Python terminal display. The paired LAN test uses synthetic projects and inert provider/harness fixtures, not live Core data. Updating CI runner labels does not change application behavior or require a broader test selection.",
+  "change_digest": "0ca4d5085247ebeb91f7fe435163684f48bfd2c08bec16a685f06cddb48161be",
+  "reviewed_by": "Codex; independent fresh-context validation of the terminal selection feedback fault",
+  "reason": "The full-screen paired terminal client lacked a transient navigation state after Enter or a command shortcut, so its picker vanished and the old chat could still say Ready while Core catalog, detail, history, and status reads were pending. Focused TUI tests cover immediate feedback, the picker/input boundary, cancellation and error cleanup. A paired TLS LAN Core test holds real project and chat reads to verify LOADING on the visible terminal screen and its removal when the selected chat is ready. Product guidance, destination discovery, index digest, and Chroma synchronization are checked for the new loading explanation.",
+  "exclusions": "The client-only transient status does not change Core routes, durable session state, browser UI, or native runtime. Browser Playwright profiles and native tests are not applicable to the Python terminal display. The LAN Core uses only synthetic projects and paired credentials; no production Core is restarted or changed.",
   "expected_tests": {
-    "python": 13,
+    "python": 8,
     "frontend": 1,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_tui.py::test_tui_sidebar_keeps_distinct_suffixes_and_selected_chat_visible",
-    "tests/test_terminal_tui.py::test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown",
-    "tests/test_terminal_tui.py::test_tui_generated_markdown_title_stays_readable_in_navigation",
-    "tests/test_terminal_tui.py::test_navigation_rail_includes_the_selected_butler",
-    "tests/test_terminal_tui.py::test_conversation_activity_poll_handles_304_failure_and_project_switch",
-    "tests/v3/test_terminal_core.py::test_paired_tui_marks_other_conversations_running_waiting_and_idle",
-    "tests/v3/test_terminal_core.py::test_paired_full_screen_tui_shows_progress_and_saved_answer",
-    "tests/v3/test_chat_api.py::test_chat_session_activity_reports_core_owned_turn_state",
+    "tests/test_terminal_tui.py::test_tui_searches_and_selects_a_menu_without_opaque_ids",
+    "tests/test_terminal_tui.py::test_tui_selection_loading_stays_visible_until_next_view_is_ready",
+    "tests/test_terminal_tui.py::test_tui_loading_clears_when_a_picker_needs_input_or_fails",
+    "tests/v3/test_terminal_core.py::test_paired_tui_shows_loading_while_selected_project_and_chat_open",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets",
-    "tests/test_terminal_tui.py::test_navigation_rail_keeps_an_older_selected_chat"
+    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets"
   ],
   "frontend": [
     "ui/src/settingsCatalog.terminal.test.ts"

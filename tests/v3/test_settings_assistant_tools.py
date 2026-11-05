@@ -116,7 +116,9 @@ def test_catalog_covers_settings_destinations_without_secrets():
         in settings_destination["guide"]
     )
     assert "running conversation" in settings_destination["aliases"]
+    assert "selection feedback" in settings_destination["aliases"]
     assert "RUN/WAIT/IDLE conversation status" in settings_destination["guide"]
+    assert "local LOADING feedback" in settings_destination["guide"]
     assert (
         next(item for item in result["settings"] if item["id"] == "storage")["url"]
         == "/settings#storage-integration-settings"

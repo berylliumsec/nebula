@@ -544,6 +544,20 @@ def lan_core(tmp_path, monkeypatch):
         execution_data_root=tmp_path,
         workspace_service=workspaces,
     )
+    delayed_read = {
+        "path": "",
+        "entered": threading.Event(),
+        "release": threading.Event(),
+    }
+
+    @app.middleware("http")
+    async def delay_selected_read(request, call_next):
+        if request.method == "GET" and request.url.path == delayed_read["path"]:
+            delayed_read["path"] = ""
+            delayed_read["entered"].set()
+            await asyncio.to_thread(delayed_read["release"].wait, 15)
+        return await call_next(request)
+
     server = uvicorn.Server(
         uvicorn.Config(
             app,
@@ -621,6 +635,7 @@ def lan_core(tmp_path, monkeypatch):
             "admin": admin,
             "store": store,
             "provider": provider,
+            "delayed_read": delayed_read,
             "project": project,
             "config": config,
             "env": env,
@@ -807,6 +822,94 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
                     "rendered streamed Markdown",
                     "source toggle",
                     "saved readback",
+                ],
+                "result": "passed",
+            }
+        )
+    )
+
+
+def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core):
+    data = lan_core
+    second = data["store"].create(
+        Engagement(
+            id="second-project",
+            name="Second Project",
+            workspace_path=str(data["workspace"]),
+            assistant_defaults={
+                "backend": "provider",
+                "provider_id": "provider-a",
+                "model": "model-a",
+            },
+        )
+    )
+    data["store"].create(
+        ChatSession(
+            id="slow-chat",
+            engagement_id=second.id,
+            title="Slow chat",
+            backend="provider",
+            provider_profile_id="provider-a",
+            model="model-a",
+            metadata={"initial_title_state": "operator"},
+        )
+    )
+    delayed = data["delayed_read"]
+    terminal = data["start"](
+        "shell",
+        "--project",
+        "Terminal Project",
+        "--chat",
+        "Harness chat",
+        tty=True,
+        columns=132,
+        rows=30,
+    )
+    try:
+        terminal.expect_screen("Terminal Project / Harness chat", "/help for commands")
+        delayed["path"] = "/api/v1/engagements"
+        terminal.send("/projects")
+        terminal.expect_screen("LOADING  Running /projects…", "Harness chat")
+        assert delayed["entered"].wait(10), "Project catalog did not reach Core"
+        delayed["release"].set()
+        terminal.expect_screen("Search:", "Second Project")
+
+        delayed["entered"].clear()
+        delayed["release"].clear()
+        delayed["path"] = "/api/v1/chat-sessions"
+        os.write(terminal.input_fd, b"Second Project")
+        terminal.expect_screen("Search: Second Project")
+        os.write(terminal.input_fd, b"\r")
+        terminal.expect_screen("LOADING  Opening project…", timeout=7)
+        assert delayed["entered"].wait(10), "Chat catalog did not reach Core"
+        delayed["release"].set()
+        terminal.expect_screen("Search:", "Slow chat")
+
+        delayed["entered"].clear()
+        delayed["release"].clear()
+        delayed["path"] = "/api/v1/chat-sessions/slow-chat"
+        os.write(terminal.input_fd, b"Slow chat")
+        terminal.expect_screen("Search: Slow chat")
+        os.write(terminal.input_fd, b"\r")
+        terminal.expect_screen("LOADING  Opening conversation…", timeout=7)
+        assert delayed["entered"].wait(10), "Chat detail did not reach Core"
+        terminal.expect_screen("LOADING  Opening conversation…", "Harness chat")
+        delayed["release"].set()
+        terminal.expect_screen("Second Project / Slow chat", absent=("LOADING",))
+    finally:
+        delayed["release"].set()
+        terminal.close(send_quit=False, send_eof=True)
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and authenticated TLS LAN Core",
+                "fixture": "paired client, synthetic projects and paused Core reads",
+                "checks": [
+                    "command progress before picker",
+                    "selected project progress through catalog read",
+                    "selected chat progress through detail read",
+                    "loading clears when the new chat is ready",
                 ],
                 "result": "passed",
             }
