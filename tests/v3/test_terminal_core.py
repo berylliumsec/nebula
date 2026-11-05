@@ -285,13 +285,19 @@ class TerminalProcess:
         if expect:
             self.expect(expect)
 
-    def close(self, *, send_quit=True):
+    def close(self, *, send_quit=True, send_eof=False):
         if self.process.poll() is None:
             if send_quit:
                 self.send("/quit")
             if self.master is not None:
                 deadline = time.monotonic() + 10
+                next_eof = 0.0
                 while self.process.poll() is None and time.monotonic() < deadline:
+                    if send_eof and time.monotonic() >= next_eof:
+                        # The main input future is absent while a command runs.
+                        # Keep trying Ctrl-D until the next prompt opens.
+                        os.write(self.input_fd, b"\x04")
+                        next_eof = time.monotonic() + 0.2
                     ready, _, _ = select.select([self.master], [], [], 0.05)
                     if ready:
                         try:
@@ -783,17 +789,17 @@ def test_paired_full_screen_slash_menu_tracks_chat_context(lan_core):
     terminal.send("Hello from the slash-menu fixture", expect="Response complete.")
     os.write(terminal.input_fd, b"/")
     terminal.expect_screen("/history", "/status", absent=("/stop",))
+    terminal.position = len(terminal.output)
     os.write(terminal.input_fd, b"his\t\r")
     terminal.expect("Hello from the slash-menu fixture")
     terminal.expect("Synthetic provider answer.")
 
-    terminal.close()
+    terminal.close(send_quit=False, send_eof=True)
     reopened = data["start"]("shell", tty=True)
     reopened.expect("/help for commands")
     os.write(reopened.input_fd, b"/")
     reopened.expect_screen("/history", "/status", absent=("/stop",))
-    os.write(reopened.input_fd, b"quit\t\r")
-    reopened.close(send_quit=False)
+    reopened.close(send_quit=False, send_eof=True)
     print(
         json.dumps(
             {

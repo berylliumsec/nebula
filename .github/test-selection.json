@@ -1,5 +1,5 @@
 {
-  "change_digest": "8bc38b1afcd7657e55978e3a7de868b92cc3f651eba593226e830fc9214612ee",
+  "change_digest": "2784c2df8c36a2c9ed0e16f0e1a34a726d3b502a338aa4f9bd8b133ef4854054",
   "reviewed_by": "Codex; independent fresh-context TUI root-cause validation before repair",
   "reason": "Typing slash in the Python terminal client now renders and filters a selectable command menu using selected chat, turn, and attention state. Three focused client tests cover command availability and PTY keyboard interaction; one paired TLS LAN Core test covers the real shell entry, command dispatch, saved chat, and reconnect. Two product-help tests cover the updated guidance and bundled source digest.",
   "exclusions": "No browser UI, frontend, or native code changed, so frontend, Playwright, and Rust tests do not apply. The paired LAN test uses a synthetic project and inert provider; it does not access a live Core. A separate client wheel build verifies packaging.",
