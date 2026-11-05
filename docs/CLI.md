@@ -35,6 +35,9 @@ or Tab to insert it without running. When no command list is open, Tab focuses
 the transcript for scrolling. Ctrl-C stops a supported selected turn.
 The view updates as Core accepts, queues, and works on a turn, before the first
 answer text arrives. Progress and requests for action stay visible during input.
+The activity strip shows **LOADING** as soon as a command or menu selection starts
+opening. It stays visible through Core reads, then clears when the next choice or
+view is ready. This local navigation status is separate from a running Core turn.
 The conversation rail labels each chat **RUN**, **WAIT**, or **IDLE** using Core's
 turn state. **WAIT** means Core needs a decision or intervention; `/status` shows
 the next action. A **?** means activity could not be read, so it must not be

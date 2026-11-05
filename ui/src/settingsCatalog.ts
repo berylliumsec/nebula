@@ -211,7 +211,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Identity & Security",
     scope: "Security",
     target: "device-pairing-settings",
-    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke", "CLI", "terminal", "nebula-chat", "nebula-client", "Assistant shell", "remote agent chats", "running conversation", "idle conversation", "turn status", "headless"],
+    keywords: ["device", "pair", "pairing link", "unpair", "phone", "mobile", "browser", "qr", "revoke", "CLI", "terminal", "nebula-chat", "nebula-client", "Assistant shell", "remote agent chats", "running conversation", "idle conversation", "turn status", "terminal loading", "selection feedback", "headless"],
   },
   {
     id: "settings.release",

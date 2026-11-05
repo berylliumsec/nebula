@@ -10,4 +10,5 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   const pairing = settingCatalogText(settingCatalogEntry("settings.devices")).toLowerCase();
   expect(pairing).toContain("running conversation");
   expect(pairing).toContain("idle conversation");
+  expect(pairing).toContain("selection feedback");
 });

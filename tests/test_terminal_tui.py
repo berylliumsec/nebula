@@ -10,7 +10,7 @@ from nebula.terminal.shell import Shell
 from nebula.terminal.state import View
 from nebula.terminal.transport import AsyncApi, Settings
 from nebula.terminal.tui import TuiUI
-from nebula.terminal.ui import TerminalUI
+from nebula.terminal.ui import CancelledInput, TerminalUI
 
 
 def test_tui_keeps_progress_visible_and_replaces_chat_history() -> None:
@@ -388,6 +388,75 @@ def test_tui_searches_and_selects_a_menu_without_opaque_ids() -> None:
         assert [item["id"] for item in ui._matching_items()] == ["id-b"]
         ui._menu_select()
         assert (await choice)["id"] == "id-b"
+
+    asyncio.run(run())
+
+
+def test_tui_selection_loading_stays_visible_until_next_view_is_ready() -> None:
+    async def run() -> None:
+        ui = TuiUI()
+        ui.activity("Ready")
+        shortcut = asyncio.create_task(ui.ask("You", main=True))
+        await asyncio.sleep(0)
+        ui._shortcut("chats")
+        assert "LOADING  Running /chats…" in ui._activity_text()
+        assert await shortcut == "/chats"
+
+        choice = asyncio.create_task(
+            ui.choose("Conversation", [{"id": "chat", "name": "Slow chat"}])
+        )
+        await asyncio.sleep(0)
+        assert "LOADING" not in ui._activity_text()
+        ui._menu_select()
+        assert (await choice)["id"] == "chat"
+        assert not ui._modal_visible
+        assert "LOADING  Opening conversation…" in ui._activity_text()
+
+        ui.open_view(
+            {"id": "project", "name": "Project"},
+            {"id": "chat", "title": "Slow chat"},
+        )
+        assert "LOADING  Opening conversation…" in ui._activity_text()
+        ready = asyncio.create_task(ui.ask("You", main=True))
+        await asyncio.sleep(0)
+        assert "LOADING" not in ui._activity_text()
+        assert "Ready" in ui._activity_text()
+        ui._complete_main(EOFError())
+        try:
+            await ready
+        except EOFError:
+            pass
+
+    asyncio.run(run())
+
+
+def test_tui_loading_clears_when_a_picker_needs_input_or_fails() -> None:
+    async def run() -> None:
+        ui = TuiUI()
+        ui.begin_loading("Loading projects…")
+        choice = asyncio.create_task(ui.choose("Project", []))
+        await asyncio.sleep(0)
+        assert "LOADING" not in ui._activity_text()
+        ui._cancel_modal()
+        try:
+            await choice
+        except CancelledInput:
+            pass
+        else:
+            raise AssertionError("Cancelling a picker should stop the selection")
+
+        ui.begin_loading("Opening conversation…")
+        ui.say("Cannot reach Core securely. Check the connection.")
+        ui._render()
+        ready = asyncio.create_task(ui.ask("You", main=True))
+        await asyncio.sleep(0)
+        assert "LOADING" not in ui._activity_text()
+        assert "Cannot reach Core securely" in ui.transcript.text
+        ui._complete_main(EOFError())
+        try:
+            await ready
+        except EOFError:
+            pass
 
     asyncio.run(run())
 

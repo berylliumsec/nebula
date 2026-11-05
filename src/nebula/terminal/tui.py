@@ -138,6 +138,7 @@ class TuiUI(TerminalUI):
         self._entries: list[tuple[str, str]] = []
         self._activity: list[str] = []
         self._notice = ""
+        self._loading = ""
         self._streaming = False
         self._source_view = False
         self._render_width = 0
@@ -495,7 +496,9 @@ class TuiUI(TerminalUI):
 
     def _activity_text(self) -> str:
         width = self.app.output.get_size().columns
-        if self._notice:
+        if self._loading:
+            detail = "LOADING  " + self._loading
+        elif self._notice:
             detail = "ACTION  " + self._notice
         elif self._streaming:
             detail = "WORKING  " + (
@@ -602,6 +605,15 @@ class TuiUI(TerminalUI):
         if clean and (not self._activity or self._activity[-1] != clean):
             self._activity.append(clean[:180])
             self._activity = self._activity[-30:]
+            self._invalidate()
+
+    def begin_loading(self, value: str) -> None:
+        self._loading = terminal_text(value).strip()[:180]
+        self._invalidate()
+
+    def clear_loading(self) -> None:
+        if self._loading:
+            self._loading = ""
             self._invalidate()
 
     def clear_notice(self) -> None:
@@ -731,6 +743,12 @@ class TuiUI(TerminalUI):
         if not value.strip():
             return
         self.composer.text = ""
+        if value.startswith("/"):
+            command = value[1:].split(maxsplit=1)
+            action = f"Running /{command[0]}…" if command else "Running command…"
+        else:
+            action = "Sending message…"
+        self.begin_loading(action)
         self._main_future.set_result(value)
 
     def set_commands(self, names: list[str]) -> None:
@@ -753,6 +771,7 @@ class TuiUI(TerminalUI):
             return
         self._preserved_draft = self.composer.text
         self.composer.text = ""
+        self.begin_loading(f"Running /{name}…")
         self._main_future.set_result("/" + name)
 
     def _interrupt(self) -> None:
@@ -788,6 +807,7 @@ class TuiUI(TerminalUI):
         path: bool = False,
     ) -> str:
         if main:
+            self.clear_loading()
             if default and not self.composer.text:
                 self.composer.text = default
             self._mode = "main"
@@ -798,6 +818,7 @@ class TuiUI(TerminalUI):
                 return await self._main_future
             finally:
                 self._main_future = None
+        self.clear_loading()
         self._mode = "prompt"
         self._prompt_future = asyncio.get_running_loop().create_future()
         prompt_keys = KeyBindings()
@@ -806,6 +827,7 @@ class TuiUI(TerminalUI):
         def submit(_event: Any) -> None:
             assert self._modal_input is not None
             if self._prompt_future is not None and not self._prompt_future.done():
+                self.begin_loading("Processing answer…")
                 self._prompt_future.set_result(self._modal_input.text)
 
         self._modal_input = TextArea(
@@ -912,6 +934,7 @@ class TuiUI(TerminalUI):
         if row["id"] == "__load_more":
             asyncio.create_task(self._load_more(picker))
         elif not picker.future.done():
+            self.begin_loading(f"Opening {picker.title.lower()}…")
             picker.future.set_result(row)
 
     async def choose(
@@ -934,6 +957,7 @@ class TuiUI(TerminalUI):
             raise ClientError(
                 f"No unique matching {title}. Choose from the listed names."
             )
+        self.clear_loading()
         future: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
