@@ -99,6 +99,8 @@ attachment. No provider keys or transcript mirror are stored on the client.
 
 Output follows Core sequence/epoch cursors. Network recovery attaches only to
 known existing turns; an uncertain submission is never automatically resent.
+If a goal action times out, it may already have completed in Core. Use
+`/goal show` to read its saved state before deciding whether to retry.
 Use `/status`, `/history` and `/follow` to recover, or `/chats` to locate a newly
 saved conversation whose acceptance response was lost. Core retains its existing
 permissions, scope and data-sharing consent. Browser-owned actions, Voice,

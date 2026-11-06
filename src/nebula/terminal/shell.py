@@ -1339,6 +1339,7 @@ class Shell:
                 await self.select_project(project, chat=chat)
             self.ui.say("/help for commands. Core work continues after /quit.")
             while self.running:
+                text = ""
                 try:
                     view = self.current()
                     text = await self.ui.ask("You", default=view.draft.text, main=True)
@@ -1370,13 +1371,25 @@ class Shell:
                 except EOFError:
                     break
                 except (ClientError, ValueError, OSError, httpx.HTTPError) as exc:
+                    if isinstance(exc, httpx.ReadTimeout):
+                        message = (
+                            "Core timed out during /goal. The goal may have changed. "
+                            "Use /goal show to read its saved state before retrying; "
+                            "nothing was resent."
+                            if text == "/goal" or text.startswith("/goal ")
+                            else "Core timed out. Core may have processed the request. "
+                            "Check its saved state before retrying; nothing was resent."
+                        )
+                    elif isinstance(exc, httpx.HTTPError):
+                        message = (
+                            "Cannot reach Core securely. Check the connection; "
+                            "nothing was automatically resent."
+                        )
+                    else:
+                        message = str(exc)
                     if isinstance(self.ui, TuiUI):
-                        self.ui.show_problem(str(exc))
-                    self.ui.say(
-                        str(exc)
-                        if not isinstance(exc, httpx.HTTPError)
-                        else "Cannot reach Core securely. Check the connection; nothing was automatically resent."
-                    )
+                        self.ui.show_problem(message)
+                    self.ui.say(message)
         except (CancelledInput, EOFError):
             self.ui.say("Terminal closed. Core work continues.")
         finally:
