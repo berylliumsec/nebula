@@ -40,9 +40,11 @@ The activity strip and header animate while connecting, opening a project or
 conversation, reading a catalog page, sending a turn, reconnecting, or following
 active Core work. They show the current step and local elapsed time where known;
 they stop when the operation ends. `NEBULA_CHAT_REDUCED_MOTION=1` keeps the same
-labels and feedback with a stationary indicator. The transcript is kept to a
-readable width on wide terminals, and the conversation rail is separated from it.
+labels and feedback with a stationary indicator. The transcript, activity strip,
+and composer fill the available terminal pane beside the conversation rail.
 At narrow widths the rail hides, leaving the transcript and composer usable.
+If macOS Terminal has a split pane open, press Shift-Command-D to close it and
+give the Assistant the full window height.
 
 The rail labels each chat **Running**, **Waiting for action**, **Idle**, or
 **State unknown** using Core's turn state. Waiting calls for `/status` to inspect

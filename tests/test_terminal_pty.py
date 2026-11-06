@@ -190,7 +190,7 @@ asyncio.run(main())
         assert process.returncode == 0
 
 
-def test_full_screen_wide_layout_separates_rail_and_bounds_long_text():
+def test_full_screen_wide_layout_fills_pane_beside_rail():
     code = """
 import asyncio
 from nebula.terminal.tui import TuiUI
@@ -210,7 +210,7 @@ async def main():
     await ui.close()
 asyncio.run(main())
 """
-    with terminal(code, ready=b"Message or /command", columns=180, rows=36) as (
+    with terminal(code, ready=b"Message or /command", columns=202, rows=30) as (
         _process,
         _master,
         _output,
@@ -225,9 +225,12 @@ asyncio.run(main())
         assert any("● Running" in row for row in rows)
         assert any("○ Idle" in row for row in rows)
         assert any("plan:" in row for row in rows)
-        assert max(len(row.rstrip()) for row in rows if "plan:" in row) <= 142
+        assert max(row.count("long content") for row in rows) >= 9
         assert "Simulate open memory lane" in "\n".join(rows)
-        assert any("Message or /command" in row for row in rows[-6:-1])
+        assert any(
+            "Message or /command" in row and row.rfind("┐") >= 198
+            for row in rows[-6:-1]
+        )
 
 
 def test_full_screen_renders_markdown_and_toggles_original_source():

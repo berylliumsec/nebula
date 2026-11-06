@@ -25,7 +25,6 @@ from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
     ConditionalContainer,
-    Dimension,
     Float,
     FloatContainer,
     HSplit,
@@ -48,7 +47,6 @@ from .ui import CancelledInput, InterruptedPrompt, SlashCommandCompleter, Termin
 SIDEBAR_WIDTH = 32
 SIDEBAR_MIN_COLUMNS = 110
 SIDEBAR_MIN_ROWS = 24
-READING_WIDTH = 104
 SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
 
 
@@ -298,7 +296,6 @@ class TuiUI(TerminalUI):
                 self._activity_window,
                 Frame(self.composer, title="Message or /command"),
             ],
-            width=Dimension(max=READING_WIDTH, preferred=READING_WIDTH),
         )
         root = FloatContainer(
             content=HSplit(
@@ -317,7 +314,7 @@ class TuiUI(TerminalUI):
                             ),
                             Window(width=2, char=" ", style="class:gutter"),
                             reading,
-                            Window(char=" ", style="class:gutter"),
+                            Window(width=2, char=" ", style="class:gutter"),
                         ]
                     ),
                     Window(
@@ -538,7 +535,7 @@ class TuiUI(TerminalUI):
             if columns >= SIDEBAR_MIN_COLUMNS and size.rows >= SIDEBAR_MIN_ROWS
             else 0
         )
-        return max(12, min(96, columns - sidebar - 6))
+        return max(12, columns - sidebar - 6)
 
     def _check_render_width(self, _app: Application[None]) -> None:
         if self._render_width != self._reading_width():
