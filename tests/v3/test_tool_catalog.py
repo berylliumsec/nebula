@@ -1,10 +1,14 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 import threading
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.chat as chat_module
 import nebula.v3.tool_catalog as tool_catalog_module
@@ -506,9 +510,9 @@ def test_chroma_tool_collection_embeds_each_fingerprint_once(tmp_path):
     assert index.rank_tools("tls port", ["fp-database"], limit=5)[0][0] == "fp-database"
 
 
-def _deferred_loop(tmp_path, responses, *, preloaded=()):
+async def _deferred_loop(tmp_path, responses, *, preloaded=()):
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
     components = prepared.tool_components
     mcp = _spec(MCP_TOOL, "Search tracker issues.")
     # RecordingBroker serves both the built-in and the MCP-sourced spec.
@@ -527,7 +531,7 @@ def _deferred_loop(tmp_path, responses, *, preloaded=()):
     }
     catalog = catalog_components(components, deferred=[MCP_TOOL])
     prepared.tool_components = chat_module.combine_tool_components(components, catalog)
-    turn = store.update(
+    turn = await store.update(
         ChatTurn,
         prepared.turn.id,
         {"request_snapshot": {"tool_catalog": receipt}},
@@ -545,7 +549,7 @@ def _finish(call_id):
     return _response(calls=[ToolCall(id=call_id, name="finish_response", arguments={})])
 
 
-def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
+async def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
     responses = [
         _response(
             calls=[
@@ -569,9 +573,11 @@ def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
         _finish("c4"),
         _response(text="Found it."),
     ]
-    store, service, prepared, provider, broker = _deferred_loop(tmp_path, responses)
+    store, service, prepared, provider, broker = await _deferred_loop(
+        tmp_path, responses
+    )
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     routing = [
         item for item in provider.requests if item.tool_choice != ToolChoice.NONE
@@ -593,7 +599,7 @@ def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         (MCP_TOOL, {"value": "x"})
     ]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     entry = next(item for item in turn.tool_history if item["model_call_id"] == "c3")
     assert entry["name"] == MCP_TOOL and entry["status"] == "complete"
@@ -613,17 +619,17 @@ def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
     assert [item["name"] for item in json.loads(inventory)] == [MCP_TOOL]
 
 
-def test_final_synthesis_omits_on_demand_tools_that_were_never_loaded(tmp_path):
+async def test_final_synthesis_omits_on_demand_tools_that_were_never_loaded(tmp_path):
     responses = [_finish("c1"), _response(text="Nothing needed.")]
-    _, service, prepared, provider, _ = _deferred_loop(tmp_path, responses)
+    _, service, prepared, provider, _ = await _deferred_loop(tmp_path, responses)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     final = provider.requests[-1]
     assert "BEGIN COMMAND-RUNTIME CAPABILITIES" not in final.instructions
 
 
-def test_preloaded_tool_is_callable_from_the_first_step(tmp_path):
+async def test_preloaded_tool_is_callable_from_the_first_step(tmp_path):
     responses = [
         _response(
             calls=[
@@ -637,11 +643,11 @@ def test_preloaded_tool_is_callable_from_the_first_step(tmp_path):
         _finish("c2"),
         _response(text="Done."),
     ]
-    _, service, prepared, provider, broker = _deferred_loop(
+    _, service, prepared, provider, broker = await _deferred_loop(
         tmp_path, responses, preloaded=[MCP_TOOL]
     )
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     first = provider.requests[0]
     assert MCP_TOOL not in {tool.name for tool in first.tools}
@@ -650,7 +656,7 @@ def test_preloaded_tool_is_callable_from_the_first_step(tmp_path):
     assert [call.tool_name for call in broker.calls] == [MCP_TOOL]
 
 
-def test_call_to_an_unknown_tool_is_an_error_the_model_can_correct(tmp_path):
+async def test_call_to_an_unknown_tool_is_an_error_the_model_can_correct(tmp_path):
     responses = [
         _response(
             calls=[
@@ -664,12 +670,14 @@ def test_call_to_an_unknown_tool_is_an_error_the_model_can_correct(tmp_path):
         _finish("c2"),
         _response(text="That tool does not exist."),
     ]
-    store, service, prepared, provider, broker = _deferred_loop(tmp_path, responses)
+    store, service, prepared, provider, broker = await _deferred_loop(
+        tmp_path, responses
+    )
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     assert broker.calls == []
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     entry = turn.tool_history[0]
     assert entry["name"] == CATALOG_CALL and entry["status"] == "failed"
@@ -684,7 +692,7 @@ def test_call_to_an_unknown_tool_is_an_error_the_model_can_correct(tmp_path):
     assert failure["next_action"].startswith("Correct the indicated argument")
 
 
-def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
+async def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
     search = [
         _response(
             calls=[
@@ -698,8 +706,8 @@ def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
         for i in range(MAX_CATALOG_CALLS_PER_TURN + 1)
     ]
     responses = [*search, _finish("done"), _response(text="Stopped searching.")]
-    store, service, prepared, provider, _ = _deferred_loop(tmp_path, responses)
-    turn = store.update(
+    store, service, prepared, provider, _ = await _deferred_loop(tmp_path, responses)
+    turn = await store.update(
         ChatTurn,
         prepared.turn.id,
         {"max_artifact_queries": None, "max_tool_calls": None},
@@ -707,13 +715,13 @@ def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
     )
     prepared.turn = turn
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     routing = [
         item for item in provider.requests if item.tool_choice != ToolChoice.NONE
     ]
     assert all(_tools(item) == _tools(routing[0]) for item in routing)
-    history = store.get(ChatTurn, "turn").tool_history
+    history = (await store.get(ChatTurn, "turn")).tool_history
     assert [item["status"] for item in history][-1] == "failed"
     refused = json.loads(history[-1]["provider_result"])
     assert refused["schema"] == "nebula.tool-failure/v1"
@@ -734,29 +742,29 @@ def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
     assert all(item["status"] == "complete" for item in history[:-1])
 
 
-def test_direct_call_to_an_unloaded_deferred_tool_still_runs(tmp_path):
+async def test_direct_call_to_an_unloaded_deferred_tool_still_runs(tmp_path):
     responses = [
         _response(calls=[ToolCall(id="c1", name=MCP_TOOL, arguments={"value": "x"})]),
         _finish("c2"),
         _response(text="Done."),
     ]
-    _, service, prepared, provider, broker = _deferred_loop(tmp_path, responses)
+    _, service, prepared, provider, broker = await _deferred_loop(tmp_path, responses)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     assert MCP_TOOL not in {tool.name for tool in provider.requests[1].tools}
     assert [call.tool_name for call in broker.calls] == [MCP_TOOL]
 
 
-def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
+async def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
     def fail(_):
         raise AssertionError("Jev must not be called")
 
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: fail(None))
+    service, request = await _mcp_service(tmp_path, monkeypatch, lambda: fail(None))
     original = service.tool_platform.chat_components
 
-    def default_scope(**kwargs):
-        components = original(**kwargs)
+    async def default_scope(**kwargs):
+        components = await original(**kwargs)
         return RuntimeToolComponents(
             broker=components.broker,
             scope=components.scope.model_copy(update={"tool_suggestions": False}),
@@ -769,7 +777,7 @@ def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
     index = FakeIndex({MCP_TOOL: 0.9}, state="required")
     service.knowledge_index = index
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     snapshot = prepared.turn.request_snapshot
     assert snapshot["tool_suggestions"] is None
@@ -798,10 +806,10 @@ def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "phase", ["resolve", "web_search", "catalog", "build", "reserve"]
 )
-def test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation(
+async def test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation(
     tmp_path, monkeypatch, phase
 ):
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: None)
+    service, request = await _mcp_service(tmp_path, monkeypatch, lambda: None)
     entered = threading.Event()
     release = threading.Event()
 
@@ -845,23 +853,27 @@ def test_chat_preparation_keeps_event_loop_responsive_during_tool_preparation(
             release.set()
         return await task
 
-    prepared = asyncio.run(exercise())
+    prepared = await exercise()
     assert prepared.tool_components is not None
 
 
-def test_local_picks_tell_the_model_which_server_they_come_from(tmp_path, monkeypatch):
+async def test_local_picks_tell_the_model_which_server_they_come_from(
+    tmp_path, monkeypatch
+):
     def fail(_):
         raise AssertionError("Jev must not be called")
 
-    service, request = _mcp_service(
+    service, request = await _mcp_service(
         tmp_path, monkeypatch, lambda: fail(None), scope={"tool_suggestions": False}
     )
-    tracker = service.store.get(McpServerProfile, "tracker")
-    service.store.update(
-        McpServerProfile,
-        tracker.id,
-        {"description": "Bugs for the web app."},
-        expected_revision=tracker.revision,
+    tracker = await service.store.get(McpServerProfile, "tracker")
+    (
+        await service.store.update(
+            McpServerProfile,
+            tracker.id,
+            {"description": "Bugs for the web app."},
+            expected_revision=tracker.revision,
+        )
     )
     service.knowledge_index = FakeIndex({}, state="required")
     request = request.model_copy(
@@ -872,7 +884,7 @@ def test_local_picks_tell_the_model_which_server_they_come_from(tmp_path, monkey
         }
     )
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     catalog = prepared.turn.request_snapshot["tool_catalog"]
     assert catalog["ranker"] == "keyword" and catalog["suggested"] == [MCP_TOOL]
@@ -888,17 +900,17 @@ def test_local_picks_tell_the_model_which_server_they_come_from(tmp_path, monkey
     assert '"description":"Bugs for the web app."' in instructions
 
 
-def test_prepare_sends_only_selected_servers_when_on_demand_loading_is_off(
+async def test_prepare_sends_only_selected_servers_when_on_demand_loading_is_off(
     tmp_path, monkeypatch
 ):
-    service, request = _mcp_service(
+    service, request = await _mcp_service(
         tmp_path,
         monkeypatch,
         lambda: None,
         scope={"tool_suggestions": False, "on_demand_tools": False},
     )
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     # Without deferral the other server's tools would land in every request,
     # so it is not offered at all.
@@ -912,10 +924,14 @@ def test_prepare_sends_only_selected_servers_when_on_demand_loading_is_off(
     } == {NOTES_TOOL, NOTES_WRITE_TOOL_NAME}
 
 
-def test_on_demand_servers_never_turn_tools_on_for_a_plain_chat(tmp_path, monkeypatch):
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: None, selected=())
+async def test_on_demand_servers_never_turn_tools_on_for_a_plain_chat(
+    tmp_path, monkeypatch
+):
+    service, request = await _mcp_service(
+        tmp_path, monkeypatch, lambda: None, selected=()
+    )
     # Side chats keep the project but carry no Work, roster or peer tools.
-    session = service.store.create(
+    session = await service.store.create(
         ChatSession(
             engagement_id=request.engagement_id,
             provider_profile_id=request.provider_id,
@@ -926,18 +942,20 @@ def test_on_demand_servers_never_turn_tools_on_for_a_plain_chat(tmp_path, monkey
     )
     request = request.model_copy(update={"session_id": session.id})
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     assert prepared.tools_enabled is False
     assert service.tool_platform.calls == []
 
 
-def test_resume_rebuilds_the_on_demand_catalog_from_the_turn(tmp_path, monkeypatch):
-    service, request = _mcp_service(
+async def test_resume_rebuilds_the_on_demand_catalog_from_the_turn(
+    tmp_path, monkeypatch
+):
+    service, request = await _mcp_service(
         tmp_path, monkeypatch, lambda: None, scope={"tool_suggestions": False}
     )
-    prepared = service.prepare(request)
-    turn = service.store.update(
+    prepared = await service.prepare(request)
+    turn = await service.store.update(
         ChatTurn,
         prepared.turn.id,
         {"status": ChatTurnStatus.WAITING_APPROVAL},
@@ -945,15 +963,17 @@ def test_resume_rebuilds_the_on_demand_catalog_from_the_turn(tmp_path, monkeypat
     )
     # Changing the live server after the pause must not change what the
     # paused turn was offered.
-    tracker = service.store.get(McpServerProfile, "tracker")
-    service.store.update(
-        McpServerProfile,
-        tracker.id,
-        {"enabled": False},
-        expected_revision=tracker.revision,
+    tracker = await service.store.get(McpServerProfile, "tracker")
+    (
+        await service.store.update(
+            McpServerProfile,
+            tracker.id,
+            {"enabled": False},
+            expected_revision=tracker.revision,
+        )
     )
 
-    resumed = service.prepare_resume(turn.id)
+    resumed = await service.prepare_resume(turn.id)
 
     assert service.tool_platform.calls[-1] == ["notes", "tracker"]
     assert {MCP_TOOL, NOTES_TOOL, CATALOG_CALL} <= set(resumed.tool_components.specs)
@@ -967,14 +987,14 @@ def test_resume_rebuilds_the_on_demand_catalog_from_the_turn(tmp_path, monkeypat
     assert MCP_TOOL in after
 
 
-def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
+async def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
     tmp_path, monkeypatch
 ):
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: None)
+    service, request = await _mcp_service(tmp_path, monkeypatch, lambda: None)
     original = service.tool_platform.chat_components
 
-    def pinned(**kwargs):
-        components = original(**kwargs)
+    async def pinned(**kwargs):
+        components = await original(**kwargs)
         return RuntimeToolComponents(
             broker=components.broker,
             scope=components.scope.model_copy(
@@ -990,7 +1010,7 @@ def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
 
     service.tool_platform.chat_components = pinned
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     # The pin covers the one on-demand tool and the selected server is sent
     # whole, so nothing is left to defer and the catalog tools are omitted.
@@ -1004,7 +1024,7 @@ def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
     assert {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL}.isdisjoint(available)
 
 
-def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):
+async def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -1014,20 +1034,22 @@ def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):
         )
     )
     headers = {"Authorization": "Bearer test-token"}
-    engagement = store.create(Engagement(id="eng-scope", name="Scope"))
+    engagement = await store.create(Engagement(id="eng-scope", name="Scope"))
     url = f"/api/v1/engagements/{engagement.id}/scope"
 
-    created = client.put(url, json={"local_only": False}, headers=headers)
+    created = await client.put(url, json={"local_only": False}, headers=headers)
     assert created.status_code == 200, created.text
     assert created.json()["on_demand_tools"] is True
 
-    off = client.put(url, json={"on_demand_tools": False}, headers=headers)
+    off = await client.put(url, json={"on_demand_tools": False}, headers=headers)
     assert off.json()["on_demand_tools"] is False
-    kept = client.put(url, json={"allowed_domains": ["example.com"]}, headers=headers)
+    kept = await client.put(
+        url, json={"allowed_domains": ["example.com"]}, headers=headers
+    )
     assert kept.json()["on_demand_tools"] is False
 
 
-def _scope_client(tmp_path):
+async def _scope_client(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -1036,15 +1058,15 @@ def _scope_client(tmp_path):
             auth_token="test-token",
         )
     )
-    engagement = store.create(Engagement(id="eng-scope", name="Scope"))
+    engagement = await store.create(Engagement(id="eng-scope", name="Scope"))
     return store, client, engagement, {"Authorization": "Bearer test-token"}
 
 
-def test_always_loaded_tools_are_normalized_and_kept_by_older_clients(tmp_path):
-    _, client, engagement, headers = _scope_client(tmp_path)
+async def test_always_loaded_tools_are_normalized_and_kept_by_older_clients(tmp_path):
+    _, client, engagement, headers = await _scope_client(tmp_path)
     url = f"/api/v1/engagements/{engagement.id}/scope"
 
-    created = client.put(
+    created = await client.put(
         url,
         json={"always_loaded_tools": [f" {MCP_TOOL} ", MCP_TOOL, "", DATABASE_TOOL]},
         headers=headers,
@@ -1052,18 +1074,18 @@ def test_always_loaded_tools_are_normalized_and_kept_by_older_clients(tmp_path):
     assert created.status_code == 200, created.text
     assert created.json()["always_loaded_tools"] == sorted([MCP_TOOL, DATABASE_TOOL])
 
-    kept = client.put(url, json={"local_only": True}, headers=headers)
+    kept = await client.put(url, json={"local_only": True}, headers=headers)
     assert kept.json()["always_loaded_tools"] == sorted([MCP_TOOL, DATABASE_TOOL])
-    cleared = client.put(url, json={"always_loaded_tools": []}, headers=headers)
+    cleared = await client.put(url, json={"always_loaded_tools": []}, headers=headers)
     assert cleared.json()["always_loaded_tools"] == []
 
 
-def test_catalog_offers_every_other_usable_server_in_name_order(tmp_path):
+async def test_catalog_offers_every_other_usable_server_in_name_order(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
 
-    def server(identifier, name, **fields):
+    async def server(identifier, name, **fields):
         fields.setdefault("enabled", True)
-        return store.create(
+        return await store.create(
             McpServerProfile(
                 id=identifier,
                 name=name,
@@ -1078,68 +1100,80 @@ def test_catalog_offers_every_other_usable_server_in_name_order(tmp_path):
             )
         )
 
-    server("mcp-selected", "selected")
-    server("mcp-z", "alpha")
-    server("mcp-a", "beta")
-    server("mcp-off", "off", enabled=False)
-    server("mcp-unprobed", "unprobed", checked_at=None)
-    server("mcp-denied", "denied", tool_overrides={"work": McpApprovalMode.DENY})
-    server("mcp-trimmed", "trimmed", disabled_tools=["work"])
+    (await server("mcp-selected", "selected"))
+    (await server("mcp-z", "alpha"))
+    (await server("mcp-a", "beta"))
+    (await server("mcp-off", "off", enabled=False))
+    (await server("mcp-unprobed", "unprobed", checked_at=None))
+    (
+        await server(
+            "mcp-denied", "denied", tool_overrides={"work": McpApprovalMode.DENY}
+        )
+    )
+    (await server("mcp-trimmed", "trimmed", disabled_tools=["work"]))
 
-    catalog = catalog_mcp_profiles(store, exclude={"mcp-selected"})
+    catalog = await catalog_mcp_profiles(store, exclude={"mcp-selected"})
 
     # Skipped quietly: nobody chose these, so none of them may fail the turn.
     assert [item.id for item in catalog] == ["mcp-z", "mcp-a"]
 
 
-def test_tool_candidates_are_the_runtime_names_of_selectable_mcp_tools(tmp_path):
-    store, client, engagement, headers = _scope_client(tmp_path)
+async def test_tool_candidates_are_the_runtime_names_of_selectable_mcp_tools(tmp_path):
+    store, client, engagement, headers = await _scope_client(tmp_path)
 
     def tool(name):
         return McpToolSnapshot(name=name, description=f"  {name}  does work ")
 
-    store.create(
-        McpServerProfile(
-            id="mcp-tracker",
-            name="tracker",
-            transport="stdio",
-            command="/usr/bin/tracker",
-            enabled=True,
-            trusted_stdio=True,
-            disabled_tools=["delete_everything"],
-            tool_overrides={"rotate_password": McpApprovalMode.DENY},
-            capabilities=McpCapabilitySnapshot(
-                checked_at=utc_now(),
-                tools=[
-                    tool("search_issues"),
-                    tool("delete_everything"),
-                    tool("rotate_password"),
-                ],
-            ),
+    (
+        await store.create(
+            McpServerProfile(
+                id="mcp-tracker",
+                name="tracker",
+                transport="stdio",
+                command="/usr/bin/tracker",
+                enabled=True,
+                trusted_stdio=True,
+                disabled_tools=["delete_everything"],
+                tool_overrides={"rotate_password": McpApprovalMode.DENY},
+                capabilities=McpCapabilitySnapshot(
+                    checked_at=utc_now(),
+                    tools=[
+                        tool("search_issues"),
+                        tool("delete_everything"),
+                        tool("rotate_password"),
+                    ],
+                ),
+            )
         )
     )
-    store.create(
-        McpServerProfile(
-            id="mcp-offline",
-            name="offline",
-            transport="stdio",
-            command="/usr/bin/offline",
-            enabled=False,
-            capabilities=McpCapabilitySnapshot(checked_at=utc_now(), tools=[tool("x")]),
+    (
+        await store.create(
+            McpServerProfile(
+                id="mcp-offline",
+                name="offline",
+                transport="stdio",
+                command="/usr/bin/offline",
+                enabled=False,
+                capabilities=McpCapabilitySnapshot(
+                    checked_at=utc_now(), tools=[tool("x")]
+                ),
+            )
         )
     )
-    store.create(
-        McpServerProfile(
-            id="mcp-unprobed",
-            name="unprobed",
-            transport="stdio",
-            command="/usr/bin/unprobed",
-            enabled=True,
-            trusted_stdio=True,
+    (
+        await store.create(
+            McpServerProfile(
+                id="mcp-unprobed",
+                name="unprobed",
+                transport="stdio",
+                command="/usr/bin/unprobed",
+                enabled=True,
+                trusted_stdio=True,
+            )
         )
     )
 
-    found = client.get(
+    found = await client.get(
         f"/api/v1/engagements/{engagement.id}/scope/tool-candidates", headers=headers
     )
     assert found.status_code == 200, found.text
@@ -1152,7 +1186,10 @@ def test_tool_candidates_are_the_runtime_names_of_selectable_mcp_tools(tmp_path)
             "description": "search_issues does work",
         }
     ]
-    missing = client.get(
+    missing = await client.get(
         "/api/v1/engagements/eng-missing/scope/tool-candidates", headers=headers
     )
     assert missing.status_code == 404
+
+
+pytestmark = pytest.mark.anyio

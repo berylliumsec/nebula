@@ -1,9 +1,15 @@
 """One durable Butler transcript is reserved across clients and Core restarts."""
 
-from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-from fastapi.testclient import TestClient
+from asyncio import Barrier
+
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.butler_sessions import ButlerSessionReservation, reserve_butler_session
@@ -29,11 +35,11 @@ def _runtime(store: NebulaStore, tmp_path) -> HarnessRuntimeService:
     )
 
 
-def test_provider_reservation_is_atomic_across_clients_and_core_restart(tmp_path):
+async def test_provider_reservation_is_atomic_across_clients_and_core_restart(tmp_path):
     path = tmp_path / "butler-provider-reservation.db"
     store = NebulaStore(path)
-    project = store.create(Engagement(name="Selected project"))
-    profile = store.create(_profile(local=True))
+    project = await store.create(Engagement(name="Selected project"))
+    profile = await store.create(_profile(local=True))
     request = ButlerSessionReservation(
         engagement_id=project.id,
         backend=ChatBackend.PROVIDER,
@@ -42,33 +48,31 @@ def test_provider_reservation_is_atomic_across_clients_and_core_restart(tmp_path
     barrier = Barrier(6)
     connections = [NebulaStore(path) for _ in range(6)]
 
-    def reserve(index: int) -> ChatSession:
-        barrier.wait()
+    async def reserve(index: int) -> ChatSession:
+        await barrier.wait()
         # Separate stores exercise the same database boundary used by two
         # Core processes, rather than one in-process lock.
         connection = connections[index]
-        return reserve_butler_session(
+        return await reserve_butler_session(
             connection, _runtime(connection, tmp_path), request
         )
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        sessions = list(executor.map(reserve, range(6)))
+    sessions = list((await asyncio.gather(*(reserve(_item) for _item in range(6)))))
 
     assert len({session.id for session in sessions}) == 1
-    assert len(store.list_entities(ChatSession, engagement_id=project.id)) == 1
+    assert len((await store.list_entities(ChatSession, engagement_id=project.id))) == 1
     assert sessions[0].metadata["control_assistant"] is True
     restarted = NebulaStore(path)
     assert (
-        reserve_butler_session(restarted, _runtime(restarted, tmp_path), request).id
-        == sessions[0].id
-    )
+        await reserve_butler_session(restarted, _runtime(restarted, tmp_path), request)
+    ).id == sessions[0].id
 
 
-def test_harness_reservation_commits_one_chat_and_vendor_binding(tmp_path):
+async def test_harness_reservation_commits_one_chat_and_vendor_binding(tmp_path):
     path = tmp_path / "butler-harness-reservation.db"
     store = NebulaStore(path)
-    project = store.create(Engagement(name="Selected project"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected project"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -86,34 +90,32 @@ def test_harness_reservation_commits_one_chat_and_vendor_binding(tmp_path):
     barrier = Barrier(4)
     connections = [NebulaStore(path) for _ in range(4)]
 
-    def reserve(index: int) -> ChatSession:
-        barrier.wait()
+    async def reserve(index: int) -> ChatSession:
+        await barrier.wait()
         connection = connections[index]
-        return reserve_butler_session(
+        return await reserve_butler_session(
             connection, _runtime(connection, tmp_path), request
         )
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        sessions = list(executor.map(reserve, range(4)))
+    sessions = list((await asyncio.gather(*(reserve(_item) for _item in range(4)))))
 
     assert len({session.id for session in sessions}) == 1
-    assert len(store.list_entities(ChatSession, engagement_id=project.id)) == 1
-    vendors = store.list_entities(HarnessSession, engagement_id=project.id)
+    assert len((await store.list_entities(ChatSession, engagement_id=project.id))) == 1
+    vendors = await store.list_entities(HarnessSession, engagement_id=project.id)
     assert len(vendors) == 1
     assert vendors[0].id == sessions[0].harness_session_id
     assert vendors[0].metadata["control_assistant"] is True
     restarted = NebulaStore(path)
     assert (
-        reserve_butler_session(restarted, _runtime(restarted, tmp_path), request).id
-        == sessions[0].id
-    )
+        await reserve_butler_session(restarted, _runtime(restarted, tmp_path), request)
+    ).id == sessions[0].id
 
 
-def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_path):
+async def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_path):
     store = NebulaStore(tmp_path / "butler-reservation-api.db")
-    first = store.create(Engagement(name="First project"))
-    second = store.create(Engagement(name="Second project"))
-    profile = store.create(_profile(local=True))
+    first = await store.create(Engagement(name="First project"))
+    second = await store.create(Engagement(name="Second project"))
+    profile = await store.create(_profile(local=True))
     app = create_app(store, auth_token="test-token")
     browser_mcp = app.state.agent_security_tools.register_profile()
     client = TestClient(app)
@@ -126,20 +128,19 @@ def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_path):
     }
 
     assert (
-        client.post("/api/v1/chat/control-assistant/session", json=payload).status_code
-        == 401
-    )
-    created = client.post(
+        await client.post("/api/v1/chat/control-assistant/session", json=payload)
+    ).status_code == 401
+    created = await client.post(
         "/api/v1/chat/control-assistant/session", json=payload, headers=headers
     )
     assert created.status_code == 200, created.text
     assert created.json()["model"] == "model-a"
-    again = client.post(
+    again = await client.post(
         "/api/v1/chat/control-assistant/session", json=payload, headers=headers
     )
     assert again.status_code == 200, again.text
     assert again.json()["id"] == created.json()["id"]
-    other = client.post(
+    other = await client.post(
         "/api/v1/chat/control-assistant/session",
         json={**payload, "engagement_id": second.id},
         headers=headers,
@@ -147,10 +148,13 @@ def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_path):
     assert other.status_code == 200, other.text
     assert other.json()["id"] != created.json()["id"]
     assert (
-        store.get(ChatSession, created.json()["id"]).provider_profile_id == profile.id
-    )
-    assert store.get(ChatSession, created.json()["id"]).metadata["mcp_server_ids"] == [
-        browser_mcp.id
-    ]
-    assert len(store.list_entities(ChatSession, engagement_id=first.id)) == 1
-    assert len(store.list_entities(ChatSession, engagement_id=second.id)) == 1
+        await store.get(ChatSession, created.json()["id"])
+    ).provider_profile_id == profile.id
+    assert (await store.get(ChatSession, created.json()["id"])).metadata[
+        "mcp_server_ids"
+    ] == [browser_mcp.id]
+    assert len((await store.list_entities(ChatSession, engagement_id=first.id))) == 1
+    assert len((await store.list_entities(ChatSession, engagement_id=second.id))) == 1
+
+
+pytestmark = pytest.mark.anyio

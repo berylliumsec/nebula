@@ -1,8 +1,12 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app, _with_heartbeats
 from nebula.v3.chat import ChatService, _ActiveProviderTurn
@@ -18,9 +22,9 @@ from nebula.v3.domain import (
 from nebula.v3.storage import NebulaStore
 
 
-def saved_turn(store, backend, *, progress=None):
-    store.create(Engagement(id="project", name="Project"))
-    chat = store.create(
+async def saved_turn(store, backend, *, progress=None):
+    (await store.create(Engagement(id="project", name="Project")))
+    chat = await store.create(
         ChatSession(
             id="chat",
             engagement_id="project",
@@ -34,49 +38,57 @@ def saved_turn(store, backend, *, progress=None):
     )
     harness_id = None
     if backend == "harness":
-        store.create(
-            HarnessProfile(
-                id="harness",
-                name="Harness",
-                kind="grok_acp",
-                executable="/nonexistent/fixture",
+        (
+            await store.create(
+                HarnessProfile(
+                    id="harness",
+                    name="Harness",
+                    kind="grok_acp",
+                    executable="/nonexistent/fixture",
+                )
             )
         )
-        store.create(
-            HarnessSession(
-                id="session",
-                engagement_id="project",
-                harness_profile_id="harness",
-                model="fixture",
+        (
+            await store.create(
+                HarnessSession(
+                    id="session",
+                    engagement_id="project",
+                    harness_profile_id="harness",
+                    model="fixture",
+                )
             )
         )
         harness_id = "harness-turn"
-        store.create(
-            HarnessTurn(
-                id=harness_id,
-                engagement_id="project",
-                harness_session_id="session",
-                origin="chat",
-                chat_session_id=chat.id,
-                chat_turn_id="turn",
-                prompt="one request",
-                status="complete",
+        (
+            await store.create(
+                HarnessTurn(
+                    id=harness_id,
+                    engagement_id="project",
+                    harness_session_id="session",
+                    origin="chat",
+                    chat_session_id=chat.id,
+                    chat_turn_id="turn",
+                    prompt="one request",
+                    status="complete",
+                )
             )
         )
         for text in ("first", "tail"):
-            store.append_operation_event(
-                harness_id,
-                "harness_turn",
-                "project",
-                "harness.message_delta",
-                {
-                    "type": "message_delta",
-                    "delta": text,
-                    "harness_turn_id": harness_id,
-                    "payload": {},
-                },
+            (
+                await store.append_operation_event(
+                    harness_id,
+                    "harness_turn",
+                    "project",
+                    "harness.message_delta",
+                    {
+                        "type": "message_delta",
+                        "delta": text,
+                        "harness_turn_id": harness_id,
+                        "payload": {},
+                    },
+                )
             )
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             id="answer",
             engagement_id="project",
@@ -89,30 +101,32 @@ def saved_turn(store, backend, *, progress=None):
             ),
         )
     )
-    store.create(
-        ChatTurn(
-            id="turn",
-            engagement_id="project",
-            session_id=chat.id,
-            backend=backend,
-            provider_profile_id="provider" if backend == "provider" else None,
-            harness_turn_id=harness_id,
-            model="fixture",
-            status="complete",
-            final_message_id=message.id,
+    (
+        await store.create(
+            ChatTurn(
+                id="turn",
+                engagement_id="project",
+                session_id=chat.id,
+                backend=backend,
+                provider_profile_id="provider" if backend == "provider" else None,
+                harness_turn_id=harness_id,
+                model="fixture",
+                status="complete",
+                final_message_id=message.id,
+            )
         )
     )
 
 
 @pytest.mark.parametrize("backend", ["harness", "provider"])
-def test_chat_follow_is_read_only_and_returns_saved_completion(tmp_path, backend):
+async def test_chat_follow_is_read_only_and_returns_saved_completion(tmp_path, backend):
     store = NebulaStore(tmp_path / "core.db")
     progress = "Routing update."
-    saved_turn(store, backend, progress=progress)
+    (await saved_turn(store, backend, progress=progress))
     app = create_app(store, auth_token="test-token")
-    with TestClient(app) as client:
-        before = store.get(ChatTurn, "turn").revision
-        response = client.get(
+    async with TestClient(app) as client:
+        before = (await store.get(ChatTurn, "turn")).revision
+        response = await client.get(
             "/api/v1/chat/turns/turn/events?after=1",
             headers={"Authorization": "Bearer test-token"},
         )
@@ -129,38 +143,39 @@ def test_chat_follow_is_read_only_and_returns_saved_completion(tmp_path, backend
             assert [f["delta"] for f in frames if f["type"] == "message_delta"] == [
                 "tail"
             ]
-        assert store.get(ChatTurn, "turn").revision == before
-        assert client.get("/api/v1/chat/turns/turn/events").status_code == 401
+        assert (await store.get(ChatTurn, "turn")).revision == before
+        assert (await client.get("/api/v1/chat/turns/turn/events")).status_code == 401
         assert (
-            client.get(
+            await client.get(
                 "/api/v1/chat/turns/turn/events?after=-1",
                 headers={"Authorization": "Bearer test-token"},
-            ).status_code
-            == 422
-        )
+            )
+        ).status_code == 422
 
 
-def test_chat_follow_never_restarts_an_uncertain_provider_turn(tmp_path):
+async def test_chat_follow_never_restarts_an_uncertain_provider_turn(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    saved_turn(store, "provider")
-    turn = store.get(ChatTurn, "turn")
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"status": "interrupted", "final_message_id": None},
-        expected_revision=turn.revision,
+    (await saved_turn(store, "provider"))
+    turn = await store.get(ChatTurn, "turn")
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"status": "interrupted", "final_message_id": None},
+            expected_revision=turn.revision,
+        )
     )
     app = create_app(store, auth_token="test-token")
-    with TestClient(app) as client:
-        response = client.get(
+    async with TestClient(app) as client:
+        response = await client.get(
             "/api/v1/chat/turns/turn/events",
             headers={"Authorization": "Bearer test-token"},
         )
         assert response.status_code == 409
-        assert store.get(ChatTurn, turn.id).status.value == "interrupted"
+        assert (await store.get(ChatTurn, turn.id)).status.value == "interrupted"
 
 
-def test_provider_follow_cursor_is_stable_across_viewers(tmp_path):
+async def test_provider_follow_cursor_is_stable_across_viewers(tmp_path):
     async def scenario():
         service = ChatService(NebulaStore(tmp_path / "core.db"))
         runtime = _ActiveProviderTurn(
@@ -183,10 +198,10 @@ def test_provider_follow_cursor_is_stable_across_viewers(tmp_path):
         await second.aclose()
         assert len(runtime.events) == 2
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_heartbeats_do_not_cancel_quiet_work_and_cleanup_pending_reads():
+async def test_heartbeats_do_not_cancel_quiet_work_and_cleanup_pending_reads():
     async def scenario():
         release = asyncio.Event()
         closed = asyncio.Event()
@@ -206,4 +221,7 @@ def test_heartbeats_do_not_cancel_quiet_work_and_cleanup_pending_reads():
         await follower.aclose()
         assert closed.is_set()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

@@ -11,6 +11,10 @@ unreadable one.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 from collections.abc import Callable
@@ -19,7 +23,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.api as api_module
 import nebula.v3.storage as storage_module
@@ -126,29 +130,31 @@ def _turn(turn_id: str, session_id: str, status: ChatTurnStatus, **changes):
 
 
 def _status(model, entity_id: str, expected) -> Callable[[NebulaStore], None]:
-    def check(store: NebulaStore) -> None:
-        assert store.get(model, entity_id).status == expected
+    async def check(store: NebulaStore) -> None:
+        assert (await store.get(model, entity_id)).status == expected
 
     return check
 
 
-def _interrupted_terminals(store: NebulaStore) -> None:
+async def _interrupted_terminals(store: NebulaStore) -> None:
     for project in ("project", "unreadable"):
-        store.append_operation_event(
-            f"terminal-{project}",
-            "container_terminal",
-            project,
-            "container_terminal.running",
-            {"status": "running"},
-            actor_id="operator",
+        (
+            await store.append_operation_event(
+                f"terminal-{project}",
+                "container_terminal",
+                project,
+                "container_terminal.running",
+                {"status": "running"},
+                actor_id="operator",
+            )
         )
 
 
-def _terminal_settled(store: NebulaStore) -> None:
-    [*_, settled] = store.replay_operation_events("terminal-project")
+async def _terminal_settled(store: NebulaStore) -> None:
+    [*_, settled] = await store.replay_operation_events("terminal-project")
     assert settled.event_type == "container_terminal.terminal"
     assert settled.payload["status"] == "interrupted"
-    [left] = store.replay_operation_events("terminal-unreadable")
+    [left] = await store.replay_operation_events("terminal-unreadable")
     assert left.event_type == "container_terminal.running"
 
 
@@ -387,24 +393,24 @@ def _schedule(schedule_id: str, session_id: str) -> ChatSchedule:
 
 
 def _removed(model, entity_id: str) -> Callable[[NebulaStore], None]:
-    def check(store: NebulaStore) -> None:
+    async def check(store: NebulaStore) -> None:
         with pytest.raises(NotFoundError):
-            store.get(model, entity_id)
+            (await store.get(model, entity_id))
 
     return check
 
 
-def _approval_failed(store: NebulaStore) -> None:
-    continuation = store.get(Approval, "readable").continuation
+async def _approval_failed(store: NebulaStore) -> None:
+    continuation = (await store.get(Approval, "readable")).continuation
     assert continuation is not None and continuation.status == "failed"
 
 
-def _schedule_skipped(store: NebulaStore) -> None:
-    assert store.get(ChatSchedule, "readable").last_status == "skipped"
+async def _schedule_skipped(store: NebulaStore) -> None:
+    assert (await store.get(ChatSchedule, "readable")).last_status == "skipped"
 
 
-def _harness_run_settled(store: NebulaStore) -> None:
-    assert store.get(AgentRun, "readable").status != RunStatus.QUEUED
+async def _harness_run_settled(store: NebulaStore) -> None:
+    assert (await store.get(AgentRun, "readable")).status != RunStatus.QUEUED
 
 
 EXPIRED = utc_now() - timedelta(days=2)
@@ -625,42 +631,48 @@ CASES: dict[str, Case] = {
 }
 
 
-def _make_unreadable(store: NebulaStore, entity_id: str) -> None:
+async def _make_unreadable(store: NebulaStore, entity_id: str) -> None:
     # A revision below 1 fails validation while leaving every field a scan
     # filters on intact, so the scan still selects the row.
-    with store.database.engine.begin() as connection:
-        connection.exec_driver_sql(
-            "UPDATE entities SET payload = json_set(payload, '$.revision', 0) "
-            "WHERE id = ?",
-            (entity_id,),
+    async with store.database.engine.begin() as connection:
+        (
+            await connection.exec_driver_sql(
+                "UPDATE entities SET payload = json_set(payload, '$.revision', 0) "
+                "WHERE id = ?",
+                (entity_id,),
+            )
         )
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
-def test_core_starts_and_recovers_beside_an_unreadable_record(
+async def test_core_starts_and_recovers_beside_an_unreadable_record(
     tmp_path: Path, monkeypatch, name: str
 ):
     case = CASES[name]
     store = NebulaStore(tmp_path / "nebula.db")
-    store.create(Engagement(id="project", name="Project"))
-    store.create(
-        ProviderProfile(id="provider", name="Provider", provider_type="openrouter")
+    (await store.create(Engagement(id="project", name="Project")))
+    (
+        await store.create(
+            ProviderProfile(id="provider", name="Provider", provider_type="openrouter")
+        )
     )
-    store.create(
-        HarnessProfile(
-            id="harness",
-            name="Harness",
-            kind=HarnessKind.CODEX_APP_SERVER,
-            executable="/bin/true",
+    (
+        await store.create(
+            HarnessProfile(
+                id="harness",
+                name="Harness",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+            )
         )
     )
     for session_id in ("chat-a", "chat-b", "child-a", "child-b"):
-        store.create(_chat(session_id))
+        (await store.create(_chat(session_id)))
     for record in case.records():
-        store.create(record)
+        (await store.create(record))
     case.seed(store)
     for entity_id in case.unreadable:
-        _make_unreadable(store, entity_id)
+        (await _make_unreadable(store, entity_id))
 
     skipped: list[str] = []
     record = storage_module.record_caught_exception
@@ -690,7 +702,7 @@ def test_core_starts_and_recovers_beside_an_unreadable_record(
         execution_data_root=tmp_path,
     )
 
-    with TestClient(app) as client:
+    async with TestClient(app) as client:
         # The periodic pass reads the same kinds again every 15 seconds.
         client.portal.call(services[0].fire_due_schedules)
         client.portal.call(services[0].recovery_tick)
@@ -701,7 +713,7 @@ def test_core_starts_and_recovers_beside_an_unreadable_record(
                 async with asyncio.timeout(5):
                     while True:
                         try:
-                            store.get(ChatSession, "readable")
+                            (await store.get(ChatSession, "readable"))
                         except NotFoundError:
                             return
                         await asyncio.sleep(0.02)
@@ -709,7 +721,9 @@ def test_core_starts_and_recovers_beside_an_unreadable_record(
             client.portal.call(wait_for_popup_cleanup)
         else:
             client.portal.call(asyncio.sleep, 0.2)
-        assert client.get("/api/v1/setup/status", headers=AUTH).status_code == 200
+        assert (
+            await client.get("/api/v1/setup/status", headers=AUTH)
+        ).status_code == 200
         case.recovered(store)
 
     if case.scanned:
@@ -730,35 +744,39 @@ class _RecordingIndex:
         self.indexed.append(item.id)
 
 
-def test_startup_index_migration_moves_readable_records_beside_unreadable_ones(
+async def test_startup_index_migration_moves_readable_records_beside_unreadable_ones(
     tmp_path: Path, monkeypatch
 ):
     """Core migrates legacy inline chunks as it starts, before any component."""
 
     store = NebulaStore(tmp_path / "nebula.db")
-    store.create(Engagement(id="project", name="Project"))
+    (await store.create(Engagement(id="project", name="Project")))
     chunks = {"chunks": [{"text": "Scope notes"}]}
     for suffix in ("readable", "unreadable"):
-        store.create(
-            KnowledgeSource(
-                id=f"source-{suffix}",
-                engagement_id="project",
-                name="Notes",
-                source_type="text",
-                metadata=chunks,
+        (
+            await store.create(
+                KnowledgeSource(
+                    id=f"source-{suffix}",
+                    engagement_id="project",
+                    name="Notes",
+                    source_type="text",
+                    metadata=chunks,
+                )
             )
         )
-        store.create(
-            LibraryItem(
-                id=f"library-{suffix}",
-                name="Notes",
-                source_type="text",
-                metadata=chunks,
+        (
+            await store.create(
+                LibraryItem(
+                    id=f"library-{suffix}",
+                    name="Notes",
+                    source_type="text",
+                    metadata=chunks,
+                )
             )
         )
         if suffix == "unreadable":
-            _make_unreadable(store, f"source-{suffix}")
-            _make_unreadable(store, f"library-{suffix}")
+            (await _make_unreadable(store, f"source-{suffix}"))
+            (await _make_unreadable(store, f"library-{suffix}"))
     skipped: list[str] = []
     record = storage_module.record_caught_exception
 
@@ -770,15 +788,19 @@ def test_startup_index_migration_moves_readable_records_beside_unreadable_ones(
     monkeypatch.setattr(storage_module, "record_caught_exception", recording)
     index = _RecordingIndex()
 
-    migrated = migrate_inline_knowledge_indexes(store=store, knowledge_index=index)  # type: ignore[arg-type]
+    migrated = await migrate_inline_knowledge_indexes(
+        store=store, knowledge_index=index
+    )  # type: ignore[arg-type]
 
     assert migrated == 2
     assert index.indexed == ["source-readable", "library-readable"]
-    assert "chunks" not in store.get(KnowledgeSource, "source-readable").metadata
+    assert (
+        "chunks" not in (await store.get(KnowledgeSource, "source-readable")).metadata
+    )
     assert sorted(skipped) == ["library-unreadable", "source-unreadable"]
 
 
-def test_a_readable_scan_reaches_every_match_while_its_caller_settles_them(
+async def test_a_readable_scan_reaches_every_match_while_its_caller_settles_them(
     tmp_path: Path,
 ):
     """A recovery pass moves each record out of its filter as it goes.
@@ -789,32 +811,40 @@ def test_a_readable_scan_reaches_every_match_while_its_caller_settles_them(
     """
 
     store = NebulaStore(tmp_path / "nebula.db")
-    store.create(Engagement(id="project", name="Project"))
+    (await store.create(Engagement(id="project", name="Project")))
     for index in range(7):
-        store.create(_render(f"render-{index}"))
-    _make_unreadable(store, "render-3")
+        (await store.create(_render(f"render-{index}")))
+    (await _make_unreadable(store, "render-3"))
     settled: list[str] = []
 
-    for render in store.iter_readable_entities(
+    async for render in store.iter_readable_entities(
         ReportRender, {"status": ReportRenderStatus.RENDERING.value}, page_size=2
     ):
-        store.update(
-            ReportRender,
-            render.id,
-            {"status": ReportRenderStatus.INTERRUPTED},
-            expected_revision=render.revision,
+        (
+            await store.update(
+                ReportRender,
+                render.id,
+                {"status": ReportRenderStatus.INTERRUPTED},
+                expected_revision=render.revision,
+            )
         )
         settled.append(render.id)
         if render.id == "render-4":
             # A record removed before its page is read is left out.
-            store.delete(ReportRender, "render-6")
+            (await store.delete(ReportRender, "render-6"))
 
     assert settled == ["render-0", "render-1", "render-2", "render-4", "render-5"]
     assert (
         list(
-            store.iter_readable_entities(
-                ReportRender, {"status": ReportRenderStatus.RENDERING.value}
-            )
+            [
+                item
+                async for item in store.iter_readable_entities(
+                    ReportRender, {"status": ReportRenderStatus.RENDERING.value}
+                )
+            ]
         )
         == []
     )
+
+
+pytestmark = pytest.mark.anyio

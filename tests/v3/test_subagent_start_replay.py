@@ -8,6 +8,11 @@ failure, and a start that never ran fails again the way it failed first.
 """
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -44,14 +49,16 @@ from tests.v3.test_harness_provider_subagents import (
 from tests.v3.test_harness_provider_subagents import _setup as _harness_setup
 
 
-def _settled(store, record_id: str) -> bool:
-    return store.get(ChatSubagent, record_id).status != ChatSubagentStatus.RUNNING
+async def _settled(store, record_id: str) -> bool:
+    return (
+        await store.get(ChatSubagent, record_id)
+    ).status != ChatSubagentStatus.RUNNING
 
 
-def test_harness_retry_of_a_start_reports_the_childs_real_status(tmp_path: Path):
+async def test_harness_retry_of_a_start_reports_the_childs_real_status(tmp_path: Path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _harness_setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _harness_setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Mapped 4 routes."]
         child.gate = asyncio.Event()
         seen: dict = {}
@@ -76,7 +83,9 @@ def test_harness_retry_of_a_start_reports_the_childs_real_status(tmp_path: Path)
         _, _, turn = _prepare(runtime, project, harness, "Map the routes.")
         await runtime.start_chat_turn(turn.id)
 
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
         assert seen["first"]["status"] == "running"
         assert seen["running"]["subagent_id"] == seen["first"]["subagent_id"]
         assert seen["running"]["status"] == "running"
@@ -87,19 +96,19 @@ def test_harness_retry_of_a_start_reports_the_childs_real_status(tmp_path: Path)
         assert "received its report earlier" in finished["note"]
         assert "subagent.message" in finished["note"]
         # One child, never a second one for the retries.
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert record.id == finished["subagent_id"]
         assert record.reported_at is not None
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_a_finished_child_whose_report_is_unread_points_to_it(tmp_path: Path):
-    store, _, _, chat = _setup(tmp_path, RoutedProvider([], []))
-    session = _session(store)
-    parent = _turn(store, session, status=ChatTurnStatus.ROUTING)
-    record = _child(
+async def test_a_finished_child_whose_report_is_unread_points_to_it(tmp_path: Path):
+    store, _, _, chat = await _setup(tmp_path, RoutedProvider([], []))
+    session = await _session(store)
+    parent = await _turn(store, session, status=ChatTurnStatus.ROUTING)
+    record = await _child(
         store,
         session,
         parent,
@@ -118,11 +127,11 @@ def test_a_finished_child_whose_report_is_unread_points_to_it(tmp_path: Path):
     assert "subagent.wait" in harness["note"]
 
 
-def test_harness_retry_of_a_start_whose_child_failed_is_not_a_start_failure(
+async def test_harness_retry_of_a_start_whose_child_failed_is_not_a_start_failure(
     tmp_path: Path,
 ):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _harness_setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _harness_setup(tmp_path)
         # No answers: the child's first request fails.
         seen: dict = {}
 
@@ -141,19 +150,19 @@ def test_harness_retry_of_a_start_whose_child_failed_is_not_a_start_failure(
         retry = _payload(seen["retry"])
         assert retry["status"] == "failed"
         assert "Running in parallel" not in retry["note"]
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert record.status == ChatSubagentStatus.FAILED
         # Core handed the harness its failure report when it settled.
         assert record.reported_at is not None
         assert "received its report earlier" in retry["note"]
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_retry_of_a_start_that_never_ran_fails_again(tmp_path: Path):
+async def test_harness_retry_of_a_start_that_never_ran_fails_again(tmp_path: Path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _harness_setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _harness_setup(tmp_path)
         seen: dict = {}
         original = chat.prepare_async
         parent: dict = {}
@@ -185,19 +194,21 @@ def test_harness_retry_of_a_start_that_never_ran_fails_again(tmp_path: Path):
             assert failure["schema"] == FAILURE_SCHEMA
             assert failure["category"] == "execution_failed", key
             assert "child provider offline" not in json.dumps(response)
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert record.status == ChatSubagentStatus.FAILED
         assert record.parent_request["not_started"] is True
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def _raise_cleanup(session_id: str) -> None:
     raise RuntimeError("cleanup failed")
 
 
-def test_provider_replay_of_a_start_reports_the_childs_real_status(tmp_path: Path):
+async def test_provider_replay_of_a_start_reports_the_childs_real_status(
+    tmp_path: Path,
+):
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
@@ -207,15 +218,15 @@ def test_provider_replay_of_a_start_reports_the_childs_real_status(tmp_path: Pat
             ],
             child=[_response(text="Mapped 4 routes.")],
         )
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
         prepared = await chat.prepare_async(
             _request(project, content="Delegate.", allow_subagents=True)
         )
-        parent_turn_id = chat.start_provider_turn(prepared)
+        parent_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         await _until(lambda: _settled(store, record.id))
-        parent = store.get(ChatTurn, parent_turn_id)
+        parent = await store.get(ChatTurn, parent_turn_id)
         assert parent.status == ChatTurnStatus.COMPLETE
 
         # The same step replayed (same idempotency key) reaches the same child.
@@ -240,20 +251,27 @@ def test_provider_replay_of_a_start_reports_the_childs_real_status(tmp_path: Pat
 
         # A child that ran and failed is reported as failed, not as a start
         # that could not run.
-        store.update(
-            ChatSubagent,
-            record.id,
-            {
-                "status": ChatSubagentStatus.FAILED,
-                "error": "The subagent's provider returned an error.",
-                "finished_at": utc_now(),
-            },
-            expected_revision=store.get(ChatSubagent, record.id).revision,
+        (
+            await store.update(
+                ChatSubagent,
+                record.id,
+                {
+                    "status": ChatSubagentStatus.FAILED,
+                    "error": "The subagent's provider returned an error.",
+                    "finished_at": utc_now(),
+                },
+                expected_revision=(await store.get(ChatSubagent, record.id)).revision,
+            )
         )
         failed = await components.broker.execute(replay, components.scope)
         assert failed.output["status"] == "failed"
         assert "Running in parallel" not in failed.output["note"]
-        assert [item.id for item in store.list_entities(ChatSubagent)] == [record.id]
+        assert [item.id for item in (await store.list_entities(ChatSubagent))] == [
+            record.id
+        ]
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

@@ -1,9 +1,13 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from fastapi import HTTPException
 from pydantic import ValidationError
 
@@ -44,33 +48,35 @@ from nebula.v3.providers import ModelMessage, ModelRequest, ModelResponse, ToolC
 from tests.v3.test_chat import FakeProvider, _admitted_stream
 
 
-def setup_goal(tmp_path):
+async def setup_goal(tmp_path):
     store = NebulaStore(tmp_path / "goals.db")
-    store.create(Engagement(id="project", name="Project"))
-    provider = store.create(
+    (await store.create(Engagement(id="project", name="Project")))
+    provider = await store.create(
         ProviderProfile(id="provider", name="Provider", provider_type="openrouter")
     )
-    store.create(
-        ChatSession(
-            id="session",
-            engagement_id="project",
-            title="Goal chat",
-            provider_profile_id=provider.id,
-            model="model",
+    (
+        await store.create(
+            ChatSession(
+                id="session",
+                engagement_id="project",
+                title="Goal chat",
+                provider_profile_id=provider.id,
+                model="model",
+            )
         )
     )
     return store, ChatGoalService(store)
 
 
-def test_goal_time_limit_requires_at_least_thirty_minutes(tmp_path):
-    _, goals = setup_goal(tmp_path)
+async def test_goal_time_limit_requires_at_least_thirty_minutes(tmp_path):
+    _, goals = await setup_goal(tmp_path)
     with pytest.raises(ValidationError, match="time_budget_seconds"):
         GoalCreate(
             objective="Short goal",
             completion_criteria=["Done"],
             time_budget_seconds=1799,
         )
-    draft = goals.create(
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Timed goal",
@@ -78,7 +84,7 @@ def test_goal_time_limit_requires_at_least_thirty_minutes(tmp_path):
             time_budget_seconds=1800,
         ),
     )
-    assert goals.read("session").time_budget_seconds == 1800
+    assert (await goals.read("session")).time_budget_seconds == 1800
     with pytest.raises(ValidationError, match="time_budget_seconds"):
         GoalUpdate(
             expected_revision=draft.revision,
@@ -88,9 +94,11 @@ def test_goal_time_limit_requires_at_least_thirty_minutes(tmp_path):
         )
 
 
-def test_goal_time_reminders_use_active_time_and_escalate_at_five_minutes(tmp_path):
-    _, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_goal_time_reminders_use_active_time_and_escalate_at_five_minutes(
+    tmp_path,
+):
+    _, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Timed goal",
@@ -100,7 +108,7 @@ def test_goal_time_reminders_use_active_time_and_escalate_at_five_minutes(tmp_pa
     )
     now = utc_now()
     assert _goal_time_instruction(draft, now) == ""
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
     ten_minute_goal = running.model_copy(
@@ -123,9 +131,9 @@ def test_goal_time_reminders_use_active_time_and_escalate_at_five_minutes(tmp_pa
     assert "Do not start new work" in overdue
 
 
-def test_five_minute_reminder_reaches_the_provider_request(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_five_minute_reminder_reaches_the_provider_request(tmp_path):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Timed goal",
@@ -133,26 +141,28 @@ def test_five_minute_reminder_reaches_the_provider_request(tmp_path):
             time_budget_seconds=1800,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
-    store.update(
-        ChatGoal,
-        running.id,
-        {"elapsed_seconds": 25 * 60, "active_since": utc_now()},
-        expected_revision=running.revision,
+    (
+        await store.update(
+            ChatGoal,
+            running.id,
+            {"elapsed_seconds": 25 * 60, "active_since": utc_now()},
+            expected_revision=running.revision,
+        )
     )
     chat = ChatService(
         store, provider_factory=lambda _: FakeProvider("provider", local=False)
     )
-    prepared = chat.prepare(_goal_request(running.id, "Continue"))
+    prepared = await chat.prepare(_goal_request(running.id, "Continue"))
     assert "5 minutes or less" in prepared.model_request.instructions
     assert "clean up" in prepared.model_request.instructions
 
 
-def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Long running research",
@@ -160,12 +170,12 @@ def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
             time_budget_seconds=1800,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
     provider = FakeProvider("provider", local=False)
     chat = ChatService(store, provider_factory=lambda _: provider)
-    prepared = chat.prepare(_goal_request(running.id, "Keep working"))
+    prepared = await chat.prepare(_goal_request(running.id, "Keep working"))
     request = prepared.model_request
     assert "Goal time reminder:" not in request.instructions
 
@@ -173,23 +183,27 @@ def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
         await chat._complete_with_context_recovery(prepared, request)
         assert "Goal time reminder:" not in provider.requests[-1].instructions
 
-        goal = goals.get("session")
-        store.update(
-            ChatGoal,
-            goal.id,
-            {"elapsed_seconds": 20 * 60, "active_since": utc_now()},
-            expected_revision=goal.revision,
+        goal = await goals.get("session")
+        (
+            await store.update(
+                ChatGoal,
+                goal.id,
+                {"elapsed_seconds": 20 * 60, "active_since": utc_now()},
+                expected_revision=goal.revision,
+            )
         )
         await chat._complete_with_context_recovery(prepared, request)
         ten_minute_request = provider.requests[-1]
         assert "Wind down over the next few turns" in ten_minute_request.instructions
 
-        goal = goals.get("session")
-        store.update(
-            ChatGoal,
-            goal.id,
-            {"elapsed_seconds": 25 * 60, "active_since": utc_now()},
-            expected_revision=goal.revision,
+        goal = await goals.get("session")
+        (
+            await store.update(
+                ChatGoal,
+                goal.id,
+                {"elapsed_seconds": 25 * 60, "active_since": utc_now()},
+                expected_revision=goal.revision,
+            )
         )
         await chat._complete_with_context_recovery(prepared, ten_minute_request)
         five_minute_request = provider.requests[-1]
@@ -197,12 +211,14 @@ def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
         assert "10 minutes or less" not in five_minute_request.instructions
         assert five_minute_request.instructions.count("Goal time reminder:") == 1
 
-        goal = goals.get("session")
-        store.update(
-            ChatGoal,
-            goal.id,
-            {"elapsed_seconds": 30 * 60, "active_since": utc_now()},
-            expected_revision=goal.revision,
+        goal = await goals.get("session")
+        (
+            await store.update(
+                ChatGoal,
+                goal.id,
+                {"elapsed_seconds": 30 * 60, "active_since": utc_now()},
+                expected_revision=goal.revision,
+            )
         )
         await chat._complete_with_context_recovery(prepared, five_minute_request)
         overdue_request = provider.requests[-1]
@@ -213,14 +229,14 @@ def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
         async for _ in chat._stream_with_context_recovery(prepared, request):
             pass
         assert "active-time limit has passed" in provider.requests[-1].instructions
-        assert len(store.list_entities(ChatTurn, engagement_id="project")) == 1
+        assert len((await store.list_entities(ChatTurn, engagement_id="project"))) == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_parked_subagent_wait_becomes_due_at_goal_reminder(tmp_path, monkeypatch):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_parked_subagent_wait_becomes_due_at_goal_reminder(tmp_path, monkeypatch):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Wait for research",
@@ -228,14 +244,14 @@ def test_parked_subagent_wait_becomes_due_at_goal_reminder(tmp_path, monkeypatch
             time_budget_seconds=1800,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
     chat = ChatService(
         store, provider_factory=lambda _: FakeProvider("provider", local=False)
     )
-    prepared = chat.prepare(_goal_request(running.id, "Wait for the child"))
-    turn = chat._save_tool_step(
+    prepared = await chat.prepare(_goal_request(running.id, "Wait for the child"))
+    turn = await chat._save_tool_step(
         prepared.turn,
         {
             "tool_call_id": "wait-1",
@@ -245,33 +261,37 @@ def test_parked_subagent_wait_becomes_due_at_goal_reminder(tmp_path, monkeypatch
         },
         status=ChatTurnStatus.WAITING_CALLBACK,
     )
-    assert chat._goal_time_wait_candidates() == []
+    assert (await chat._goal_time_wait_candidates()) == []
     wait_started = turn.updated_at
     monkeypatch.setattr(
         chat_module, "utc_now", lambda: wait_started + timedelta(minutes=20)
     )
-    assert [item.id for item in chat._goal_time_wait_candidates()] == [turn.id]
-    assert not chat._goal_time_wait_due(
-        turn.model_copy(update={"updated_at": wait_started + timedelta(minutes=21)}),
-        wait_started + timedelta(minutes=22),
+    assert [item.id for item in (await chat._goal_time_wait_candidates())] == [turn.id]
+    assert not (
+        await chat._goal_time_wait_due(
+            turn.model_copy(
+                update={"updated_at": wait_started + timedelta(minutes=21)}
+            ),
+            wait_started + timedelta(minutes=22),
+        )
     )
-    assert chat._goal_time_wait_due(
+    assert await chat._goal_time_wait_due(
         turn.model_copy(update={"updated_at": wait_started + timedelta(minutes=21)}),
         wait_started + timedelta(minutes=25),
     )
-    assert chat._goal_time_wait_due(
+    assert await chat._goal_time_wait_due(
         turn.model_copy(update={"updated_at": wait_started + timedelta(minutes=31)}),
         wait_started + timedelta(minutes=32),
     )
 
 
-def test_goal_content_can_be_edited_before_and_after_start(tmp_path):
-    _, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_goal_content_can_be_edited_before_and_after_start(tmp_path):
+    _, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(objective="Initial draft", completion_criteria=["Old criterion"]),
     )
-    edited_draft = goals.update(
+    edited_draft = await goals.update(
         "session",
         GoalUpdate(
             expected_revision=draft.revision,
@@ -281,10 +301,10 @@ def test_goal_content_can_be_edited_before_and_after_start(tmp_path):
             step_budget=3,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=edited_draft.revision, action="start")
     )
-    edited_running = goals.update(
+    edited_running = await goals.update(
         "session",
         GoalUpdate(
             expected_revision=running.revision,
@@ -302,11 +322,11 @@ def test_goal_content_can_be_edited_before_and_after_start(tmp_path):
     assert edited_running.step_budget == 4
 
 
-def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
+async def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
     tmp_path,
 ):
-    store, goals = setup_goal(tmp_path)
-    original = goals.create(
+    store, goals = await setup_goal(tmp_path)
+    original = await goals.create(
         "session", GoalCreate(objective="Inspect", completion_criteria=["Done"])
     )
     assert original.resume_instruction == DEFAULT_GOAL_RESUME_INSTRUCTION
@@ -318,7 +338,7 @@ def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
     )
 
     custom = "Review the saved findings, then verify the last open question."
-    edited = goals.update(
+    edited = await goals.update(
         "session",
         GoalUpdate(
             expected_revision=original.revision,
@@ -327,7 +347,7 @@ def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
             resume_instruction=custom,
         ),
     )
-    retained = goals.update(
+    retained = await goals.update(
         "session",
         GoalUpdate(
             expected_revision=edited.revision,
@@ -336,10 +356,10 @@ def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
         ),
     )
     assert retained.resume_instruction == custom
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=retained.revision, action="start")
     )
-    paused = goals.write(
+    paused = await goals.write(
         "session", GoalWrite(expected_revision=running.revision, action="pause")
     )
     dispatched: list[tuple[str, str]] = []
@@ -350,8 +370,8 @@ def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
 
     app = FastAPI()
     app.include_router(goals_router(store, goal_dispatcher=dispatch))
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/chat/sessions/session/goal/actions",
             json={"expected_revision": paused.revision, "action": "resume"},
         )
@@ -367,12 +387,12 @@ def test_goal_resume_instruction_defaults_edits_and_dispatches_in_same_session(
         )
 
 
-def test_goal_edit_rejects_stale_revision_and_terminal_history(tmp_path):
-    _, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_goal_edit_rejects_stale_revision_and_terminal_history(tmp_path):
+    _, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session", GoalCreate(objective="Original", completion_criteria=["Done"])
     )
-    edited = goals.update(
+    edited = await goals.update(
         "session",
         GoalUpdate(
             expected_revision=draft.revision,
@@ -381,41 +401,45 @@ def test_goal_edit_rejects_stale_revision_and_terminal_history(tmp_path):
         ),
     )
     with pytest.raises(ConflictError, match="review the latest goal"):
-        goals.update(
-            "session",
-            GoalUpdate(
-                expected_revision=draft.revision,
-                objective="Stale overwrite",
-                completion_criteria=["Done"],
-            ),
+        (
+            await goals.update(
+                "session",
+                GoalUpdate(
+                    expected_revision=draft.revision,
+                    objective="Stale overwrite",
+                    completion_criteria=["Done"],
+                ),
+            )
         )
-    cancelled = goals.write(
+    cancelled = await goals.write(
         "session", GoalWrite(expected_revision=edited.revision, action="cancel")
     )
     with pytest.raises(ConflictError, match="cannot be edited"):
-        goals.update(
-            "session",
-            GoalUpdate(
-                expected_revision=cancelled.revision,
-                objective="Rewrite history",
-                completion_criteria=["Done"],
-            ),
+        (
+            await goals.update(
+                "session",
+                GoalUpdate(
+                    expected_revision=cancelled.revision,
+                    objective="Rewrite history",
+                    completion_criteria=["Done"],
+                ),
+            )
         )
 
 
-def test_goal_resume_requires_interrupted_turn_recovery(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    goal = goals.create(
+async def test_goal_resume_requires_interrupted_turn_recovery(tmp_path):
+    store, goals = await setup_goal(tmp_path)
+    goal = await goals.create(
         "session",
         GoalCreate(objective="Continue", completion_criteria=["Done"]),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=goal.revision, action="start")
     )
-    paused = goals.write(
+    paused = await goals.write(
         "session", GoalWrite(expected_revision=running.revision, action="pause")
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id="project",
             session_id="session",
@@ -427,27 +451,30 @@ def test_goal_resume_requires_interrupted_turn_recovery(tmp_path):
         )
     )
     with pytest.raises(ConflictError, match="interrupted response needs recovery"):
-        goals.write(
-            "session", GoalWrite(expected_revision=paused.revision, action="resume")
+        (
+            await goals.write(
+                "session", GoalWrite(expected_revision=paused.revision, action="resume")
+            )
         )
-    assert goals.get("session").status == ChatGoalStatus.PAUSED
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"request_snapshot": {"recovery": {"required": False}}},
-        expected_revision=turn.revision,
+    assert (await goals.get("session")).status == ChatGoalStatus.PAUSED
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"request_snapshot": {"recovery": {"required": False}}},
+            expected_revision=turn.revision,
+        )
     )
     assert (
-        goals.write(
+        await goals.write(
             "session", GoalWrite(expected_revision=paused.revision, action="resume")
-        ).status
-        == ChatGoalStatus.RUNNING
-    )
+        )
+    ).status == ChatGoalStatus.RUNNING
 
 
-def test_parent_cancel_stops_child_and_reserves_budget(tmp_path):
-    store, service = setup_goal(tmp_path)
-    parent = service.create(
+async def test_parent_cancel_stops_child_and_reserves_budget(tmp_path):
+    store, service = await setup_goal(tmp_path)
+    parent = await service.create(
         "session",
         GoalCreate(
             objective="Parent work",
@@ -455,34 +482,36 @@ def test_parent_cancel_stops_child_and_reserves_budget(tmp_path):
             child_budget=1,
         ),
     )
-    started = service.write(
+    started = await service.write(
         "session", GoalWrite(expected_revision=parent.revision, action="start")
     )
-    child = service.start_child(
+    child = await service.start_child(
         "session",
         GoalCreate(objective="Child work", completion_criteria=["Isolated"]),
     )
     assert child.parent_goal_id == started.id
     assert child.status == ChatGoalStatus.DRAFT
-    parent_after = service.get("session")
+    parent_after = await service.get("session")
     assert parent_after.children_started == 1
     assert child.session_id in parent_after.child_session_ids
     with pytest.raises(ConflictError, match="child budget is exhausted"):
-        service.start_child(
-            "session",
-            GoalCreate(objective="Another child", completion_criteria=["No"]),
+        (
+            await service.start_child(
+                "session",
+                GoalCreate(objective="Another child", completion_criteria=["No"]),
+            )
         )
-    cancelled = service.write(
+    cancelled = await service.write(
         "session",
         GoalWrite(expected_revision=parent_after.revision, action="cancel"),
     )
     assert cancelled.status == ChatGoalStatus.CANCELLED
-    assert service.get(child.session_id).status == ChatGoalStatus.CANCELLED
+    assert (await service.get(child.session_id)).status == ChatGoalStatus.CANCELLED
 
 
-def test_goal_requires_explicit_start_and_revision_safe_lifecycle(tmp_path):
-    store, service = setup_goal(tmp_path)
-    goal = service.create(
+async def test_goal_requires_explicit_start_and_revision_safe_lifecycle(tmp_path):
+    store, service = await setup_goal(tmp_path)
+    goal = await service.create(
         "session",
         GoalCreate(
             objective="Inspect the workspace safely",
@@ -497,26 +526,31 @@ def test_goal_requires_explicit_start_and_revision_safe_lifecycle(tmp_path):
     assert goal.status == ChatGoalStatus.DRAFT
     assert goal.started_at is None
     with pytest.raises(ConflictError):
-        service.create(
-            "session", GoalCreate(objective="Duplicate", completion_criteria=["Done"])
+        (
+            await service.create(
+                "session",
+                GoalCreate(objective="Duplicate", completion_criteria=["Done"]),
+            )
         )
 
-    running = service.write(
+    running = await service.write(
         "session", GoalWrite(expected_revision=goal.revision, action="start")
     )
     assert running.status == ChatGoalStatus.RUNNING
     assert running.started_at is not None
     with pytest.raises(ConflictError):
-        service.write(
-            "session", GoalWrite(expected_revision=goal.revision, action="pause")
+        (
+            await service.write(
+                "session", GoalWrite(expected_revision=goal.revision, action="pause")
+            )
         )
-    paused = service.write(
+    paused = await service.write(
         "session", GoalWrite(expected_revision=running.revision, action="pause")
     )
-    resumed = service.write(
+    resumed = await service.write(
         "session", GoalWrite(expected_revision=paused.revision, action="resume")
     )
-    completed = service.write(
+    completed = await service.write(
         "session",
         GoalWrite(
             expected_revision=resumed.revision,
@@ -527,42 +561,42 @@ def test_goal_requires_explicit_start_and_revision_safe_lifecycle(tmp_path):
     )
     assert completed.status == ChatGoalStatus.COMPLETED
     assert completed.completion_evidence[0]["result"] == "passed"
-    assert store.count(ChatGoal) == 1
+    assert (await store.count(ChatGoal)) == 1
 
 
-def test_running_goal_read_reports_live_elapsed_without_changing_revision(
+async def test_running_goal_read_reports_live_elapsed_without_changing_revision(
     tmp_path, monkeypatch
 ):
-    _, service = setup_goal(tmp_path)
-    created = service.create(
+    _, service = await setup_goal(tmp_path)
+    created = await service.create(
         "session", GoalCreate(objective="Inspect", completion_criteria=["Done"])
     )
     started_at = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(chat_goals_module, "utc_now", lambda: started_at)
-    running = service.write(
+    running = await service.write(
         "session", GoalWrite(expected_revision=created.revision, action="start")
     )
     monkeypatch.setattr(
         chat_goals_module, "utc_now", lambda: started_at + timedelta(seconds=125)
     )
 
-    snapshot = service.read("session")
+    snapshot = await service.read("session")
 
     assert snapshot.elapsed_seconds == pytest.approx(125)
     assert snapshot.revision == running.revision
-    assert service.get("session").elapsed_seconds == 0
+    assert (await service.get("session")).elapsed_seconds == 0
 
 
-def test_goal_block_and_cancel_are_explicit_and_session_delete_cascades(tmp_path):
-    store, service = setup_goal(tmp_path)
-    goal = service.create(
+async def test_goal_block_and_cancel_are_explicit_and_session_delete_cascades(tmp_path):
+    store, service = await setup_goal(tmp_path)
+    goal = await service.create(
         "session",
         GoalCreate(objective="Investigate", completion_criteria=["Evidence retained"]),
     )
-    running = service.write(
+    running = await service.write(
         "session", GoalWrite(expected_revision=goal.revision, action="start")
     )
-    blocked = service.write(
+    blocked = await service.write(
         "session",
         GoalWrite(
             expected_revision=running.revision,
@@ -572,20 +606,20 @@ def test_goal_block_and_cancel_are_explicit_and_session_delete_cascades(tmp_path
     )
     assert blocked.status == ChatGoalStatus.BLOCKED
     assert blocked.consecutive_stalls == 3
-    resumed = service.write(
+    resumed = await service.write(
         "session", GoalWrite(expected_revision=blocked.revision, action="resume")
     )
-    cancelled = service.write(
+    cancelled = await service.write(
         "session", GoalWrite(expected_revision=resumed.revision, action="cancel")
     )
     assert cancelled.status == ChatGoalStatus.CANCELLED
-    store.delete_chat_session("session")
-    assert store.count(ChatGoal) == 0
+    (await store.delete_chat_session("session"))
+    assert (await store.count(ChatGoal)) == 0
 
 
-def test_running_goal_is_injected_linked_and_charged_by_provider_turn(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_running_goal_is_injected_linked_and_charged_by_provider_turn(tmp_path):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Inspect the workspace safely",
@@ -595,7 +629,7 @@ def test_running_goal_is_injected_linked_and_charged_by_provider_turn(tmp_path):
             step_budget=2,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
     provider = FakeProvider("provider", local=False)
@@ -611,29 +645,29 @@ def test_running_goal_is_injected_linked_and_charged_by_provider_turn(tmp_path):
         stream=True,
     )
 
-    prepared = chat.prepare(request)
+    prepared = await chat.prepare(request)
     assert "Core-owned goal context" in prepared.model_request.instructions
     assert "Inspect the workspace safely" in prepared.model_request.instructions
-    response = asyncio.run(chat.complete(prepared))
+    response = await chat.complete(prepared)
 
-    goal = goals.get("session")
-    turns = store.list_entities(ChatTurn, engagement_id="project")
+    goal = await goals.get("session")
+    turns = await store.list_entities(ChatTurn, engagement_id="project")
     assert response.turn_id == turns[0].id
     assert turns[0].goal_id == goal.id
     assert goal.current_step == 1
     assert goal.linked_turn_ids == [turns[0].id]
     assert goal.usage.total_tokens == 7
 
-    paused = goals.write(
+    paused = await goals.write(
         "session", GoalWrite(expected_revision=goal.revision, action="pause")
     )
     with pytest.raises(ChatConfigurationError, match="must be running"):
-        chat.prepare(request.model_copy(update={"goal_id": paused.id}))
+        (await chat.prepare(request.model_copy(update={"goal_id": paused.id})))
 
 
-def test_goal_turn_after_ten_thousand_links_persists_and_completes(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_goal_turn_after_ten_thousand_links_persists_and_completes(tmp_path):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Finish the next goal turn",
@@ -641,35 +675,37 @@ def test_goal_turn_after_ten_thousand_links_persists_and_completes(tmp_path):
             step_budget=10_001,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
     prior_ids = [f"prior-turn-{index}" for index in range(10_000)]
-    store.update(
-        ChatGoal,
-        running.id,
-        {"current_step": len(prior_ids), "linked_turn_ids": prior_ids},
-        expected_revision=running.revision,
+    (
+        await store.update(
+            ChatGoal,
+            running.id,
+            {"current_step": len(prior_ids), "linked_turn_ids": prior_ids},
+            expected_revision=running.revision,
+        )
     )
     chat = ChatService(
         store, provider_factory=lambda _: FakeProvider("provider", local=False)
     )
 
-    prepared = chat.prepare(_goal_request(running.id, "Finish the next turn"))
-    response = asyncio.run(chat.complete(prepared))
+    prepared = await chat.prepare(_goal_request(running.id, "Finish the next turn"))
+    response = await chat.complete(prepared)
 
-    goal = goals.get("session")
-    turn = store.get(ChatTurn, response.turn_id)
+    goal = await goals.get("session")
+    turn = await store.get(ChatTurn, response.turn_id)
     assert turn.status == ChatTurnStatus.COMPLETE
     assert goal.current_step == 10_001
     assert len(goal.linked_turn_ids) == 10_001
     assert goal.linked_turn_ids[-1] == turn.id
 
 
-def test_successful_provider_turn_automatically_continues_running_goal(tmp_path):
+async def test_successful_provider_turn_automatically_continues_running_goal(tmp_path):
     async def scenario() -> None:
-        store, goals = setup_goal(tmp_path)
-        draft = goals.create(
+        store, goals = await setup_goal(tmp_path)
+        draft = await goals.create(
             "session",
             GoalCreate(
                 objective="Finish two bounded steps",
@@ -677,15 +713,17 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
                 step_budget=2,
             ),
         )
-        running = goals.write(
+        running = await goals.write(
             "session", GoalWrite(expected_revision=draft.revision, action="start")
         )
-        session = store.get(ChatSession, "session")
-        store.update(
-            ChatSession,
-            session.id,
-            {"metadata": {**session.metadata, "reasoning_effort": "high"}},
-            expected_revision=session.revision,
+        session = await store.get(ChatSession, "session")
+        (
+            await store.update(
+                ChatSession,
+                session.id,
+                {"metadata": {**session.metadata, "reasoning_effort": "high"}},
+                expected_revision=session.revision,
+            )
         )
         provider = FakeProvider("provider", local=False)
         provider.config.model_allowlist.append("model")
@@ -696,8 +734,8 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
         )
 
         for _ in range(200):
-            turns = store.list_entities(ChatTurn, engagement_id="project")
-            goal = goals.get("session")
+            turns = await store.list_entities(ChatTurn, engagement_id="project")
+            goal = await goals.get("session")
             if (
                 len(turns) == 2
                 and all(turn.status.value == "complete" for turn in turns)
@@ -708,7 +746,7 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
         else:
             pytest.fail("the automatic goal continuation did not settle")
 
-        messages = chat.session_messages("session")
+        messages = await chat.session_messages("session")
         assert [turn.goal_id for turn in turns] == [running.id, running.id]
         assert goal.current_step == 2
         assert goal.blocked_reason == "Goal step budget is exhausted."
@@ -734,10 +772,10 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
         )
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
+async def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
     tmp_path, monkeypatch
 ):
     class CompletingProvider(FakeProvider):
@@ -772,29 +810,31 @@ def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
             )
 
     async def scenario() -> None:
-        store, goals = setup_goal(tmp_path)
-        draft = goals.create(
+        store, goals = await setup_goal(tmp_path)
+        draft = await goals.create(
             "session",
             GoalCreate(
                 objective="Complete the recon handoff",
                 completion_criteria=["Save the requested artifact"],
             ),
         )
-        running = goals.write(
+        running = await goals.write(
             "session", GoalWrite(expected_revision=draft.revision, action="start")
         )
-        profile = store.get(ProviderProfile, "provider")
+        profile = await store.get(ProviderProfile, "provider")
         capabilities = profile.capabilities.model_dump(mode="python")
         capabilities["tool_calling"] = True
-        store.update(
-            ProviderProfile,
-            profile.id,
-            {
-                "capabilities": capabilities,
-                "capability_verifications": {
-                    "model": {"model": "model", "status": "verified"}
+        (
+            await store.update(
+                ProviderProfile,
+                profile.id,
+                {
+                    "capabilities": capabilities,
+                    "capability_verifications": {
+                        "model": {"model": "model", "status": "verified"}
+                    },
                 },
-            },
+            )
         )
         provider = CompletingProvider("provider", local=True)
         provider.config.default_model = "model"
@@ -822,10 +862,12 @@ def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
         assert GOAL_COMPLETE_TOOL_NAME in prepared.tool_components.specs
         # Completing the goal must remain possible after this turn has used
         # its ordinary execution-tool budget.
-        store.update(
-            ChatTurn,
-            prepared.turn.id,
-            {"max_tool_calls": 1, "execution_tool_calls": 1},
+        (
+            await store.update(
+                ChatTurn,
+                prepared.turn.id,
+                {"max_tool_calls": 1, "execution_tool_calls": 1},
+            )
         )
         events = []
         async for event in _admitted_stream(chat, prepared):
@@ -833,11 +875,11 @@ def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
                 event[0] == "tool_completed"
                 and event[1]["capability"] == GOAL_COMPLETE_TOOL_NAME
             ):
-                assert goals.get("session").status == ChatGoalStatus.RUNNING
+                assert (await goals.get("session")).status == ChatGoalStatus.RUNNING
             events.append(event)
         assert [name for name, _ in events].count("done") == 1
-        assert goals.get("session").status == ChatGoalStatus.COMPLETED
-        goal = goals.get("session")
+        assert (await goals.get("session")).status == ChatGoalStatus.COMPLETED
+        goal = await goals.get("session")
         assert goal.completion_summary == "Recon handoff is complete."
         assert goal.completion_evidence == [
             {
@@ -846,16 +888,16 @@ def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
                 "turn_id": prepared.turn.id,
             }
         ]
-        settled_turn = store.get(ChatTurn, prepared.turn.id)
+        settled_turn = await store.get(ChatTurn, prepared.turn.id)
         assert settled_turn.status == ChatTurnStatus.COMPLETE
         assert settled_turn.execution_tool_calls == 1
         assert any(
             message.content == "Recon handoff is complete; the artifact is saved."
-            for message in chat.session_messages("session")
+            for message in (await chat.session_messages("session"))
         )
-        assert len(store.list_entities(ChatTurn, engagement_id="project")) == 1
+        assert len((await store.list_entities(ChatTurn, engagement_id="project"))) == 1
         await asyncio.sleep(0.05)
-        assert len(store.list_entities(ChatTurn, engagement_id="project")) == 1
+        assert len((await store.list_entities(ChatTurn, engagement_id="project"))) == 1
         model_requests = [
             request
             for request in provider.requests
@@ -864,15 +906,15 @@ def test_provider_goal_completion_saves_final_answer_and_stops_continuation(
         assert model_requests[-1].tool_choice == ToolChoice.NONE
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_model_and_effort_picked_mid_turn_drive_the_goal_continuation(tmp_path):
+async def test_model_and_effort_picked_mid_turn_drive_the_goal_continuation(tmp_path):
     """A running goal is always mid-response, so a switch has to land next turn."""
 
     async def scenario() -> None:
-        store, goals = setup_goal(tmp_path)
-        draft = goals.create(
+        store, goals = await setup_goal(tmp_path)
+        draft = await goals.create(
             "session",
             GoalCreate(
                 objective="Finish two bounded steps",
@@ -880,8 +922,10 @@ def test_model_and_effort_picked_mid_turn_drive_the_goal_continuation(tmp_path):
                 step_budget=2,
             ),
         )
-        goals.write(
-            "session", GoalWrite(expected_revision=draft.revision, action="start")
+        (
+            await goals.write(
+                "session", GoalWrite(expected_revision=draft.revision, action="start")
+            )
         )
 
         class OperatorSwitchesMidTurn(FakeProvider):
@@ -890,22 +934,31 @@ def test_model_and_effort_picked_mid_turn_drive_the_goal_continuation(tmp_path):
             async def complete(self, request):
                 if not request.metadata.get("operation") and not self.switched:
                     self.switched = True
-                    assert chat.pending_turn("session") is not None
-                    session = store.get(ChatSession, "session")
-                    chat.apply_runtime_switch(
-                        "session",
-                        ChatRuntimeSwitchRequest(
-                            provider_id="provider",
-                            model="model-b",
-                            expected_session_revision=session.revision,
-                        ),
+                    assert (await chat.pending_turn("session")) is not None
+                    session = await store.get(ChatSession, "session")
+                    (
+                        await chat.apply_runtime_switch(
+                            "session",
+                            ChatRuntimeSwitchRequest(
+                                provider_id="provider",
+                                model="model-b",
+                                expected_session_revision=session.revision,
+                            ),
+                        )
                     )
-                    session = store.get(ChatSession, "session")
-                    store.update(
-                        ChatSession,
-                        session.id,
-                        {"metadata": {**session.metadata, "reasoning_effort": "low"}},
-                        expected_revision=session.revision,
+                    session = await store.get(ChatSession, "session")
+                    (
+                        await store.update(
+                            ChatSession,
+                            session.id,
+                            {
+                                "metadata": {
+                                    **session.metadata,
+                                    "reasoning_effort": "low",
+                                }
+                            },
+                            expected_revision=session.revision,
+                        )
                     )
                 return await super().complete(request)
 
@@ -918,7 +971,7 @@ def test_model_and_effort_picked_mid_turn_drive_the_goal_continuation(tmp_path):
         )
 
         for _ in range(200):
-            turns = store.list_entities(ChatTurn, engagement_id="project")
+            turns = await store.list_entities(ChatTurn, engagement_id="project")
             if len(turns) == 2 and all(
                 turn.status.value == "complete" for turn in turns
             ):
@@ -941,17 +994,17 @@ def test_model_and_effort_picked_mid_turn_drive_the_goal_continuation(tmp_path):
             "low",
         ]
         # Settling either turn never wrote the operator's choice back.
-        session = store.get(ChatSession, "session")
+        session = await store.get(ChatSession, "session")
         assert session.model == "model-b"
         assert session.metadata["reasoning_effort"] == "low"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_goal_budget_caps_output_and_nonstream_turn_remains_durable(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_goal_budget_caps_output_and_nonstream_turn_remains_durable(tmp_path):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Fit the next provider request",
@@ -959,7 +1012,7 @@ def test_goal_budget_caps_output_and_nonstream_turn_remains_durable(tmp_path):
             token_budget=10_000,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
     provider = FakeProvider("provider", local=False)
@@ -970,23 +1023,23 @@ def test_goal_budget_caps_output_and_nonstream_turn_remains_durable(tmp_path):
         max_output_tokens=2_048,
     )
     estimated_input = estimate_model_request(raw)
-    constrained_goal = store.update(
+    constrained_goal = await store.update(
         ChatGoal,
         running.id,
         {"token_budget": estimated_input + 17},
         expected_revision=running.revision,
     )
 
-    fitted = chat._fit_goal_request_budget(constrained_goal.id, raw)
+    fitted = await chat._fit_goal_request_budget(constrained_goal.id, raw)
 
     assert fitted.max_output_tokens == 17
-    resumed = store.update(
+    resumed = await store.update(
         ChatGoal,
         constrained_goal.id,
         {"token_budget": 10_000},
         expected_revision=constrained_goal.revision,
     )
-    prepared = chat.prepare(
+    prepared = await chat.prepare(
         ChatCompletionRequest(
             engagement_id="project",
             session_id="session",
@@ -999,15 +1052,17 @@ def test_goal_budget_caps_output_and_nonstream_turn_remains_durable(tmp_path):
         )
     )
     assert prepared.turn is not None
-    response = asyncio.run(chat.complete(prepared))
+    response = await chat.complete(prepared)
     assert response.turn_id == prepared.turn.id
-    assert store.get(ChatTurn, prepared.turn.id).status.value == "complete"
-    assert store.get(ChatGoal, resumed.id).usage.total_tokens == 7
+    assert (await store.get(ChatTurn, prepared.turn.id)).status.value == "complete"
+    assert (await store.get(ChatGoal, resumed.id)).usage.total_tokens == 7
 
 
-def test_active_time_budget_pauses_before_dispatch_and_excludes_paused_time(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_active_time_budget_pauses_before_dispatch_and_excludes_paused_time(
+    tmp_path,
+):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Finish within active time",
@@ -1015,10 +1070,10 @@ def test_active_time_budget_pauses_before_dispatch_and_excludes_paused_time(tmp_
             time_budget_seconds=1800,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
-    running = store.update(
+    running = await store.update(
         ChatGoal,
         running.id,
         {"active_since": utc_now() - timedelta(seconds=1802)},
@@ -1028,29 +1083,31 @@ def test_active_time_budget_pauses_before_dispatch_and_excludes_paused_time(tmp_
     chat = ChatService(store, provider_factory=lambda _: provider)
 
     with pytest.raises(ChatConfigurationError, match="active-time budget"):
-        chat.prepare(
-            ChatCompletionRequest(
-                engagement_id="project",
-                session_id="session",
-                goal_id=running.id,
-                provider_id="provider",
-                model="model-a",
-                messages=[{"role": "user", "content": "Continue"}],
-                include_knowledge=False,
-                stream=True,
+        (
+            await chat.prepare(
+                ChatCompletionRequest(
+                    engagement_id="project",
+                    session_id="session",
+                    goal_id=running.id,
+                    provider_id="provider",
+                    model="model-a",
+                    messages=[{"role": "user", "content": "Continue"}],
+                    include_knowledge=False,
+                    stream=True,
+                )
             )
         )
 
-    exhausted = goals.get("session")
+    exhausted = await goals.get("session")
     assert exhausted.status == ChatGoalStatus.PAUSED
     assert exhausted.elapsed_seconds >= 1802
     assert exhausted.active_since is None
     assert provider.requests == []
 
 
-def test_child_budget_is_reserved_once_and_fails_closed(tmp_path):
-    _, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_child_budget_is_reserved_once_and_fails_closed(tmp_path):
+    _, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Delegate once",
@@ -1058,20 +1115,20 @@ def test_child_budget_is_reserved_once_and_fails_closed(tmp_path):
             child_budget=1,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
 
-    reserved = goals.reserve_child(running.id, expected_revision=running.revision)
+    reserved = await goals.reserve_child(running.id, expected_revision=running.revision)
 
     assert reserved.children_started == 1
     with pytest.raises(ConflictError, match="child budget is exhausted"):
-        goals.reserve_child(reserved.id, expected_revision=reserved.revision)
+        (await goals.reserve_child(reserved.id, expected_revision=reserved.revision))
 
 
-def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+async def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(objective="Use reviewed guidance", completion_criteria=["Done"]),
     )
@@ -1084,10 +1141,10 @@ def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
         instructions="Review carefully.",
     )
 
-    attached = goals.replace_skills(
+    attached = await goals.replace_skills(
         "session", expected_revision=draft.revision, snapshots=[snapshot]
     )
-    assert goals.skill_snapshots(attached) == [snapshot]
+    assert (await goals.skill_snapshots(attached)) == [snapshot]
     # The goal row keeps the summary; the instructions live beside it.
     assert [
         {key: value for key, value in item.items() if key != "part_id"}
@@ -1100,9 +1157,13 @@ def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
         }
     ]
     with pytest.raises(ConflictError, match="reload before retrying"):
-        goals.replace_skills("session", expected_revision=draft.revision, snapshots=[])
+        (
+            await goals.replace_skills(
+                "session", expected_revision=draft.revision, snapshots=[]
+            )
+        )
 
-    claimed = store.update(
+    claimed = await store.update(
         ChatGoal,
         attached.id,
         {
@@ -1113,11 +1174,13 @@ def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
         expected_revision=attached.revision,
     )
     with pytest.raises(ConflictError, match="wait for active goal work"):
-        goals.replace_skills(
-            "session", expected_revision=claimed.revision, snapshots=[]
+        (
+            await goals.replace_skills(
+                "session", expected_revision=claimed.revision, snapshots=[]
+            )
         )
 
-    released = store.update(
+    released = await store.update(
         ChatGoal,
         claimed.id,
         {
@@ -1127,14 +1190,16 @@ def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
         },
         expected_revision=claimed.revision,
     )
-    cleared = goals.replace_skills(
+    cleared = await goals.replace_skills(
         "session", expected_revision=released.revision, snapshots=[]
     )
     assert cleared.skill_snapshots == []
 
 
-def test_paused_wall_time_does_not_consume_active_goal_budget(tmp_path, monkeypatch):
-    _, goals = setup_goal(tmp_path)
+async def test_paused_wall_time_does_not_consume_active_goal_budget(
+    tmp_path, monkeypatch
+):
+    _, goals = await setup_goal(tmp_path)
     base = datetime(2026, 9, 18, tzinfo=timezone.utc)
     # One clock read per action: start, pause, resume, pause. A pause stamps
     # the parent and any started children with the same instant.
@@ -1147,7 +1212,7 @@ def test_paused_wall_time_does_not_consume_active_goal_budget(tmp_path, monkeypa
         ]
     )
     monkeypatch.setattr(chat_goals_module, "utc_now", lambda: next(clock))
-    draft = goals.create(
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Count active time only",
@@ -1156,16 +1221,16 @@ def test_paused_wall_time_does_not_consume_active_goal_budget(tmp_path, monkeypa
         ),
     )
 
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
-    paused = goals.write(
+    paused = await goals.write(
         "session", GoalWrite(expected_revision=running.revision, action="pause")
     )
-    resumed = goals.write(
+    resumed = await goals.write(
         "session", GoalWrite(expected_revision=paused.revision, action="resume")
     )
-    paused_again = goals.write(
+    paused_again = await goals.write(
         "session", GoalWrite(expected_revision=resumed.revision, action="pause")
     )
 
@@ -1173,43 +1238,47 @@ def test_paused_wall_time_does_not_consume_active_goal_budget(tmp_path, monkeypa
     assert paused_again.elapsed_seconds == pytest.approx(8)
 
 
-def test_block_reports_wrong_status_and_missing_reason_distinctly(tmp_path):
-    store, service = setup_goal(tmp_path)
-    goal = service.create(
+async def test_block_reports_wrong_status_and_missing_reason_distinctly(tmp_path):
+    store, service = await setup_goal(tmp_path)
+    goal = await service.create(
         "session",
         GoalCreate(objective="Investigate", completion_criteria=["Evidence retained"]),
     )
-    running = service.write(
+    running = await service.write(
         "session", GoalWrite(expected_revision=goal.revision, action="start")
     )
 
     # A running goal blocked without a reason is a validation failure (422).
     with pytest.raises(HTTPException) as missing_reason:
-        service.write(
-            "session",
-            GoalWrite(expected_revision=running.revision, action="block"),
+        (
+            await service.write(
+                "session",
+                GoalWrite(expected_revision=running.revision, action="block"),
+            )
         )
     assert missing_reason.value.status_code == 422
     assert "reason" in missing_reason.value.detail
 
-    paused = service.write(
+    paused = await service.write(
         "session", GoalWrite(expected_revision=running.revision, action="pause")
     )
 
     # A paused goal blocked WITH a reason is a state conflict (409), and the
     # message must name the status, not the reason the caller already supplied.
     with pytest.raises(ConflictError) as wrong_status:
-        service.write(
-            "session",
-            GoalWrite(
-                expected_revision=paused.revision,
-                action="block",
-                reason="Three unchanged failures",
-            ),
+        (
+            await service.write(
+                "session",
+                GoalWrite(
+                    expected_revision=paused.revision,
+                    action="block",
+                    reason="Three unchanged failures",
+                ),
+            )
         )
     assert "running" in str(wrong_status.value)
     assert "reason" not in str(wrong_status.value)
-    assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED
+    assert (await store.get(ChatGoal, goal.id)).status == ChatGoalStatus.PAUSED
 
 
 def _goal_request(goal_id: str, content: str) -> ChatCompletionRequest:
@@ -1225,7 +1294,7 @@ def _goal_request(goal_id: str, content: str) -> ChatCompletionRequest:
     )
 
 
-def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_path):
+async def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_path):
     """``current_step`` counts turns under the step budget; the plan is guidance.
 
     A two-line plan with a step budget of four used to crash the third send
@@ -1233,8 +1302,8 @@ def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_path):
     leaving the goal RUNNING and every later send failing the same way.
     """
 
-    store, goals = setup_goal(tmp_path)
-    draft = goals.create(
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Inspect the workspace safely",
@@ -1243,33 +1312,34 @@ def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_path):
             step_budget=4,
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
     provider = FakeProvider("provider", local=False)
     chat = ChatService(store, provider_factory=lambda _: provider)
 
     for index in range(4):
-        prepared = chat.prepare(_goal_request(running.id, f"Step {index}"))
+        prepared = await chat.prepare(_goal_request(running.id, f"Step {index}"))
         assert "Core-owned goal context" in prepared.model_request.instructions
-        asyncio.run(chat.complete(prepared))
-        goal = goals.get("session")
+        (await chat.complete(prepared))
+        goal = await goals.get("session")
         assert goal.status == ChatGoalStatus.RUNNING
         assert goal.current_step == index + 1
 
-    assert len(store.list_entities(ChatTurn, engagement_id="project")) == 4
-    assert goals.get("session").linked_turn_ids == [
-        turn.id for turn in store.list_entities(ChatTurn, engagement_id="project")
+    assert len((await store.list_entities(ChatTurn, engagement_id="project"))) == 4
+    assert (await goals.get("session")).linked_turn_ids == [
+        turn.id
+        for turn in (await store.list_entities(ChatTurn, engagement_id="project"))
     ]
 
     # The step budget, not the plan length, is what ends the goal cleanly.
     with pytest.raises(ChatConfigurationError, match="step budget is exhausted"):
-        chat.prepare(_goal_request(running.id, "One more"))
-    exhausted = goals.get("session")
+        (await chat.prepare(_goal_request(running.id, "One more")))
+    exhausted = await goals.get("session")
     assert exhausted.status == ChatGoalStatus.PAUSED
     assert exhausted.blocked_reason == "Goal step budget is exhausted."
     assert exhausted.current_step == 4
-    assert len(store.list_entities(ChatTurn, engagement_id="project")) == 4
+    assert len((await store.list_entities(ChatTurn, engagement_id="project"))) == 4
 
     # A goal with a plan and no step budget is bounded by tokens/time only.
     assert (
@@ -1285,26 +1355,26 @@ def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_path):
     )
 
 
-def test_charging_a_terminal_goal_records_usage_without_resurrecting_it(tmp_path):
-    store, goals = setup_goal(tmp_path)
+async def test_charging_a_terminal_goal_records_usage_without_resurrecting_it(tmp_path):
+    store, goals = await setup_goal(tmp_path)
     provider = FakeProvider("provider", local=False)
     chat = ChatService(store, provider_factory=lambda _: provider)
     over_budget = ChatTokenUsage(input_tokens=6, output_tokens=6, total_tokens=12)
 
-    draft = goals.create(
+    draft = await goals.create(
         "session",
         GoalCreate(
             objective="Inspect", completion_criteria=["Evidence"], token_budget=10
         ),
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
-    cancelled = goals.write(
+    cancelled = await goals.write(
         "session", GoalWrite(expected_revision=running.revision, action="cancel")
     )
 
-    charged = chat._charge_goal(cancelled.id, over_budget)
+    charged = await chat._charge_goal(cancelled.id, over_budget)
 
     assert charged.status == ChatGoalStatus.CANCELLED
     assert charged.usage.total_tokens == 12
@@ -1312,11 +1382,14 @@ def test_charging_a_terminal_goal_records_usage_without_resurrecting_it(tmp_path
     assert charged.blocked_reason is None
     assert charged.paused_at is None
     with pytest.raises(ConflictError, match="paused or blocked"):
-        goals.write(
-            "session", GoalWrite(expected_revision=charged.revision, action="resume")
+        (
+            await goals.write(
+                "session",
+                GoalWrite(expected_revision=charged.revision, action="resume"),
+            )
         )
 
-    completed = store.update(
+    completed = await store.update(
         ChatGoal,
         charged.id,
         {
@@ -1326,46 +1399,48 @@ def test_charging_a_terminal_goal_records_usage_without_resurrecting_it(tmp_path
         },
         expected_revision=charged.revision,
     )
-    charged_again = chat._charge_goal(completed.id, over_budget)
+    charged_again = await chat._charge_goal(completed.id, over_budget)
     assert charged_again.status == ChatGoalStatus.COMPLETED
     assert charged_again.usage.total_tokens == 24
     assert charged_again.completion_summary == "Done."
 
     # A running goal that crosses its budget still pauses with the reason.
-    active = store.update(
+    active = await store.update(
         ChatGoal,
         charged_again.id,
         {"status": ChatGoalStatus.RUNNING, "active_since": utc_now()},
         expected_revision=charged_again.revision,
     )
-    paused = chat._charge_goal(active.id, over_budget)
+    paused = await chat._charge_goal(active.id, over_budget)
     assert paused.status == ChatGoalStatus.PAUSED
     assert paused.blocked_reason == "Token budget exhausted during provider response."
     assert paused.usage.total_tokens == 36
 
 
-def test_goal_usage_keeps_provider_cache_and_billed_cost(tmp_path):
-    store, goals = setup_goal(tmp_path)
+async def test_goal_usage_keeps_provider_cache_and_billed_cost(tmp_path):
+    store, goals = await setup_goal(tmp_path)
     chat = ChatService(store, provider_factory=lambda _: FakeProvider("provider"))
-    draft = goals.create(
+    draft = await goals.create(
         "session", GoalCreate(objective="Inspect", completion_criteria=["Evidence"])
     )
-    running = goals.write(
+    running = await goals.write(
         "session", GoalWrite(expected_revision=draft.revision, action="start")
     )
 
-    chat._charge_goal(
-        running.id,
-        ChatTokenUsage(
-            input_tokens=100,
-            output_tokens=10,
-            total_tokens=110,
-            cached_input_tokens=80,
-            cache_creation_input_tokens=5,
-            cost_usd=0.02,
-        ),
+    (
+        await chat._charge_goal(
+            running.id,
+            ChatTokenUsage(
+                input_tokens=100,
+                output_tokens=10,
+                total_tokens=110,
+                cached_input_tokens=80,
+                cache_creation_input_tokens=5,
+                cost_usd=0.02,
+            ),
+        )
     )
-    charged = chat._charge_goal(
+    charged = await chat._charge_goal(
         running.id,
         ChatTokenUsage(
             input_tokens=20,
@@ -1384,17 +1459,17 @@ def test_goal_usage_keeps_provider_cache_and_billed_cost(tmp_path):
         cache_creation_input_tokens=5,
         cost_usd=0.03,
     )
-    assert goals.read("session").usage == charged.usage
-    unknown = chat._charge_goal(
+    assert (await goals.read("session")).usage == charged.usage
+    unknown = await chat._charge_goal(
         running.id, ChatTokenUsage(input_tokens=1, total_tokens=1)
     )
     assert unknown.usage.cached_input_tokens == 95
     assert unknown.usage.cost_usd is None
 
 
-def test_parent_pause_skips_draft_children_and_commits_with_the_parent(tmp_path):
-    store, service = setup_goal(tmp_path)
-    parent = service.create(
+async def test_parent_pause_skips_draft_children_and_commits_with_the_parent(tmp_path):
+    store, service = await setup_goal(tmp_path)
+    parent = await service.create(
         "session",
         GoalCreate(
             objective="Parent work",
@@ -1402,76 +1477,88 @@ def test_parent_pause_skips_draft_children_and_commits_with_the_parent(tmp_path)
             child_budget=2,
         ),
     )
-    service.write(
-        "session", GoalWrite(expected_revision=parent.revision, action="start")
+    (
+        await service.write(
+            "session", GoalWrite(expected_revision=parent.revision, action="start")
+        )
     )
-    draft_child = service.start_child(
+    draft_child = await service.start_child(
         "session", GoalCreate(objective="Draft child", completion_criteria=["x"])
     )
-    started_child = service.start_child(
+    started_child = await service.start_child(
         "session", GoalCreate(objective="Started child", completion_criteria=["y"])
     )
-    started_child = service.write(
+    started_child = await service.write(
         started_child.session_id,
         GoalWrite(expected_revision=started_child.revision, action="start"),
     )
 
-    paused = service.write(
+    paused = await service.write(
         "session",
-        GoalWrite(expected_revision=service.get("session").revision, action="pause"),
+        GoalWrite(
+            expected_revision=(await service.get("session")).revision, action="pause"
+        ),
     )
 
     assert paused.status == ChatGoalStatus.PAUSED
     # The draft child never passed Start, so the parent's pause leaves it alone.
-    untouched = service.get(draft_child.session_id)
+    untouched = await service.get(draft_child.session_id)
     assert untouched.status == ChatGoalStatus.DRAFT
     assert untouched.revision == draft_child.revision
     assert untouched.blocked_reason is None
     with pytest.raises(ConflictError, match="paused or blocked"):
-        service.write(
-            draft_child.session_id,
-            GoalWrite(expected_revision=untouched.revision, action="resume"),
+        (
+            await service.write(
+                draft_child.session_id,
+                GoalWrite(expected_revision=untouched.revision, action="resume"),
+            )
         )
-    stopped = service.get(started_child.session_id)
+    stopped = await service.get(started_child.session_id)
     assert stopped.status == ChatGoalStatus.PAUSED
     assert stopped.blocked_reason == "Parent goal paused; child work is paused."
     assert stopped.started_at is not None
 
     # Resume everything, then make the parent's own update lose a revision race
     # while the pause is in flight: neither the parent nor the child may change.
-    resumed = service.write(
+    resumed = await service.write(
         "session", GoalWrite(expected_revision=paused.revision, action="resume")
     )
-    running_child = service.write(
+    running_child = await service.write(
         stopped.session_id,
         GoalWrite(expected_revision=stopped.revision, action="resume"),
     )
     real_list_children = service.list_children
 
-    def list_children_while_another_device_writes(session_id: str) -> list[ChatGoal]:
-        children = real_list_children(session_id)
-        store.update(
-            ChatGoal,
-            resumed.id,
-            {"metadata": {"touched_elsewhere": True}},
-            expected_revision=resumed.revision,
+    async def list_children_while_another_device_writes(
+        session_id: str,
+    ) -> list[ChatGoal]:
+        children = await real_list_children(session_id)
+        (
+            await store.update(
+                ChatGoal,
+                resumed.id,
+                {"metadata": {"touched_elsewhere": True}},
+                expected_revision=resumed.revision,
+            )
         )
         return children
 
     service.list_children = list_children_while_another_device_writes  # type: ignore[method-assign]
     with pytest.raises(ConflictError):
-        service.write(
-            "session", GoalWrite(expected_revision=resumed.revision, action="pause")
+        (
+            await service.write(
+                "session", GoalWrite(expected_revision=resumed.revision, action="pause")
+            )
         )
 
-    assert service.get("session").status == ChatGoalStatus.RUNNING
-    child_after = service.get(running_child.session_id)
+    assert (await service.get("session")).status == ChatGoalStatus.RUNNING
+    child_after = await service.get(running_child.session_id)
     assert child_after.status == ChatGoalStatus.RUNNING
     assert child_after.revision == running_child.revision
 
 
-def test_child_budget_is_bounded_by_the_child_list_cap(tmp_path):
-    store, service = setup_goal(tmp_path)
+async def test_child_budget_is_bounded_by_the_child_list_cap(tmp_path):
+    store, service = await setup_goal(tmp_path)
     assert CHAT_GOAL_CHILD_LIMIT == 32
     with pytest.raises(ValidationError, match="less than or equal to 32"):
         GoalCreate(
@@ -1490,7 +1577,7 @@ def test_child_budget_is_bounded_by_the_child_list_cap(tmp_path):
 
     # A goal persisted with a larger budget (or one whose list is already full)
     # is refused before any child session or goal is created.
-    full = store.create(
+    full = await store.create(
         ChatGoal(
             engagement_id="project",
             session_id="session",
@@ -1506,16 +1593,21 @@ def test_child_budget_is_bounded_by_the_child_list_cap(tmp_path):
             ],
         )
     )
-    goals_before = store.count(ChatGoal)
-    sessions_before = store.count(ChatSession)
+    goals_before = await store.count(ChatGoal)
+    sessions_before = await store.count(ChatSession)
 
     with pytest.raises(ConflictError, match="goal child budget is exhausted"):
-        service.start_child(
-            "session", GoalCreate(objective="Child 33", completion_criteria=["x"])
+        (
+            await service.start_child(
+                "session", GoalCreate(objective="Child 33", completion_criteria=["x"])
+            )
         )
 
-    assert store.count(ChatGoal) == goals_before
-    assert store.count(ChatSession) == sessions_before
-    parent = service.get("session")
+    assert (await store.count(ChatGoal)) == goals_before
+    assert (await store.count(ChatSession)) == sessions_before
+    parent = await service.get("session")
     assert parent.revision == full.revision
     assert parent.children_started == CHAT_GOAL_CHILD_LIMIT
+
+
+pytestmark = pytest.mark.anyio

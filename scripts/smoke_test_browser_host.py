@@ -40,11 +40,11 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
     try:
         with tempfile.TemporaryDirectory(prefix="nebula-host-smoke-") as temporary:
             store = NebulaStore(Path(temporary) / "core.db")
-            project = store.create(Engagement(name="Automatic host validation"))
-            scope = store.create(
+            project = await store.create(Engagement(name="Automatic host validation"))
+            scope = await store.create(
                 ScopePolicy(engagement_id=project.id, allowed_cidrs=["127.0.0.1/32"])
             )
-            store.update(Engagement, project.id, {"scope_policy_id": scope.id})
+            (await store.update(Engagement, project.id, {"scope_policy_id": scope.id}))
             app = create_app(store, auth_token="isolated-host-smoke-token")
             host = BrowserCompanion._store_hosts[store]()
             assert host is not None and host._task is None
@@ -74,8 +74,8 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                     )
                     result.raise_for_status()
                     assert result.json()["text"] == "Ready", result.text
-                    identity_id = store.get(
-                        BrowserSession, session["session_id"]
+                    identity_id = (
+                        await store.get(BrowserSession, session["session_id"])
                     ).identity_id
                     live_page = await host._manager.page_for_screencast(
                         identity_id, session["active_tab_id"]
@@ -115,7 +115,7 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                             host._adapter.base_url + "/v1/readiness"
                         )
                         assert denied.status_code == 401
-                    chat = store.create(
+                    chat = await store.create(
                         ChatSession(
                             engagement_id=project.id,
                             title="Saved host conversation",
@@ -133,7 +133,7 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                     (
                         await client.put(endpoint + "/control?paused=false")
                     ).raise_for_status()
-                    pending = broker.service.propose(
+                    pending = await broker.service.propose(
                         session["session_id"],
                         CompanionRequest(
                             operation="click",
@@ -160,7 +160,9 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                     assert (await client.get(endpoint + "/control")).json()[
                         "paused"
                     ] is True
-                    assert store.get(CompanionAction, pending.id).status == "revoked"
+                    assert (
+                        await store.get(CompanionAction, pending.id)
+                    ).status == "revoked"
                     stale = await client.post(
                         endpoint + "/operations",
                         json={

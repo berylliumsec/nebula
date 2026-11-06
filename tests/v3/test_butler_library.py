@@ -1,12 +1,15 @@
 """Interactive Butler sees bounded shared Library metadata and exact handoffs."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import base64
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -16,17 +19,22 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError
 
 
-def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp_path):
+async def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    store.create(Engagement(name="Another project"))
+    selected = await store.create(Engagement(name="Selected"))
+    (await store.create(Engagement(name="Another project")))
     items = [
-        store.create(
-            LibraryItem(
-                name=f"Shared note {index}",
-                source_type="text",
-                artifact_id=f"artifact-{index}",
-                metadata={"chunks": ["private document bytes"], "filename": "note.txt"},
+        (
+            await store.create(
+                LibraryItem(
+                    name=f"Shared note {index}",
+                    source_type="text",
+                    artifact_id=f"artifact-{index}",
+                    metadata={
+                        "chunks": ["private document bytes"],
+                        "filename": "note.txt",
+                    },
+                )
             )
         )
         for index in range(52)
@@ -101,18 +109,20 @@ def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp_path)
                 "name": item.name,
             },
         }
-        assert store.get(LibraryItem, item.id).revision == item.revision
+        assert (await store.get(LibraryItem, item.id)).revision == item.revision
         with pytest.raises(
             CapabilityInputError, match="use nebula.capabilities.change"
         ):
             await invoke(
                 "reindex", {"item_id": item.id, "expected_revision": item.revision}
             )
-        store.update(
-            LibraryItem,
-            item.id,
-            {"name": "Changed elsewhere"},
-            expected_revision=item.revision,
+        (
+            await store.update(
+                LibraryItem,
+                item.id,
+                {"name": "Changed elsewhere"},
+                expected_revision=item.revision,
+            )
         )
         with pytest.raises(ValueError, match="changed"):
             await invoke(
@@ -127,17 +137,17 @@ def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp_path)
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_library_api_revision_guard_preserves_item_and_artifact(tmp_path):
+async def test_library_api_revision_guard_preserves_item_and_artifact(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     client = TestClient(
         create_app(store, artifact_store=artifacts, auth_token="test-token")
     )
     auth = {"Authorization": "Bearer test-token"}
-    created = client.post(
+    created = await client.post(
         "/api/v1/library/items/ingest",
         headers=auth,
         json={
@@ -149,29 +159,32 @@ def test_library_api_revision_guard_preserves_item_and_artifact(tmp_path):
     item = created.json()
     target = f"/api/v1/library/items/{item['id']}"
     stale = item["revision"] + 1
-    reindex = client.post(f"{target}/reindex?expected_revision={stale}", headers=auth)
+    reindex = await client.post(
+        f"{target}/reindex?expected_revision={stale}", headers=auth
+    )
     assert reindex.status_code == 409
-    assert store.get(LibraryItem, item["id"]).revision == item["revision"]
-    removed = client.delete(f"{target}?expected_revision={stale}", headers=auth)
+    assert (await store.get(LibraryItem, item["id"])).revision == item["revision"]
+    removed = await client.delete(f"{target}?expected_revision={stale}", headers=auth)
     assert removed.status_code == 409
-    assert store.get(LibraryItem, item["id"]).revision == item["revision"]
-    updated = client.post(
+    assert (await store.get(LibraryItem, item["id"])).revision == item["revision"]
+    updated = await client.post(
         f"{target}/reindex?expected_revision={item['revision']}", headers=auth
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["revision"] > item["revision"]
     assert updated.json()["status"] == "ready"
     assert (
-        client.delete(
+        await client.delete(
             f"{target}?expected_revision={item['revision']}", headers=auth
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
     assert (
-        client.delete(
+        await client.delete(
             f"{target}?expected_revision={updated.json()['revision']}", headers=auth
-        ).status_code
-        == 204
-    )
-    assert client.get(target, headers=auth).status_code == 404
-    assert store.count(Artifact) == 1
+        )
+    ).status_code == 204
+    assert (await client.get(target, headers=auth)).status_code == 404
+    assert (await store.count(Artifact)) == 1
+
+
+pytestmark = pytest.mark.anyio

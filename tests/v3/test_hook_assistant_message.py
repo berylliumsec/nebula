@@ -8,7 +8,11 @@ whether it was cut; failed and cancelled events carry both keys too, so one
 hook serves all three ends.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 import pytest
@@ -44,7 +48,7 @@ ANSWER_GUARD_HOOK = (
 )
 
 
-def test_routing_answer_completed_hook_receives_the_answer(tmp_path):
+async def test_routing_answer_completed_hook_receives_the_answer(tmp_path):
     workspace = tmp_path / "workspace"
     _write_native_hook(
         workspace,
@@ -53,22 +57,22 @@ def test_routing_answer_completed_hook_receives_the_answer(tmp_path):
         script=ANSWER_GUARD_HOOK,
         failure_policy="block",
     )
-    store, service, prepared, _, _ = _glm_turn(
+    store, service, prepared, _, _ = await _glm_turn(
         tmp_path, [_answer("Hello!"), _synthesis("A second, paid-for answer.")]
     )
     prepared.hook_snapshots = [
         snapshot_native_hook("answer-guard", discover_native_hooks(workspace))
     ]
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # A tool turn whose routing reply is the answer ends on that reply, and
     # its completed hook sees it as a synthesized answer's hook would.
     assert completion.message.content == "Hello!"
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     executions = [
         item
-        for item in service.list_turn_hook_executions("turn")
+        for item in (await service.list_turn_hook_executions("turn"))
         if item.event_name == "chat.turn.completed"
     ]
     assert [item.status for item in executions] == ["complete"]
@@ -97,9 +101,9 @@ class LongAnswerProvider(FakeProvider):
         )
 
 
-def test_completed_hook_answer_is_bounded_and_flagged(tmp_path):
+async def test_completed_hook_answer_is_bounded_and_flagged(tmp_path):
     async def scenario():
-        _, service, _, request, hook_dir = _service(
+        _, service, _, request, hook_dir = await _service(
             tmp_path,
             LongAnswerProvider,
             hook_id="answer-guard",
@@ -113,7 +117,7 @@ def test_completed_hook_answer_is_bounded_and_flagged(tmp_path):
         await service.shutdown()
         return hook_dir, completion
 
-    hook_dir, completion = asyncio.run(scenario())
+    hook_dir, completion = await scenario()
 
     # The stored answer is whole; only the hook's copy is bounded.
     assert completion.message.content == LongAnswerProvider.ANSWER
@@ -145,3 +149,6 @@ def test_turn_end_payload_bounds_the_answer_at_64_kib(answer, sent, truncated):
         "assistant_message": sent,
         "assistant_message_truncated": truncated,
     }
+
+
+pytestmark = pytest.mark.anyio

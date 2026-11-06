@@ -71,7 +71,7 @@ async def read_core_observation(
         return response.json()
 
 
-def serve(args):
+async def serve(args):
     from fastapi import Depends, Header, HTTPException
     from keyring.backends.null import Keyring
     import uvicorn
@@ -105,14 +105,14 @@ def serve(args):
     store = NebulaStore(root / "core.db")
     artifacts = ArtifactStore(root / "artifacts")
     credentials = CredentialStore(keyring_backend=Keyring())
-    project = store.create(
+    project = await store.create(
         Engagement(
             id="budget-project",
             name="Synthetic fifty-chat resource model",
             workspace_path=str(root),
         )
     )
-    profile = store.create(
+    profile = await store.create(
         HarnessProfile(
             id="inert-budget-harness",
             name="Inert CPU model",
@@ -124,7 +124,7 @@ def serve(args):
     )
     owners = {}
     for i in range(args.chats):
-        session = store.create(
+        session = await store.create(
             HarnessSession(
                 id=f"harness-{i}",
                 engagement_id=project.id,
@@ -132,7 +132,7 @@ def serve(args):
                 model="fixture",
             )
         )
-        chat = store.create(
+        chat = await store.create(
             ChatSession(
                 id=f"chat-{i}",
                 engagement_id=project.id,
@@ -146,26 +146,28 @@ def serve(args):
         )
         owners[session.id] = chat.id
         if args.history:
-            store.create_many(
-                [
-                    ToolCall(
-                        id=f"historical-{i}-{j}",
-                        engagement_id=project.id,
-                        run_id="history",
-                        origin="chat",
-                        chat_session_id=chat.id,
-                        tool_name="vendor:codex:synthetic.cpu",
-                        status="complete",
-                        risk_class="local_read",
-                        result="synthetic saved history " * 5,
-                        metadata={"harness_turn_id": "historical-turn"},
-                    )
-                    for j in range(args.history)
-                ]
+            (
+                await store.create_many(
+                    [
+                        ToolCall(
+                            id=f"historical-{i}-{j}",
+                            engagement_id=project.id,
+                            run_id="history",
+                            origin="chat",
+                            chat_session_id=chat.id,
+                            tool_name="vendor:codex:synthetic.cpu",
+                            status="complete",
+                            risk_class="local_read",
+                            result="synthetic saved history " * 5,
+                            metadata={"harness_turn_id": "historical-turn"},
+                        )
+                        for j in range(args.history)
+                    ]
+                )
             )
     note_ids = []
     for i in range(48):
-        note = store.create(
+        note = await store.create(
             Observation(
                 id=f"note-{i}",
                 engagement_id=project.id,
@@ -179,12 +181,14 @@ def serve(args):
         )
         note_ids.append(note.id)
     for i in range(args.pdfs):
-        store.create(
-            Report(
-                id=f"report-{i}",
-                engagement_id=project.id,
-                title=f"Synthetic budget PDF {i}",
-                observation_ids=note_ids,
+        (
+            await store.create(
+                Report(
+                    id=f"report-{i}",
+                    engagement_id=project.id,
+                    title=f"Synthetic budget PDF {i}",
+                    observation_ids=note_ids,
+                )
             )
         )
 
@@ -398,7 +402,7 @@ def serve(args):
 
     @app.get("/__resource_model__/metrics", dependencies=[Depends(authorized)])
     async def metrics(reset: bool = False):
-        turns = store.find_entities(
+        turns = await store.find_entities(
             HarnessTurn, {}, engagement_id=project.id, limit=200
         )
         value = {
@@ -465,10 +469,18 @@ def serve(args):
             "budget": budget.snapshot(),
         }
 
-    uvicorn.run(
-        app, host=args.host, port=args.port, access_log=False, log_level="warning"
+    (
+        await uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=args.host,
+                port=args.port,
+                access_log=False,
+                log_level="warning",
+            )
+        ).serve()
     )
-    store.database.dispose()
+    (await store.database.dispose())
 
 
 async def drive(args, token, core):
@@ -919,7 +931,7 @@ async def drive(args, token, core):
         }
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--compute", action="store_true")
@@ -940,9 +952,9 @@ def main():
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.compute:
-        return asyncio.run(compute_server(args.directory, args.workers))
+        return await compute_server(args.directory, args.workers)
     if args.serve:
-        return serve(args)
+        return await serve(args)
     if not args.host or not args.output:
         parser.error("Require a private LAN host and an output path")
     address = ipaddress.ip_address(args.host)
@@ -1095,7 +1107,7 @@ def main():
             with args.output.with_suffix(".log").open("w") as log:
                 core = subprocess.Popen(core_command, env=env, stdout=log, stderr=log)
                 try:
-                    result = asyncio.run(drive(args, token, core))
+                    result = await drive(args, token, core)
                 finally:
                     if core.poll() is None:
                         core.send_signal(signal.SIGINT)
@@ -1151,4 +1163,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -1,6 +1,10 @@
 """A command hook can deny an effect and still give the model useful feedback."""
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 import pytest
@@ -28,7 +32,7 @@ from tests.v3.test_native_hook_turn_ends import _attach_running_goal, _service
 
 
 @pytest.mark.parametrize("goal_mode", [False, True])
-def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(
+async def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(
     tmp_path, goal_mode
 ):
     class GuidanceProvider(FakeProvider):
@@ -43,7 +47,7 @@ def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(
                 )
             return await super().complete(request)
 
-    store, service, provider, request, _ = _service(
+    store, service, provider, request, _ = await _service(
         tmp_path,
         GuidanceProvider,
         hook_id="start-check",
@@ -56,12 +60,12 @@ def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(
         ),
         failure_policy="block",
     )
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
     if goal_mode:
-        _attach_running_goal(store, prepared)
+        (await _attach_running_goal(store, prepared))
 
     with pytest.raises(StartHookBlocked, match="start-check"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     [feedback_request] = [
         item
@@ -75,21 +79,21 @@ def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(
     )
     assert "stderr: Bearer [REDACTED]" in feedback_request.messages[-1].content
     assert "private-token" not in json.dumps(feedback_request.model_dump())
-    turn = store.get(ChatTurn, prepared.turn.id)
+    turn = await store.get(ChatTurn, prepared.turn.id)
     assert turn.status == ChatTurnStatus.FAILED
     assert turn.request_snapshot["start_hook_resolution"]["candidate"] == (
         "Ask the workspace owner to resolve the existing changes."
     )
     note = next(
         item
-        for item in service.session_messages(turn.session_id)
+        for item in (await service.session_messages(turn.session_id))
         if item.metadata.get("kind") == "turn_outcome"
     )
     assert "the turn remained blocked" in note.content
     assert "Ask the workspace owner" in note.content
 
 
-def test_effectful_completion_hook_informs_model_without_replaying_hook(tmp_path):
+async def test_effectful_completion_hook_informs_model_without_replaying_hook(tmp_path):
     class GuidanceProvider(FakeProvider):
         async def complete(self, request: ModelRequest) -> ModelResponse:
             if request.metadata.get("completion_hook_retry") == "1":
@@ -102,7 +106,7 @@ def test_effectful_completion_hook_informs_model_without_replaying_hook(tmp_path
                 )
             return await super().complete(request)
 
-    store, service, provider, request, _ = _service(
+    store, service, provider, request, _ = await _service(
         tmp_path,
         GuidanceProvider,
         hook_id="workspace-check",
@@ -116,10 +120,10 @@ def test_effectful_completion_hook_informs_model_without_replaying_hook(tmp_path
         failure_policy="block",
         side_effects="workspace",
     )
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     with pytest.raises(CompletionHookBlocked, match="workspace-check"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     [feedback_request] = [
         item
@@ -129,8 +133,8 @@ def test_effectful_completion_hook_informs_model_without_replaying_hook(tmp_path
     assert "stdout: Review another owner" in feedback_request.messages[-1].content
     assert "stderr: Bearer [REDACTED]" in feedback_request.messages[-1].content
     assert "cannot be replayed" in feedback_request.messages[-1].content
-    assert len(service.list_turn_hook_executions(prepared.turn.id)) == 1
-    turn = store.get(ChatTurn, prepared.turn.id)
+    assert len((await service.list_turn_hook_executions(prepared.turn.id))) == 1
+    turn = await store.get(ChatTurn, prepared.turn.id)
     assert turn.status == ChatTurnStatus.FAILED
     assert (
         "operator must review"
@@ -138,7 +142,7 @@ def test_effectful_completion_hook_informs_model_without_replaying_hook(tmp_path
     )
 
 
-def test_effectful_tool_completion_hook_routes_feedback_without_replay(tmp_path):
+async def test_effectful_tool_completion_hook_routes_feedback_without_replay(tmp_path):
     _write_native_hook(
         tmp_path,
         "workspace-check",
@@ -147,7 +151,7 @@ def test_effectful_tool_completion_hook_routes_feedback_without_replay(tmp_path)
         failure_policy="block",
         side_effects="workspace",
     )
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(
@@ -166,15 +170,15 @@ def test_effectful_tool_completion_hook_routes_feedback_without_replay(tmp_path)
     ]
 
     with pytest.raises(CompletionHookBlocked, match="workspace-check"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     assert any(
         "stdout: Review another owner" in str(message.content)
         for message in provider.requests[2].messages
     )
     assert "cannot be replayed" in str(provider.requests[2].messages[-1].content)
-    assert len(service.list_turn_hook_executions("turn")) == 1
-    turn = store.get(ChatTurn, "turn")
+    assert len((await service.list_turn_hook_executions("turn"))) == 1
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.FAILED
     assert (
         "operator must review"
@@ -182,10 +186,10 @@ def test_effectful_tool_completion_hook_routes_feedback_without_replay(tmp_path)
     )
 
 
-def test_blocked_command_hook_output_enters_bounded_model_receipt(tmp_path):
+async def test_blocked_command_hook_output_enters_bounded_model_receipt(tmp_path):
     async def scenario():
-        manager, store, artifacts, engagement, sessions = runtime(tmp_path)
-        create_tool_chat(store, engagement)
+        manager, store, artifacts, engagement, sessions = await runtime(tmp_path)
+        (await create_tool_chat(store, engagement))
         workspace = tmp_path / "workspaces" / engagement.id
         directory = workspace / ".agents" / "hooks" / "workspace-check"
         directory.mkdir(parents=True)
@@ -222,7 +226,7 @@ def test_blocked_command_hook_output_enters_bounded_model_receipt(tmp_path):
 
         with pytest.raises(ProjectHookPolicyDenied) as caught:
             await broker.execute(
-                invocation, store.get(ScopePolicy, f"scope:{engagement.id}")
+                invocation, (await store.get(ScopePolicy, f"scope:{engagement.id}"))
             )
         receipt = tool_failure(
             command_specs()["run_command"],
@@ -232,11 +236,13 @@ def test_blocked_command_hook_output_enters_bounded_model_receipt(tmp_path):
         )
         return store, sessions, receipt
 
-    store, sessions, receipt = asyncio.run(scenario())
+    store, sessions, receipt = await scenario()
 
     assert sessions == []
-    assert store.list_entities(CommandExecution) == []
-    assert store.list_entities(StoredToolCall)[0].status == ToolCallStatus.DENIED
+    assert (await store.list_entities(CommandExecution)) == []
+    assert (await store.list_entities(StoredToolCall))[
+        0
+    ].status == ToolCallStatus.DENIED
     assert receipt["category"] == "permission_denied"
     assert receipt["side_effects"] == "none"
     assert receipt["retry_safe"] is False
@@ -247,7 +253,7 @@ def test_blocked_command_hook_output_enters_bounded_model_receipt(tmp_path):
     assert "private-token" not in json.dumps(delivered)
 
 
-def test_blocked_hook_feedback_reaches_next_provider_request(tmp_path):
+async def test_blocked_hook_feedback_reaches_next_provider_request(tmp_path):
     class HookBlockingBroker(RecordingBroker):
         async def execute(self, invocation, scope, *, approval=None):
             del scope, approval
@@ -264,7 +270,7 @@ def test_blocked_hook_feedback_reaches_next_provider_request(tmp_path):
             )
 
     broker = HookBlockingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(
@@ -280,11 +286,11 @@ def test_blocked_hook_feedback_reaches_next_provider_request(tmp_path):
         broker,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert "operator" in completion.message.content
     assert len(broker.calls) == 1
-    assert store.get(ChatTurn, "turn").tool_history[0]["status"] == "denied"
+    assert (await store.get(ChatTurn, "turn")).tool_history[0]["status"] == "denied"
     [feedback] = provider.requests[1].tool_results
     assert feedback.is_error is True
     assert (
@@ -317,3 +323,6 @@ def test_blocked_hook_output_is_bounded_and_searchable():
     assert receipt["hook_output"]["truncated"] is True
     assert "secret-value" not in serialize_model_result(receipt)
     assert "Fix repository ownership" in failure_receipt_text(receipt)
+
+
+pytestmark = pytest.mark.anyio

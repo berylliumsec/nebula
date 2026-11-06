@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import itertools
 import json
@@ -6,7 +10,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import ValidationError
 
 from nebula.v3.api import create_app
@@ -181,11 +185,11 @@ class FakeSession(RuntimeBackendSession):
             await process.terminate()
 
 
-def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
+async def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Runtime test"))
-    scope = store.create(
+    engagement = await store.create(Engagement(name="Runtime test"))
+    scope = await store.create(
         ScopePolicy(
             id=f"scope:{engagement.id}",
             engagement_id=engagement.id,
@@ -193,7 +197,7 @@ def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
             allowed_ports=[443],
         )
     )
-    engagement = store.update(
+    engagement = await store.update(
         Engagement,
         engagement.id,
         {"scope_policy_id": scope.id},
@@ -201,22 +205,28 @@ def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
     )
     # This fixture represents projects created before Host became the default.
     # Keep its Docker policy explicit so existing runtime tests retain that mode.
-    store.create(
-        AutomationProjectPolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement.id}")),
-            engagement_id=engagement.id,
-            execution_mode="docker",
+    (
+        await store.create(
+            AutomationProjectPolicy(
+                id=str(
+                    uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement.id}")
+                ),
+                engagement_id=engagement.id,
+                execution_mode="docker",
+            )
         )
     )
-    store.create(
-        RunnerProfile(
-            id="runner",
-            name="Docker",
-            runtime=RunnerRuntime.DOCKER,
-            executable="/usr/bin/docker",
-            platform="linux/amd64",
-            isolation=RunnerIsolation.ROOTLESS,
-            healthy=True,
+    (
+        await store.create(
+            RunnerProfile(
+                id="runner",
+                name="Docker",
+                runtime=RunnerRuntime.DOCKER,
+                executable="/usr/bin/docker",
+                platform="linux/amd64",
+                isolation=RunnerIsolation.ROOTLESS,
+                healthy=True,
+            )
         )
     )
     workspace = (
@@ -246,31 +256,35 @@ def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
     return manager, store, artifacts, engagement, sessions
 
 
-def test_host_session_refuses_project_relink_after_workspace_resolution(tmp_path):
-    manager, store, _, project, _ = runtime(tmp_path)
+async def test_host_session_refuses_project_relink_after_workspace_resolution(tmp_path):
+    manager, store, _, project, _ = await runtime(tmp_path)
     old = tmp_path / "workspaces" / project.id
     new = tmp_path / "new-workspace"
     new.mkdir()
-    project = store.update(
+    project = await store.update(
         Engagement,
         project.id,
         {"workspace_path": str(old)},
         expected_revision=project.revision,
     )
-    policy = manager.project_policy(project.id)
-    store.update(
-        AutomationProjectPolicy,
-        policy.id,
-        {"execution_mode": "host", "host_access_acknowledged": True},
-        expected_revision=policy.revision,
+    policy = await manager.project_policy(project.id)
+    (
+        await store.update(
+            AutomationProjectPolicy,
+            policy.id,
+            {"execution_mode": "host", "host_access_acknowledged": True},
+            expected_revision=policy.revision,
+        )
     )
     read_policy = manager.project_policy
 
-    def relink_after_project_read(engagement_id):
+    async def relink_after_project_read(engagement_id):
         manager.project_policy = read_policy
-        policy = read_policy(engagement_id)
-        store.relink_project_workspace(
-            project.id, str(new), expected_revision=project.revision
+        policy = await read_policy(engagement_id)
+        (
+            await store.relink_project_workspace(
+                project.id, str(new), expected_revision=project.revision
+            )
         )
         return policy
 
@@ -282,9 +296,9 @@ def test_host_session_refuses_project_relink_after_workspace_resolution(tmp_path
                 engagement_id=project.id, owner_kind="api", owner_id="late-start"
             )
 
-    asyncio.run(attempt())
-    assert store.count(AutomationSession, engagement_id=project.id) == 0
-    assert store.get(Engagement, project.id).workspace_path == str(new)
+    (await attempt())
+    assert (await store.count(AutomationSession, engagement_id=project.id)) == 0
+    assert (await store.get(Engagement, project.id)).workspace_path == str(new)
 
 
 def command_hook(
@@ -358,33 +372,37 @@ def tool_invocation(engagement, workspace: Path, name: str, arguments: dict, ste
     )
 
 
-def create_tool_chat(store: NebulaStore, engagement: Engagement) -> None:
-    store.create(
-        ChatSession(
-            id="chat-1",
-            engagement_id=engagement.id,
-            title="Command hook test",
-            provider_profile_id="provider-1",
-            model="test-model",
+async def create_tool_chat(store: NebulaStore, engagement: Engagement) -> None:
+    (
+        await store.create(
+            ChatSession(
+                id="chat-1",
+                engagement_id=engagement.id,
+                title="Command hook test",
+                provider_profile_id="provider-1",
+                model="test-model",
+            )
         )
     )
-    store.create(
-        ChatTurn(
-            id="turn-1",
-            engagement_id=engagement.id,
-            session_id="chat-1",
-            provider_profile_id="provider-1",
-            model="test-model",
-            status=ChatTurnStatus.ROUTING,
-            tools_enabled=True,
+    (
+        await store.create(
+            ChatTurn(
+                id="turn-1",
+                engagement_id=engagement.id,
+                session_id="chat-1",
+                provider_profile_id="provider-1",
+                model="test-model",
+                status=ChatTurnStatus.ROUTING,
+                tools_enabled=True,
+            )
         )
     )
 
 
-def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
+async def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
     async def scenario():
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
-        create_tool_chat(store, engagement)
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        (await create_tool_chat(store, engagement))
         workspace = tmp_path / "workspaces" / engagement.id
         log = tmp_path / "command-hooks.jsonl"
         command_hook(workspace, log)
@@ -397,7 +415,7 @@ def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
             tool_invocation(
                 engagement, workspace, "run_command", {"command": "echo hook-ok"}, 1
             ),
-            store.get(ScopePolicy, f"scope:{engagement.id}"),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
         )
         await broker.execute(
             tool_invocation(
@@ -407,7 +425,7 @@ def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
                 {"process_id": command.receipt.process_id, "action": "poll"},
                 2,
             ),
-            store.get(ScopePolicy, f"scope:{engagement.id}"),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
         )
 
         events = [json.loads(line) for line in log.read_text().splitlines()]
@@ -435,17 +453,17 @@ def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
         assert all(
             item["workspace_provenance"]["actor_id"] == "chat:chat-1" for item in events
         )
-        executions = store.list_entities(NativeHookExecution)
+        executions = await store.list_entities(NativeHookExecution)
         assert len(executions) == 4
         assert all(item.owner_id == "chat-1" for item in executions)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_blocking_before_hook_denies_command_before_runtime_execution(tmp_path):
+async def test_blocking_before_hook_denies_command_before_runtime_execution(tmp_path):
     async def scenario():
-        manager, store, artifacts, engagement, sessions = runtime(tmp_path)
-        create_tool_chat(store, engagement)
+        manager, store, artifacts, engagement, sessions = await runtime(tmp_path)
+        (await create_tool_chat(store, engagement))
         workspace = tmp_path / "workspaces" / engagement.id
         command_hook(workspace, tmp_path / "blocked-hooks.jsonl", block=True)
         broker = AutomationBroker(
@@ -459,28 +477,28 @@ def test_blocking_before_hook_denies_command_before_runtime_execution(tmp_path):
 
         with pytest.raises(PolicyDenied, match="required project hook"):
             await broker.execute(
-                invocation, store.get(ScopePolicy, f"scope:{engagement.id}")
+                invocation, (await store.get(ScopePolicy, f"scope:{engagement.id}"))
             )
 
         assert sessions == []
-        [call] = store.list_entities(ToolCall)
+        [call] = await store.list_entities(ToolCall)
         assert call.status == ToolCallStatus.DENIED
-        assert store.list_entities(CommandExecution) == []
-        [observation] = store.list_entities(WorkspaceProvenanceObservation)
+        assert (await store.list_entities(CommandExecution)) == []
+        [observation] = await store.list_entities(WorkspaceProvenanceObservation)
         assert observation.status == "complete"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_inherited_blocking_before_hook_denies_nested_workspace_command(tmp_path):
+async def test_inherited_blocking_before_hook_denies_nested_workspace_command(tmp_path):
     async def scenario():
         repository = tmp_path / "repository"
         repository.mkdir()
         (repository / ".git").mkdir()
-        manager, store, artifacts, engagement, sessions = runtime(
+        manager, store, artifacts, engagement, sessions = await runtime(
             tmp_path, workspace_parent=repository / "projects"
         )
-        create_tool_chat(store, engagement)
+        (await create_tool_chat(store, engagement))
         workspace = repository / "projects" / engagement.id
         log = tmp_path / "inherited-blocked-hooks.jsonl"
         command_hook(
@@ -505,7 +523,7 @@ def test_inherited_blocking_before_hook_denies_nested_workspace_command(tmp_path
                     {"command": "echo must-not-run"},
                     1,
                 ),
-                store.get(ScopePolicy, f"scope:{engagement.id}"),
+                (await store.get(ScopePolicy, f"scope:{engagement.id}")),
             )
 
         [event] = [
@@ -513,26 +531,26 @@ def test_inherited_blocking_before_hook_denies_nested_workspace_command(tmp_path
         ]
         assert event["payload"]["workspace_path"] == str(workspace.resolve())
         assert sessions == []
-        [call] = store.list_entities(ToolCall)
+        [call] = await store.list_entities(ToolCall)
         assert call.status == ToolCallStatus.DENIED
-        [execution] = store.list_entities(NativeHookExecution)
+        [execution] = await store.list_entities(NativeHookExecution)
         assert execution.hook_id == "shared-repo-search-routing"
-        assert store.list_entities(CommandExecution) == []
+        assert (await store.list_entities(CommandExecution)) == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file(
+async def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file(
     tmp_path,
 ):
     async def scenario():
         repository = tmp_path / "repository"
         repository.mkdir()
         (repository / ".git").mkdir()
-        manager, store, artifacts, engagement, sessions = runtime(
+        manager, store, artifacts, engagement, sessions = await runtime(
             tmp_path, workspace_parent=repository / "projects"
         )
-        create_tool_chat(store, engagement)
+        (await create_tool_chat(store, engagement))
         workspace = repository / "projects" / engagement.id
         (workspace / "AGENTS.md").write_text("fixture input\n", encoding="utf-8")
         shared_ancestor_search_hook(repository)
@@ -557,16 +575,16 @@ def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file(
                         {"command": command},
                         step,
                     ),
-                    store.get(ScopePolicy, f"scope:{engagement.id}"),
+                    (await store.get(ScopePolicy, f"scope:{engagement.id}")),
                 )
 
-            execution = store.list_entities(NativeHookExecution)[-1]
+            execution = (await store.list_entities(NativeHookExecution))[-1]
             assert execution.hook_id == "shared-repo-search-routing"
             assert execution.status != "complete"
             assert "repo_search_guard (run_command)" in execution.stderr
             assert "capability_search" in execution.stderr
             assert sessions == []
-            assert store.list_entities(CommandExecution) == []
+            assert (await store.list_entities(CommandExecution)) == []
 
         allowed = await broker.execute(
             tool_invocation(
@@ -576,27 +594,27 @@ def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file(
                 {"command": "rg needle AGENTS.md"},
                 3,
             ),
-            store.get(ScopePolicy, f"scope:{engagement.id}"),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
         )
 
         assert allowed.receipt.status == CommandExecutionStatus.COMPLETED
         assert len(sessions) == 1
-        assert store.list_entities(NativeHookExecution)[-1].status == "complete"
+        assert (await store.list_entities(NativeHookExecution))[-1].status == "complete"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write(
+async def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write(
     tmp_path,
 ):
     async def scenario():
         repository = tmp_path / "repository"
         repository.mkdir()
         (repository / ".git").mkdir()
-        manager, store, artifacts, engagement, sessions = runtime(
+        manager, store, artifacts, engagement, sessions = await runtime(
             tmp_path, workspace_parent=repository / "projects"
         )
-        create_tool_chat(store, engagement)
+        (await create_tool_chat(store, engagement))
         workspace = repository / "projects" / engagement.id
         (workspace / "subdir").mkdir()
         (workspace / "AGENTS.md").write_text("fixture input\n", encoding="utf-8")
@@ -614,7 +632,7 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
                 {"command": "bash", "cwd": "subdir", "background": True},
                 1,
             ),
-            store.get(ScopePolicy, f"scope:{engagement.id}"),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
         )
 
         with pytest.raises(PolicyDenied, match="required project hook"):
@@ -629,7 +647,7 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
                 },
                 2,
             )
-            payload = broker._hook_payload(invocation, "payload-contract-probe")
+            payload = await broker._hook_payload(invocation, "payload-contract-probe")
             assert payload["workspace_path"] == str(workspace.resolve())
             assert payload["process_context"] == {
                 "command": "bash",
@@ -638,10 +656,10 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
             }
             await broker.execute(
                 invocation,
-                store.get(ScopePolicy, f"scope:{engagement.id}"),
+                (await store.get(ScopePolicy, f"scope:{engagement.id}")),
             )
 
-        [blocked_execution] = store.list_entities(NativeHookExecution)[-1:]
+        [blocked_execution] = (await store.list_entities(NativeHookExecution))[-1:]
         assert blocked_execution.hook_id == "shared-repo-search-routing"
         assert "repo_search_guard (process_io shell write)" in blocked_execution.stderr
         assert "capability_search" in blocked_execution.stderr
@@ -659,24 +677,24 @@ def test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_w
                 },
                 3,
             ),
-            store.get(ScopePolicy, f"scope:{engagement.id}"),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
         )
         assert allowed.receipt.process_id == command.receipt.process_id
         assert sessions[0].processes[0].writes == [b"rg needle AGENTS.md\n"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_inherited_shared_search_hook_blocks_process_write_without_parent_context(
+async def test_inherited_shared_search_hook_blocks_process_write_without_parent_context(
     tmp_path,
 ):
     async def scenario():
         repository = tmp_path / "repository"
         repository.mkdir()
-        manager, store, artifacts, engagement, sessions = runtime(
+        manager, store, artifacts, engagement, sessions = await runtime(
             tmp_path, workspace_parent=repository / "projects"
         )
-        create_tool_chat(store, engagement)
+        (await create_tool_chat(store, engagement))
         workspace = repository / "projects" / engagement.id
         shared_ancestor_search_hook(repository)
         broker = AutomationBroker(
@@ -698,39 +716,41 @@ def test_inherited_shared_search_hook_blocks_process_write_without_parent_contex
                     },
                     1,
                 ),
-                store.get(ScopePolicy, f"scope:{engagement.id}"),
+                (await store.get(ScopePolicy, f"scope:{engagement.id}")),
             )
 
-        [execution] = store.list_entities(NativeHookExecution)
+        [execution] = await store.list_entities(NativeHookExecution)
         assert "parent process context is unavailable" in execution.stderr
         assert sessions == []
-        assert store.list_entities(CommandExecution) == []
+        assert (await store.list_entities(CommandExecution)) == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io(
+async def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io(
     tmp_path,
 ):
     async def scenario():
         repository = tmp_path / "repository"
         repository.mkdir()
         (repository / ".git").mkdir()
-        manager, store, artifacts, engagement, _fake_sessions = runtime(
+        manager, store, artifacts, engagement, _fake_sessions = await runtime(
             tmp_path, workspace_parent=repository / "projects"
         )
-        create_tool_chat(store, engagement)
+        (await create_tool_chat(store, engagement))
         workspace = repository / "projects" / engagement.id
         (workspace / "AGENTS.md").write_text("needle\n", encoding="utf-8")
         shared_ancestor_search_hook(repository)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=False,
-            runner_profile_id=None,
-            max_timeout_ms=5_000,
-            execution_mode="host",
-            host_access_acknowledged=True,
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=False,
+                runner_profile_id=None,
+                max_timeout_ms=5_000,
+                execution_mode="host",
+                host_access_acknowledged=True,
+            )
         )
         manager.runtime_image = ""
         manager.runtime_digest = ""
@@ -740,7 +760,7 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             output_service=ToolOutputService(store, artifacts),
             execution_mode="host",
         )
-        scope = store.get(ScopePolicy, f"scope:{engagement.id}")
+        scope = await store.get(ScopePolicy, f"scope:{engagement.id}")
 
         with pytest.raises(PolicyDenied, match="required project hook"):
             await broker.execute(
@@ -753,10 +773,10 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
                 ),
                 scope,
             )
-        [blocked_hook] = store.list_entities(NativeHookExecution)
+        [blocked_hook] = await store.list_entities(NativeHookExecution)
         assert blocked_hook.hook_id == "shared-repo-search-routing"
         assert "capability_search" in blocked_hook.stderr
-        assert store.list_entities(CommandExecution) == []
+        assert (await store.list_entities(CommandExecution)) == []
 
         allowed = await broker.execute(
             tool_invocation(
@@ -773,8 +793,8 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             preview.kind == "stdout" and "needle" in preview.text
             for preview in allowed.receipt.output_preview
         )
-        allowed_execution = store.list_entities(CommandExecution)[-1]
-        persisted = store.get(AutomationSession, allowed_execution.session_id)
+        allowed_execution = (await store.list_entities(CommandExecution))[-1]
+        persisted = await store.get(AutomationSession, allowed_execution.session_id)
         assert persisted.execution_mode == "host"
         assert persisted.metadata["network_boundary"] == "host_os"
 
@@ -789,7 +809,7 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             scope,
         )
         process_id = shell.receipt.process_id
-        shell_execution = store.list_entities(CommandExecution)[-1]
+        shell_execution = (await store.list_entities(CommandExecution))[-1]
         process_session_id = shell_execution.session_id
         try:
             denied_write = tool_invocation(
@@ -803,7 +823,7 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
                 },
                 4,
             )
-            payload = broker._hook_payload(denied_write, "host-process-context")
+            payload = await broker._hook_payload(denied_write, "host-process-context")
             assert payload["workspace_path"] == str(workspace.resolve())
             assert payload["process_context"] == {
                 "command": "bash",
@@ -812,7 +832,7 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
             }
             with pytest.raises(PolicyDenied, match="required project hook"):
                 await broker.execute(denied_write, scope)
-            [blocked_write] = store.list_entities(NativeHookExecution)[-1:]
+            [blocked_write] = (await store.list_entities(NativeHookExecution))[-1:]
             assert blocked_write.hook_id == "shared-repo-search-routing"
             assert "process_io shell write" in blocked_write.stderr
             assert "capability_search" in blocked_write.stderr
@@ -835,12 +855,12 @@ def test_inherited_shared_search_hook_enforces_real_host_run_command_and_process
         finally:
             await manager.close_session(process_session_id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_general_command_reuses_session_and_persists_artifacts(tmp_path):
+async def test_general_command_reuses_session_and_persists_artifacts(tmp_path):
     async def scenario():
-        manager, store, artifacts, engagement, sessions = runtime(tmp_path)
+        manager, store, artifacts, engagement, sessions = await runtime(tmp_path)
 
         first = await manager.run_command(
             engagement_id=engagement.id,
@@ -859,22 +879,22 @@ def test_general_command_reuses_session_and_persists_artifacts(tmp_path):
         assert first.session_id == second.session_id
         assert first.status == CommandExecutionStatus.COMPLETED
         assert "rg needle" in first.stdout
-        execution = store.get(CommandExecution, first.execution_id)
+        execution = await store.get(CommandExecution, first.execution_id)
         assert execution.command_sha256
         assert execution.stdout_artifact_id
         assert execution.redacted_stdout_artifact_id
         assert artifacts.read(
-            store.get_by_kind("artifacts", execution.stdout_artifact_id)
+            (await store.get_by_kind("artifacts", execution.stdout_artifact_id))
         )
 
         closed = await manager.close_session(first.session_id)
         assert closed.status == AutomationSessionStatus.CLOSED
         assert sessions[0].closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_process_wrapper_accepts_an_existing_process_group(tmp_path):
+async def test_process_wrapper_accepts_an_existing_process_group(tmp_path):
     async def scenario():
         pid_file = tmp_path / "process.pid"
         process = await asyncio.create_subprocess_exec(
@@ -893,10 +913,10 @@ def test_process_wrapper_accepts_an_existing_process_group(tmp_path):
         assert stdout == b"wrapper-ok"
         assert int(pid_file.read_text(encoding="ascii")) > 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_communicate_accepts_discarded_stderr():
+async def test_communicate_accepts_discarded_stderr():
     async def scenario():
         process = await asyncio.create_subprocess_exec(
             "/usr/bin/python3",
@@ -910,10 +930,10 @@ def test_communicate_accepts_discarded_stderr():
         assert stdout == b"output\n"
         assert stderr == b""
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_communicate_preserves_timeout_when_process_exits_during_kill():
+async def test_communicate_preserves_timeout_when_process_exits_during_kill():
     class ExitedProcess:
         returncode = None
 
@@ -933,14 +953,16 @@ def test_communicate_preserves_timeout_when_process_exits_during_kill():
         ):
             await automation_runtime._communicate(ExitedProcess(), timeout=0.001)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_removes_exact_orphan_runtime_and_gateway_names(tmp_path, monkeypatch):
+async def test_startup_removes_exact_orphan_runtime_and_gateway_names(
+    tmp_path, monkeypatch
+):
     async def scenario():
-        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
-        session = store.create(
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
+        session = await store.create(
             AutomationSession(
                 id="A4D6F5D0-BC17-4A90-8878-21A93F805EB9",
                 engagement_id=engagement.id,
@@ -955,16 +977,18 @@ def test_startup_removes_exact_orphan_runtime_and_gateway_names(tmp_path, monkey
                 status=AutomationSessionStatus.READY,
             )
         )
-        store.create(
-            CommandExecution(
-                id=manager._execution_id("orphan-process"),
-                engagement_id=engagement.id,
-                session_id=session.id,
-                process_id="orphan-process",
-                command="sleep 3600",
-                command_sha256="0" * 64,
-                runtime_digest="sha256:" + "a" * 64,
-                policy_revision=policy.revision,
+        (
+            await store.create(
+                CommandExecution(
+                    id=manager._execution_id("orphan-process"),
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    process_id="orphan-process",
+                    command="sleep 3600",
+                    command_sha256="0" * 64,
+                    runtime_digest="sha256:" + "a" * 64,
+                    policy_revision=policy.revision,
+                )
             )
         )
 
@@ -987,18 +1011,18 @@ def test_startup_removes_exact_orphan_runtime_and_gateway_names(tmp_path, monkey
 
         expected = "nebula-runtime-a4d6f5d0bc174a90887821a93f805eb9"
         assert cleanup_runner.removed == [expected, f"{expected}-egress"]
-        interrupted_session = store.get(AutomationSession, session.id)
+        interrupted_session = await store.get(AutomationSession, session.id)
         assert interrupted_session.status == AutomationSessionStatus.INTERRUPTED
         assert interrupted_session.failure_detail == (
             "Core restarted; detached runtime teardown requested"
         )
-        [execution] = store.list_entities(CommandExecution)
+        [execution] = await store.list_entities(CommandExecution)
         assert execution.status == CommandExecutionStatus.INTERRUPTED
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path):
+async def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path):
     """Listing one session's processes reads only that session's records.
 
     It paged through every CommandExecution Core holds (~12.7k on the live
@@ -1012,11 +1036,11 @@ def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path
     from nebula.v3.database import EntityRow
     from nebula.v3.domain import utc_now
 
-    manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
-    policy = manager.project_policy(engagement.id)
+    manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+    policy = await manager.project_policy(engagement.id)
 
-    def session(owner_id: str) -> AutomationSession:
-        return store.create(
+    async def session(owner_id: str) -> AutomationSession:
+        return await store.create(
             AutomationSession(
                 engagement_id=engagement.id,
                 owner_kind="api",
@@ -1031,8 +1055,8 @@ def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path
             )
         )
 
-    listed = session("listed")
-    busy = session("busy")
+    listed = await session("listed")
+    busy = await session("busy")
     started = utc_now()
 
     def execution(owner: AutomationSession, process_id: str, index: int):
@@ -1050,15 +1074,20 @@ def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path
             updated_at=at,
         )
 
-    with store.transaction() as transaction:
-        transaction.add_all(
-            [
-                # Oldest first by creation, not by process id.
-                execution(listed, "listed-c", 0),
-                *(execution(busy, f"busy-{index}", index) for index in range(1, 1_201)),
-                execution(listed, "listed-a", 1_201),
-                execution(listed, "listed-b", 1_202),
-            ]
+    async with store.transaction() as transaction:
+        (
+            await transaction.add_all(
+                [
+                    # Oldest first by creation, not by process id.
+                    execution(listed, "listed-c", 0),
+                    *(
+                        execution(busy, f"busy-{index}", index)
+                        for index in range(1, 1_201)
+                    ),
+                    execution(listed, "listed-a", 1_201),
+                    execution(listed, "listed-b", 1_202),
+                ]
+            )
         )
     loaded: list[str] = []
 
@@ -1068,7 +1097,7 @@ def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path
 
     orm_event.listen(EntityRow, "load", count)
     try:
-        processes = manager.list_processes(listed.id)
+        processes = await manager.list_processes(listed.id)
     finally:
         orm_event.remove(EntityRow, "load", count)
 
@@ -1079,17 +1108,19 @@ def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path
     ]
     assert all(isinstance(item, CommandExecution) for item in processes)
     assert len(loaded) == 3
-    assert [item.process_id for item in manager.list_processes(busy.id)][:2] == [
+    assert [item.process_id for item in (await manager.list_processes(busy.id))][
+        :2
+    ] == [
         "busy-1",
         "busy-2",
     ]
     with pytest.raises(NotFoundError):
-        manager.list_processes("missing-session")
+        (await manager.list_processes("missing-session"))
 
 
-def test_historical_process_io_preserves_agent_ownership(tmp_path):
+async def test_historical_process_io_preserves_agent_ownership(tmp_path):
     async def scenario():
-        manager, _store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, _store, _artifacts, engagement, _sessions = await runtime(tmp_path)
         result = await manager.run_command(
             engagement_id=engagement.id,
             owner_kind="mission",
@@ -1113,12 +1144,12 @@ def test_historical_process_io_preserves_agent_ownership(tmp_path):
         )
         assert historical.status == CommandExecutionStatus.COMPLETED
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_command_execution_does_not_walk_workspace(tmp_path, monkeypatch):
+async def test_command_execution_does_not_walk_workspace(tmp_path, monkeypatch):
     async def scenario():
-        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
         monkeypatch.setattr(
             automation_runtime.os,
             "walk",
@@ -1136,10 +1167,10 @@ def test_command_execution_does_not_walk_workspace(tmp_path, monkeypatch):
             encoding="utf-8"
         ) == "generated"
         assert result.workspace_changes == []
-        execution = store.get(CommandExecution, result.execution_id)
+        execution = await store.get(CommandExecution, result.execution_id)
         assert execution.workspace_changes == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_command_request_defers_path_boundary_to_selected_backend_and_rejects_nul():
@@ -1148,12 +1179,12 @@ def test_command_request_defers_path_boundary_to_selected_backend_and_rejects_nu
         RunCommandRequest(command="printf bad\0command")
 
 
-def test_binary_output_is_truncated_for_models_and_retained_as_raw_artifact(
+async def test_binary_output_is_truncated_for_models_and_retained_as_raw_artifact(
     tmp_path, monkeypatch
 ):
     async def scenario():
         monkeypatch.setattr(automation_runtime, "MAX_CAPTURE_BYTES", 8)
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
 
         result = await manager.run_command(
             engagement_id=engagement.id,
@@ -1162,19 +1193,19 @@ def test_binary_output_is_truncated_for_models_and_retained_as_raw_artifact(
             request=RunCommandRequest(command="binary-output"),
         )
 
-        execution = store.get(CommandExecution, result.execution_id)
-        raw = store.get_by_kind("artifacts", execution.stdout_artifact_id)
+        execution = await store.get(CommandExecution, result.execution_id)
+        raw = await store.get_by_kind("artifacts", execution.stdout_artifact_id)
         assert result.output_truncated is True
         assert execution.observed_stdout_bytes > raw.size == 8
         assert raw.media_type == "application/octet-stream"
         assert artifacts.read(raw) == b"\x00\xffbinary"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_network_boundary_prompts_once_and_enables_whole_project_scope(tmp_path):
+async def test_network_boundary_prompts_once_and_enables_whole_project_scope(tmp_path):
     async def scenario():
-        manager, store, _artifacts, engagement, sessions = runtime(tmp_path)
+        manager, store, _artifacts, engagement, sessions = await runtime(tmp_path)
         request = RunCommandRequest(
             command="curl https://example.test",
             network=AutomationNetworkMode.PROJECT_SCOPE,
@@ -1186,7 +1217,7 @@ def test_network_boundary_prompts_once_and_enables_whole_project_scope(tmp_path)
                 owner_id="mission-1",
                 request=request,
             )
-        approval = store.update(
+        approval = await store.update(
             Approval,
             required.value.approval.id,
             {
@@ -1217,20 +1248,24 @@ def test_network_boundary_prompts_once_and_enables_whole_project_scope(tmp_path)
         assert again.network_granted is True
         assert sessions[0].enable_count == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_never_policy_is_automatic_and_background_process_can_be_cancelled(tmp_path):
+async def test_never_policy_is_automatic_and_background_process_can_be_cancelled(
+    tmp_path,
+):
     async def scenario():
-        manager, _store, _artifacts, engagement, sessions = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        manager, _store, _artifacts, engagement, sessions = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         started = await manager.run_command(
             engagement_id=engagement.id,
@@ -1258,20 +1293,22 @@ def test_never_policy_is_automatic_and_background_process_can_be_cancelled(tmp_p
         )
         assert stopped.status == CommandExecutionStatus.CANCELLED
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_always_policy_consumes_one_exact_approval_per_command(tmp_path):
+async def test_always_policy_consumes_one_exact_approval_per_command(tmp_path):
     async def scenario():
-        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.ALWAYS,
-            network_enabled=False,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.ALWAYS,
+                network_enabled=False,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         request = RunCommandRequest(command="git status")
         with pytest.raises(CommandApprovalRequired) as required:
@@ -1281,7 +1318,7 @@ def test_always_policy_consumes_one_exact_approval_per_command(tmp_path):
                 owner_id="api-2",
                 request=request,
             )
-        approval = store.update(
+        approval = await store.update(
             Approval,
             required.value.approval.id,
             {
@@ -1306,12 +1343,12 @@ def test_always_policy_consumes_one_exact_approval_per_command(tmp_path):
                 request=request,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_command_timeout_terminates_the_process_group(tmp_path):
+async def test_command_timeout_terminates_the_process_group(tmp_path):
     async def scenario():
-        manager, store, _artifacts, engagement, sessions = runtime(tmp_path)
+        manager, store, _artifacts, engagement, sessions = await runtime(tmp_path)
         started = await manager.run_command(
             engagement_id=engagement.id,
             owner_kind="api",
@@ -1330,24 +1367,28 @@ def test_command_timeout_terminates_the_process_group(tmp_path):
                 break
             await asyncio.sleep(0.01)
         assert result.status == CommandExecutionStatus.TIMED_OUT
-        execution = store.get(CommandExecution, result.execution_id)
+        execution = await store.get(CommandExecution, result.execution_id)
         assert execution.error == "command timed out"
         assert sessions[0].processes[0]._done.result() == -15
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_network_request_fails_closed_when_disabled_or_scope_is_url_only(tmp_path):
+async def test_network_request_fails_closed_when_disabled_or_scope_is_url_only(
+    tmp_path,
+):
     async def scenario():
-        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=False,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=False,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         request = RunCommandRequest(
             command="curl https://example.test",
@@ -1361,25 +1402,29 @@ def test_network_request_fails_closed_when_disabled_or_scope_is_url_only(tmp_pat
                 request=request,
             )
 
-        current = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=current.revision,
+        current = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=current.revision,
+            )
         )
-        scope = store.get(ScopePolicy, engagement.scope_policy_id)
-        store.update(
-            ScopePolicy,
-            scope.id,
-            {
-                "allowed_cidrs": [],
-                "allowed_domains": [],
-                "allowed_urls": ["https://example.test/only-this-path"],
-            },
-            expected_revision=scope.revision,
+        scope = await store.get(ScopePolicy, engagement.scope_policy_id)
+        (
+            await store.update(
+                ScopePolicy,
+                scope.id,
+                {
+                    "allowed_cidrs": [],
+                    "allowed_domains": [],
+                    "allowed_urls": ["https://example.test/only-this-path"],
+                },
+                expected_revision=scope.revision,
+            )
         )
         with pytest.raises(AutomationPolicyDenied, match="URL-only scope"):
             await manager.run_command(
@@ -1389,12 +1434,12 @@ def test_network_request_fails_closed_when_disabled_or_scope_is_url_only(tmp_pat
                 request=request,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
+async def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
     async def scenario():
-        manager, _store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, _store, _artifacts, engagement, _sessions = await runtime(tmp_path)
         launches = []
 
         async def launch(configuration):
@@ -1419,18 +1464,20 @@ def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
             ("203.0.113.0/24", [443])
         ]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
+async def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
     async def scenario():
-        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
-        scope = store.get(ScopePolicy, engagement.scope_policy_id)
-        store.update(
-            ScopePolicy,
-            scope.id,
-            {"allowed_cidrs": [], "allowed_domains": ["example.test"]},
-            expected_revision=scope.revision,
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        scope = await store.get(ScopePolicy, engagement.scope_policy_id)
+        (
+            await store.update(
+                ScopePolicy,
+                scope.id,
+                {"allowed_cidrs": [], "allowed_domains": ["example.test"]},
+                expected_revision=scope.revision,
+            )
         )
         launches = []
 
@@ -1456,19 +1503,21 @@ def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
             "nameserver 127.0.0.53\n"
         )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_selected_vpn_is_frozen_and_streamed_only_to_the_namespace_launch(tmp_path):
+async def test_selected_vpn_is_frozen_and_streamed_only_to_the_namespace_launch(
+    tmp_path,
+):
     async def scenario():
-        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
         manager.data_root = tmp_path / "core-data"
         manager.data_root.mkdir()
         credentials = CredentialStore()
         secret = credentials.create(
             CredentialCreateRequest(secret="client\ndev tun0\n", persistence="session")
         )
-        vpn = store.create(
+        vpn = await store.create(
             VpnProfile(
                 name="Assessment VPN",
                 filename="assessment.ovpn",
@@ -1480,15 +1529,17 @@ def test_selected_vpn_is_frozen_and_streamed_only_to_the_namespace_launch(tmp_pa
             )
         )
         manager.credential_store = credentials
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            vpn_profile_id=vpn.id,
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                vpn_profile_id=vpn.id,
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         launches = []
 
@@ -1512,18 +1563,18 @@ def test_selected_vpn_is_frozen_and_streamed_only_to_the_namespace_launch(tmp_pa
         assert launches[0].vpn_config == "client\ndev tun0"
         assert launches[0].workspace.resolve() in launches[0].runner.workspace_roots
         assert tmp_path.resolve() not in launches[0].runner.workspace_roots
-        session = store.get(AutomationSession, result.session_id)
+        session = await store.get(AutomationSession, result.session_id)
         assert (session.vpn_profile_id, session.vpn_profile_revision) == (
             vpn.id,
             vpn.revision,
         )
         assert "client" not in session.model_dump_json()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
-    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+async def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
+    manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
     app = create_app(
         store,
         artifact_store=artifacts,
@@ -1532,15 +1583,15 @@ def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
     )
     headers = {"Authorization": "Bearer runtime-test-token"}
 
-    with TestClient(app) as client:
-        policy = client.get(
+    async with TestClient(app) as client:
+        policy = await client.get(
             f"/api/v1/engagements/{engagement.id}/automation-policy",
             headers=headers,
         )
         assert policy.status_code == 200
         assert policy.json()["approval_policy"] == "on_boundary"
 
-        command = client.post(
+        command = await client.post(
             f"/api/v1/engagements/{engagement.id}/automation-sessions/api/"
             "api-session/commands",
             headers=headers,
@@ -1551,7 +1602,7 @@ def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
         assert result["status"] == "completed"
         assert "rg needle" in result["stdout"]
 
-        processes = client.get(
+        processes = await client.get(
             f"/api/v1/automation-sessions/{result['session_id']}/processes",
             headers=headers,
         )
@@ -1560,7 +1611,7 @@ def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
             result["process_id"]
         ]
 
-        paths = client.get("/openapi.json").json()["paths"]
+        paths = (await client.get("/openapi.json")).json()["paths"]
         assert not any(
             marker in path
             for path in paths
@@ -1568,8 +1619,8 @@ def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
         )
 
 
-def test_api_saves_vpn_secret_outside_public_profile_and_selects_it(tmp_path):
-    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+async def test_api_saves_vpn_secret_outside_public_profile_and_selects_it(tmp_path):
+    manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
     app = create_app(
         store,
         artifact_store=artifacts,
@@ -1588,8 +1639,8 @@ certificate
 </ca>
 """
 
-    with TestClient(app) as client:
-        created = client.post(
+    async with TestClient(app) as client:
+        created = await client.post(
             "/api/v1/vpn-profiles",
             headers=headers,
             json={
@@ -1604,7 +1655,7 @@ certificate
         assert "secret_ref" not in profile
         assert "config" not in profile
         assert profile["available"] is True
-        duplicate = client.post(
+        duplicate = await client.post(
             "/api/v1/vpn-profiles",
             headers=headers,
             json={
@@ -1615,13 +1666,17 @@ certificate
             },
         )
         assert duplicate.status_code == 409, duplicate.text
-        assert len(client.get("/api/v1/vpn-profiles", headers=headers).json()) == 1
+        assert (
+            len((await client.get("/api/v1/vpn-profiles", headers=headers)).json()) == 1
+        )
 
-        current = client.get(
-            f"/api/v1/engagements/{engagement.id}/automation-policy",
-            headers=headers,
+        current = (
+            await client.get(
+                f"/api/v1/engagements/{engagement.id}/automation-policy",
+                headers=headers,
+            )
         ).json()
-        updated = client.put(
+        updated = await client.put(
             f"/api/v1/engagements/{engagement.id}/automation-policy",
             headers=headers,
             json={
@@ -1636,7 +1691,7 @@ certificate
         assert updated.status_code == 200, updated.text
         assert updated.json()["vpn_profile_id"] == profile["id"]
 
-        blocked = client.request(
+        blocked = await client.request(
             "DELETE",
             f"/api/v1/vpn-profiles/{profile['id']}",
             headers=headers,
@@ -1644,28 +1699,30 @@ certificate
         )
         assert blocked.status_code == 409
 
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=policy.approval_policy,
-            network_enabled=policy.network_enabled,
-            runner_profile_id=policy.runner_profile_id,
-            vpn_profile_id=None,
-            max_timeout_ms=policy.max_timeout_ms,
-            expected_revision=policy.revision,
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=policy.approval_policy,
+                network_enabled=policy.network_enabled,
+                runner_profile_id=policy.runner_profile_id,
+                vpn_profile_id=None,
+                max_timeout_ms=policy.max_timeout_ms,
+                expected_revision=policy.revision,
+            )
         )
-        removed = client.request(
+        removed = await client.request(
             "DELETE",
             f"/api/v1/vpn-profiles/{profile['id']}",
             headers=headers,
             json={"expected_revision": profile["revision"]},
         )
         assert removed.status_code == 204
-        assert client.get("/api/v1/vpn-profiles", headers=headers).json() == []
+        assert (await client.get("/api/v1/vpn-profiles", headers=headers)).json() == []
 
 
-def test_project_vpn_selection_and_vault_secret_survive_core_restart(tmp_path):
-    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+async def test_project_vpn_selection_and_vault_secret_survive_core_restart(tmp_path):
+    manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
     backend = DurableTestKeyring()
     credentials = CredentialStore(backend)
     app = create_app(
@@ -1687,24 +1744,28 @@ certificate
 </ca>
 """
 
-    with TestClient(app) as client:
-        profile = client.post(
-            "/api/v1/vpn-profiles",
-            headers=headers,
-            json={
-                "name": "Persistent project VPN",
-                "filename": "project.ovpn",
-                "config": config,
-                "username": "project-user",
-                "password": "project-password",
-                "persistence": "vault",
-            },
+    async with TestClient(app) as client:
+        profile = (
+            await client.post(
+                "/api/v1/vpn-profiles",
+                headers=headers,
+                json={
+                    "name": "Persistent project VPN",
+                    "filename": "project.ovpn",
+                    "config": config,
+                    "username": "project-user",
+                    "password": "project-password",
+                    "persistence": "vault",
+                },
+            )
         ).json()
-        policy = client.get(
-            f"/api/v1/engagements/{engagement.id}/automation-policy",
-            headers=headers,
+        policy = (
+            await client.get(
+                f"/api/v1/engagements/{engagement.id}/automation-policy",
+                headers=headers,
+            )
         ).json()
-        selected = client.put(
+        selected = await client.put(
             f"/api/v1/engagements/{engagement.id}/automation-policy",
             headers=headers,
             json={
@@ -1720,8 +1781,8 @@ certificate
 
     restarted_store = NebulaStore(tmp_path / "nebula.db")
     restarted_credentials = CredentialStore(backend)
-    persisted_profile = restarted_store.get(VpnProfile, profile["id"])
-    persisted_policy = restarted_store.get(
+    persisted_profile = await restarted_store.get(VpnProfile, profile["id"])
+    persisted_policy = await restarted_store.get(
         AutomationProjectPolicy, selected.json()["id"]
     )
 
@@ -1737,13 +1798,13 @@ certificate
     assert b"project-password" not in (tmp_path / "nebula.db").read_bytes()
 
 
-def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared(
+async def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared(
     tmp_path,
 ):
-    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+    manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
     manager.runtime_image = ""
     manager.runtime_digest = ""
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             name="Local analysis model",
             provider_type="vllm",
@@ -1759,8 +1820,8 @@ def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared
         automation_runtime=manager,
     )
 
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/missions",
             headers={"Authorization": "Bearer runtime-test-token"},
             json={
@@ -1779,8 +1840,8 @@ def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared
     assert payload["budget"]["max_tool_calls"] is None
 
 
-def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):
-    manager, store, artifacts, _engagement, _sessions = runtime(tmp_path)
+async def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):
+    manager, store, artifacts, _engagement, _sessions = await runtime(tmp_path)
     diagnostics = DiagnosticManager(
         tmp_path / "diagnostics", level_override="debug", watch_settings=False
     )
@@ -1793,8 +1854,8 @@ def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):
     )
 
     try:
-        with TestClient(app) as client:
-            response = client.get(
+        async with TestClient(app) as client:
+            response = await client.get(
                 "/api/v1/automation/runtime",
                 headers={"Authorization": "Bearer runtime-test-token"},
             )
@@ -1808,18 +1869,20 @@ def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):
     assert "runtime.managed-browser-host.stopped" in runtime_events
 
 
-def test_runtime_info_is_not_ready_before_kali_image_preparation(tmp_path):
+async def test_runtime_info_is_not_ready_before_kali_image_preparation(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    store.create(
-        RunnerProfile(
-            id="runner",
-            name="Docker",
-            runtime=RunnerRuntime.DOCKER,
-            executable="/usr/bin/docker",
-            platform="linux/amd64",
-            isolation=RunnerIsolation.ROOTLESS,
-            healthy=True,
+    (
+        await store.create(
+            RunnerProfile(
+                id="runner",
+                name="Docker",
+                runtime=RunnerRuntime.DOCKER,
+                executable="/usr/bin/docker",
+                platform="linux/amd64",
+                isolation=RunnerIsolation.ROOTLESS,
+                healthy=True,
+            )
         )
     )
 
@@ -1835,7 +1898,7 @@ def test_runtime_info_is_not_ready_before_kali_image_preparation(tmp_path):
         cached_runtime_provider=lambda: None,
     )
 
-    info = asyncio.run(manager.runtime_info())
+    info = await manager.runtime_info()
 
     assert info.configured is True
     assert info.ready is False
@@ -1845,10 +1908,12 @@ def test_runtime_info_is_not_ready_before_kali_image_preparation(tmp_path):
     assert info.detail == "the existing Kali headless runtime has not been prepared"
 
 
-def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_path):
+async def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(
+    tmp_path,
+):
     async def scenario():
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
-        call = store.create(
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        call = await store.create(
             ToolCall(
                 id="command-call",
                 engagement_id=engagement.id,
@@ -1867,14 +1932,14 @@ def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_pa
             tool_call_id=call.id,
         )
         service = ToolOutputService(store, artifacts)
-        process_receipt = AutomationBroker(
+        process_receipt = await AutomationBroker(
             manager=manager,
             store=store,
             output_service=service,
         )._receipt("process-io-call", PROCESS_IO_NAME, result)
         assert process_receipt.tool_call_id == call.id
 
-        search = service.search(
+        search = await service.search(
             engagement_id=engagement.id,
             owner_id="mission-owner",
             tool_call_id=call.id,
@@ -1882,7 +1947,7 @@ def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_pa
         )
         assert search["matches"]
         assert "untrusted_data" not in search
-        read = service.read(
+        read = await service.read(
             engagement_id=engagement.id,
             owner_id="mission-owner",
             artifact_id=result.stdout_artifact_id,
@@ -1890,26 +1955,32 @@ def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_pa
         assert "unique-needle" in json.dumps(read)
         assert len(json.dumps(read).encode()) <= 8 * 1024
         with pytest.raises(ToolOutputAccessError):
-            service.search(
-                engagement_id=engagement.id,
-                owner_id="another-mission",
-                tool_call_id=call.id,
-                query="unique-needle",
+            (
+                await service.search(
+                    engagement_id=engagement.id,
+                    owner_id="another-mission",
+                    tool_call_id=call.id,
+                    query="unique-needle",
+                )
             )
         with pytest.raises(ToolOutputQueryError, match="regular-expression"):
-            ToolOutputService(store, artifacts, regex_deadline_seconds=0).search(
-                engagement_id=engagement.id,
-                owner_id="mission-owner",
-                tool_call_id=call.id,
-                query="(a+)+$",
-                mode="regex",
+            (
+                await ToolOutputService(
+                    store, artifacts, regex_deadline_seconds=0
+                ).search(
+                    engagement_id=engagement.id,
+                    owner_id="mission-owner",
+                    tool_call_id=call.id,
+                    query="(a+)+$",
+                    mode="regex",
+                )
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def _searchable_tool_call(store, artifacts, engagement, *, call_id, body):
-    call = store.create(
+async def _searchable_tool_call(store, artifacts, engagement, *, call_id, body):
+    call = await store.create(
         ToolCall(
             id=call_id,
             engagement_id=engagement.id,
@@ -1920,26 +1991,32 @@ def _searchable_tool_call(store, artifacts, engagement, *, call_id, body):
             risk_class=RiskClass.WORKSPACE_WRITE,
         )
     )
-    store.create(
-        artifacts.put_bytes(
-            body,
-            engagement_id=engagement.id,
-            filename=f"{call_id}.stdout",
-            media_type="text/plain",
-            metadata={"tool_call_id": call.id, "kind": "stdout", "searchable": True},
+    (
+        await store.create(
+            artifacts.put_bytes(
+                body,
+                engagement_id=engagement.id,
+                filename=f"{call_id}.stdout",
+                media_type="text/plain",
+                metadata={
+                    "tool_call_id": call.id,
+                    "kind": "stdout",
+                    "searchable": True,
+                },
+            )
         )
     )
     return call
 
 
-def test_tool_output_search_budget_is_separate_from_the_regex_guard(tmp_path):
+async def test_tool_output_search_budget_is_separate_from_the_regex_guard(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Large output"))
+    engagement = await store.create(Engagement(name="Large output"))
     # About 3 MB of scan output with the needle on the last line: a literal
     # search must finish instead of tripping over the 0.25 s regex guard.
     body = b"ordinary scan output line with some padding text\n" * 60_000
-    call = _searchable_tool_call(
+    call = await _searchable_tool_call(
         store,
         artifacts,
         engagement,
@@ -1947,7 +2024,7 @@ def test_tool_output_search_budget_is_separate_from_the_regex_guard(tmp_path):
         body=body + b"admin found here\n",
     )
 
-    result = ToolOutputService(store, artifacts).search(
+    result = await ToolOutputService(store, artifacts).search(
         engagement_id=engagement.id,
         owner_id="mission-owner",
         tool_call_id=call.id,
@@ -1960,13 +2037,13 @@ def test_tool_output_search_budget_is_separate_from_the_regex_guard(tmp_path):
     assert result["reason"] is None
 
 
-def test_tool_output_search_reports_budget_exhaustion_with_a_resumable_cursor(
+async def test_tool_output_search_reports_budget_exhaustion_with_a_resumable_cursor(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Paged output"))
-    call = _searchable_tool_call(
+    engagement = await store.create(Engagement(name="Paged output"))
+    call = await _searchable_tool_call(
         store,
         artifacts,
         engagement,
@@ -1982,7 +2059,7 @@ def test_tool_output_search_reports_budget_exhaustion_with_a_resumable_cursor(
     pages = []
     cursor = None
     for _ in range(200):
-        page = service.search(
+        page = await service.search(
             engagement_id=engagement.id,
             owner_id="mission-owner",
             tool_call_id=call.id,
@@ -2012,18 +2089,18 @@ def test_tool_output_search_reports_budget_exhaustion_with_a_resumable_cursor(
                 )
 
 
-def test_tool_output_search_rejects_a_cursor_that_no_longer_resolves(tmp_path):
+async def test_tool_output_search_rejects_a_cursor_that_no_longer_resolves(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Cursor reuse"))
-    first = _searchable_tool_call(
+    engagement = await store.create(Engagement(name="Cursor reuse"))
+    first = await _searchable_tool_call(
         store, artifacts, engagement, call_id="first-call", body=b"needle\nneedle\n"
     )
-    second = _searchable_tool_call(
+    second = await _searchable_tool_call(
         store, artifacts, engagement, call_id="second-call", body=b"needle\n"
     )
     service = ToolOutputService(store, artifacts)
-    page = service.search(
+    page = await service.search(
         engagement_id=engagement.id,
         owner_id="mission-owner",
         tool_call_id=first.id,
@@ -2033,29 +2110,33 @@ def test_tool_output_search_rejects_a_cursor_that_no_longer_resolves(tmp_path):
     assert page["truncated"] is True
 
     with pytest.raises(ToolOutputQueryError, match="continuation cursor"):
-        service.search(
-            engagement_id=engagement.id,
-            owner_id="mission-owner",
-            tool_call_id=second.id,
-            query="needle",
-            cursor=page["continuation_cursor"],
+        (
+            await service.search(
+                engagement_id=engagement.id,
+                owner_id="mission-owner",
+                tool_call_id=second.id,
+                query="needle",
+                cursor=page["continuation_cursor"],
+            )
         )
 
 
-def test_tool_output_read_resumes_within_utf8_line_and_redacts_every_page(tmp_path):
+async def test_tool_output_read_resumes_within_utf8_line_and_redacts_every_page(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Long artifact line"))
+    engagement = await store.create(Engagement(name="Long artifact line"))
     secret = "Bearer abcdefghijklmnopqrstuvwxyz123456"
     long_line = "α🛰" * 10_000 + secret + "é" * 4_000
     body = ("head\n" * 5 + long_line + "\ntail\n").encode("utf-8")
     assert 68_000 < len(body) < 75_000
-    call = _searchable_tool_call(
+    call = await _searchable_tool_call(
         store, artifacts, engagement, call_id="long-line", body=body
     )
-    (artifact,) = store.list_tool_call_artifacts(engagement.id, call.id)
+    (artifact,) = await store.list_tool_call_artifacts(engagement.id, call.id)
     service = ToolOutputService(store, artifacts)
-    page = service.read(
+    page = await service.read(
         engagement_id=engagement.id,
         owner_id="mission-owner",
         artifact_id=artifact.id,
@@ -2076,13 +2157,15 @@ def test_tool_output_read_resumes_within_utf8_line_and_redacts_every_page(tmp_pa
         cursor = page["continuation_cursor"]
         assert cursor is not None
         with pytest.raises(ToolOutputAccessError):
-            service.read(
-                engagement_id=engagement.id,
-                owner_id="unauthorized",
-                artifact_id=artifact.id,
-                continuation_cursor=cursor,
+            (
+                await service.read(
+                    engagement_id=engagement.id,
+                    owner_id="unauthorized",
+                    artifact_id=artifact.id,
+                    continuation_cursor=cursor,
+                )
             )
-        page = service.read(
+        page = await service.read(
             engagement_id=engagement.id,
             owner_id="mission-owner",
             artifact_id=artifact.id,
@@ -2148,10 +2231,12 @@ def test_historical_raw_tool_output_fails_closed_to_a_receipt():
     assert "raw historical output" not in json.dumps(result)
 
 
-def test_host_mode_requires_consent_and_reads_external_folder_without_docker(tmp_path):
+async def test_host_mode_requires_consent_and_reads_external_folder_without_docker(
+    tmp_path,
+):
     async def scenario():
-        manager, store, _, engagement, containers = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
+        manager, store, _, engagement, containers = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
         update = dict(
             approval_policy=AutomationApprovalPolicy.NEVER,
             network_enabled=False,
@@ -2160,9 +2245,11 @@ def test_host_mode_requires_consent_and_reads_external_folder_without_docker(tmp
             execution_mode="host",
         )
         with pytest.raises(AutomationPolicyDenied, match="Acknowledge"):
-            manager.update_project_policy(engagement.id, **update)
-        manager.update_project_policy(
-            engagement.id, **update, host_access_acknowledged=True
+            (await manager.update_project_policy(engagement.id, **update))
+        (
+            await manager.update_project_policy(
+                engagement.id, **update, host_access_acknowledged=True
+            )
         )
         manager.runtime_image = ""
         manager.runtime_digest = ""
@@ -2177,14 +2264,16 @@ def test_host_mode_requires_consent_and_reads_external_folder_without_docker(tmp
             request=RunCommandRequest(command="cat marker.txt", cwd=str(backup)),
         )
         assert result.exit_code == 0
-        execution = store.get(CommandExecution, result.execution_id)
+        execution = await store.get(CommandExecution, result.execution_id)
         assert execution.network == AutomationNetworkMode.HOST
         assert execution.metadata["execution_mode"] == "host"
         assert result.session_id
         assert containers == []
         # Mode changes never convert the already-created host session to Docker.
-        manager.update_project_policy(
-            engagement.id, **{**update, "execution_mode": "docker"}
+        (
+            await manager.update_project_policy(
+                engagement.id, **{**update, "execution_mode": "docker"}
+            )
         )
         retained = await manager.session(
             engagement_id=engagement.id, owner_kind="api", owner_id="host-test"
@@ -2193,33 +2282,37 @@ def test_host_mode_requires_consent_and_reads_external_folder_without_docker(tmp
         await manager.close_session(result.session_id)
         assert policy.execution_mode == "docker"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker(
+async def test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_docker(
     tmp_path,
 ):
     async def scenario():
-        manager, store, _, legacy_project, containers = runtime(tmp_path)
-        assert manager.project_policy(legacy_project.id).execution_mode == "docker"
+        manager, store, _, legacy_project, containers = await runtime(tmp_path)
+        assert (
+            await manager.project_policy(legacy_project.id)
+        ).execution_mode == "docker"
 
-        created = create_engagement_with_default_scope(
+        created = await create_engagement_with_default_scope(
             store, Engagement(name="New Host project")
         )
-        policy = manager.project_policy(created.id)
+        policy = await manager.project_policy(created.id)
         assert policy.execution_mode == "host"
         assert policy.host_access_acknowledged is False
         assert not (await manager.runtime_info(engagement_id=created.id)).ready
-        manager.update_project_policy(
-            created.id,
-            execution_mode="host",
-            host_access_acknowledged=True,
-            approval_policy=policy.approval_policy,
-            network_enabled=policy.network_enabled,
-            runner_profile_id=policy.runner_profile_id,
-            vpn_profile_id=policy.vpn_profile_id,
-            max_timeout_ms=policy.max_timeout_ms,
-            expected_revision=policy.revision,
+        (
+            await manager.update_project_policy(
+                created.id,
+                execution_mode="host",
+                host_access_acknowledged=True,
+                approval_policy=policy.approval_policy,
+                network_enabled=policy.network_enabled,
+                runner_profile_id=policy.runner_profile_id,
+                vpn_profile_id=policy.vpn_profile_id,
+                max_timeout_ms=policy.max_timeout_ms,
+                expected_revision=policy.revision,
+            )
         )
         manager.runtime_image = ""
         manager.runtime_digest = ""
@@ -2231,12 +2324,12 @@ def test_new_project_defaults_to_host_pending_consent_and_legacy_project_keeps_d
         assert containers == []
         await manager.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_docker_mode_rejects_host_paths_and_host_network_requests(tmp_path):
+async def test_docker_mode_rejects_host_paths_and_host_network_requests(tmp_path):
     async def scenario():
-        manager, _, _, engagement, _ = runtime(tmp_path)
+        manager, _, _, engagement, _ = await runtime(tmp_path)
         for request in [
             RunCommandRequest(command="pwd", cwd="/tmp"),
             RunCommandRequest(command="pwd", cwd="../outside"),
@@ -2254,20 +2347,22 @@ def test_docker_mode_rejects_host_paths_and_host_network_requests(tmp_path):
         )
         await manager.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
+async def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
     async def scenario():
-        manager, store, _, engagement, _ = runtime(tmp_path)
-        manager.update_project_policy(
-            engagement.id,
-            execution_mode="host",
-            host_access_acknowledged=True,
-            approval_policy=AutomationApprovalPolicy.ALWAYS,
-            network_enabled=False,
-            runner_profile_id=None,
-            max_timeout_ms=1000,
+        manager, store, _, engagement, _ = await runtime(tmp_path)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                execution_mode="host",
+                host_access_acknowledged=True,
+                approval_policy=AutomationApprovalPolicy.ALWAYS,
+                network_enabled=False,
+                runner_profile_id=None,
+                max_timeout_ms=1000,
+            )
         )
         request = RunCommandRequest(command="sleep 30", background=True)
         with pytest.raises(CommandApprovalRequired) as pending:
@@ -2279,7 +2374,7 @@ def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
             )
         approval = pending.value.approval
         assert "host filesystem" in approval.expected_effects[0]
-        approval = store.update(
+        approval = await store.update(
             Approval,
             approval.id,
             {
@@ -2309,10 +2404,10 @@ def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
         assert result.status == CommandExecutionStatus.TIMED_OUT
         await manager.close_session(result.session_id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_cancelled_foreground_command_stops_its_process(tmp_path):
+async def test_cancelled_foreground_command_stops_its_process(tmp_path):
     """Stop cancels the caller of a foreground command; the command stops too.
 
     Cancelling the wait used to cancel finalization as well, which also
@@ -2320,15 +2415,17 @@ def test_cancelled_foreground_command_stops_its_process(tmp_path):
     """
 
     async def scenario():
-        manager, store, _, engagement, _ = runtime(tmp_path)
-        manager.update_project_policy(
-            engagement.id,
-            execution_mode="host",
-            host_access_acknowledged=True,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=False,
-            runner_profile_id=None,
-            max_timeout_ms=60_000,
+        manager, store, _, engagement, _ = await runtime(tmp_path)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                execution_mode="host",
+                host_access_acknowledged=True,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=False,
+                runner_profile_id=None,
+                max_timeout_ms=60_000,
+            )
         )
         marker = tmp_path / "command-finished"
         command = asyncio.create_task(
@@ -2340,16 +2437,16 @@ def test_cancelled_foreground_command_stops_its_process(tmp_path):
             )
         )
         for _ in range(200):
-            if store.list_entities(CommandExecution):
+            if await store.list_entities(CommandExecution):
                 break
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.1)
         command.cancel()
         with pytest.raises(asyncio.CancelledError):
             await command
-        (execution,) = store.list_entities(CommandExecution)
+        (execution,) = await store.list_entities(CommandExecution)
         for _ in range(200):
-            execution = store.get(CommandExecution, execution.id)
+            execution = await store.get(CommandExecution, execution.id)
             if execution.status != CommandExecutionStatus.RUNNING:
                 break
             await asyncio.sleep(0.01)
@@ -2358,31 +2455,35 @@ def test_cancelled_foreground_command_stops_its_process(tmp_path):
         assert not marker.exists()
         await manager.close_session(execution.session_id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_host_scope_expiry_closes_running_commands(tmp_path):
+async def test_host_scope_expiry_closes_running_commands(tmp_path):
     import time
     from datetime import timedelta
 
     async def scenario():
-        manager, store, _, engagement, _ = runtime(tmp_path)
-        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        manager, store, _, engagement, _ = await runtime(tmp_path)
+        scope = await store.get(ScopePolicy, engagement.scope_policy_id)
         not_after = utc_now() + timedelta(seconds=0.5)
-        store.update(
-            ScopePolicy,
-            scope.id,
-            {"not_after": not_after},
-            expected_revision=scope.revision,
+        (
+            await store.update(
+                ScopePolicy,
+                scope.id,
+                {"not_after": not_after},
+                expected_revision=scope.revision,
+            )
         )
-        manager.update_project_policy(
-            engagement.id,
-            execution_mode="host",
-            host_access_acknowledged=True,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=False,
-            runner_profile_id=None,
-            max_timeout_ms=5000,
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                execution_mode="host",
+                host_access_acknowledged=True,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=False,
+                runner_profile_id=None,
+                max_timeout_ms=5000,
+            )
         )
         result = await manager.run_command(
             engagement_id=engagement.id,
@@ -2396,13 +2497,11 @@ def test_host_scope_expiry_closes_running_commands(tmp_path):
         # the command would otherwise run.
         deadline = time.monotonic() + 10
         while (
-            store.get(AutomationSession, result.session_id).status
-            != AutomationSessionStatus.CLOSED
-            and time.monotonic() < deadline
-        ):
+            await store.get(AutomationSession, result.session_id)
+        ).status != AutomationSessionStatus.CLOSED and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
-        session = store.get(AutomationSession, result.session_id)
-        execution = store.get(CommandExecution, result.execution_id)
+        session = await store.get(AutomationSession, result.session_id)
+        execution = await store.get(CommandExecution, result.execution_id)
         assert session.status == AutomationSessionStatus.CLOSED
         assert execution.status == CommandExecutionStatus.CANCELLED
         # Closed by the scope boundary, not before it.
@@ -2410,26 +2509,28 @@ def test_host_scope_expiry_closes_running_commands(tmp_path):
         assert session.completed_at >= not_after
         await manager.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_unreadable_command_receipt_preserves_exit_and_partial_artifacts(tmp_path):
+async def test_unreadable_command_receipt_preserves_exit_and_partial_artifacts(
+    tmp_path,
+):
     from types import SimpleNamespace
 
-    manager, store, artifacts, engagement, _ = runtime(tmp_path)
-    out = store.create(
+    manager, store, artifacts, engagement, _ = await runtime(tmp_path)
+    out = await store.create(
         artifacts.put_bytes(
             b"useful result\n", engagement_id=engagement.id, filename="stdout"
         )
     )
-    err = store.create(
+    err = await store.create(
         artifacts.put_bytes(
             b"rg: private.txt: Permission denied (os error 13)\n",
             engagement_id=engagement.id,
             filename="stderr",
         )
     )
-    execution = store.create(
+    execution = await store.create(
         CommandExecution(
             engagement_id=engagement.id,
             session_id="session",
@@ -2446,7 +2547,7 @@ def test_unreadable_command_receipt_preserves_exit_and_partial_artifacts(tmp_pat
             observed_stderr_bytes=err.size,
         )
     )
-    receipt = AutomationBroker(
+    receipt = await AutomationBroker(
         manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
     )._receipt("call", "run_command", SimpleNamespace(execution_id=execution.id))
     assert receipt.exit_code == 2
@@ -2457,12 +2558,12 @@ def test_unreadable_command_receipt_preserves_exit_and_partial_artifacts(tmp_pat
         assert stream.read() == b"useful result\n"
 
 
-def test_small_command_output_is_redacted_in_receipt_without_extra_read(tmp_path):
+async def test_small_command_output_is_redacted_in_receipt_without_extra_read(tmp_path):
     from types import SimpleNamespace
 
-    manager, store, artifacts, engagement, _ = runtime(tmp_path)
+    manager, store, artifacts, engagement, _ = await runtime(tmp_path)
     raw = b"result: ready\nBearer abcdefghijklmnop123456\n"
-    out = store.create(
+    out = await store.create(
         artifacts.put_bytes(
             raw,
             engagement_id=engagement.id,
@@ -2470,7 +2571,7 @@ def test_small_command_output_is_redacted_in_receipt_without_extra_read(tmp_path
             media_type="text/plain",
         )
     )
-    execution = store.create(
+    execution = await store.create(
         CommandExecution(
             engagement_id=engagement.id,
             session_id="session",
@@ -2485,7 +2586,7 @@ def test_small_command_output_is_redacted_in_receipt_without_extra_read(tmp_path
             observed_stdout_bytes=out.size,
         )
     )
-    receipt = AutomationBroker(
+    receipt = await AutomationBroker(
         manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
     )._receipt("call", "run_command", SimpleNamespace(execution_id=execution.id))
     assert receipt.output_preview[0].artifact_id == out.id
@@ -2495,14 +2596,14 @@ def test_small_command_output_is_redacted_in_receipt_without_extra_read(tmp_path
         assert stream.read() == raw
 
 
-def test_large_or_truncated_command_output_stays_artifact_only(tmp_path):
+async def test_large_or_truncated_command_output_stays_artifact_only(tmp_path):
     from types import SimpleNamespace
 
-    manager, store, artifacts, engagement, _ = runtime(tmp_path)
-    out = store.create(
+    manager, store, artifacts, engagement, _ = await runtime(tmp_path)
+    out = await store.create(
         artifacts.put_bytes(b"x" * 4097, engagement_id=engagement.id, filename="stdout")
     )
-    execution = store.create(
+    execution = await store.create(
         CommandExecution(
             engagement_id=engagement.id,
             session_id="session",
@@ -2520,28 +2621,27 @@ def test_large_or_truncated_command_output_stays_artifact_only(tmp_path):
     broker = AutomationBroker(
         manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
     )
-    receipt = broker._receipt(
+    receipt = await broker._receipt(
         "call", "run_command", SimpleNamespace(execution_id=execution.id)
     )
     assert receipt.output_preview == []
     assert "tool_output.read" in receipt.next_actions
-    truncated = store.update(
+    truncated = await store.update(
         CommandExecution,
         execution.id,
         {"stdout_truncated": True},
         expected_revision=execution.revision,
     )
     assert (
-        broker._receipt(
+        await broker._receipt(
             "call", "run_command", SimpleNamespace(execution_id=truncated.id)
-        ).output_preview
-        == []
-    )
+        )
+    ).output_preview == []
 
 
-def test_capture_directory_is_removed_once_output_is_delivered(tmp_path):
+async def test_capture_directory_is_removed_once_output_is_delivered(tmp_path):
     async def scenario():
-        manager, _store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, _store, _artifacts, engagement, _sessions = await runtime(tmp_path)
         result = await manager.run_command(
             engagement_id=engagement.id,
             owner_kind="chat",
@@ -2554,14 +2654,14 @@ def test_capture_directory_is_removed_once_output_is_delivered(tmp_path):
         await manager.close_session(result.session_id)
         assert list(manager.capture_root.glob(f"{result.process_id}-*")) == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_sweeps_stale_capture_directories(tmp_path):
+async def test_startup_sweeps_stale_capture_directories(tmp_path):
     from uuid import uuid4
 
     async def scenario():
-        manager, _store, _artifacts, _engagement, _sessions = runtime(tmp_path)
+        manager, _store, _artifacts, _engagement, _sessions = await runtime(tmp_path)
         stale = manager.capture_root / f"{uuid4()}-ab3_x9zq"
         stale.mkdir()
         (stale / "stdout").write_bytes(b"orphaned capture\n")
@@ -2571,10 +2671,12 @@ def test_startup_sweeps_stale_capture_directories(tmp_path):
         assert not stale.exists()
         assert unrelated.is_dir()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(tmp_path):
+async def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(
+    tmp_path,
+):
     import os
     import signal
     import time
@@ -2583,15 +2685,17 @@ def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(tmp_pat
 
     async def scenario():
         nonlocal daemon_pid
-        manager, _store, _, engagement, _ = runtime(tmp_path)
-        manager.update_project_policy(
-            engagement.id,
-            execution_mode="host",
-            host_access_acknowledged=True,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=False,
-            runner_profile_id=None,
-            max_timeout_ms=20_000,
+        manager, _store, _, engagement, _ = await runtime(tmp_path)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                execution_mode="host",
+                host_access_acknowledged=True,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=False,
+                runner_profile_id=None,
+                max_timeout_ms=20_000,
+            )
         )
         started = time.monotonic()
         # The detached daemon inherits stdout/stderr and outlives bash.
@@ -2614,7 +2718,7 @@ def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(tmp_pat
         await asyncio.wait_for(manager.close_session(result.session_id), timeout=5)
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
     finally:
         if daemon_pid is not None:
             try:
@@ -2623,38 +2727,42 @@ def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(tmp_pat
                 pass
 
 
-def test_automation_broker_refuses_replay_of_an_unknown_ledger_row(tmp_path):
+async def test_automation_broker_refuses_replay_of_an_unknown_ledger_row(tmp_path):
     """MIS-2: a call whose ledger row is running/failed/cancelled without a
     trustworthy receipt is an unknown effect and is never executed again."""
 
     async def scenario():
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         broker = AutomationBroker(
             manager=manager,
             store=store,
             output_service=ToolOutputService(store, artifacts),
         )
-        store.create(
-            AgentRun(
-                id="run-ambiguous",
-                engagement_id=engagement.id,
-                objective="x",
-                status=RunStatus.RUNNING,
-                budget=RunBudget(
-                    max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
-                ),
+        (
+            await store.create(
+                AgentRun(
+                    id="run-ambiguous",
+                    engagement_id=engagement.id,
+                    objective="x",
+                    status=RunStatus.RUNNING,
+                    budget=RunBudget(
+                        max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
+                    ),
+                )
             )
         )
-        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        scope = await store.get(ScopePolicy, engagement.scope_policy_id)
         for prior in (
             ToolCallStatus.RUNNING,
             ToolCallStatus.FAILED,
@@ -2674,47 +2782,51 @@ def test_automation_broker_refuses_replay_of_an_unknown_ledger_row(tmp_path):
             running = await broker.ledger.transition(call, ToolCallStatus.RUNNING)
             if prior != ToolCallStatus.RUNNING:
                 await broker.ledger.transition(running, prior)
-            before = len(store.list_entities(CommandExecution))
+            before = len((await store.list_entities(CommandExecution)))
             with pytest.raises(AmbiguousToolState):
                 await broker.execute(invocation, scope)
-            after = len(store.list_entities(CommandExecution))
+            after = len((await store.list_entities(CommandExecution)))
             assert after == before
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_automation_broker_resumes_a_waiting_approval_call_exactly_once(tmp_path):
+async def test_automation_broker_resumes_a_waiting_approval_call_exactly_once(tmp_path):
     """MIS-2/MIS-3: an approved command parked at WAITING_APPROVAL runs once on
     resume, and a second resume of that consumed slot is refused."""
 
     async def scenario():
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.ALWAYS,
-            network_enabled=False,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.ALWAYS,
+                network_enabled=False,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         broker = AutomationBroker(
             manager=manager,
             store=store,
             output_service=ToolOutputService(store, artifacts),
         )
-        store.create(
-            AgentRun(
-                id="run-approve",
-                engagement_id=engagement.id,
-                objective="scan",
-                status=RunStatus.RUNNING,
-                budget=RunBudget(
-                    max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
-                ),
+        (
+            await store.create(
+                AgentRun(
+                    id="run-approve",
+                    engagement_id=engagement.id,
+                    objective="scan",
+                    status=RunStatus.RUNNING,
+                    budget=RunBudget(
+                        max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
+                    ),
+                )
             )
         )
-        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        scope = await store.get(ScopePolicy, engagement.scope_policy_id)
         invocation = ToolInvocation(
             engagement_id=engagement.id,
             run_id="run-approve",
@@ -2732,10 +2844,10 @@ def test_automation_broker_resumes_a_waiting_approval_call_exactly_once(tmp_path
         # The card is bound to this ledger slot and its Mission task.
         assert approval.tool_call_id is not None
         assert approval.task_id == "task-approve"
-        parked = store.get(ToolCall, approval.tool_call_id)
+        parked = await store.get(ToolCall, approval.tool_call_id)
         assert parked.status == ToolCallStatus.WAITING_APPROVAL
 
-        approved = store.update(
+        approved = await store.update(
             Approval,
             approval.id,
             {
@@ -2747,18 +2859,18 @@ def test_automation_broker_resumes_a_waiting_approval_call_exactly_once(tmp_path
         )
         result = await broker.execute(invocation, scope, approval=approved)
         assert result.receipt is not None
-        assert len(store.list_entities(CommandExecution)) == 1
+        assert len((await store.list_entities(CommandExecution))) == 1
 
         # The consumed slot is now COMPLETE; resuming it again returns the same
         # durable receipt instead of running the command a second time.
         replay = await broker.execute(invocation, scope, approval=approved)
         assert replay.output == result.output
-        assert len(store.list_entities(CommandExecution)) == 1
+        assert len((await store.list_entities(CommandExecution))) == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_cancelling_a_foreground_command_terminates_it_and_records_cancelled(
+async def test_cancelling_a_foreground_command_terminates_it_and_records_cancelled(
     tmp_path,
 ):
     """MIS-4: cancelling the task awaiting a foreground command stops the
@@ -2766,25 +2878,29 @@ def test_cancelling_a_foreground_command_terminates_it_and_records_cancelled(
     running with the execution stuck in running."""
 
     async def scenario():
-        manager, store, _artifacts, engagement, sessions = runtime(tmp_path)
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=60_000,
-            expected_revision=policy.revision,
+        manager, store, _artifacts, engagement, sessions = await runtime(tmp_path)
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=60_000,
+                expected_revision=policy.revision,
+            )
         )
-        store.create(
-            AgentRun(
-                id="run-cancel",
-                engagement_id=engagement.id,
-                objective="cancel",
-                status=RunStatus.RUNNING,
-                budget=RunBudget(
-                    max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
-                ),
+        (
+            await store.create(
+                AgentRun(
+                    id="run-cancel",
+                    engagement_id=engagement.id,
+                    objective="cancel",
+                    status=RunStatus.RUNNING,
+                    budget=RunBudget(
+                        max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
+                    ),
+                )
             )
         )
         worker = asyncio.create_task(
@@ -2805,12 +2921,15 @@ def test_cancelling_a_foreground_command_terminates_it_and_records_cancelled(
         # The process is stopped at once; the (shielded) finalizer then
         # records the outcome.
         assert sessions[0].processes[0]._done.done()
-        [execution] = store.list_entities(CommandExecution)
+        [execution] = await store.list_entities(CommandExecution)
         for _ in range(200):
-            execution = store.get(CommandExecution, execution.id)
+            execution = await store.get(CommandExecution, execution.id)
             if execution.status != CommandExecutionStatus.RUNNING:
                 break
             await asyncio.sleep(0.01)
         assert execution.status == CommandExecutionStatus.CANCELLED
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

@@ -1,12 +1,15 @@
 """Notes use the selected project, Core references and browser revision guards."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -16,11 +19,13 @@ from nebula.v3.relations import ResourceRelationService
 from nebula.v3.storage import NebulaStore
 
 
-def test_butler_notes_retains_accepted_execution_note_identity_and_provenance(tmp_path):
+async def test_butler_notes_retains_accepted_execution_note_identity_and_provenance(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    note = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    note = await store.create(
         Observation(
             engagement_id=project.id,
             observation_type="ai_execution_note",
@@ -34,10 +39,10 @@ def test_butler_notes_retains_accepted_execution_note_identity_and_provenance(tm
             },
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         note.model_copy(update={"id": str(uuid4()), "engagement_id": other.id})
     )
-    hidden = store.create(
+    hidden = await store.create(
         note.model_copy(
             update={"id": str(uuid4()), "observation_type": "execution_result"}
         )
@@ -82,29 +87,33 @@ def test_butler_notes_retains_accepted_execution_note_identity_and_provenance(tm
                 },
                 change=True,
             )
-        retained = store.get(Observation, note.id)
+        retained = await store.get(Observation, note.id)
         assert retained.observation_type == note.observation_type
         assert retained.source == note.source and retained.metadata == note.metadata
         assert retained.body == note.body
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked(tmp_path):
+async def test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    asset = store.create(Asset(engagement_id=selected.id, name="Inventory host"))
-    evidence = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    asset = await store.create(Asset(engagement_id=selected.id, name="Inventory host"))
+    evidence = await store.create(
         Evidence(
             engagement_id=selected.id, title="Retained proof", evidence_type="manual"
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         Observation(engagement_id=other.id, observation_type="note", title="Foreign")
     )
-    foreign_asset = store.create(Asset(engagement_id=other.id, name="Foreign asset"))
-    hidden = store.create(
+    foreign_asset = await store.create(
+        Asset(engagement_id=other.id, name="Foreign asset")
+    )
+    hidden = await store.create(
         Observation(
             engagement_id=selected.id,
             observation_type="execution_result",
@@ -112,12 +121,14 @@ def test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked(tm
         )
     )
     notes = [
-        store.create(
-            Observation(
-                engagement_id=selected.id,
-                observation_type="note",
-                title=f"Note {n}",
-                body="x" * 9000,
+        (
+            await store.create(
+                Observation(
+                    engagement_id=selected.id,
+                    observation_type="note",
+                    title=f"Note {n}",
+                    body="x" * 9000,
+                )
             )
         )
         for n in range(52)
@@ -168,8 +179,10 @@ def test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked(tm
         assert created["client_action"]["project_id"] == selected.id
         assert (
             len(
-                store.find_entities(
-                    Observation, {"title": "New note"}, engagement_id=selected.id
+                (
+                    await store.find_entities(
+                        Observation, {"title": "New note"}, engagement_id=selected.id
+                    )
                 )
             )
             == 0
@@ -184,7 +197,7 @@ def test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked(tm
             change=True,
         )
         assert changed["client_action"]["body"] == "Edited"
-        assert store.get(Observation, notes[0].id).body == "x" * 9000
+        assert (await store.get(Observation, notes[0].id)).body == "x" * 9000
         for operation, arguments in (
             ("detail", {"note_id": foreign.id}),
             ("detail", {"note_id": hidden.id}),
@@ -201,15 +214,17 @@ def test_butler_notes_discovery_is_bounded_project_owned_and_revision_checked(tm
             with pytest.raises(ValueError):
                 await invoke(operation, arguments, change=operation != "detail")
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_note_draft_route_preserves_links_and_core_deletion_guards(tmp_path):
+async def test_butler_note_draft_route_preserves_links_and_core_deletion_guards(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    asset = store.create(Asset(engagement_id=project.id, name="Host"))
-    foreign = store.create(Asset(engagement_id=other.id, name="Foreign"))
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    asset = await store.create(Asset(engagement_id=project.id, name="Host"))
+    foreign = await store.create(Asset(engagement_id=other.id, name="Foreign"))
     client = TestClient(create_app(store, auth_token="test-token"))
     auth = {"Authorization": "Bearer test-token"}
     body = {
@@ -220,24 +235,26 @@ def test_butler_note_draft_route_preserves_links_and_core_deletion_guards(tmp_pa
         "asset_ids": [asset.id],
     }
     assert (
-        client.post("/api/v1/observations/butler-drafts", json=body).status_code == 401
+        await client.post("/api/v1/observations/butler-drafts", json=body)
+    ).status_code == 401
+    created = await client.post(
+        "/api/v1/observations/butler-drafts", headers=auth, json=body
     )
-    created = client.post("/api/v1/observations/butler-drafts", headers=auth, json=body)
     assert created.status_code == 201, created.text
     note = created.json()
     assert note["id"] == body["note_id"] and note["asset_ids"] == [asset.id]
-    duplicate = client.post(
+    duplicate = await client.post(
         "/api/v1/observations/butler-drafts", headers=auth, json=body
     )
     assert duplicate.status_code == 409
-    bad = client.post(
+    bad = await client.post(
         "/api/v1/observations/butler-drafts",
         headers=auth,
         json={**body, "note_id": str(uuid4()), "asset_ids": [foreign.id]},
     )
     assert bad.status_code in (400, 422), bad.text
     path = f"/api/v1/observations/{note['id']}"
-    edited = client.patch(
+    edited = await client.patch(
         path,
         headers=auth,
         json={
@@ -247,33 +264,36 @@ def test_butler_note_draft_route_preserves_links_and_core_deletion_guards(tmp_pa
     )
     assert edited.status_code == 200, edited.text
     assert edited.json()["asset_ids"] == [asset.id]
-    stale = client.patch(
+    stale = await client.patch(
         path,
         headers=auth,
         json={"expected_revision": note["revision"], "changes": {"body": "Stale body"}},
     )
     assert stale.status_code == 409
     relations = ResourceRelationService(store)
-    report = relations.create_legacy_entity(
+    report = await relations.create_legacy_entity(
         Report(
             engagement_id=project.id,
             title="Retaining report",
             observation_ids=[note["id"]],
         )
     )
-    blocked = client.delete(
+    blocked = await client.delete(
         path, headers={**auth, "If-Match": str(edited.json()["revision"])}
     )
     assert blocked.status_code == 409, blocked.text
-    unlinked = client.patch(
+    unlinked = await client.patch(
         f"/api/v1/reports/{report.id}",
         headers=auth,
         json={"expected_revision": report.revision, "changes": {"observation_ids": []}},
     )
     assert unlinked.status_code == 200, unlinked.text
-    deleted = client.delete(
+    deleted = await client.delete(
         path, headers={**auth, "If-Match": str(edited.json()["revision"])}
     )
     assert deleted.status_code == 204, deleted.text
-    assert client.get(path, headers=auth).status_code == 404
-    assert store.get(Asset, asset.id).name == "Host"
+    assert (await client.get(path, headers=auth)).status_code == 404
+    assert (await store.get(Asset, asset.id)).name == "Host"
+
+
+pytestmark = pytest.mark.anyio

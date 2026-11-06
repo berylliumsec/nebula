@@ -20,7 +20,7 @@ from nebula.v3.storage import NebulaStore, _entity_lookup_fields
 PAGE = 1_000
 
 
-def seed_older_copies(
+async def seed_older_copies(
     store: NebulaStore,
     entity: Entity,
     count: int = PAGE,
@@ -57,5 +57,5 @@ def seed_older_copies(
                 "updated_at": created,
             }
         )
-    with store.database.session() as session:
-        session.execute(insert(EntityRow), rows)
+    async with store.database.session() as session:
+        (await session.execute(insert(EntityRow), rows))

@@ -1,10 +1,14 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.domain import (
     ChatGoal,
@@ -32,10 +36,10 @@ from nebula.v3.structured_results import (
 from nebula.v3.tools import ToolInvocation
 
 
-def fixture(tmp_path):
+async def fixture(tmp_path):
     store = NebulaStore(tmp_path / "results.db")
-    store.create(Engagement(id="project", name="Project"))
-    store.create(Engagement(id="other", name="Other project"))
+    (await store.create(Engagement(id="project", name="Project")))
+    (await store.create(Engagement(id="other", name="Other project")))
     app = FastAPI()
     app.include_router(structured_results_router(store))
 
@@ -53,8 +57,8 @@ def publish(client, payload, **extra):
     return client.post("/projects/project/structured-results", json=body)
 
 
-def test_any_json_value_publishes_and_reads_back_unchanged(tmp_path):
-    _, client = fixture(tmp_path)
+async def test_any_json_value_publishes_and_reads_back_unchanged(tmp_path):
+    _, client = await fixture(tmp_path)
     for payload in [
         {"name": "  spaced  ", "count": 3},
         [1, 2, 3],
@@ -67,14 +71,14 @@ def test_any_json_value_publishes_and_reads_back_unchanged(tmp_path):
         created = publish(client, payload)
         assert created.status_code == 201, created.text
         identity = created.json()["result"]["id"]
-        read = client.get(f"/projects/project/structured-results/{identity}")
+        read = await client.get(f"/projects/project/structured-results/{identity}")
         assert read.status_code == 200
         # The stored value is the authority: no trimming, rounding or coercion.
         assert read.json()["result"] == payload
 
 
-def test_stats_describe_shape_without_interpreting_it(tmp_path):
-    _, client = fixture(tmp_path)
+async def test_stats_describe_shape_without_interpreting_it(tmp_path):
+    _, client = await fixture(tmp_path)
     created = publish(client, {"rows": [{"a": 1}, {"a": 2}], "note": None})
     stats = created.json()["result"]["stats"]
     assert stats["root_type"] == "object"
@@ -84,8 +88,8 @@ def test_stats_describe_shape_without_interpreting_it(tmp_path):
     assert stats["byte_size"] > 0
 
 
-def test_deeply_nested_payload_is_inspected_without_recursion(tmp_path):
-    _, client = fixture(tmp_path)
+async def test_deeply_nested_payload_is_inspected_without_recursion(tmp_path):
+    _, client = await fixture(tmp_path)
     deep: object = "leaf"
     for _ in range(MAX_RESULT_DEPTH - 1):
         deep = {"next": deep}
@@ -127,8 +131,8 @@ def test_a_structure_that_refers_into_itself_is_refused_not_walked_forever():
     assert inspect_payload({"left": shared, "right": shared}).node_count == 5
 
 
-def test_hints_are_stored_beside_the_result_and_never_merged_into_it(tmp_path):
-    _, client = fixture(tmp_path)
+async def test_hints_are_stored_beside_the_result_and_never_merged_into_it(tmp_path):
+    _, client = await fixture(tmp_path)
     created = publish(
         client,
         {"name": "host-1"},
@@ -148,8 +152,8 @@ def test_hints_are_stored_beside_the_result_and_never_merged_into_it(tmp_path):
     assert validate_hints(None) is None
 
 
-def test_summaries_stay_light_and_preview_only_top_level_scalars(tmp_path):
-    _, client = fixture(tmp_path)
+async def test_summaries_stay_light_and_preview_only_top_level_scalars(tmp_path):
+    _, client = await fixture(tmp_path)
     publish(
         client,
         {
@@ -161,7 +165,7 @@ def test_summaries_stay_light_and_preview_only_top_level_scalars(tmp_path):
         title="Scan output",
         producer="agent",
     )
-    listed = client.get("/projects/project/structured-results")
+    listed = await client.get("/projects/project/structured-results")
     assert listed.status_code == 200
     (row,) = listed.json()
     assert row["title"] == "Scan output"
@@ -173,34 +177,36 @@ def test_summaries_stay_light_and_preview_only_top_level_scalars(tmp_path):
     assert payload_preview([1, 2, 3]) == []
 
 
-def test_results_list_newest_first_and_are_scoped_to_their_project(tmp_path):
-    store, client = fixture(tmp_path)
+async def test_results_list_newest_first_and_are_scoped_to_their_project(tmp_path):
+    store, client = await fixture(tmp_path)
     first = publish(client, {"n": 1}, title="First").json()["result"]["id"]
     second = publish(client, {"n": 2}, title="Second").json()["result"]["id"]
     assert [
-        row["id"] for row in client.get("/projects/project/structured-results").json()
+        row["id"]
+        for row in (await client.get("/projects/project/structured-results")).json()
     ] == [
         second,
         first,
     ]
-    assert client.get("/projects/other/structured-results").json() == []
-    assert client.get(f"/projects/other/structured-results/{first}").status_code == 404
+    assert (await client.get("/projects/other/structured-results")).json() == []
     assert (
-        client.delete(f"/projects/other/structured-results/{first}").status_code == 404
-    )
+        await client.get(f"/projects/other/structured-results/{first}")
+    ).status_code == 404
     assert (
-        client.delete(f"/projects/project/structured-results/{first}").status_code
-        == 204
-    )
-    assert store.count(StructuredResult, engagement_id="project") == 1
+        await client.delete(f"/projects/other/structured-results/{first}")
+    ).status_code == 404
+    assert (
+        await client.delete(f"/projects/project/structured-results/{first}")
+    ).status_code == 204
+    assert (await store.count(StructuredResult, engagement_id="project")) == 1
 
 
-def test_retention_removes_the_oldest_and_says_which_ones(tmp_path):
-    store, _ = fixture(tmp_path)
+async def test_retention_removes_the_oldest_and_says_which_ones(tmp_path):
+    store, _ = await fixture(tmp_path)
     identities = []
     removed: list[str] = []
     for index in range(MAX_RESULTS_PER_PROJECT + 2):
-        outcome = publish_result(
+        outcome = await publish_result(
             store,
             "project",
             StructuredResultPublish(title=f"Result {index}", result={"index": index}),
@@ -212,22 +218,23 @@ def test_retention_removes_the_oldest_and_says_which_ones(tmp_path):
         )
         removed.extend(outcome.retention_removed)
     assert (
-        store.count(StructuredResult, engagement_id="project")
-        == MAX_RESULTS_PER_PROJECT
-    )
+        await store.count(StructuredResult, engagement_id="project")
+    ) == MAX_RESULTS_PER_PROJECT
     assert set(removed) == set(identities[:2])
     surviving = {
         row.id
-        for row in store.list_entities(
-            StructuredResult, engagement_id="project", limit=1_000
+        for row in (
+            await store.list_entities(
+                StructuredResult, engagement_id="project", limit=1_000
+            )
         )
     }
     assert surviving == set(identities[2:])
 
 
-def test_publishing_into_an_unknown_project_is_not_an_orphan_record(tmp_path):
-    _, client = fixture(tmp_path)
-    missing = client.post(
+async def test_publishing_into_an_unknown_project_is_not_an_orphan_record(tmp_path):
+    _, client = await fixture(tmp_path)
+    missing = await client.post(
         "/projects/absent/structured-results", json={"title": "x", "result": {}}
     )
     assert missing.status_code == 404
@@ -245,8 +252,8 @@ def test_publish_tool_declares_a_write_with_no_network_or_filesystem_reach():
     assert "type" not in spec.input_schema["properties"]["result"]
 
 
-def test_publish_tool_stores_the_payload_and_points_the_operator_at_it(tmp_path):
-    store, _ = fixture(tmp_path)
+async def test_publish_tool_stores_the_payload_and_points_the_operator_at_it(tmp_path):
+    store, _ = await fixture(tmp_path)
     tool = PublishResultTool(store)
     invocation = ToolInvocation(
         engagement_id="project",
@@ -260,9 +267,9 @@ def test_publish_tool_stores_the_payload_and_points_the_operator_at_it(tmp_path)
             "hints": {"titleField": "ip"},
         },
     )
-    result = asyncio.run(tool.execute(invocation, runner=None))
+    result = await tool.execute(invocation, runner=None)
     assert result.exit_code == 0
-    stored = store.get(StructuredResult, result.output["result_id"])
+    stored = await store.get(StructuredResult, result.output["result_id"])
     assert stored.result == {"hosts": [{"ip": "10.0.0.1"}]}
     assert stored.origin == "agent"
     assert stored.chat_session_id == "session"
@@ -271,8 +278,8 @@ def test_publish_tool_stores_the_payload_and_points_the_operator_at_it(tmp_path)
     assert "hosts" not in str(result.output)
 
 
-def test_publish_tool_reports_a_refusal_instead_of_raising(tmp_path):
-    store, _ = fixture(tmp_path)
+async def test_publish_tool_reports_a_refusal_instead_of_raising(tmp_path):
+    store, _ = await fixture(tmp_path)
     tool = PublishResultTool(store)
     invocation = ToolInvocation(
         engagement_id="project",
@@ -284,15 +291,15 @@ def test_publish_tool_reports_a_refusal_instead_of_raising(tmp_path):
             "result": {"blob": "z" * (MAX_RESULT_BYTES + 1)},
         },
     )
-    result = asyncio.run(tool.execute(invocation, runner=None))
+    result = await tool.execute(invocation, runner=None)
     assert result.exit_code == 1
     assert result.output["result_id"] is None
     assert "the limit is" in result.output["detail"]
-    assert store.count(StructuredResult, engagement_id="project") == 0
+    assert (await store.count(StructuredResult, engagement_id="project")) == 0
 
 
-def test_progress_snapshots_form_one_ordered_stream(tmp_path):
-    store, client = fixture(tmp_path)
+async def test_progress_snapshots_form_one_ordered_stream(tmp_path):
+    store, client = await fixture(tmp_path)
     tool = PublishResultTool(store)
 
     def snapshot(title, payload, stream="refactor-auth"):
@@ -323,8 +330,8 @@ def test_progress_snapshots_form_one_ordered_stream(tmp_path):
     # A different stream numbers its own steps rather than continuing another.
     assert other["sequence"] == 1
 
-    series = client.get(
-        "/projects/project/structured-results?stream=refactor-auth"
+    series = (
+        await client.get("/projects/project/structured-results?stream=refactor-auth")
     ).json()
     assert [row["sequence"] for row in series] == [2, 1]
     assert {row["title"] for row in series} == {
@@ -332,37 +339,40 @@ def test_progress_snapshots_form_one_ordered_stream(tmp_path):
         "Mapped the call graph",
     }
 
-    by_session = client.get(
-        "/projects/project/structured-results?chat_session_id=session"
+    by_session = (
+        await client.get("/projects/project/structured-results?chat_session_id=session")
     ).json()
     assert len(by_session) == 3
     assert (
-        client.get("/projects/project/structured-results?chat_session_id=other").json()
-        == []
-    )
+        await client.get("/projects/project/structured-results?chat_session_id=other")
+    ).json() == []
 
 
-def test_the_newest_results_are_the_first_page(tmp_path):
-    _, client = fixture(tmp_path)
+async def test_the_newest_results_are_the_first_page(tmp_path):
+    _, client = await fixture(tmp_path)
     for index in range(5):
         publish(client, {"index": index}, title=f"Result {index}")
-    page = client.get("/projects/project/structured-results?limit=2").json()
+    page = (await client.get("/projects/project/structured-results?limit=2")).json()
     assert [row["title"] for row in page] == ["Result 4", "Result 3"]
-    later = client.get("/projects/project/structured-results?limit=2&offset=2").json()
+    later = (
+        await client.get("/projects/project/structured-results?limit=2&offset=2")
+    ).json()
     assert [row["title"] for row in later] == ["Result 2", "Result 1"]
 
 
-def running_goal(store, objective="Refactor the auth handler"):
-    store.create(
-        ChatSession(
-            id="session",
-            engagement_id="project",
-            title="Goal chat",
-            provider_profile_id="provider",
-            model="model-a",
+async def running_goal(store, objective="Refactor the auth handler"):
+    (
+        await store.create(
+            ChatSession(
+                id="session",
+                engagement_id="project",
+                title="Goal chat",
+                provider_profile_id="provider",
+                model="model-a",
+            )
         )
     )
-    return store.create(
+    return await store.create(
         ChatGoal(
             id="goal-1",
             engagement_id="project",
@@ -391,9 +401,11 @@ def snapshot(store, goal, title="Step", payload=None, stream="ignored-by-core"):
     return asyncio.run(tool.execute(invocation, runner=None)).output
 
 
-def test_a_goals_snapshots_join_its_own_series_whatever_the_model_passes(tmp_path):
-    store, client = fixture(tmp_path)
-    goal = running_goal(store)
+async def test_a_goals_snapshots_join_its_own_series_whatever_the_model_passes(
+    tmp_path,
+):
+    store, client = await fixture(tmp_path)
+    goal = await running_goal(store)
 
     first = snapshot(store, goal, title="Read the handler")
     second = snapshot(store, goal, title="Mapped the callers", stream="something-else")
@@ -401,14 +413,16 @@ def test_a_goals_snapshots_join_its_own_series_whatever_the_model_passes(tmp_pat
     # Core owns the series: the model cannot split or merge one by accident.
     assert (first["stream"], first["sequence"]) == (goal.id, 1)
     assert (second["stream"], second["sequence"]) == (goal.id, 2)
-    rows = client.get(f"/projects/project/structured-results?stream={goal.id}").json()
+    rows = (
+        await client.get(f"/projects/project/structured-results?stream={goal.id}")
+    ).json()
     assert [row["sequence"] for row in rows] == [2, 1]
     # The operator reads the objective, not the goal's identity.
     assert {row["stream_label"] for row in rows} == {"Refactor the auth handler"}
 
 
-def test_an_unbound_tool_still_honours_the_stream_a_producer_chose(tmp_path):
-    store, _ = fixture(tmp_path)
+async def test_an_unbound_tool_still_honours_the_stream_a_producer_chose(tmp_path):
+    store, _ = await fixture(tmp_path)
     tool = PublishResultTool(store)
     invocation = ToolInvocation(
         engagement_id="project",
@@ -417,12 +431,12 @@ def test_an_unbound_tool_still_honours_the_stream_a_producer_chose(tmp_path):
         workspace=tmp_path,
         arguments={"title": "Ad hoc", "result": {"a": 1}, "stream": "chosen"},
     )
-    output = asyncio.run(tool.execute(invocation, runner=None)).output
+    output = (await tool.execute(invocation, runner=None)).output
     assert output["stream"] == "chosen"
-    assert store.get(StructuredResult, output["result_id"]).stream_label == ""
+    assert (await store.get(StructuredResult, output["result_id"])).stream_label == ""
 
 
-def test_goal_turns_no_longer_require_a_model_published_dashboard(
+async def test_goal_turns_no_longer_require_a_model_published_dashboard(
     tmp_path, monkeypatch
 ):
     import nebula.v3.chat as chat_module
@@ -442,24 +456,26 @@ def test_goal_turns_no_longer_require_a_model_published_dashboard(
     reference = skill_path.parent / "references" / "checklist.md"
     reference.parent.mkdir()
     reference.write_text("Check the diff.", encoding="utf-8")
-    store.create(Engagement(id="project", name="Project"))
+    (await store.create(Engagement(id="project", name="Project")))
     payload = _profile(local=True).model_dump(mode="python")
     payload["capabilities"]["tool_calling"] = True
     payload["capability_verifications"] = {
         "model-a": {"model": "model-a", "status": "verified"}
     }
-    profile = store.create(ProviderProfile.model_validate(payload))
+    profile = await store.create(ProviderProfile.model_validate(payload))
     for identity in ("session", "session-plain"):
-        store.create(
-            ChatSession(
-                id=identity,
-                engagement_id="project",
-                title="Goal chat",
-                provider_profile_id=profile.id,
-                model="model-a",
+        (
+            await store.create(
+                ChatSession(
+                    id=identity,
+                    engagement_id="project",
+                    title="Goal chat",
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                )
             )
         )
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             id="goal-1",
             engagement_id="project",
@@ -478,8 +494,8 @@ def test_goal_turns_no_longer_require_a_model_published_dashboard(
         workspace_resolver=lambda _: workspace,
     )
 
-    def prepare(session_id="session", **extra):
-        return service.prepare(
+    async def prepare(session_id="session", **extra):
+        return await service.prepare(
             ChatCompletionRequest(
                 provider_id=profile.id,
                 engagement_id="project",
@@ -492,7 +508,7 @@ def test_goal_turns_no_longer_require_a_model_published_dashboard(
             )
         )
 
-    inside = prepare(goal_id=goal.id)
+    inside = await prepare(goal_id=goal.id)
     assert {
         "skill.read_resource",
         "notes.write",
@@ -501,10 +517,13 @@ def test_goal_turns_no_longer_require_a_model_published_dashboard(
     assert DASHBOARD_PUBLISH_TOOL_NAME not in (inside.model_request.instructions or "")
 
     # A conversation with the same runtime but no goal has the same tool set.
-    outside = prepare(session_id="session-plain")
+    outside = await prepare(session_id="session-plain")
     assert {
         "skill.read_resource",
         "notes.write",
     } <= set(outside.tool_components.specs)
     assert DASHBOARD_PUBLISH_TOOL_NAME not in outside.tool_components.specs
     assert DASHBOARD_PUBLISH_TOOL_NAME not in (outside.model_request.instructions or "")
+
+
+pytestmark = pytest.mark.anyio

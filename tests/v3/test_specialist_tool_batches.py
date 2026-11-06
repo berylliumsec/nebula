@@ -1,6 +1,10 @@
 """The mission specialist loop runs every call a model batches into one turn."""
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -176,7 +180,7 @@ def _call(call_id: str, name: str, arguments=None) -> ToolCall:
     return ToolCall(id=call_id, name=name, arguments=arguments or {})
 
 
-def test_specialist_runs_every_call_a_model_batches_in_one_turn(tmp_path):
+async def test_specialist_runs_every_call_a_model_batches_in_one_turn(tmp_path):
     provider = ScriptedRoutingProvider(
         [
             [
@@ -189,7 +193,7 @@ def test_specialist_runs_every_call_a_model_batches_in_one_turn(tmp_path):
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    result = asyncio.run(specialist.run(_context()))
+    result = await specialist.run(_context())
 
     assert [invocation.tool_name for invocation in broker.calls] == [
         "nmap.tcp",
@@ -220,7 +224,7 @@ def test_specialist_runs_every_call_a_model_batches_in_one_turn(tmp_path):
     assert (result.input_tokens, result.output_tokens) == (10, 5)
 
 
-def test_specialist_replays_every_batched_result_to_the_next_turn(tmp_path):
+async def test_specialist_replays_every_batched_result_to_the_next_turn(tmp_path):
     provider = ScriptedRoutingProvider(
         [
             [_call("call-1", "nmap.tcp"), _call("call-2", "browser.fetch")],
@@ -240,9 +244,9 @@ def test_specialist_replays_every_batched_result_to_the_next_turn(tmp_path):
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    first = asyncio.run(specialist.run(_context()))
-    asyncio.run(
-        specialist.run(
+    first = await specialist.run(_context())
+    (
+        await specialist.run(
             _context(
                 prior_turns=[first],
                 turn_index=2,
@@ -256,7 +260,7 @@ def test_specialist_replays_every_batched_result_to_the_next_turn(tmp_path):
     assert not any(item.is_error for item in replayed)
 
 
-def test_specialist_finishes_when_finish_is_the_whole_response(tmp_path):
+async def test_specialist_finishes_when_finish_is_the_whole_response(tmp_path):
     provider = ScriptedRoutingProvider(
         [
             [
@@ -275,13 +279,13 @@ def test_specialist_finishes_when_finish_is_the_whole_response(tmp_path):
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    result = asyncio.run(specialist.run(_context()))
+    result = await specialist.run(_context())
 
     assert result.outcome is SpecialistOutcome.COMPLETE
     assert broker.calls == []
 
 
-def test_specialist_drops_a_finish_queued_behind_tool_calls(tmp_path):
+async def test_specialist_drops_a_finish_queued_behind_tool_calls(tmp_path):
     provider = ScriptedRoutingProvider(
         [
             [
@@ -302,7 +306,7 @@ def test_specialist_drops_a_finish_queued_behind_tool_calls(tmp_path):
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    result = asyncio.run(specialist.run(_context()))
+    result = await specialist.run(_context())
 
     # The turn cannot finish before it has inspected what it just brokered, and
     # a call queued behind the finish never runs.
@@ -310,7 +314,7 @@ def test_specialist_drops_a_finish_queued_behind_tool_calls(tmp_path):
     assert result.outcome is SpecialistOutcome.CONTINUE
 
 
-def test_specialist_stops_a_batch_when_the_tool_call_budget_runs_out(tmp_path):
+async def test_specialist_stops_a_batch_when_the_tool_call_budget_runs_out(tmp_path):
     provider = ScriptedRoutingProvider(
         [
             [
@@ -323,7 +327,7 @@ def test_specialist_stops_a_batch_when_the_tool_call_budget_runs_out(tmp_path):
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    result = asyncio.run(specialist.run(_context(remaining_tool_calls=1)))
+    result = await specialist.run(_context(remaining_tool_calls=1))
 
     # Retrieval is free; the second real call is dropped rather than spent.
     assert [invocation.tool_name for invocation in broker.calls] == [
@@ -333,7 +337,7 @@ def test_specialist_stops_a_batch_when_the_tool_call_budget_runs_out(tmp_path):
     assert result.tool_calls == 1
 
 
-def test_specialist_runs_a_batched_call_that_reuses_an_id_under_a_core_id(
+async def test_specialist_runs_a_batched_call_that_reuses_an_id_under_a_core_id(
     tmp_path,
 ):
     provider = ScriptedRoutingProvider(
@@ -342,7 +346,7 @@ def test_specialist_runs_a_batched_call_that_reuses_an_id_under_a_core_id(
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    result = asyncio.run(specialist.run(_context()))
+    result = await specialist.run(_context())
 
     # A different call under a reused id is a new call: it runs under an id
     # Core makes unique, so history still pairs each call with its result.
@@ -355,7 +359,7 @@ def test_specialist_runs_a_batched_call_that_reuses_an_id_under_a_core_id(
     assert len(set(call_ids)) == 2
 
 
-def test_specialist_answers_an_unavailable_tool_and_still_runs_the_batch(
+async def test_specialist_answers_an_unavailable_tool_and_still_runs_the_batch(
     tmp_path,
 ):
     provider = ScriptedRoutingProvider(
@@ -368,7 +372,7 @@ def test_specialist_answers_an_unavailable_tool_and_still_runs_the_batch(
         update={"allowed_tools": frozenset({"nmap.tcp", "tool_output.search"})}
     )
 
-    result = asyncio.run(specialist.run(context))
+    result = await specialist.run(context)
 
     # The unavailable call never reaches the broker; it is answered with a
     # failed observation the model reads on its next turn.
@@ -379,7 +383,9 @@ def test_specialist_answers_an_unavailable_tool_and_still_runs_the_batch(
     assert result.tool_calls == 1
 
 
-def test_specialist_keeps_completed_calls_when_a_batch_pauses_for_approval(tmp_path):
+async def test_specialist_keeps_completed_calls_when_a_batch_pauses_for_approval(
+    tmp_path,
+):
     provider = ScriptedRoutingProvider(
         [
             [
@@ -393,7 +399,7 @@ def test_specialist_keeps_completed_calls_when_a_batch_pauses_for_approval(tmp_p
     specialist = _specialist(tmp_path, provider, broker)
 
     with pytest.raises(SpecialistApprovalRequired) as paused:
-        asyncio.run(specialist.run(_context()))
+        (await specialist.run(_context()))
 
     partial = paused.value.partial_result
     assert partial is not None
@@ -408,7 +414,9 @@ def test_specialist_keeps_completed_calls_when_a_batch_pauses_for_approval(tmp_p
     ]
 
 
-def test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval(tmp_path):
+async def test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval(
+    tmp_path,
+):
     task = PlannedTask(
         id="scan",
         role=SpecialistRole.NETWORK_SERVICE,
@@ -485,12 +493,10 @@ def test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval(tmp_pa
         specialists={SpecialistRole.NETWORK_SERVICE: specialist},
     )
 
-    waiting = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-approval",
-            objective="Run one bounded scan",
-            budget=RunBudget(max_retries=0),
-        )
+    waiting = await runtime.start(
+        engagement_id="engagement-approval",
+        objective="Run one bounded scan",
+        budget=RunBudget(max_retries=0),
     )
 
     assert waiting["task_status"] == {task.id: TaskStatus.WAITING_APPROVAL.value}
@@ -500,8 +506,8 @@ def test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval(tmp_pa
     ]
     assert waiting["tool_calls"] == 1
 
-    completed = asyncio.run(
-        runtime.resume(waiting["run_id"], {"status": "approved", "operator": "alice"})
+    completed = await runtime.resume(
+        waiting["run_id"], {"status": "approved", "operator": "alice"}
     )
 
     assert completed["task_status"] == {task.id: TaskStatus.COMPLETE.value}
@@ -576,7 +582,7 @@ class _ApprovalCapturingBroker:
         )
 
 
-def test_specialist_derives_deterministic_call_identity_from_position(tmp_path):
+async def test_specialist_derives_deterministic_call_identity_from_position(tmp_path):
     """MIS-1: an invocation's id and idempotency key come from its place in the
     turn, not the provider's random call id, so a replay addresses the same
     ledger slot."""
@@ -587,7 +593,7 @@ def test_specialist_derives_deterministic_call_identity_from_position(tmp_path):
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    asyncio.run(specialist.run(_context(turn_index=3)))
+    (await specialist.run(_context(turn_index=3)))
 
     assert [invocation.idempotency_key for invocation in broker.calls] == [
         "task:scan:turn:3:call:0",
@@ -595,14 +601,14 @@ def test_specialist_derives_deterministic_call_identity_from_position(tmp_path):
     ]
 
 
-def test_specialist_replays_a_recorded_routing_response_after_restart(tmp_path):
+async def test_specialist_replays_a_recorded_routing_response_after_restart(tmp_path):
     """MIS-1: a turn re-dispatched after a Core restart replays the recorded
     routing response instead of asking the model again, and every call keeps
     its ledger identity."""
 
     store = NebulaStore(tmp_path / "journal.db")
-    engagement = store.create(Engagement(name="Replay"))
-    attempt = store.create(
+    engagement = await store.create(Engagement(name="Replay"))
+    attempt = await store.create(
         AgentAttempt(
             id="run-1:scan:1",
             engagement_id=engagement.id,
@@ -622,10 +628,10 @@ def test_specialist_replays_a_recorded_routing_response_after_restart(tmp_path):
         update={"routing_journal": RoutingJournal(store, attempt.id)}
     )
 
-    asyncio.run(first_specialist.run(context))
+    (await first_specialist.run(context))
     assert len(provider.requests) == 1
     first_ids = [invocation.id for invocation in first_broker.calls]
-    assert store.get(AgentAttempt, attempt.id).routing_response is not None
+    assert (await store.get(AgentAttempt, attempt.id)).routing_response is not None
 
     # A Core restart re-dispatches the same turn with a fresh specialist and a
     # fresh broker. The recorded response is replayed, not re-requested.
@@ -635,7 +641,7 @@ def test_specialist_replays_a_recorded_routing_response_after_restart(tmp_path):
         update={"routing_journal": RoutingJournal(store, attempt.id)}
     )
 
-    asyncio.run(second_specialist.run(replayed_context))
+    (await second_specialist.run(replayed_context))
 
     assert len(provider.requests) == 1  # the model was never asked again
     assert [invocation.id for invocation in second_broker.calls] == first_ids
@@ -644,14 +650,14 @@ def test_specialist_replays_a_recorded_routing_response_after_restart(tmp_path):
     ]
 
 
-def test_specialist_marks_a_refused_effect_as_an_unknown_observation(tmp_path):
+async def test_specialist_marks_a_refused_effect_as_an_unknown_observation(tmp_path):
     """MIS-1: a call the broker refuses as an unknown effect becomes a failed
     observation the next turn reads, never a silent re-run."""
 
     provider = ScriptedRoutingProvider([[_call("call-1", "nmap.tcp")]])
     specialist = _specialist(tmp_path, provider, _UnknownEffectBroker())
 
-    result = asyncio.run(specialist.run(_context()))
+    result = await specialist.run(_context())
 
     record = call_records(result.output)[0]
     assert record["status"] == "failed"
@@ -659,13 +665,13 @@ def test_specialist_marks_a_refused_effect_as_an_unknown_observation(tmp_path):
     assert record["provider_result"]["side_effects"] == "unknown"
 
 
-def test_specialist_resumes_an_approval_from_the_durable_ledger_row(tmp_path):
+async def test_specialist_resumes_an_approval_from_the_durable_ledger_row(tmp_path):
     """MIS-3: an approved specialist call is rebuilt from its paused ledger row
     and executed once with the durable operator decision."""
 
     store = NebulaStore(tmp_path / "approve.db")
-    engagement = store.create(Engagement(name="Approve"))
-    call = store.create(
+    engagement = await store.create(Engagement(name="Approve"))
+    call = await store.create(
         LedgerCall(
             id="call-durable",
             engagement_id=engagement.id,
@@ -678,7 +684,7 @@ def test_specialist_resumes_an_approval_from_the_durable_ledger_row(tmp_path):
             idempotency_key="task:scan:turn:1:call:0",
         )
     )
-    approval = store.create(
+    approval = await store.create(
         Approval(
             id="approval-1",
             engagement_id=engagement.id,
@@ -709,10 +715,13 @@ def test_specialist_resumes_an_approval_from_the_durable_ledger_row(tmp_path):
         update={"approval_response": {"approval_id": approval.id, "status": "approved"}}
     )
 
-    asyncio.run(specialist.run(context))
+    (await specialist.run(context))
 
     assert len(broker.calls) == 1
     assert broker.calls[0].id == "call-durable"
     assert broker.calls[0].idempotency_key == "task:scan:turn:1:call:0"
     assert broker.calls[0].arguments == {"ports": [443]}
     assert broker.approvals[0].id == approval.id
+
+
+pytestmark = pytest.mark.anyio

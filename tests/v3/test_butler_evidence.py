@@ -1,8 +1,11 @@
 """Butler evidence actions retain the project and requesting-device boundary."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 
 import pytest
 
@@ -12,27 +15,29 @@ from nebula.v3.domain import Engagement, Evidence
 from nebula.v3.storage import NebulaStore
 
 
-def test_butler_evidence_pages_project_records_and_prepares_exact_file_handoffs(
+async def test_butler_evidence_pages_project_records_and_prepares_exact_file_handoffs(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Foreign"))
+    selected = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Foreign"))
     items = [
-        store.create(
-            Evidence(
-                engagement_id=selected.id,
-                evidence_type="operator_upload",
-                title=f"Proof {index}",
-                description="Private evidence description",
-                artifact_id=f"artifact-{index}",
-                sha256="a" * 64,
-                metadata={"filename": f"proof-{index}.txt", "size": 10},
+        (
+            await store.create(
+                Evidence(
+                    engagement_id=selected.id,
+                    evidence_type="operator_upload",
+                    title=f"Proof {index}",
+                    description="Private evidence description",
+                    artifact_id=f"artifact-{index}",
+                    sha256="a" * 64,
+                    metadata={"filename": f"proof-{index}.txt", "size": 10},
+                )
             )
         )
         for index in range(52)
     ]
-    outsider = store.create(
+    outsider = await store.create(
         Evidence(
             engagement_id=foreign.id,
             evidence_type="operator_upload",
@@ -105,4 +110,7 @@ def test_butler_evidence_pages_project_records_and_prepares_exact_file_handoffs(
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

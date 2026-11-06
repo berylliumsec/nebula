@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import contextlib
@@ -14,7 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import SecretStr
 
 from nebula.v3.api import create_app
@@ -250,10 +254,10 @@ class RefreshedCatalogAdapter(FakeAdapter):
         )
 
 
-def _runtime(tmp_path: Path, *, fail: bool = False):
+async def _runtime(tmp_path: Path, *, fail: bool = False):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = await store.create(
         HarnessProfile(
             id="harness-a",
             name="Codex fixture",
@@ -263,7 +267,7 @@ def _runtime(tmp_path: Path, *, fail: bool = False):
             privacy={"local_only": True, "permits_sensitive_data": True},
         )
     )
-    mcp = store.create(
+    mcp = await store.create(
         McpServerProfile(
             id="mcp-a",
             name="workspace",
@@ -305,11 +309,11 @@ def _runtime(tmp_path: Path, *, fail: bool = False):
     return store, engagement, profile, mcp, adapter, runtime
 
 
-def test_harness_session_refuses_relink_after_workspace_preparation(tmp_path):
-    store, project, profile, _, _, runtime = _runtime(tmp_path)
+async def test_harness_session_refuses_relink_after_workspace_preparation(tmp_path):
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
     next_folder = tmp_path / "next-folder"
     next_folder.mkdir()
-    project = store.update(
+    project = await store.update(
         Engagement,
         project.id,
         {"workspace_path": str(tmp_path)},
@@ -317,28 +321,32 @@ def test_harness_session_refuses_relink_after_workspace_preparation(tmp_path):
     )
     execution_mode = runtime._project_execution_mode
 
-    def relink_before_admission(engagement_id):
+    async def relink_before_admission(engagement_id):
         runtime._project_execution_mode = execution_mode
-        mode = execution_mode(engagement_id)
-        store.relink_project_workspace(
-            project.id, str(next_folder), expected_revision=project.revision
+        mode = await execution_mode(engagement_id)
+        (
+            await store.relink_project_workspace(
+                project.id, str(next_folder), expected_revision=project.revision
+            )
         )
         return mode
 
     runtime._project_execution_mode = relink_before_admission
     with pytest.raises(ConflictError, match="Project workspace changed"):
-        runtime.create_session(
-            engagement_id=project.id, profile_id=profile.id, model="test-model"
+        (
+            await runtime.create_session(
+                engagement_id=project.id, profile_id=profile.id, model="test-model"
+            )
         )
-    assert store.count(HarnessSession, engagement_id=project.id) == 0
-    assert store.get(Engagement, project.id).workspace_path == str(next_folder)
+    assert (await store.count(HarnessSession, engagement_id=project.id)) == 0
+    assert (await store.get(Engagement, project.id)).workspace_path == str(next_folder)
 
 
-def test_harness_chat_refuses_relink_before_turn_admission(tmp_path):
-    store, project, profile, _, _, runtime = _runtime(tmp_path)
+async def test_harness_chat_refuses_relink_before_turn_admission(tmp_path):
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
     next_folder = tmp_path / "next-folder"
     next_folder.mkdir()
-    project = store.update(
+    project = await store.update(
         Engagement,
         project.id,
         {"workspace_path": str(tmp_path)},
@@ -347,46 +355,52 @@ def test_harness_chat_refuses_relink_before_turn_admission(tmp_path):
     original_messages = runtime._chat_messages
     relinked = False
 
-    def relink_before_turn(*args, **kwargs):
+    async def relink_before_turn(*args, **kwargs):
         nonlocal relinked
-        messages = original_messages(*args, **kwargs)
+        messages = await original_messages(*args, **kwargs)
         if not relinked:
             relinked = True
-            for session in store.list_entities(
+            for session in await store.list_entities(
                 HarnessSession, engagement_id=project.id
             ):
-                store.update(
-                    HarnessSession,
-                    session.id,
-                    {"status": HarnessSessionStatus.CLOSED},
-                    expected_revision=session.revision,
+                (
+                    await store.update(
+                        HarnessSession,
+                        session.id,
+                        {"status": HarnessSessionStatus.CLOSED},
+                        expected_revision=session.revision,
+                    )
                 )
-            store.relink_project_workspace(
-                project.id, str(next_folder), expected_revision=project.revision
+            (
+                await store.relink_project_workspace(
+                    project.id, str(next_folder), expected_revision=project.revision
+                )
             )
         return messages
 
     runtime._chat_messages = relink_before_turn
     with pytest.raises(ConflictError, match="Project workspace changed"):
-        runtime.prepare_chat(
-            engagement_id=project.id,
-            profile_id=profile.id,
-            model="test-model",
-            prompt="Work in the old folder",
-            chat_session_id=None,
-            harness_session_id=None,
-            mcp_server_ids=[],
+        (
+            await runtime.prepare_chat(
+                engagement_id=project.id,
+                profile_id=profile.id,
+                model="test-model",
+                prompt="Work in the old folder",
+                chat_session_id=None,
+                harness_session_id=None,
+                mcp_server_ids=[],
+            )
         )
     assert relinked
-    assert store.count(HarnessTurn, engagement_id=project.id) == 0
-    assert store.count(ChatTurn, engagement_id=project.id) == 0
+    assert (await store.count(HarnessTurn, engagement_id=project.id)) == 0
+    assert (await store.count(ChatTurn, engagement_id=project.id)) == 0
 
 
-def test_harness_mission_refuses_relink_before_queue_admission(tmp_path):
-    store, project, profile, _, _, runtime = _runtime(tmp_path)
+async def test_harness_mission_refuses_relink_before_queue_admission(tmp_path):
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
     next_folder = tmp_path / "next-folder"
     next_folder.mkdir()
-    project = store.update(
+    project = await store.update(
         Engagement,
         project.id,
         {"workspace_path": str(tmp_path)},
@@ -395,20 +409,24 @@ def test_harness_mission_refuses_relink_before_queue_admission(tmp_path):
     original_components = runtime._ensure_oci_components
     relinked = False
 
-    def relink_after_components(session, **kwargs):
+    async def relink_after_components(session, **kwargs):
         nonlocal relinked
-        components = original_components(session, **kwargs)
+        components = await original_components(session, **kwargs)
         if not relinked:
             relinked = True
-            current = store.get(HarnessSession, session.id)
-            store.update(
-                HarnessSession,
-                current.id,
-                {"status": HarnessSessionStatus.CLOSED},
-                expected_revision=current.revision,
+            current = await store.get(HarnessSession, session.id)
+            (
+                await store.update(
+                    HarnessSession,
+                    current.id,
+                    {"status": HarnessSessionStatus.CLOSED},
+                    expected_revision=current.revision,
+                )
             )
-            store.relink_project_workspace(
-                project.id, str(next_folder), expected_revision=project.revision
+            (
+                await store.relink_project_workspace(
+                    project.id, str(next_folder), expected_revision=project.revision
+                )
             )
         return components
 
@@ -425,29 +443,29 @@ def test_harness_mission_refuses_relink_before_queue_admission(tmp_path):
         )
 
     with pytest.raises(ConflictError, match="Project workspace changed"):
-        asyncio.run(start())
+        (await start())
     assert relinked
-    assert store.count(AgentRun, engagement_id=project.id) == 0
-    assert store.count(HarnessTurn, engagement_id=project.id) == 0
+    assert (await store.count(AgentRun, engagement_id=project.id)) == 0
+    assert (await store.count(HarnessTurn, engagement_id=project.id)) == 0
 
 
-def test_external_harness_session_can_be_discovered_and_imported_once(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+async def test_external_harness_session_can_be_discovered_and_imported_once(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
 
-    discovered = asyncio.run(
-        runtime.external_sessions(profile_id=profile.id, engagement_id=engagement.id)
+    discovered = await runtime.external_sessions(
+        profile_id=profile.id, engagement_id=engagement.id
     )
     assert discovered[0].external_session_id == "external-thread-7"
     assert discovered[0].internal_session_id is None
 
-    imported = runtime.import_external_session(
+    imported = await runtime.import_external_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         external_session_id="external-thread-7",
         display_name="Externally started Codex audit",
         model="test-model",
     )
-    repeated = runtime.import_external_session(
+    repeated = await runtime.import_external_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         external_session_id="external-thread-7",
@@ -458,34 +476,37 @@ def test_external_harness_session_can_be_discovered_and_imported_once(tmp_path):
     assert repeated.id == imported.id
     assert imported.external_session_id == "external-thread-7"
     assert imported.display_name == "Externally started Codex audit"
-    stale = store.update(
+    stale = await store.update(
         HarnessSession,
         imported.id,
         {"display_name": "Unattached session"},
         expected_revision=imported.revision,
     )
     assert stale.display_name == "Unattached session"
-    rediscovered = asyncio.run(
-        runtime.external_sessions(profile_id=profile.id, engagement_id=engagement.id)
+    rediscovered = await runtime.external_sessions(
+        profile_id=profile.id, engagement_id=engagement.id
     )
     assert rediscovered[0].internal_session_id == imported.id
-    assert store.get(HarnessSession, imported.id).display_name == (
+    assert (await store.get(HarnessSession, imported.id)).display_name == (
         "Externally started Codex audit"
     )
-    assert len(store.list_entities(HarnessSession, engagement_id=engagement.id)) == 1
+    assert (
+        len((await store.list_entities(HarnessSession, engagement_id=engagement.id)))
+        == 1
+    )
 
 
-def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history(
+async def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history(
     tmp_path,
 ):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    harness_session = runtime.create_session(
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    harness_session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
         mcp_server_ids=[],
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Legacy VPN audit",
@@ -495,7 +516,7 @@ def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history
             model="test-model",
         )
     )
-    with store.transaction() as transaction:
+    async with store.transaction() as transaction:
         for sequence, (role, content, replaced) in enumerate(
             [
                 ("user", "Retained question", False),
@@ -505,22 +526,24 @@ def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history
             ],
             start=1,
         ):
-            transaction.add(
-                ChatMessage(
-                    engagement_id=engagement.id,
-                    session_id=chat.id,
-                    sequence=sequence,
-                    role=role,
-                    content=content,
-                    metadata=(
-                        {"retracted_at": "2026-09-19T12:00:00+00:00"}
-                        if replaced
-                        else {}
-                    ),
+            (
+                await transaction.add(
+                    ChatMessage(
+                        engagement_id=engagement.id,
+                        session_id=chat.id,
+                        sequence=sequence,
+                        role=role,
+                        content=content,
+                        metadata=(
+                            {"retracted_at": "2026-09-19T12:00:00+00:00"}
+                            if replaced
+                            else {}
+                        ),
+                    )
                 )
             )
 
-    rewound = runtime.rewind_chat_session(chat, reason="operator_edit")
+    rewound = await runtime.rewind_chat_session(chat, reason="operator_edit")
 
     assert rewound.id == chat.id
     assert rewound.harness_session_id != harness_session.id
@@ -530,13 +553,13 @@ def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history
     assert rollover["to_session_id"] == rewound.harness_session_id
     assert rollover["reason"] == "operator_edit"
 
-    context = runtime._chat_handoff_context(rewound)
+    context = await runtime._chat_handoff_context(rewound)
     assert "Retained question" in context
     assert "Retained answer" in context
     assert "Replaced question" not in context
     assert "Replaced answer" not in context
 
-    chat, _chat_turn, _harness_turn = runtime.prepare_chat(
+    chat, _chat_turn, _harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -550,7 +573,9 @@ def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history
     appended = sorted(
         (
             item
-            for item in store.list_entities(ChatMessage, engagement_id=engagement.id)
+            for item in (
+                await store.list_entities(ChatMessage, engagement_id=engagement.id)
+            )
             if item.session_id == chat.id and not item.metadata.get("retracted_at")
         ),
         key=lambda item: item.sequence,
@@ -565,17 +590,17 @@ def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history
 @pytest.mark.parametrize(
     "other_message_count,chat_message_count", [(1_001, 45), (0, 1_001)]
 )
-def test_long_project_history_preserves_harness_chat_sequence_and_handoff(
+async def test_long_project_history_preserves_harness_chat_sequence_and_handoff(
     tmp_path, other_message_count, chat_message_count
 ):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    harness_session = runtime.create_session(
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    harness_session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
         mcp_server_ids=[],
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Long conversation",
@@ -585,38 +610,42 @@ def test_long_project_history_preserves_harness_chat_sequence_and_handoff(
             model="test-model",
         )
     )
-    other_chat = store.create(
+    other_chat = await store.create(
         chat.model_copy(update={"id": "other-chat", "title": "Other conversation"})
     )
-    with store.transaction() as transaction:
+    async with store.transaction() as transaction:
         for index in range(other_message_count):
-            transaction.add(
-                ChatMessage(
-                    engagement_id=engagement.id,
-                    session_id=other_chat.id,
-                    sequence=index + 10_000,
-                    role="user",
-                    content="Unrelated conversation",
+            (
+                await transaction.add(
+                    ChatMessage(
+                        engagement_id=engagement.id,
+                        session_id=other_chat.id,
+                        sequence=index + 10_000,
+                        role="user",
+                        content="Unrelated conversation",
+                    )
                 )
             )
         for sequence in range(1, chat_message_count + 1):
-            transaction.add(
-                ChatMessage(
-                    engagement_id=engagement.id,
-                    session_id=chat.id,
-                    sequence=sequence,
-                    role="user",
-                    content=f"Saved message [{sequence}]",
+            (
+                await transaction.add(
+                    ChatMessage(
+                        engagement_id=engagement.id,
+                        session_id=chat.id,
+                        sequence=sequence,
+                        role="user",
+                        content=f"Saved message [{sequence}]",
+                    )
                 )
             )
 
-    context = runtime._chat_handoff_context(chat)
+    context = await runtime._chat_handoff_context(chat)
     assert f"Saved message [{chat_message_count}]" in context
     assert f"Saved message [{chat_message_count - 39}]" in context
     assert f"Saved message [{chat_message_count - 40}]" not in context
     assert "Unrelated conversation" not in context
 
-    chat, chat_turn, harness_turn = runtime.prepare_chat(
+    chat, chat_turn, harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -625,12 +654,16 @@ def test_long_project_history_preserves_harness_chat_sequence_and_handoff(
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    runtime._complete_owner(harness_turn, "Completed response", ChatTokenUsage())
-    completed_turn = store.get(ChatTurn, chat_turn.id)
-    assert store.get(ChatMessage, completed_turn.final_message_id).sequence == (
+    (
+        await runtime._complete_owner(
+            harness_turn, "Completed response", ChatTokenUsage()
+        )
+    )
+    completed_turn = await store.get(ChatTurn, chat_turn.id)
+    assert (await store.get(ChatMessage, completed_turn.final_message_id)).sequence == (
         chat_message_count + 2
     )
-    handoff = runtime._append_chat_handoff(
+    handoff = await runtime._append_chat_handoff(
         chat, role="assistant", content="Mission summary", run_id="run-test", usage=None
     )
     assert handoff.sequence == chat_message_count + 3
@@ -641,8 +674,10 @@ def test_long_project_history_preserves_harness_chat_sequence_and_handoff(
     for offset in range(0, other_message_count + chat_message_count + 3, 1_000):
         saved.extend(
             message
-            for message in reopened.list_entities(
-                ChatMessage, engagement_id=engagement.id, offset=offset, limit=1_000
+            for message in (
+                await reopened.list_entities(
+                    ChatMessage, engagement_id=engagement.id, offset=offset, limit=1_000
+                )
             )
             if message.session_id == chat.id
         )
@@ -651,15 +686,15 @@ def test_long_project_history_preserves_harness_chat_sequence_and_handoff(
     )
 
 
-def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    harness_session = runtime.create_session(
+async def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    harness_session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
         mcp_server_ids=[],
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Attached execution",
@@ -669,7 +704,7 @@ def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
             model=harness_session.model,
         )
     )
-    context = store.create(
+    context = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=chat.id,
@@ -678,14 +713,14 @@ def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
             content="BEGIN EXECUTION ATTACHMENT\nbounded output",
         )
     )
-    chat = store.update(
+    chat = await store.update(
         ChatSession,
         chat.id,
         {"metadata": {"pending_context_message_id": context.id}},
         expected_revision=chat.revision,
     )
 
-    updated_chat, _chat_turn, harness_turn = runtime.prepare_chat(
+    updated_chat, _chat_turn, harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -701,11 +736,13 @@ def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
     assert "pending_context_message_id" not in updated_chat.metadata
 
 
-def test_health_reconciles_a_retired_default_model_with_the_advertised_catalog(
+async def test_health_reconciles_a_retired_default_model_with_the_advertised_catalog(
     tmp_path,
 ):
-    store, _engagement, profile, _mcp, _adapter, _existing_runtime = _runtime(tmp_path)
-    stale = store.update(
+    store, _engagement, profile, _mcp, _adapter, _existing_runtime = await _runtime(
+        tmp_path
+    )
+    stale = await store.update(
         HarnessProfile,
         profile.id,
         {"default_model": "retired-model"},
@@ -719,23 +756,23 @@ def test_health_reconciles_a_retired_default_model_with_the_advertised_catalog(
         adapter_factory=lambda _: adapter,
     )
 
-    result = asyncio.run(runtime.health(stale.id))
+    result = await runtime.health(stale.id)
 
     assert result.capabilities.models == ["current-model", "alternate-model"]
-    persisted = store.get(HarnessProfile, stale.id)
+    persisted = await store.get(HarnessProfile, stale.id)
     assert persisted.default_model == "current-model"
     assert persisted.capabilities.models == ["current-model", "alternate-model"]
 
 
-def test_failed_turn_persists_profile_failure_reason(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    session = runtime.create_session(
+async def test_failed_turn_persists_profile_failure_reason(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
         mcp_server_ids=[],
     )
-    _chat, _chat_turn, turn = runtime.prepare_chat(
+    _chat, _chat_turn, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -745,20 +782,22 @@ def test_failed_turn_persists_profile_failure_reason(tmp_path):
         mcp_server_ids=[],
     )
 
-    runtime._fail_turn(
-        turn.id,
-        HarnessTurnStatus.FAILED,
-        "Provider balance exhausted",
-        diagnostic={"reason_code": "quota_exhausted"},
+    (
+        await runtime._fail_turn(
+            turn.id,
+            HarnessTurnStatus.FAILED,
+            "Provider balance exhausted",
+            diagnostic={"reason_code": "quota_exhausted"},
+        )
     )
 
-    persisted = store.get(HarnessProfile, profile.id)
+    persisted = await store.get(HarnessProfile, profile.id)
     assert persisted.capabilities.turn_state == "failed"
     assert persisted.capabilities.last_turn_failure_reason == "quota_exhausted"
 
 
-def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+async def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
     skill_dir = tmp_path / ".agents" / "skills" / "review"
     skill_dir.mkdir(parents=True)
     skill_file = skill_dir / "SKILL.md"
@@ -767,7 +806,7 @@ def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
     outside.mkdir()
     (outside / "SKILL.md").write_text("outside", encoding="utf-8")
     (tmp_path / ".agents" / "skills" / "escape").symlink_to(outside)
-    profile = store.update(
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -785,7 +824,7 @@ def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
         expected_revision=profile.revision,
     )
 
-    skills = runtime.available_skills(
+    skills = await runtime.available_skills(
         engagement_id=engagement.id,
         profile_id=profile.id,
     )
@@ -796,7 +835,7 @@ def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
     ] == [("review", str(skill_file.resolve()), "project")]
     assert all(skill.name != "escape" for skill in skills)
 
-    _chat, _chat_turn, harness_turn = runtime.prepare_chat(
+    _chat, _chat_turn, harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -817,18 +856,20 @@ def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
     }
 
     with pytest.raises(HarnessConfigurationError, match="not available"):
-        runtime.prepare_chat(
-            engagement_id=engagement.id,
-            profile_id=profile.id,
-            model="test-model",
-            prompt="Read an arbitrary path",
-            chat_session_id=None,
-            harness_session_id=None,
-            mcp_server_ids=[],
-            harness_skill=HarnessSkillInvocation(
-                name="outside",
-                path=str((outside / "SKILL.md").resolve()),
-            ),
+        (
+            await runtime.prepare_chat(
+                engagement_id=engagement.id,
+                profile_id=profile.id,
+                model="test-model",
+                prompt="Read an arbitrary path",
+                chat_session_id=None,
+                harness_session_id=None,
+                mcp_server_ids=[],
+                harness_skill=HarnessSkillInvocation(
+                    name="outside",
+                    path=str((outside / "SKILL.md").resolve()),
+                ),
+            )
         )
 
 
@@ -850,12 +891,12 @@ def test_disabled_nebula_knowledge_does_not_suppress_installed_skills():
     )
 
 
-def test_codex_native_skill_catalog_is_selectable_for_a_chat(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+async def test_codex_native_skill_catalog_is_selectable_for_a_chat(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
     native_path = tmp_path / "native-plugin" / "SKILL.md"
     native_path.parent.mkdir()
     native_path.write_text("---\nname: native-plugin\n---\n", encoding="utf-8")
-    profile = store.update(
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -886,7 +927,7 @@ def test_codex_native_skill_catalog_is_selectable_for_a_chat(tmp_path):
         assert [(item.name, item.path) for item in skills] == [
             ("native-plugin", str(native_path))
         ]
-        _chat, _chat_turn, turn = runtime.prepare_chat(
+        _chat, _chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model="test-model",
@@ -903,12 +944,12 @@ def test_codex_native_skill_catalog_is_selectable_for_a_chat(tmp_path):
             "path": str(native_path),
         }
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    chat, chat_turn, turn = runtime.prepare_chat(
+async def test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    chat, chat_turn, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -917,26 +958,35 @@ def test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff(tmp_path
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    source_session = store.get(HarnessSession, chat.harness_session_id)
-    store.update(
-        HarnessSession,
-        source_session.id,
-        {"external_session_id": "source-thread", "status": HarnessSessionStatus.IDLE},
-        expected_revision=source_session.revision,
+    source_session = await store.get(HarnessSession, chat.harness_session_id)
+    (
+        await store.update(
+            HarnessSession,
+            source_session.id,
+            {
+                "external_session_id": "source-thread",
+                "status": HarnessSessionStatus.IDLE,
+            },
+            expected_revision=source_session.revision,
+        )
     )
-    store.update(
-        ChatTurn,
-        chat_turn.id,
-        {"status": ChatTurnStatus.COMPLETE},
-        expected_revision=chat_turn.revision,
+    (
+        await store.update(
+            ChatTurn,
+            chat_turn.id,
+            {"status": ChatTurnStatus.COMPLETE},
+            expected_revision=chat_turn.revision,
+        )
     )
-    store.update(
-        HarnessTurn,
-        turn.id,
-        {"status": HarnessTurnStatus.COMPLETE, "external_turn_id": "codex-turn"},
-        expected_revision=turn.revision,
+    (
+        await store.update(
+            HarnessTurn,
+            turn.id,
+            {"status": HarnessTurnStatus.COMPLETE, "external_turn_id": "codex-turn"},
+            expected_revision=turn.revision,
+        )
     )
-    answer = store.create(
+    answer = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=chat.id,
@@ -946,8 +996,8 @@ def test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff(tmp_path
             metadata={"harness_turn_id": turn.id},
         )
     )
-    fork_session = runtime.fork_session(source_session.id, reason="chat fork")
-    fork = ChatService(store).fork_session(
+    fork_session = await runtime.fork_session(source_session.id, reason="chat fork")
+    fork = await ChatService(store).fork_session(
         chat.id,
         through_message_id=answer.id,
         harness_session_id=fork_session.id,
@@ -962,39 +1012,39 @@ def test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff(tmp_path
             return "native-child-thread"
 
     runtime.adapter_factory = lambda _kind: NativeForkAdapter()
-    fork = asyncio.run(
-        runtime.maybe_fork_native_codex_chat(
-            source=chat, fork=fork, through_message_id=answer.id
-        )
+    fork = await runtime.maybe_fork_native_codex_chat(
+        source=chat, fork=fork, through_message_id=answer.id
     )
     assert calls == [("source-thread", "codex-turn")]
     assert fork.metadata["harness_context_handoff_pending"] is False
     assert fork.metadata["harness_native_fork"] is True
-    native_session = store.get(HarnessSession, fork_session.id)
+    native_session = await store.get(HarnessSession, fork_session.id)
     assert native_session.external_session_id == "native-child-thread"
     assert native_session.metadata["native_codex_fork"] is True
 
     user_message = next(
         item
-        for item in store.list_session_entities(ChatMessage, chat.id)
+        for item in (await store.list_session_entities(ChatMessage, chat.id))
         if item.role.value == "user"
     )
-    fallback_session = runtime.fork_session(source_session.id, reason="user boundary")
-    fallback = ChatService(store).fork_session(
+    fallback_session = await runtime.fork_session(
+        source_session.id, reason="user boundary"
+    )
+    fallback = await ChatService(store).fork_session(
         chat.id,
         through_message_id=user_message.id,
         harness_session_id=fallback_session.id,
     )
-    fallback = asyncio.run(
-        runtime.maybe_fork_native_codex_chat(
-            source=chat, fork=fallback, through_message_id=user_message.id
-        )
+    fallback = await runtime.maybe_fork_native_codex_chat(
+        source=chat, fork=fallback, through_message_id=user_message.id
     )
     assert calls == [("source-thread", "codex-turn")]
     assert fallback.metadata["harness_context_handoff_pending"] is True
-    assert store.get(HarnessSession, fallback_session.id).external_session_id is None
+    assert (
+        await store.get(HarnessSession, fallback_session.id)
+    ).external_session_id is None
 
-    _chat, _chat_turn, continued = runtime.prepare_chat(
+    _chat, _chat_turn, continued = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -1006,9 +1056,9 @@ def test_codex_chat_fork_uses_exact_completed_turn_without_text_handoff(tmp_path
     assert "Nebula conversation handoff" not in continued.prompt
 
 
-def test_codex_daybreak_choice_is_advertised_and_saved_for_chat(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    profile = store.update(
+async def test_codex_daybreak_choice_is_advertised_and_saved_for_chat(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -1026,7 +1076,7 @@ def test_codex_daybreak_choice_is_advertised_and_saved_for_chat(tmp_path):
         },
         expected_revision=profile.revision,
     )
-    chat, _, turn = runtime.prepare_chat(
+    chat, _, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -1036,24 +1086,26 @@ def test_codex_daybreak_choice_is_advertised_and_saved_for_chat(tmp_path):
         mcp_server_ids=[],
         harness_cyber_access_program="daybreakBlue",
     )
-    session = store.get(HarnessSession, turn.harness_session_id)
+    session = await store.get(HarnessSession, turn.harness_session_id)
     assert session.metadata["runtime_options"]["cyber_access_program"] == "daybreakBlue"
     assert (
         chat.metadata["harness_runtime_options"]["cyber_access_program"]
         == "daybreakBlue"
     )
     with pytest.raises(HarnessConfigurationError, match="not available"):
-        runtime.create_session(
-            engagement_id=engagement.id,
-            profile_id=profile.id,
-            model="test-model",
-            cyber_access_program="daybreakRed",
+        (
+            await runtime.create_session(
+                engagement_id=engagement.id,
+                profile_id=profile.id,
+                model="test-model",
+                cyber_access_program="daybreakRed",
+            )
         )
 
 
-def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    profile = store.update(
+async def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -1081,7 +1133,7 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
         expected_revision=profile.revision,
     )
 
-    chat, chat_turn, harness_turn = runtime.prepare_chat(
+    chat, chat_turn, harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -1094,7 +1146,7 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
     )
     assert chat_turn.max_tool_calls is None
     assert chat_turn.max_artifact_queries is None
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
     assert session.metadata["runtime_options"] == {
         "reasoning_effort": "high",
         "service_tier": "fast",
@@ -1107,10 +1159,8 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
         == session.metadata["runtime_options"]
     )
 
-    asyncio.run(
-        runtime.cancel_turn(harness_turn.id, reason="Settle the fixture response")
-    )
-    updated_chat, _, updated_turn = runtime.prepare_chat(
+    (await runtime.cancel_turn(harness_turn.id, reason="Settle the fixture response"))
+    updated_chat, _, updated_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -1121,24 +1171,21 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
         harness_reasoning_effort="low",
         harness_service_tier="fast",
     )
-    replacement = store.get(HarnessSession, updated_turn.harness_session_id)
+    replacement = await store.get(HarnessSession, updated_turn.harness_session_id)
     assert updated_chat.id == chat.id
     assert replacement.id != session.id
     assert replacement.metadata["runtime_options"]["reasoning_effort"] == "low"
-    assert (
-        store.get(HarnessSession, session.id).metadata["runtime_options"][
-            "reasoning_effort"
-        ]
-        == "high"
-    )
+    assert (await store.get(HarnessSession, session.id)).metadata["runtime_options"][
+        "reasoning_effort"
+    ] == "high"
     assert "Use the selected runtime" in updated_turn.prompt
     assert updated_chat.metadata["harness_runtime_options"]["reasoning_effort"] == "low"
 
 
-def test_grok_skill_catalog_discovers_bundled_and_installed_plugin_skills(
+async def test_grok_skill_catalog_discovers_bundled_and_installed_plugin_skills(
     tmp_path, monkeypatch
 ):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
     fake_home = tmp_path / "home"
     bundled = fake_home / ".grok" / "bundled" / "skills" / "review"
     plugin = (
@@ -1154,7 +1201,7 @@ def test_grok_skill_catalog_discovers_bundled_and_installed_plugin_skills(
     (bundled / "SKILL.md").write_text("bundled", encoding="utf-8")
     (plugin / "SKILL.md").write_text("plugin", encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
-    profile = store.update(
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -1169,7 +1216,7 @@ def test_grok_skill_catalog_discovers_bundled_and_installed_plugin_skills(
         expected_revision=profile.revision,
     )
 
-    skills = runtime.available_skills(
+    skills = await runtime.available_skills(
         engagement_id=engagement.id,
         profile_id=profile.id,
     )
@@ -1180,9 +1227,9 @@ def test_grok_skill_catalog_discovers_bundled_and_installed_plugin_skills(
     ]
 
 
-def test_activity_replay_bounds_legacy_verbose_tool_summaries(tmp_path):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    _chat, _chat_turn, turn = runtime.prepare_chat(
+async def test_activity_replay_bounds_legacy_verbose_tool_summaries(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    _chat, _chat_turn, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
@@ -1191,33 +1238,35 @@ def test_activity_replay_bounds_legacy_verbose_tool_summaries(tmp_path):
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    store.append_operation_event(
-        turn.id,
-        "harness_turn",
-        engagement.id,
-        "harness.item_upsert",
-        {
-            "type": "item_upsert",
-            "item_id": "legacy-tool",
-            "item_kind": "tool",
-            "item_status": "running",
-            "summary": "chat · MCP grok/" + ("s" * 6_000),
-            "tool_name": "Execute `" + ("x" * 6_000),
-            "payload": {},
-        },
+    (
+        await store.append_operation_event(
+            turn.id,
+            "harness_turn",
+            engagement.id,
+            "harness.item_upsert",
+            {
+                "type": "item_upsert",
+                "item_id": "legacy-tool",
+                "item_kind": "tool",
+                "item_status": "running",
+                "summary": "chat · MCP grok/" + ("s" * 6_000),
+                "tool_name": "Execute `" + ("x" * 6_000),
+                "payload": {},
+            },
+        )
     )
 
-    replayed = runtime.activity_events(turn.id).events
+    replayed = (await runtime.activity_events(turn.id)).events
 
     assert len(replayed) == 1
     assert len(replayed[0].summary or "") == 4_000
     assert len(replayed[0].tool_name or "") == 1_000
 
 
-def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
+async def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, mcp, adapter, runtime = _runtime(tmp_path)
-        chat, chat_turn, harness_turn = runtime.prepare_chat(
+        store, engagement, profile, mcp, adapter, runtime = await _runtime(tmp_path)
+        chat, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1226,7 +1275,7 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        reserved = runtime.session_activity(chat.harness_session_id or "")
+        reserved = await runtime.session_activity(chat.harness_session_id or "")
         assert reserved.busy is True
         assert reserved.live is False
         assert reserved.turn_id == harness_turn.id
@@ -1245,13 +1294,13 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             "status",
         ]
         assert (
-            store.get(HarnessTurn, harness_turn.id).status == HarnessTurnStatus.COMPLETE
-        )
-        assert store.get(ChatTurn, chat_turn.id).status.value == "complete"
-        session = store.get(HarnessSession, chat.harness_session_id or "")
+            await store.get(HarnessTurn, harness_turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        assert (await store.get(ChatTurn, chat_turn.id)).status.value == "complete"
+        session = await store.get(HarnessSession, chat.harness_session_id or "")
         assert session.external_session_id == "vendor-session-1"
         assert session.status == HarnessSessionStatus.IDLE
-        available = runtime.session_activity(session.id)
+        available = await runtime.session_activity(session.id)
         assert available.busy is False
         assert available.live is False
         assert available.turn_id is None
@@ -1261,11 +1310,13 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert available.detail == "This harness session is ready for another turn."
 
         # Editing a profile cannot mutate the immutable session snapshot.
-        store.update(
-            McpServerProfile,
-            mcp.id,
-            {"url": "https://changed.invalid/api"},
-            expected_revision=mcp.revision,
+        (
+            await store.update(
+                McpServerProfile,
+                mcp.id,
+                {"url": "https://changed.invalid/api"},
+                expected_revision=mcp.revision,
+            )
         )
         run = await runtime.start_mission(
             engagement_id=engagement.id,
@@ -1276,7 +1327,7 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             harness_session_id=session.id,
         )
         await runtime._mission_tasks[run.id]
-        finished = store.get(AgentRun, run.id)
+        finished = await store.get(AgentRun, run.id)
         assert finished.status == RunStatus.COMPLETE
         assert finished.harness_session_id == session.id
         assert finished.metadata["final_summary"] == (
@@ -1287,7 +1338,7 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert finished.metadata["output_tokens"] == 5
         usage_events = [
             event
-            for event in store.replay_events(run.id)
+            for event in (await store.replay_events(run.id))
             if event.event_type == "harness.usage"
         ]
         assert [event.payload["run_cost_usd"] for event in usage_events] == [
@@ -1296,7 +1347,7 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         ]
         completed_event = next(
             event
-            for event in store.replay_events(run.id)
+            for event in (await store.replay_events(run.id))
             if event.event_type == "run.completed"
         )
         assert completed_event.payload["summary"] == (
@@ -1319,11 +1370,13 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert adapter.opens[0].mcp_profiles == ()
         assert set(adapter.opens[0].gateway_config) == {"nebula"}
 
-        attached = runtime.attach_run_to_chat(run.id)
+        attached = await runtime.attach_run_to_chat(run.id)
         assert attached.id == chat.id
         messages = [
             item
-            for item in store.list_entities(ChatMessage, engagement_id=engagement.id)
+            for item in (
+                await store.list_entities(ChatMessage, engagement_id=engagement.id)
+            )
             if item.session_id == chat.id
         ]
         assert [item.content for item in messages][-2:] == [
@@ -1333,29 +1386,29 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         await runtime.shutdown()
         assert adapter.connections[0].closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
+async def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-        scope = store.create(
+        store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+        scope = await store.create(
             ScopePolicy(
                 engagement_id=engagement.id,
                 allowed_domains=["app.example.test"],
                 allowed_ports=[443],
             )
         )
-        engagement = store.update(
+        engagement = await store.update(
             Engagement,
             engagement.id,
             {"scope_policy_id": scope.id},
             expected_revision=engagement.revision,
         )
-        identity = store.create(
+        identity = await store.create(
             BrowserIdentity(engagement_id=engagement.id, name="Harness identity")
         )
-        session = store.create(
+        session = await store.create(
             BrowserSession(
                 engagement_id=engagement.id,
                 identity_id=identity.id,
@@ -1388,29 +1441,35 @@ def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
         assert set(AUTONOMOUS_BROWSER_TOOLS).issubset(frozen["tool_names"])
         assert frozen["application_model_runtime"] == "v2"
         assert any(name.endswith("model.get_updates") for name in frozen["tool_names"])
-        status = platform.automation.status(engagement.id, run_id=run.id)
+        status = await platform.automation.status(engagement.id, run_id=run.id)
         assert status.leases[0].session_id == session.id
         assert status.leases[0].scope_policy_revision == scope.revision
         await runtime._mission_tasks[run.id]
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_path):
+async def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         owner_statuses: list[HarnessTurnStatus] = []
         complete_owner = runtime._complete_owner
 
-        def observed_complete_owner(
+        async def observed_complete_owner(
             turn, final_message, usage, *, usage_reported=False
         ):
-            owner_statuses.append(store.get(HarnessTurn, turn.id).status)
-            complete_owner(turn, final_message, usage, usage_reported=usage_reported)
+            owner_statuses.append((await store.get(HarnessTurn, turn.id)).status)
+            (
+                await complete_owner(
+                    turn, final_message, usage, usage_reported=usage_reported
+                )
+            )
 
         runtime._complete_owner = observed_complete_owner
-        chat, chat_turn, harness_turn = runtime.prepare_chat(
+        chat, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1419,16 +1478,16 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        task = runtime.start_chat_turn(harness_turn.id)
+        task = await runtime.start_chat_turn(harness_turn.id)
         first = await anext(runtime.follow_turn(harness_turn.id))
         assert first.sequence == 1
         await task
 
-        finished = store.get(HarnessTurn, harness_turn.id)
+        finished = await store.get(HarnessTurn, harness_turn.id)
         assert finished.status == HarnessTurnStatus.COMPLETE
         assert owner_statuses == [HarnessTurnStatus.RUNNING]
-        assert store.get(ChatTurn, chat_turn.id).status.value == "complete"
-        replay = runtime.activity_events(harness_turn.id)
+        assert (await store.get(ChatTurn, chat_turn.id)).status.value == "complete"
+        replay = await runtime.activity_events(harness_turn.id)
         assert replay.events
         assert [event.sequence for event in replay.events] == list(
             range(1, replay.next_sequence + 1)
@@ -1436,15 +1495,17 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
         assert {event.schema_version for event in replay.events} == {
             "nebula.harness-activity/v2"
         }
-        after_first = runtime.activity_events(harness_turn.id, after_sequence=1)
+        after_first = await runtime.activity_events(harness_turn.id, after_sequence=1)
         assert all((event.sequence or 0) > 1 for event in after_first.events)
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("vendor", [HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP])
-def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, vendor):
+async def test_reasoning_summary_snapshot_is_identical_after_durable_replay(
+    tmp_path, vendor
+):
     class ReasoningConnection(FakeConnection):
         async def run_turn(
             self, prompt: str, *, model: str
@@ -1495,10 +1556,10 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, 
             return connection
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         adapter = ReasoningAdapter()
         runtime.adapter_factory = lambda _: adapter
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1509,7 +1570,7 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, 
         )
 
         live = [event async for event in runtime.stream_turn(turn.id)]
-        replay = runtime.activity_events(turn.id).events
+        replay = (await runtime.activity_events(turn.id)).events
         live_completed = next(
             event
             for event in live
@@ -1532,16 +1593,16 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, 
         assert replayed_completed.payload["reasoning_summary_text"] == (
             "Authoritative safe summary " * 5000 + "SNAPSHOT TAIL"
         )
-        assert store.get(HarnessTurn, turn.id).response == "Visible answer"
+        assert (await store.get(HarnessTurn, turn.id)).response == "Visible answer"
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_secret_harness_interaction_is_forwarded_but_not_persisted(tmp_path):
+async def test_secret_harness_interaction_is_forwarded_but_not_persisted(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        _, _, turn = runtime.prepare_chat(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1569,17 +1630,17 @@ def test_secret_harness_interaction_is_forwarded_but_not_persisted(tmp_path):
             "action": "answer",
             "response": {"password": "one-use-value"},
         }
-        persisted = store.get(HarnessInteraction, interaction_id)
+        persisted = await store.get(HarnessInteraction, interaction_id)
         assert resolved.status == HarnessInteractionStatus.ANSWERED
         assert persisted.response is None
         assert persisted.metadata["response_recorded"] is False
         assert "one-use-value" not in json.dumps(persisted.model_dump(mode="json"))
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
+async def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
     class BlockingConnection(FakeConnection):
         async def run_turn(
             self, prompt: str, *, model: str
@@ -1605,10 +1666,10 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
             return connection
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         adapter = BlockingAdapter()
         runtime.adapter_factory = lambda _: adapter
-        chat, chat_turn, turn = runtime.prepare_chat(
+        chat, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1617,9 +1678,11 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        task = runtime.start_chat_turn(turn.id)
+        task = await runtime.start_chat_turn(turn.id)
         for _ in range(100):
-            if store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.RUNNING:
+            if (
+                await store.get(HarnessTurn, turn.id)
+            ).status == HarnessTurnStatus.RUNNING:
                 break
             await asyncio.sleep(0.01)
         stopped = await runtime.cancel_turn(turn.id, reason="Operator stop")
@@ -1629,10 +1692,12 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
             pass
 
         assert stopped.status == HarnessTurnStatus.CANCELLED
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.CANCELLED
-        assert store.get(ChatTurn, chat_turn.id).status.value == "cancelled"
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.CANCELLED
+        assert (await store.get(ChatTurn, chat_turn.id)).status.value == "cancelled"
         assert adapter.connections[0].interrupted is True
-        replay = runtime.activity_events(turn.id)
+        replay = await runtime.activity_events(turn.id)
         assert replay.events[-1].type == "turn_status"
         assert replay.events[-1].item_status == "cancelled"
 
@@ -1641,7 +1706,7 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
         )
         assert stopped_again.status == HarnessTurnStatus.CANCELLED
 
-        interrupted = store.update(
+        interrupted = await store.update(
             HarnessTurn,
             turn.id,
             {"status": HarnessTurnStatus.INTERRUPTED},
@@ -1652,7 +1717,7 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
         )
         assert recovered_stop.status == HarnessTurnStatus.INTERRUPTED
 
-        _, follow_up_owner, follow_up_turn = runtime.prepare_chat(
+        _, follow_up_owner, follow_up_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1663,10 +1728,11 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
         )
         await runtime.start_chat_turn(follow_up_turn.id)
         assert (
-            store.get(HarnessTurn, follow_up_turn.id).status
-            == HarnessTurnStatus.COMPLETE
-        )
-        assert store.get(ChatTurn, follow_up_owner.id).status.value == "complete"
+            await store.get(HarnessTurn, follow_up_turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(ChatTurn, follow_up_owner.id)
+        ).status.value == "complete"
         assert len(adapter.connections[0].prompts) == 2
 
         run = await runtime.start_mission(
@@ -1679,16 +1745,17 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
         mission_task = runtime._mission_tasks[run.id]
         mission_turn = next(
             item
-            for item in store.list_entities(
-                HarnessTurn, engagement_id=engagement.id, limit=1_000
+            for item in (
+                await store.list_entities(
+                    HarnessTurn, engagement_id=engagement.id, limit=1_000
+                )
             )
             if item.run_id == run.id
         )
         for _ in range(100):
             if (
-                store.get(HarnessTurn, mission_turn.id).status
-                == HarnessTurnStatus.RUNNING
-            ):
+                await store.get(HarnessTurn, mission_turn.id)
+            ).status == HarnessTurnStatus.RUNNING:
                 break
             await asyncio.sleep(0.01)
         stopped_mission = await runtime.cancel_turn(
@@ -1700,17 +1767,20 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
             pass
 
         assert stopped_mission.status == HarnessTurnStatus.CANCELLED
-        assert store.get(AgentRun, run.id).status == RunStatus.CANCELLED
-        assert store.get(AgentRun, run.id).budget.max_duration_seconds is None
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.CANCELLED
+        assert (await store.get(AgentRun, run.id)).budget.max_duration_seconds is None
         assert any(
-            event.event_type == "run.cancelled" for event in store.replay_events(run.id)
+            event.event_type == "run.cancelled"
+            for event in (await store.replay_events(run.id))
         )
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_active_codex_turn_accepts_steering_with_stale_profile_capabilities(tmp_path):
+async def test_active_codex_turn_accepts_steering_with_stale_profile_capabilities(
+    tmp_path,
+):
     class BlockingConnection(FakeConnection):
         async def run_turn(
             self, prompt: str, *, model: str
@@ -1726,11 +1796,11 @@ def test_active_codex_turn_accepts_steering_with_stale_profile_capabilities(tmp_
             return connection
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         assert profile.capabilities.steering is False
         adapter = BlockingAdapter()
         runtime.adapter_factory = lambda _: adapter
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1739,9 +1809,11 @@ def test_active_codex_turn_accepts_steering_with_stale_profile_capabilities(tmp_
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        task = runtime.start_chat_turn(turn.id)
+        task = await runtime.start_chat_turn(turn.id)
         for _ in range(100):
-            if store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.RUNNING:
+            if (
+                await store.get(HarnessTurn, turn.id)
+            ).status == HarnessTurnStatus.RUNNING:
                 break
             await asyncio.sleep(0.01)
 
@@ -1750,7 +1822,7 @@ def test_active_codex_turn_accepts_steering_with_stale_profile_capabilities(tmp_
         )
 
         assert adapter.connections[0].steering == ["Prioritize the parser"]
-        guidance = runtime.activity_events(turn.id).events[-1]
+        guidance = (await runtime.activity_events(turn.id)).events[-1]
         assert guidance.type == "notice"
         assert guidance.title == "Operator guidance"
         assert guidance.payload["text"] == "Prioritize the parser"
@@ -1758,12 +1830,12 @@ def test_active_codex_turn_accepts_steering_with_stale_profile_capabilities(tmp_
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_mission_executes_operator_stages_sequentially(tmp_path):
+async def test_harness_mission_executes_operator_stages_sequentially(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+        store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
         run = await runtime.start_mission(
             engagement_id=engagement.id,
             name="Staged review",
@@ -1778,15 +1850,17 @@ def test_harness_mission_executes_operator_stages_sequentially(tmp_path):
         )
         await runtime._mission_tasks[run.id]
 
-        finished = store.get(AgentRun, run.id)
+        finished = await store.get(AgentRun, run.id)
         assert finished.status == RunStatus.COMPLETE
         assert finished.metadata["total_tasks"] == 2
         assert finished.metadata["completed_tasks"] == 2
         turns = sorted(
             (
                 item
-                for item in store.list_entities(
-                    HarnessTurn, engagement_id=engagement.id, limit=1_000
+                for item in (
+                    await store.list_entities(
+                        HarnessTurn, engagement_id=engagement.id, limit=1_000
+                    )
                 )
                 if item.run_id == run.id
             ),
@@ -1797,17 +1871,19 @@ def test_harness_mission_executes_operator_stages_sequentially(tmp_path):
             "Verify",
         ]
         assert all(item.status == HarnessTurnStatus.COMPLETE for item in turns)
-        event_types = [event.event_type for event in store.replay_events(run.id)]
+        event_types = [
+            event.event_type for event in (await store.replay_events(run.id))
+        ]
         assert event_types.count("stage.completed") == 1
         assert event_types.count("run.completed") == 1
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_scheduled_harness_mission_survives_runtime_restart(tmp_path):
+async def test_scheduled_harness_mission_survives_runtime_restart(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
+        store, engagement, profile, _mcp, adapter, runtime = await _runtime(tmp_path)
         run = await runtime.start_mission(
             engagement_id=engagement.id,
             name="Weekly harness review",
@@ -1820,7 +1896,7 @@ def test_scheduled_harness_mission_survives_runtime_restart(tmp_path):
         )
         assert run.id in runtime._scheduled_mission_tasks
         await runtime.shutdown()
-        assert store.get(AgentRun, run.id).status == RunStatus.QUEUED
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.QUEUED
 
         restored = HarnessRuntimeService(
             store,
@@ -1836,13 +1912,13 @@ def test_scheduled_harness_mission_survives_runtime_restart(tmp_path):
         assert cancelled.status == RunStatus.CANCELLED
         await restored.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_parallel_work_uses_independent_harness_sessions(tmp_path):
+async def test_parallel_work_uses_independent_harness_sessions(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
-        chat, _, chat_turn = runtime.prepare_chat(
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+        chat, _, chat_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1864,7 +1940,9 @@ def test_parallel_work_uses_independent_harness_sessions(tmp_path):
 
         assert run.harness_session_id != original_session_id
         assert run.metadata["forked_from_harness_session_id"] == original_session_id
-        assert runtime.session_activity(original_session_id).turn_id == chat_turn.id
+        assert (
+            await runtime.session_activity(original_session_id)
+        ).turn_id == chat_turn.id
 
         async def collect_chat_events() -> list[HarnessEvent]:
             return [event async for event in runtime.stream_turn(chat_turn.id)]
@@ -1873,37 +1951,45 @@ def test_parallel_work_uses_independent_harness_sessions(tmp_path):
             collect_chat_events(), runtime._mission_tasks[run.id]
         )
         assert any(event.type == "started" for event in chat_events)
-        assert store.get(HarnessTurn, chat_turn.id).status == HarnessTurnStatus.COMPLETE
-        assert store.get(AgentRun, run.id).status == RunStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, chat_turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.COMPLETE
         assert len(adapter.opens) == 2
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_session_freezes_native_capabilities(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+async def test_harness_session_freezes_native_capabilities(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
     configured = HarnessNativeCapabilities(
         workspace_access=HarnessWorkspaceAccess.READ,
         web_search=True,
         subagents=True,
     )
-    profile = store.update(
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {"native_capabilities": configured.model_dump(mode="json")},
         expected_revision=profile.revision,
     )
-    session = runtime.create_session(
+    session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
     )
 
-    store.update(
-        HarnessProfile,
-        profile.id,
-        {"native_capabilities": HarnessNativeCapabilities().model_dump(mode="json")},
-        expected_revision=profile.revision,
+    (
+        await store.update(
+            HarnessProfile,
+            profile.id,
+            {
+                "native_capabilities": HarnessNativeCapabilities().model_dump(
+                    mode="json"
+                )
+            },
+            expected_revision=profile.revision,
+        )
     )
 
     frozen = HarnessNativeCapabilities.model_validate(
@@ -1917,17 +2003,19 @@ def test_harness_session_freezes_native_capabilities(tmp_path):
     assert session.metadata["approval_policy"] == "prompt"
 
 
-def test_harness_session_freezes_project_never_approval_policy(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-    store.create(
-        AutomationProjectPolicy(
-            id=f"automation:{engagement.id}",
-            engagement_id=engagement.id,
-            approval_policy="never",
+async def test_harness_session_freezes_project_never_approval_policy(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    (
+        await store.create(
+            AutomationProjectPolicy(
+                id=f"automation:{engagement.id}",
+                engagement_id=engagement.id,
+                approval_policy="never",
+            )
         )
     )
 
-    session = runtime.create_session(
+    session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -1936,9 +2024,9 @@ def test_harness_session_freezes_project_never_approval_policy(tmp_path):
     assert session.metadata["approval_policy"] == "never"
 
 
-def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
+async def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
 
         class HostCommands:
             def __init__(self) -> None:
@@ -1953,7 +2041,7 @@ def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
                 raise AutomationRuntimeUnavailable("command runtime is optional")
 
         runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
-        session = runtime.create_session(
+        session = await runtime.create_session(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1965,7 +2053,7 @@ def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
         assert native.workspace_access == HarnessWorkspaceAccess.WRITE
         assert native.shell is True
 
-        _chat, _chat_turn, turn = runtime.prepare_chat(
+        _chat, _chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -1978,13 +2066,13 @@ def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
         assert adapter.opens[0].workspace == tmp_path
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice(
+async def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice(
     tmp_path,
 ):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
 
     class HostCommands:
         def __init__(self) -> None:
@@ -1999,7 +2087,7 @@ def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice
             raise AutomationRuntimeUnavailable("command runtime is optional")
 
     runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
-    profile = store.update(
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {"permission_mode": "unrestricted"},
@@ -2008,50 +2096,53 @@ def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice
     with pytest.raises(
         HarnessConfigurationError, match="requires project authorization Allow all"
     ):
-        runtime.create_session(
-            engagement_id=engagement.id, profile_id=profile.id, model=None
+        (
+            await runtime.create_session(
+                engagement_id=engagement.id, profile_id=profile.id, model=None
+            )
         )
 
-    scope = store.create(
+    scope = await store.create(
         ScopePolicy(
             id=f"scope:{engagement.id}",
             engagement_id=engagement.id,
             bypass_permissions=True,
         )
     )
-    engagement = store.update(
+    engagement = await store.update(
         Engagement,
         engagement.id,
         {"scope_policy_id": scope.id},
         expected_revision=engagement.revision,
     )
-    session = runtime.create_session(
+    session = await runtime.create_session(
         engagement_id=engagement.id, profile_id=profile.id, model=None
     )
     assert session.metadata["harness_permission_mode"] == "unrestricted"
     assert session.metadata["execution_mode"] == "host"
     assert session.metadata["scope_snapshot"]["bypass_permissions"] is True
 
-    store.update(
-        HarnessProfile,
-        profile.id,
-        {"permission_mode": "managed"},
-        expected_revision=profile.revision,
+    (
+        await store.update(
+            HarnessProfile,
+            profile.id,
+            {"permission_mode": "managed"},
+            expected_revision=profile.revision,
+        )
     )
-    assert (
-        store.get(HarnessSession, session.id).metadata["harness_permission_mode"]
-        == "unrestricted"
-    )
-    next_session = runtime.create_session(
+    assert (await store.get(HarnessSession, session.id)).metadata[
+        "harness_permission_mode"
+    ] == "unrestricted"
+    next_session = await runtime.create_session(
         engagement_id=engagement.id, profile_id=profile.id, model=None
     )
     assert next_session.metadata["harness_permission_mode"] == "managed"
 
 
-def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path):
+async def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
-        chat, _, first = runtime.prepare_chat(
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+        chat, _, first = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2061,7 +2152,7 @@ def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path
             mcp_server_ids=[],
         )
         _ = [event async for event in runtime.stream_turn(first.id)]
-        original = store.get(HarnessSession, first.harness_session_id)
+        original = await store.get(HarnessSession, first.harness_session_id)
         assert original.metadata["execution_mode"] == "docker"
 
         class HostCommands:
@@ -2077,7 +2168,7 @@ def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path
                 raise AutomationRuntimeUnavailable("command runtime is optional")
 
         runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
-        updated, _, second = runtime.prepare_chat(
+        updated, _, second = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2086,7 +2177,7 @@ def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path
             harness_session_id=original.id,
             mcp_server_ids=[],
         )
-        replacement = store.get(HarnessSession, second.harness_session_id)
+        replacement = await store.get(HarnessSession, second.harness_session_id)
         native = HarnessNativeCapabilities.model_validate(
             replacement.metadata["native_capabilities"]
         )
@@ -2102,11 +2193,13 @@ def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path
         assert adapter.opens[-1].workspace == tmp_path
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_session_does_not_require_unprepared_optional_command_runtime(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+async def test_harness_session_does_not_require_unprepared_optional_command_runtime(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
 
     class UnpreparedCommands:
         def project_execution_mode(self, engagement_id: str) -> str:
@@ -2121,7 +2214,7 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
     unprepared.store = store  # type: ignore[attr-defined]
     runtime.bind_automation_tool_platform(unprepared)  # type: ignore[arg-type]
 
-    session = runtime.create_session(
+    session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -2133,22 +2226,24 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
     assert all(name.startswith("model.") for name in snapshot["tool_names"])
 
 
-def test_tool_disabled_harness_session_has_no_native_or_command_runtime(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+async def test_tool_disabled_harness_session_has_no_native_or_command_runtime(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
     configured = HarnessNativeCapabilities(
         web_search=True,
         browser=True,
         skills=True,
         subagents=True,
     )
-    store.update(
-        HarnessProfile,
-        profile.id,
-        {"native_capabilities": configured.model_dump(mode="json")},
-        expected_revision=profile.revision,
+    (
+        await store.update(
+            HarnessProfile,
+            profile.id,
+            {"native_capabilities": configured.model_dump(mode="json")},
+            expected_revision=profile.revision,
+        )
     )
 
-    session = runtime.create_session(
+    session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -2167,12 +2262,12 @@ def test_tool_disabled_harness_session_has_no_native_or_command_runtime(tmp_path
 
 
 @pytest.mark.parametrize("restart", [False, True])
-def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
+async def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
     tmp_path,
     restart,
 ):
     async def scenario() -> None:
-        store, engagement, profile, _, _, first_runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, first_runtime = await _runtime(tmp_path)
 
         class Commands:
             def __init__(self, digest: str) -> None:
@@ -2198,7 +2293,7 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
         new_digest = "sha256:" + "b" * 64
         commands = Commands(old_digest)
         first_runtime.bind_automation_tool_platform(commands)  # type: ignore[arg-type]
-        chat, _, first_turn = first_runtime.prepare_chat(
+        chat, _, first_turn = await first_runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2208,10 +2303,10 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
             mcp_server_ids=[],
         )
         _ = [event async for event in first_runtime.stream_turn(first_turn.id)]
-        frozen_session = store.get(HarnessSession, first_turn.harness_session_id)
+        frozen_session = await store.get(HarnessSession, first_turn.harness_session_id)
         assert (
-            store.get(HarnessTurn, first_turn.id).status == HarnessTurnStatus.COMPLETE
-        )
+            await store.get(HarnessTurn, first_turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
         adapter = FakeAdapter()
         if restart:
             await first_runtime.shutdown()
@@ -2228,7 +2323,7 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
             restarted_runtime.bind_automation_tool_platform(Commands(new_digest))  # type: ignore[arg-type]
         else:
             commands.digest = new_digest
-        rebound_chat, owner, replacement_turn = restarted_runtime.prepare_chat(
+        rebound_chat, owner, replacement_turn = await restarted_runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2238,17 +2333,14 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
             mcp_server_ids=[],
         )
 
-        replacement_session = store.get(
+        replacement_session = await store.get(
             HarnessSession, replacement_turn.harness_session_id
         )
         assert replacement_session.id != frozen_session.id
         assert rebound_chat.harness_session_id == replacement_session.id
-        assert (
-            store.get(HarnessSession, frozen_session.id).metadata[
-                "command_runtime_snapshot"
-            ]["runtime_digest"]
-            == old_digest + "+application-model-project-v2"
-        )
+        assert (await store.get(HarnessSession, frozen_session.id)).metadata[
+            "command_runtime_snapshot"
+        ]["runtime_digest"] == old_digest + "+application-model-project-v2"
         assert (
             replacement_session.metadata["command_runtime_snapshot"]["runtime_digest"]
             == new_digest + "+application-model-project-v2"
@@ -2275,12 +2367,12 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
         )
         assert rollover.payload["previous_session_id"] == frozen_session.id
         assert "preserved the prior session" in rollover.payload["detail"]
-        assert store.get(HarnessTurn, replacement_turn.id).status == (
+        assert (await store.get(HarnessTurn, replacement_turn.id)).status == (
             HarnessTurnStatus.COMPLETE
         )
         await restarted_runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_harness_profiles_reject_unsupported_or_secret_bearing_native_tools():
@@ -2307,10 +2399,10 @@ def test_harness_profiles_reject_unsupported_or_secret_bearing_native_tools():
         )
 
 
-def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path):
+async def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-        _, chat_turn, harness_turn = runtime.prepare_chat(
+        store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+        _, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2319,8 +2411,8 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
-        catalog = runtime._gateway_catalog(session)["tools"]
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = (await runtime._gateway_catalog(session))["tools"]
         selected = next(
             item["name"]
             for item in catalog
@@ -2355,10 +2447,10 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
         assert receipt["schema"] == "nebula.tool-result/v2"
         assert "443/tcp" not in json.dumps(receipt)
         assert response["isError"] is False
-        call = store.get(ToolCall, receipt["tool_call_id"])
+        call = await store.get(ToolCall, receipt["tool_call_id"])
         assert call.status == ToolCallStatus.COMPLETE
         assert call.result_artifact_id
-        search = ToolOutputService(store, runtime.artifact_store).search(
+        search = await ToolOutputService(store, runtime.artifact_store).search(
             engagement_id=engagement.id,
             owner_id=chat_turn.id,
             tool_call_id=call.id,
@@ -2366,19 +2458,21 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
         )
         assert search["matches"]
         assert "instruction" not in search
-        owner = store.get(ChatTurn, chat_turn.id)
+        owner = await store.get(ChatTurn, chat_turn.id)
         assert owner.execution_tool_calls == 1
         assert owner.artifact_queries == 0
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable(tmp_path):
+async def test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-        _, chat_turn, harness_turn = runtime.prepare_chat(
+        store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+        _, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2387,7 +2481,7 @@ def test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable(tmp_pa
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
             turn_id=harness_turn.id, connection=None, task=None
         )
@@ -2404,68 +2498,72 @@ def test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable(tmp_pa
             == "string"
         )
         assert failure["side_effects"] == "none"
-        latest = store.get(ChatTurn, chat_turn.id)
+        latest = await store.get(ChatTurn, chat_turn.id)
         assert len(latest.tool_call_ids) == 1
         assert (
-            store.get(ToolCall, latest.tool_call_ids[0]).status == ToolCallStatus.FAILED
-        )
+            await store.get(ToolCall, latest.tool_call_ids[0])
+        ).status == ToolCallStatus.FAILED
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_mcp_exposes_project_application_model(tmp_path):
+async def test_harness_mcp_exposes_project_application_model(tmp_path):
     async def scenario() -> None:
         from nebula.v3.application_model.service import ApplicationModelService
         from nebula.v3.domain import BrowserIdentity, BrowserSession
 
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        scope = store.create(ScopePolicy(engagement_id=engagement.id))
-        engagement = store.update(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        scope = await store.create(ScopePolicy(engagement_id=engagement.id))
+        engagement = await store.update(
             Engagement,
             engagement.id,
             {"scope_policy_id": scope.id},
             expected_revision=engagement.revision,
         )
-        identity = store.create(
+        identity = await store.create(
             BrowserIdentity(engagement_id=engagement.id, name="Model identity")
         )
-        store.create(
-            BrowserSession(
-                engagement_id=engagement.id,
-                identity_id=identity.id,
-                name="Model browser",
+        (
+            await store.create(
+                BrowserSession(
+                    engagement_id=engagement.id,
+                    identity_id=identity.id,
+                    name="Model browser",
+                )
             )
         )
         service = ApplicationModelService(store, runtime.artifact_store)
         store.application_model_service = service
         from nebula.v3.application_model.graph import GraphTransaction
 
-        service.transact(
-            engagement.id,
-            GraphTransaction.model_validate(
-                {
-                    "expected_revision": 0,
-                    "idempotency_key": "fixture",
-                    "operations": [
-                        {
-                            "op": "put_object",
-                            "id": "site-model",
-                            "properties": {
-                                "purpose": {
-                                    "value": "Define the application boundary for its authentication workflow."
-                                }
-                            },
-                            "label": "Model site",
-                            "authentication_context": "anonymous",
-                            "classification": {"value": "Application"},
-                        }
-                    ],
-                }
-            ),
+        (
+            await service.transact(
+                engagement.id,
+                GraphTransaction.model_validate(
+                    {
+                        "expected_revision": 0,
+                        "idempotency_key": "fixture",
+                        "operations": [
+                            {
+                                "op": "put_object",
+                                "id": "site-model",
+                                "properties": {
+                                    "purpose": {
+                                        "value": "Define the application boundary for its authentication workflow."
+                                    }
+                                },
+                                "label": "Model site",
+                                "authentication_context": "anonymous",
+                                "classification": {"value": "Application"},
+                            }
+                        ],
+                    }
+                ),
+            )
         )
-        _, chat_turn, harness_turn = runtime.prepare_chat(
+        _, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2474,8 +2572,8 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
-        catalog = runtime._gateway_catalog(session)["tools"]
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = (await runtime._gateway_catalog(session))["tools"]
         selected = next(
             item["name"]
             for item in catalog
@@ -2494,7 +2592,7 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
         receipt = response["structuredContent"]
         assert receipt["schema"] == "nebula.tool-result/v2"
         assert "site-model" not in json.dumps(receipt)
-        result = ToolOutputService(store, runtime.artifact_store).search(
+        result = await ToolOutputService(store, runtime.artifact_store).search(
             engagement_id=engagement.id,
             owner_id=chat_turn.id,
             tool_call_id=receipt["tool_call_id"],
@@ -2504,13 +2602,13 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
+async def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        source = store.create(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        source = await store.create(
             KnowledgeSource(
                 id="knowledge-a",
                 engagement_id=engagement.id,
@@ -2529,24 +2627,26 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
                 },
             )
         )
-        other = store.create(Engagement(id="eng-b", name="Engagement B"))
-        store.create(
-            KnowledgeSource(
-                id="knowledge-b",
-                engagement_id=other.id,
-                name="private.txt",
-                source_type="text/plain",
-                metadata={
-                    "chunks": [
-                        {
-                            "id": "chunk-b",
-                            "text": (
-                                "The other engagement marker is "
-                                "CROSS_ENGAGEMENT_SECRET."
-                            ),
-                        }
-                    ]
-                },
+        other = await store.create(Engagement(id="eng-b", name="Engagement B"))
+        (
+            await store.create(
+                KnowledgeSource(
+                    id="knowledge-b",
+                    engagement_id=other.id,
+                    name="private.txt",
+                    source_type="text/plain",
+                    metadata={
+                        "chunks": [
+                            {
+                                "id": "chunk-b",
+                                "text": (
+                                    "The other engagement marker is "
+                                    "CROSS_ENGAGEMENT_SECRET."
+                                ),
+                            }
+                        ]
+                    },
+                )
             )
         )
         service = ChatService(store)
@@ -2560,7 +2660,7 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
                 )
             )
         )
-        chat, chat_turn, harness_turn = runtime.prepare_chat(
+        chat, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2569,8 +2669,8 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
-        catalog = runtime._gateway_catalog(session, turn=harness_turn)["tools"]
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = (await runtime._gateway_catalog(session, turn=harness_turn))["tools"]
         assert (
             next(item for item in catalog if item["name"] == "knowledge.search")[
                 "inputSchema"
@@ -2594,12 +2694,12 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
         assert payload["matches"][0]["source_id"] == source.id
         assert "HARNESS_KNOWLEDGE_443" in payload["matches"][0]["text"]
         assert "CROSS_ENGAGEMENT_SECRET" not in json.dumps(payload)
-        latest_chat_turn = store.get(ChatTurn, chat_turn.id)
-        call = store.get(ToolCall, latest_chat_turn.tool_call_ids[0])
+        latest_chat_turn = await store.get(ChatTurn, chat_turn.id)
+        call = await store.get(ToolCall, latest_chat_turn.tool_call_ids[0])
         assert call.tool_name == "knowledge.search"
         assert call.status == ToolCallStatus.COMPLETE
         assert call.engagement_id == engagement.id
-        latest_turn = store.get(HarnessTurn, harness_turn.id)
+        latest_turn = await store.get(HarnessTurn, harness_turn.id)
         assert latest_turn.metadata["citations"][0]["source_id"] == source.id
         rejected = await runtime._gateway_call(
             session,
@@ -2609,15 +2709,19 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
         assert rejected["isError"] is True
         assert rejected["structuredContent"]["schema"] == "nebula.tool-failure/v1"
         assert rejected["structuredContent"]["side_effects"] == "none"
-        runtime._complete_owner(
-            latest_turn,
-            "The marker is documented.",
-            ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        (
+            await runtime._complete_owner(
+                latest_turn,
+                "The marker is documented.",
+                ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
         )
         messages = [
             item
-            for item in store.list_entities(
-                ChatMessage, engagement_id=engagement.id, limit=100
+            for item in (
+                await store.list_entities(
+                    ChatMessage, engagement_id=engagement.id, limit=100
+                )
             )
             if item.session_id == chat.id
         ]
@@ -2625,19 +2729,23 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_answers_cite_weak_search_results_only_when_they_use_them(tmp_path):
+async def test_harness_answers_cite_weak_search_results_only_when_they_use_them(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        store.create(
-            KnowledgeSource(
-                id="knowledge-a",
-                engagement_id=engagement.id,
-                name="runbook.md",
-                source_type="text/markdown",
-                metadata={"chunks": [{"id": "chunk-a", "text": "Runbook."}]},
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        (
+            await store.create(
+                KnowledgeSource(
+                    id="knowledge-a",
+                    engagement_id=engagement.id,
+                    name="runbook.md",
+                    source_type="text/markdown",
+                    metadata={"chunks": [{"id": "chunk-a", "text": "Runbook."}]},
+                )
             )
         )
 
@@ -2666,7 +2774,7 @@ def test_harness_answers_cite_weak_search_results_only_when_they_use_them(tmp_pa
         )
 
         async def answer(prompt: str, queries: list[str], text: str) -> list[str]:
-            chat, _, harness_turn = runtime.prepare_chat(
+            chat, _, harness_turn = await runtime.prepare_chat(
                 engagement_id=engagement.id,
                 profile_id=profile.id,
                 model=None,
@@ -2675,7 +2783,7 @@ def test_harness_answers_cite_weak_search_results_only_when_they_use_them(tmp_pa
                 harness_session_id=None,
                 mcp_server_ids=[],
             )
-            session = store.get(HarnessSession, harness_turn.harness_session_id)
+            session = await store.get(HarnessSession, harness_turn.harness_session_id)
             runtime._active[session.id] = SimpleNamespace(
                 turn_id=harness_turn.id, connection=None, task=None
             )
@@ -2684,17 +2792,21 @@ def test_harness_answers_cite_weak_search_results_only_when_they_use_them(tmp_pa
                     session, "knowledge.search", {"query": query}
                 )
                 assert "weak excerpt" in response["structuredContent"]["detail"]
-            runtime._complete_owner(
-                store.get(HarnessTurn, harness_turn.id),
-                text,
-                ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            (
+                await runtime._complete_owner(
+                    (await store.get(HarnessTurn, harness_turn.id)),
+                    text,
+                    ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+                )
             )
             runtime._active.pop(session.id)
             await runtime.close_session(session.id)
             messages = [
                 item
-                for item in store.list_entities(
-                    ChatMessage, engagement_id=engagement.id, limit=100
+                for item in (
+                    await store.list_entities(
+                        ChatMessage, engagement_id=engagement.id, limit=100
+                    )
                 )
                 if item.session_id == chat.id and item.role == "assistant"
             ]
@@ -2713,11 +2825,13 @@ def test_harness_answers_cite_weak_search_results_only_when_they_use_them(tmp_pa
             "Who rolls back?", ["loose", "rollback"], "The data team."
         ) == ["chunk-loose"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_enables_available_knowledge_runtime_before_sources_exist(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+async def test_harness_enables_available_knowledge_runtime_before_sources_exist(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
     service = ChatService(store)
     runtime.bind_knowledge_retriever(
         lambda engagement_id, query, allow_local_only, token_budget: (
@@ -2730,7 +2844,7 @@ def test_harness_enables_available_knowledge_runtime_before_sources_exist(tmp_pa
         )
     )
 
-    _, _, harness_turn = runtime.prepare_chat(
+    _, _, harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -2741,23 +2855,25 @@ def test_harness_enables_available_knowledge_runtime_before_sources_exist(tmp_pa
     )
 
     assert harness_turn.metadata["knowledge_access"] is True
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
     assert {
         item["name"]
-        for item in runtime._gateway_catalog(session, turn=harness_turn)["tools"]
+        for item in (await runtime._gateway_catalog(session, turn=harness_turn))[
+            "tools"
+        ]
     } >= {"knowledge.list", "knowledge.search"}
 
 
-def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
+async def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         retrieval_calls = []
         runtime.bind_knowledge_retriever(
             lambda engagement_id, query, allow_local_only, token_budget: (
                 retrieval_calls.append(query)
             )
         )
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2767,11 +2883,11 @@ def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
             mcp_server_ids=[],
             include_knowledge=False,
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         assert turn.metadata["knowledge_access"] is False
         assert not {
             item["name"]
-            for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+            for item in (await runtime._gateway_catalog(session, turn=turn))["tools"]
         } & {"knowledge.list", "knowledge.search"}
 
         runtime._active[session.id] = SimpleNamespace(
@@ -2786,14 +2902,14 @@ def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
+async def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
     tmp_path,
 ):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-    normal_chat, _, normal_turn = runtime.prepare_chat(
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    normal_chat, _, normal_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -2802,14 +2918,16 @@ def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    normal_session = store.get(HarnessSession, normal_turn.harness_session_id)
+    normal_session = await store.get(HarnessSession, normal_turn.harness_session_id)
     assert not any(
         item["name"].startswith(
             ("nebula.settings.", "nebula.help.", "nebula.navigate.")
         )
-        for item in runtime._gateway_catalog(normal_session, turn=normal_turn)["tools"]
+        for item in (await runtime._gateway_catalog(normal_session, turn=normal_turn))[
+            "tools"
+        ]
     )
-    chat, chat_turn, turn = runtime.prepare_chat(
+    chat, chat_turn, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -2819,7 +2937,7 @@ def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
         mcp_server_ids=[],
         control_assistant=True,
     )
-    session = store.get(HarnessSession, turn.harness_session_id)
+    session = await store.get(HarnessSession, turn.harness_session_id)
     assert chat.metadata["control_assistant"] is True
     assert session.metadata["control_assistant"] is True
     assert session.metadata["command_runtime_enabled"] is (
@@ -2834,7 +2952,7 @@ def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
     assert turn.metadata["knowledge_access"] is False
     assert {
         item["name"]
-        for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+        for item in (await runtime._gateway_catalog(session, turn=turn))["tools"]
         if item["name"].startswith("nebula.")
     } == {
         "nebula.capabilities.search",
@@ -2842,7 +2960,7 @@ def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
         "nebula.capabilities.read",
         "nebula.capabilities.change",
     }
-    session = store.update(
+    session = await store.update(
         HarnessSession,
         session.id,
         {"metadata": {**session.metadata, "settings_grok_home_version": 1}},
@@ -2882,14 +3000,14 @@ def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
         ).decision
         assert denied.allowed is False
 
-    asyncio.run(verify_gateway_permission())
-    restricted = store.update(
+    (await verify_gateway_permission())
+    restricted = await store.update(
         HarnessSession,
         session.id,
         {"metadata": {**session.metadata, "harness_permission_mode": "unrestricted"}},
         expected_revision=session.revision,
     )
-    host_session = runtime._fork_session_for_execution_mode(
+    host_session = await runtime._fork_session_for_execution_mode(
         restricted, profile, execution_mode="host", reason="execution_mode_changed"
     )
     assert host_session.metadata["control_assistant"] is True
@@ -2899,7 +3017,7 @@ def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
     ] == HarnessNativeCapabilities().model_dump(mode="json")
     assert {
         item["name"]
-        for item in runtime._gateway_catalog(host_session, turn=turn)["tools"]
+        for item in (await runtime._gateway_catalog(host_session, turn=turn))["tools"]
         if item["name"].startswith("nebula.")
     } == {
         "nebula.capabilities.search",
@@ -2908,34 +3026,38 @@ def test_butler_harness_has_scoped_capability_gateway_and_isolated_session(
         "nebula.capabilities.change",
     }
     with pytest.raises(Exception, match="settings assistant"):
-        runtime.prepare_chat(
-            engagement_id=engagement.id,
-            profile_id=profile.id,
-            model=None,
-            prompt="borrow ordinary chat",
-            chat_session_id=chat.id,
-            harness_session_id=session.id,
-            mcp_server_ids=[],
-            control_assistant=False,
+        (
+            await runtime.prepare_chat(
+                engagement_id=engagement.id,
+                profile_id=profile.id,
+                model=None,
+                prompt="borrow ordinary chat",
+                chat_session_id=chat.id,
+                harness_session_id=session.id,
+                mcp_server_ids=[],
+                control_assistant=False,
+            )
         )
     with pytest.raises(Exception, match="settings assistant"):
-        runtime.prepare_chat(
-            engagement_id=engagement.id,
-            profile_id=profile.id,
-            model=None,
-            prompt="borrow settings tools",
-            chat_session_id=normal_chat.id,
-            harness_session_id=normal_session.id,
-            mcp_server_ids=[],
-            control_assistant=True,
+        (
+            await runtime.prepare_chat(
+                engagement_id=engagement.id,
+                profile_id=profile.id,
+                model=None,
+                prompt="borrow settings tools",
+                chat_session_id=normal_chat.id,
+                harness_session_id=normal_session.id,
+                mcp_server_ids=[],
+                control_assistant=True,
+            )
         )
 
 
-def test_knowledge_access_change_refreshes_fixed_gateway_catalog(tmp_path):
+async def test_knowledge_access_change_refreshes_fixed_gateway_catalog(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
         runtime.bind_knowledge_retriever(lambda *_args, **_kwargs: None)
-        _, _, disabled_turn = runtime.prepare_chat(
+        _, _, disabled_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -2945,14 +3067,14 @@ def test_knowledge_access_change_refreshes_fixed_gateway_catalog(tmp_path):
             mcp_server_ids=[],
             include_knowledge=False,
         )
-        session = store.get(HarnessSession, disabled_turn.harness_session_id)
+        session = await store.get(HarnessSession, disabled_turn.harness_session_id)
         first = await runtime._connection(session, disabled_turn)
         assert not {item["name"] for item in adapter.opens[0].gateway_tools} & {
             "knowledge.list",
             "knowledge.search",
         }
 
-        session = store.update(
+        session = await store.update(
             HarnessSession,
             session.id,
             {"external_session_id": "same-native-thread"},
@@ -2970,13 +3092,15 @@ def test_knowledge_access_change_refreshes_fixed_gateway_catalog(tmp_path):
         }
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_path):
+async def test_harness_gateway_queries_workspace_library_without_project_sources(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        item = store.create(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        item = await store.create(
             LibraryItem(
                 id="library-script",
                 name="shared_check.py",
@@ -3004,7 +3128,7 @@ def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_p
                 )
             )
         )
-        _, _, harness_turn = runtime.prepare_chat(
+        _, _, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3014,7 +3138,7 @@ def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_p
             mcp_server_ids=[],
             include_knowledge=True,
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
             turn_id=harness_turn.id,
             connection=None,
@@ -3035,13 +3159,13 @@ def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_p
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
+async def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        project_source = store.create(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        project_source = await store.create(
             KnowledgeSource(
                 id="project-guide",
                 engagement_id=engagement.id,
@@ -3056,21 +3180,23 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
                 },
             )
         )
-        other = store.create(Engagement(id="eng-other", name="Other"))
-        store.create(
-            KnowledgeSource(
-                id="other-guide",
-                engagement_id=other.id,
-                name="private.html",
-                source_type="html",
-                citation="https://private.example/guide",
-                metadata={
-                    "source_url": "https://private.example/guide",
-                    "chunks": [{"id": "private-chunk", "text": "Private"}],
-                },
+        other = await store.create(Engagement(id="eng-other", name="Other"))
+        (
+            await store.create(
+                KnowledgeSource(
+                    id="other-guide",
+                    engagement_id=other.id,
+                    name="private.html",
+                    source_type="html",
+                    citation="https://private.example/guide",
+                    metadata={
+                        "source_url": "https://private.example/guide",
+                        "chunks": [{"id": "private-chunk", "text": "Private"}],
+                    },
+                )
             )
         )
-        library_source = store.create(
+        library_source = await store.create(
             LibraryItem(
                 id="library-guide",
                 name="shared.md",
@@ -3094,7 +3220,7 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
                 )
             )
         )
-        _, chat_turn, harness_turn = runtime.prepare_chat(
+        _, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3104,8 +3230,8 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
             mcp_server_ids=[],
             include_knowledge=True,
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
-        catalog = runtime._gateway_catalog(session, turn=harness_turn)["tools"]
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = (await runtime._gateway_catalog(session, turn=harness_turn))["tools"]
         assert {
             item["name"] for item in catalog if item["name"].startswith("knowledge.")
         } == {"knowledge.list", "knowledge.search"}
@@ -3149,8 +3275,8 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
             },
         ]
         assert "private.example" not in json.dumps(payload)
-        latest_chat_turn = store.get(ChatTurn, chat_turn.id)
-        call = store.get(ToolCall, latest_chat_turn.tool_call_ids[0])
+        latest_chat_turn = await store.get(ChatTurn, chat_turn.id)
+        call = await store.get(ToolCall, latest_chat_turn.tool_call_ids[0])
         assert call.tool_name == "knowledge.list"
         assert call.status == ToolCallStatus.COMPLETE
         # Another project's sources are never reachable by argument.
@@ -3169,7 +3295,7 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-        _, _, disabled_turn = runtime.prepare_chat(
+        _, _, disabled_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3179,7 +3305,9 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
             mcp_server_ids=[],
             include_knowledge=False,
         )
-        disabled_session = store.get(HarnessSession, disabled_turn.harness_session_id)
+        disabled_session = await store.get(
+            HarnessSession, disabled_turn.harness_session_id
+        )
         runtime._active[disabled_session.id] = SimpleNamespace(
             turn_id=disabled_turn.id,
             connection=None,
@@ -3187,11 +3315,13 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
         )
         assert not any(
             tool["name"].startswith("knowledge.")
-            for tool in runtime._gateway_catalog(disabled_session, turn=disabled_turn)[
-                "tools"
-            ]
+            for tool in (
+                await runtime._gateway_catalog(disabled_session, turn=disabled_turn)
+            )["tools"]
         )
-        assert store.get(ChatTurn, disabled_turn.chat_turn_id).tool_call_ids == []
+        assert (
+            await store.get(ChatTurn, disabled_turn.chat_turn_id)
+        ).tool_call_ids == []
         denied = await runtime._gateway_call(
             disabled_session,
             "knowledge.list",
@@ -3204,13 +3334,13 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
         runtime._active.pop(disabled_session.id)
         await runtime.close_session(disabled_session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
+async def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        profile = store.update(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        profile = await store.update(
             HarnessProfile,
             profile.id,
             {"privacy": {"local_only": False, "permits_sensitive_data": True}},
@@ -3220,21 +3350,23 @@ def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
             ("shared", "Shared deployment marker PUBLIC_MARKER.", False),
             ("local", "Local deployment marker LOCAL_ONLY_SECRET.", True),
         ):
-            store.create(
-                KnowledgeSource(
-                    id=source_id,
-                    engagement_id=engagement.id,
-                    name=f"{source_id}.txt",
-                    source_type="text/plain",
-                    metadata={
-                        "local_only": local_only,
-                        "chunks": [
-                            {
-                                "id": f"{source_id}-chunk",
-                                "text": text,
-                            }
-                        ],
-                    },
+            (
+                await store.create(
+                    KnowledgeSource(
+                        id=source_id,
+                        engagement_id=engagement.id,
+                        name=f"{source_id}.txt",
+                        source_type="text/plain",
+                        metadata={
+                            "local_only": local_only,
+                            "chunks": [
+                                {
+                                    "id": f"{source_id}-chunk",
+                                    "text": text,
+                                }
+                            ],
+                        },
+                    )
                 )
             )
         service = ChatService(store)
@@ -3248,7 +3380,7 @@ def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
                 )
             )
         )
-        _, _, harness_turn = runtime.prepare_chat(
+        _, _, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3260,7 +3392,7 @@ def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
             allow_cloud_knowledge=True,
             allow_agent_messaging=False,
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
             turn_id=harness_turn.id, connection=None, task=None
         )
@@ -3280,11 +3412,11 @@ def test_remote_harness_knowledge_search_excludes_local_only_sources(tmp_path):
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_gateway_catalog_paginates_below_ipc_limit(tmp_path, monkeypatch):
-    store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+async def test_harness_gateway_catalog_paginates_below_ipc_limit(tmp_path, monkeypatch):
+    store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
     tools = [
         McpToolSnapshot(
             name=f"read_{index}",
@@ -3301,13 +3433,13 @@ def test_harness_gateway_catalog_paginates_below_ipc_limit(tmp_path, monkeypatch
         )
         for index in range(12)
     ]
-    mcp = store.update(
+    mcp = await store.update(
         McpServerProfile,
         mcp.id,
         {"capabilities": McpCapabilitySnapshot(checked_at=utc_now(), tools=tools)},
         expected_revision=mcp.revision,
     )
-    _, _, harness_turn = runtime.prepare_chat(
+    _, _, harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -3316,15 +3448,15 @@ def test_harness_gateway_catalog_paginates_below_ipc_limit(tmp_path, monkeypatch
         harness_session_id=None,
         mcp_server_ids=[mcp.id],
     )
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
-    complete = runtime._gateway_catalog(session)["tools"]
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
+    complete = (await runtime._gateway_catalog(session))["tools"]
     largest = max(len(json.dumps(item).encode()) for item in complete)
     monkeypatch.setattr("nebula.v3.harnesses.GATEWAY_CATALOG_PAGE_BYTES", largest + 512)
 
     names: list[str] = []
     cursor = None
     while True:
-        page = runtime._gateway_catalog(
+        page = await runtime._gateway_catalog(
             session, {"cursor": cursor} if cursor is not None else {}
         )
         names.extend(item["name"] for item in page["tools"])
@@ -3335,7 +3467,7 @@ def test_harness_gateway_catalog_paginates_below_ipc_limit(tmp_path, monkeypatch
     assert names == [item["name"] for item in complete]
 
 
-def test_gateway_unix_ipc_accepts_messages_above_streamreader_default() -> None:
+async def test_gateway_unix_ipc_accepts_messages_above_streamreader_default() -> None:
     async def scenario() -> None:
         description = "x" * 100_000
         gateway = McpGatewaySession(
@@ -3357,10 +3489,12 @@ def test_gateway_unix_ipc_accepts_messages_above_streamreader_default() -> None:
             await client.close()
             await gateway.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_gateway_launch_uses_python_script_outside_frozen_build(monkeypatch) -> None:
+async def test_gateway_launch_uses_python_script_outside_frozen_build(
+    monkeypatch,
+) -> None:
     async def scenario() -> None:
         monkeypatch.delattr(sys, "frozen", raising=False)
         gateway = McpGatewaySession(
@@ -3383,10 +3517,10 @@ def test_gateway_launch_uses_python_script_outside_frozen_build(monkeypatch) -> 
         finally:
             await gateway.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_gateway_launch_uses_core_command_in_frozen_build(monkeypatch) -> None:
+async def test_gateway_launch_uses_core_command_in_frozen_build(monkeypatch) -> None:
     async def scenario() -> None:
         monkeypatch.setattr(sys, "frozen", True, raising=False)
         gateway = McpGatewaySession(
@@ -3408,13 +3542,13 @@ def test_gateway_launch_uses_core_command_in_frozen_build(monkeypatch) -> None:
         finally:
             await gateway.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_chat_gateway_serializes_concurrent_action_calls(tmp_path):
+async def test_chat_gateway_serializes_concurrent_action_calls(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-        _, _, harness_turn = runtime.prepare_chat(
+        store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+        _, _, harness_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3423,10 +3557,10 @@ def test_chat_gateway_serializes_concurrent_action_calls(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
         selected = next(
             item["name"]
-            for item in runtime._gateway_catalog(session)["tools"]
+            for item in (await runtime._gateway_catalog(session))["tools"]
             if item["name"].endswith("read_file")
         )
         runtime._active[session.id] = SimpleNamespace(
@@ -3454,13 +3588,13 @@ def test_chat_gateway_serializes_concurrent_action_calls(tmp_path):
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
+async def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-        chat, _, turn = runtime.prepare_chat(
+        store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3483,9 +3617,8 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
         assert (await safe.decision).allowed is True
         assert safe.approval_id is None
         assert (
-            store.get(ToolCall, safe.tool_call_id or "").status
-            == ToolCallStatus.APPROVED
-        )
+            await store.get(ToolCall, safe.tool_call_id or "")
+        ).status == ToolCallStatus.APPROVED
 
         destructive = await runtime._request_permission(
             turn.id,
@@ -3498,10 +3631,10 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
                 arguments={"path": "evidence.txt"},
             ),
         )
-        approval = store.get(Approval, destructive.approval_id or "")
+        approval = await store.get(Approval, destructive.approval_id or "")
         assert approval.exact_request["argument_editing"] is False
         assert approval.status == ApprovalStatus.PENDING
-        decided = store.update(
+        decided = await store.update(
             Approval,
             approval.id,
             {"status": ApprovalStatus.APPROVED, "decided_by": "operator"},
@@ -3527,14 +3660,16 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
         assert unknown.approval_id is None
 
         # Exact deny takes precedence even for an otherwise safe tool.
-        session = store.get(HarnessSession, chat.harness_session_id or "")
+        session = await store.get(HarnessSession, chat.harness_session_id or "")
         snapshot = McpServerProfile.model_validate(session.mcp_snapshot[0])
         snapshot.tool_overrides = {"read_file": McpApprovalMode.DENY}
-        store.update(
-            HarnessSession,
-            session.id,
-            {"mcp_snapshot": [snapshot.model_dump(mode="json")]},
-            expected_revision=session.revision,
+        (
+            await store.update(
+                HarnessSession,
+                session.id,
+                {"mcp_snapshot": [snapshot.model_dump(mode="json")]},
+                expected_revision=session.revision,
+            )
         )
         exact_deny = await runtime._request_permission(
             turn.id,
@@ -3548,28 +3683,30 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
         )
         assert (await exact_deny.decision).allowed is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_permission_bypass_is_frozen_and_keeps_unknown_tools_denied(tmp_path):
+async def test_harness_permission_bypass_is_frozen_and_keeps_unknown_tools_denied(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-        scope = store.create(
+        store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+        scope = await store.create(
             ScopePolicy(engagement_id=engagement.id, bypass_permissions=True)
         )
-        engagement = store.update(
+        engagement = await store.update(
             Engagement,
             engagement.id,
             {"scope_policy_id": scope.id},
             expected_revision=engagement.revision,
         )
-        mcp = store.update(
+        mcp = await store.update(
             McpServerProfile,
             mcp.id,
             {"tool_overrides": {"read_file": McpApprovalMode.DENY}},
             expected_revision=mcp.revision,
         )
-        chat, _, turn = runtime.prepare_chat(
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3578,7 +3715,7 @@ def test_harness_permission_bypass_is_frozen_and_keeps_unknown_tools_denied(tmp_
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        session = store.get(HarnessSession, chat.harness_session_id or "")
+        session = await store.get(HarnessSession, chat.harness_session_id or "")
         assert session.metadata["scope_snapshot"]["bypass_permissions"] is True
 
         def permission(vendor_id: str, server: str = "workspace"):
@@ -3599,15 +3736,17 @@ def test_harness_permission_bypass_is_frozen_and_keeps_unknown_tools_denied(tmp_
         )
         assert (await unknown.decision).allowed is False
 
-        store.update(
-            ScopePolicy,
-            scope.id,
-            {"bypass_permissions": False},
-            expected_revision=scope.revision,
+        (
+            await store.update(
+                ScopePolicy,
+                scope.id,
+                {"bypass_permissions": False},
+                expected_revision=scope.revision,
+            )
         )
         frozen = await runtime._request_permission(turn.id, permission("frozen"))
         assert (await frozen.decision).allowed is True
-        new_chat, _, new_turn = runtime.prepare_chat(
+        new_chat, _, new_turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3616,19 +3755,19 @@ def test_harness_permission_bypass_is_frozen_and_keeps_unknown_tools_denied(tmp_
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        new_session = store.get(HarnessSession, new_chat.harness_session_id or "")
+        new_session = await store.get(HarnessSession, new_chat.harness_session_id or "")
         assert new_session.metadata["scope_snapshot"]["bypass_permissions"] is False
         denied = await runtime._request_permission(new_turn.id, permission("bounded"))
         assert (await denied.decision).allowed is False
         assert (await denied.decision).rule == "mcp_approval_deny"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_native_command_policy_denies_legacy_host_shell_capabilities(tmp_path):
+async def test_native_command_policy_denies_legacy_host_shell_capabilities(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        profile = store.update(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        profile = await store.update(
             HarnessProfile,
             profile.id,
             {
@@ -3639,7 +3778,7 @@ def test_native_command_policy_denies_legacy_host_shell_capabilities(tmp_path):
             },
             expected_revision=profile.revision,
         )
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3663,38 +3802,42 @@ def test_native_command_policy_denies_legacy_host_shell_capabilities(tmp_path):
         decision = await ticket.decision
         assert decision.allowed is False
         assert "not enabled" in decision.reason
-        denied_call = store.get(ToolCall, ticket.tool_call_id)
+        denied_call = await store.get(ToolCall, ticket.tool_call_id)
         assert denied_call.status == ToolCallStatus.DENIED
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         frozen = HarnessNativeCapabilities.model_validate(
             session.metadata["native_capabilities"]
         )
         assert frozen.shell is False
         assert frozen.workspace_access == HarnessWorkspaceAccess.NONE
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
+async def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        store.create(
-            AutomationProjectPolicy(
-                id=f"automation:{engagement.id}",
-                engagement_id=engagement.id,
-                approval_policy="never",
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        (
+            await store.create(
+                AutomationProjectPolicy(
+                    id=f"automation:{engagement.id}",
+                    engagement_id=engagement.id,
+                    approval_policy="never",
+                )
             )
         )
         # Destructive actions always need approval; force ASK on a local read
         # to exercise the project's no-prompt override without that boundary.
-        mcp = store.get(McpServerProfile, "mcp-a")
-        store.update(
-            McpServerProfile,
-            mcp.id,
-            {"tool_overrides": {"read_file": McpApprovalMode.ASK}},
-            expected_revision=mcp.revision,
+        mcp = await store.get(McpServerProfile, "mcp-a")
+        (
+            await store.update(
+                McpServerProfile,
+                mcp.id,
+                {"tool_overrides": {"read_file": McpApprovalMode.ASK}},
+                expected_revision=mcp.revision,
+            )
         )
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3720,20 +3863,21 @@ def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
         assert decision.allowed is True
         assert decision.reason == "Approved by the Project's no-prompt tool policy"
         assert ticket.approval_id is None
-        assert store.list_entities(Approval, engagement_id=engagement.id) == []
+        assert (await store.list_entities(Approval, engagement_id=engagement.id)) == []
         assert (
-            store.get(ToolCall, ticket.tool_call_id or "").status
-            == ToolCallStatus.APPROVED
-        )
+            await store.get(ToolCall, ticket.tool_call_id or "")
+        ).status == ToolCallStatus.APPROVED
 
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         snapshot = McpServerProfile.model_validate(session.mcp_snapshot[0])
         snapshot.tool_overrides = {"read_file": McpApprovalMode.DENY}
-        store.update(
-            HarnessSession,
-            session.id,
-            {"mcp_snapshot": [snapshot.model_dump(mode="json")]},
-            expected_revision=session.revision,
+        (
+            await store.update(
+                HarnessSession,
+                session.id,
+                {"mcp_snapshot": [snapshot.model_dump(mode="json")]},
+                expected_revision=session.revision,
+            )
         )
         denied = await runtime._request_permission(
             turn.id,
@@ -3749,13 +3893,15 @@ def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
         assert (await asyncio.wait_for(denied.decision, timeout=1)).allowed is False
         assert denied.approval_id is None
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
+async def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path, fail=True)
-        _, chat_turn, turn = runtime.prepare_chat(
+        store, engagement, profile, _, adapter, runtime = await _runtime(
+            tmp_path, fail=True
+        )
+        _, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3766,9 +3912,9 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
         )
         events = [event async for event in runtime.stream_turn(turn.id)]
         assert events[-1].type == "error"
-        failed = store.get(HarnessTurn, turn.id)
+        failed = await store.get(HarnessTurn, turn.id)
         assert failed.status == HarnessTurnStatus.INTERRUPTED
-        assert store.get(ChatTurn, chat_turn.id).status.value == "interrupted"
+        assert (await store.get(ChatTurn, chat_turn.id)).status.value == "interrupted"
         assert len(adapter.connections[0].prompts) == 1
         assert (
             "BEGIN NEBULA TURN CAPABILITY STATE"
@@ -3781,11 +3927,13 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
 
         # A later Core instance reconciles uncertain durable state but never opens
         # a connection or reissues the objective.
-        store.update(
-            HarnessTurn,
-            failed.id,
-            {"status": HarnessTurnStatus.RUNNING, "completed_at": None},
-            expected_revision=failed.revision,
+        (
+            await store.update(
+                HarnessTurn,
+                failed.id,
+                {"status": HarnessTurnStatus.RUNNING, "completed_at": None},
+                expected_revision=failed.revision,
+            )
         )
         second_adapter = FakeAdapter()
         restarted = HarnessRuntimeService(
@@ -3795,16 +3943,22 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
             adapter_factory=lambda _: second_adapter,
         )
         await restarted.startup()
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.INTERRUPTED
         assert second_adapter.opens == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_transport_loss_discards_the_dead_connection_before_the_next_turn(tmp_path):
+async def test_transport_loss_discards_the_dead_connection_before_the_next_turn(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path, fail=True)
-        chat, _, turn = runtime.prepare_chat(
+        store, engagement, profile, _, adapter, runtime = await _runtime(
+            tmp_path, fail=True
+        )
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3815,7 +3969,7 @@ def test_transport_loss_discards_the_dead_connection_before_the_next_turn(tmp_pa
         )
         events = [event async for event in runtime.stream_turn(turn.id)]
         assert events[-1].type == "error"
-        failed = store.get(HarnessTurn, turn.id)
+        failed = await store.get(HarnessTurn, turn.id)
         assert failed.status == HarnessTurnStatus.INTERRUPTED
         dead = adapter.connections[0]
         assert dead.closed is True
@@ -3824,7 +3978,7 @@ def test_transport_loss_discards_the_dead_connection_before_the_next_turn(tmp_pa
         # The vendor process is gone. The retry must open a fresh connection
         # instead of writing to the dead one forever.
         adapter.fail = False
-        _, follow_up_owner, follow_up = runtime.prepare_chat(
+        _, follow_up_owner, follow_up = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3835,18 +3989,22 @@ def test_transport_loss_discards_the_dead_connection_before_the_next_turn(tmp_pa
         )
         await runtime.start_chat_turn(follow_up.id)
 
-        assert store.get(HarnessTurn, follow_up.id).status == HarnessTurnStatus.COMPLETE
-        assert store.get(ChatTurn, follow_up_owner.id).status.value == "complete"
+        assert (
+            await store.get(HarnessTurn, follow_up.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(ChatTurn, follow_up_owner.id)
+        ).status.value == "complete"
         assert len(adapter.connections) == 2
         assert adapter.connections[1] is not dead
         assert len(dead.prompts) == 1
         assert len(adapter.connections[1].prompts) == 1
         assert "Retry after the transport loss" in adapter.connections[1].prompts[0]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_next_turn_reopens_a_connection_that_reports_disconnected(tmp_path):
+async def test_next_turn_reopens_a_connection_that_reports_disconnected(tmp_path):
     class ObservedConnection(FakeConnection):
         state = "connected"
 
@@ -3862,10 +4020,10 @@ def test_next_turn_reopens_a_connection_that_reports_disconnected(tmp_path):
             return connection
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         adapter = ObservedAdapter()
         runtime.adapter_factory = lambda _: adapter
-        chat, _, turn = runtime.prepare_chat(
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3875,12 +4033,14 @@ def test_next_turn_reopens_a_connection_that_reports_disconnected(tmp_path):
             mcp_server_ids=[],
         )
         await runtime.start_chat_turn(turn.id)
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
         first = adapter.connections[0]
 
         # The vendor process died while the session was idle.
         first.state = "disconnected"
-        _, _, follow_up = runtime.prepare_chat(
+        _, _, follow_up = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3891,17 +4051,19 @@ def test_next_turn_reopens_a_connection_that_reports_disconnected(tmp_path):
         )
         await runtime.start_chat_turn(follow_up.id)
 
-        assert store.get(HarnessTurn, follow_up.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, follow_up.id)
+        ).status == HarnessTurnStatus.COMPLETE
         assert first.closed is True
         assert len(adapter.connections) == 2
         assert len(first.prompts) == 1
         assert "Second turn" in adapter.connections[1].prompts[0]
         assert runtime._connections[turn.harness_session_id] is adapter.connections[1]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_stop_closes_a_connection_that_never_acknowledges_interrupt(
+async def test_stop_closes_a_connection_that_never_acknowledges_interrupt(
     tmp_path, monkeypatch
 ):
     class HungConnection(FakeConnection):
@@ -3924,10 +4086,10 @@ def test_stop_closes_a_connection_that_never_acknowledges_interrupt(
 
     async def scenario() -> None:
         monkeypatch.setattr(harness_module, "HARNESS_INTERRUPT_TIMEOUT_SECONDS", 0.05)
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         adapter = HungAdapter()
         runtime.adapter_factory = lambda _: adapter
-        _, chat_turn, turn = runtime.prepare_chat(
+        _, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3936,9 +4098,11 @@ def test_stop_closes_a_connection_that_never_acknowledges_interrupt(
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        task = runtime.start_chat_turn(turn.id)
+        task = await runtime.start_chat_turn(turn.id)
         for _ in range(100):
-            if store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.RUNNING:
+            if (
+                await store.get(HarnessTurn, turn.id)
+            ).status == HarnessTurnStatus.RUNNING:
                 break
             await asyncio.sleep(0.01)
 
@@ -3951,30 +4115,30 @@ def test_stop_closes_a_connection_that_never_acknowledges_interrupt(
             pass
 
         assert stopped.status == HarnessTurnStatus.CANCELLED
-        assert store.get(ChatTurn, chat_turn.id).status.value == "cancelled"
+        assert (await store.get(ChatTurn, chat_turn.id)).status.value == "cancelled"
         connection = adapter.connections[0]
         assert connection.closed is True
         assert turn.harness_session_id not in runtime._connections
         assert turn.harness_session_id not in runtime._active
-        assert runtime.session_activity(turn.harness_session_id).busy is False
+        assert (await runtime.session_activity(turn.harness_session_id)).busy is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn(
+async def test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn(
     tmp_path, monkeypatch
 ):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
         original = runtime._persist_activity
 
-        def failing_persist(turn, session, event):
+        async def failing_persist(turn, session, event):
             if event.type == "message_delta":
                 raise RuntimeError("activity store unavailable")
-            return original(turn, session, event)
+            return await original(turn, session, event)
 
         monkeypatch.setattr(runtime, "_persist_activity", failing_persist)
-        _, chat_turn, turn = runtime.prepare_chat(
+        _, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -3987,21 +4151,25 @@ def test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn(
         events = [event async for event in runtime.stream_turn(turn.id)]
 
         assert events[-1].type == "error"
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
-        assert store.get(ChatTurn, chat_turn.id).status.value == "interrupted"
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.INTERRUPTED
+        assert (await store.get(ChatTurn, chat_turn.id)).status.value == "interrupted"
         # The vendor was still executing with no consumer; it must be told to stop.
         assert adapter.connections[0].interrupted is True
         # A Nebula-side failure does not condemn a healthy vendor connection.
         assert runtime._connections[turn.harness_session_id] is adapter.connections[0]
         assert adapter.connections[0].closed is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tmp_path):
+async def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
-        chat, _, turn = runtime.prepare_chat(
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -4010,17 +4178,17 @@ def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tm
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         assert not any(
             item["name"] == "browser.companion"
-            for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+            for item in (await runtime._gateway_catalog(session, turn=turn))["tools"]
         )
         first = await runtime._connection(session, turn)
         assert not any(
             tool["name"] == "browser.companion"
             for tool in adapter.opens[0].gateway_tools
         )
-        session = store.update(
+        session = await store.update(
             HarnessSession,
             session.id,
             {
@@ -4033,7 +4201,7 @@ def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tm
         )
         assert any(
             item["name"] == "browser.companion"
-            for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+            for item in (await runtime._gateway_catalog(session, turn=turn))["tools"]
         )
         second = await runtime._connection(session, turn)
         assert second is not first and first.closed
@@ -4044,7 +4212,7 @@ def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tm
         )
         assert await runtime._connection(session, turn) is second
         assert len(adapter.opens) == 2
-        session = store.update(
+        session = await store.update(
             HarnessSession,
             session.id,
             {"metadata": {**session.metadata, "browser_companion_session_id": None}},
@@ -4055,19 +4223,19 @@ def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tm
             tool["name"] == "browser.companion"
             for tool in adapter.opens[-1].gateway_tools
         )
-        assert store.get(ChatSession, chat.id).harness_session_id == session.id
+        assert (await store.get(ChatSession, chat.id)).harness_session_id == session.id
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("attached", [True, False])
-def test_linked_retry_refreshes_current_browser_binding(
+async def test_linked_retry_refreshes_current_browser_binding(
     tmp_path, monkeypatch, attached
 ):
     async def scenario():
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        chat, owner, turn = runtime.prepare_chat(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        chat, owner, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -4076,10 +4244,10 @@ def test_linked_retry_refreshes_current_browser_binding(
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        identity = store.create(
+        identity = await store.create(
             BrowserIdentity(engagement_id=engagement.id, name="Browser")
         )
-        browser = store.create(
+        browser = await store.create(
             BrowserSession(
                 engagement_id=engagement.id,
                 identity_id=identity.id,
@@ -4090,24 +4258,28 @@ def test_linked_retry_refreshes_current_browser_binding(
                 },
             )
         )
-        store.update(
-            HarnessTurn,
-            turn.id,
-            {
-                "status": HarnessTurnStatus.CANCELLED,
-                "metadata": {
-                    **turn.metadata,
-                    "browser_companion_session_id": browser.id,
+        (
+            await store.update(
+                HarnessTurn,
+                turn.id,
+                {
+                    "status": HarnessTurnStatus.CANCELLED,
+                    "metadata": {
+                        **turn.metadata,
+                        "browser_companion_session_id": browser.id,
+                    },
                 },
-            },
-            expected_revision=turn.revision,
+                expected_revision=turn.revision,
+            )
         )
 
-        store.update(
-            ChatTurn,
-            owner.id,
-            {"status": ChatTurnStatus.CANCELLED},
-            expected_revision=owner.revision,
+        (
+            await store.update(
+                ChatTurn,
+                owner.id,
+                {"status": ChatTurnStatus.CANCELLED},
+                expected_revision=owner.revision,
+            )
         )
 
         async def drive(_):
@@ -4116,8 +4288,8 @@ def test_linked_retry_refreshes_current_browser_binding(
         monkeypatch.setattr(runtime, "_drive_chat_turn", drive)
         replacement = await runtime.retry_turn(turn.id)
         await runtime._chat_turn_tasks[replacement.id]
-        current = store.get(HarnessTurn, replacement.id)
-        session = store.get(HarnessSession, current.harness_session_id)
+        current = await store.get(HarnessTurn, replacement.id)
+        session = await store.get(HarnessSession, current.harness_session_id)
         assert current.chat_session_id == chat.id
         assert current.metadata.get("browser_companion_session_id") == (
             browser.id if attached else None
@@ -4126,21 +4298,23 @@ def test_linked_retry_refreshes_current_browser_binding(
             browser.id if attached else None
         )
         assert current.metadata["retry_of_turn_id"] == turn.id
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.CANCELLED
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.CANCELLED
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_browser_gateway_rechecks_conversation_binding_before_execution(
+async def test_browser_gateway_rechecks_conversation_binding_before_execution(
     tmp_path, monkeypatch
 ):
     from nebula.v3.browser_companion import BrowserCompanion
     from nebula.v3.browser_engine import BrowserEngineRegistry
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        chat, _, turn = runtime.prepare_chat(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -4149,10 +4323,10 @@ def test_browser_gateway_rechecks_conversation_binding_before_execution(
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        identity = store.create(
+        identity = await store.create(
             BrowserIdentity(engagement_id=engagement.id, name="Browser")
         )
-        browser = store.create(
+        browser = await store.create(
             BrowserSession(
                 engagement_id=engagement.id,
                 identity_id=identity.id,
@@ -4160,8 +4334,8 @@ def test_browser_gateway_rechecks_conversation_binding_before_execution(
                 metadata={"browser_companion_version": 1, "conversation_id": chat.id},
             )
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
-        session = store.update(
+        session = await store.get(HarnessSession, turn.harness_session_id)
+        session = await store.update(
             HarnessSession,
             session.id,
             {
@@ -4172,7 +4346,7 @@ def test_browser_gateway_rechecks_conversation_binding_before_execution(
             },
         )
         monkeypatch.setattr(runtime, "_active_gateway_turn", lambda _: turn)
-        BrowserCompanion(store, BrowserEngineRegistry()).bind(browser.id, None)
+        (await BrowserCompanion(store, BrowserEngineRegistry()).bind(browser.id, None))
         response = await runtime._gateway_call(
             session,
             "browser.companion",
@@ -4187,22 +4361,22 @@ def test_browser_gateway_rechecks_conversation_binding_before_execution(
         assert failure["side_effects"] == "none"
         assert failure["retry_safe"] is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_browser_gateway_refuses_paused_control_as_a_denial_before_execution(
+async def test_browser_gateway_refuses_paused_control_as_a_denial_before_execution(
     tmp_path, monkeypatch
 ):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        scope = store.create(ScopePolicy(engagement_id=engagement.id))
-        engagement = store.update(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        scope = await store.create(ScopePolicy(engagement_id=engagement.id))
+        engagement = await store.update(
             Engagement,
             engagement.id,
             {"scope_policy_id": scope.id},
             expected_revision=engagement.revision,
         )
-        chat, _, turn = runtime.prepare_chat(
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -4211,10 +4385,10 @@ def test_browser_gateway_refuses_paused_control_as_a_denial_before_execution(
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        identity = store.create(
+        identity = await store.create(
             BrowserIdentity(engagement_id=engagement.id, name="Browser")
         )
-        browser = store.create(
+        browser = await store.create(
             BrowserSession(
                 engagement_id=engagement.id,
                 identity_id=identity.id,
@@ -4226,8 +4400,8 @@ def test_browser_gateway_refuses_paused_control_as_a_denial_before_execution(
                 },
             )
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
-        session = store.update(
+        session = await store.get(HarnessSession, turn.harness_session_id)
+        session = await store.update(
             HarnessSession,
             session.id,
             {
@@ -4252,10 +4426,10 @@ def test_browser_gateway_refuses_paused_control_as_a_denial_before_execution(
         assert failure["side_effects"] == "none"
         assert failure["retry_safe"] is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
+async def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
     tmp_path, monkeypatch
 ):
     """Control paused during the change's page check is a denial; nothing ran.
@@ -4272,15 +4446,15 @@ def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
     from nebula.v3.domain import CompanionAction, ToolCall as PersistedToolCall
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        scope = store.create(ScopePolicy(engagement_id=engagement.id))
-        engagement = store.update(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        scope = await store.create(ScopePolicy(engagement_id=engagement.id))
+        engagement = await store.update(
             Engagement,
             engagement.id,
             {"scope_policy_id": scope.id},
             expected_revision=engagement.revision,
         )
-        chat, _, turn = runtime.prepare_chat(
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -4289,10 +4463,10 @@ def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        identity = store.create(
+        identity = await store.create(
             BrowserIdentity(engagement_id=engagement.id, name="Browser")
         )
-        browser = store.create(
+        browser = await store.create(
             BrowserSession(
                 engagement_id=engagement.id,
                 identity_id=identity.id,
@@ -4304,8 +4478,8 @@ def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
                 },
             )
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
-        session = store.update(
+        session = await store.get(HarnessSession, turn.harness_session_id)
+        session = await store.update(
             HarnessSession,
             session.id,
             {
@@ -4322,8 +4496,10 @@ def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
                 sent.append(payload["operation"])
                 if payload["operation"] == "capture":
                     # The operator pauses control while Core reads the page.
-                    BrowserCompanion(store, BrowserEngineRegistry()).takeover(
-                        browser.id, True
+                    (
+                        await BrowserCompanion(store, BrowserEngineRegistry()).takeover(
+                            browser.id, True
+                        )
                     )
                 return httpx.Response(
                     200,
@@ -4368,20 +4544,20 @@ def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
         # Only the page was read; no change was proposed, and the call was
         # refused before it was marked running.
         assert sent == ["tabs", "capture"]
-        assert store.list_entities(CompanionAction) == []
-        [call] = store.list_entities(PersistedToolCall)
+        assert (await store.list_entities(CompanionAction)) == []
+        [call] = await store.list_entities(PersistedToolCall)
         assert call.status == ToolCallStatus.DENIED
         assert call.started_at is None
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
+async def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         adapter = FailingOpenAdapter()
         runtime.adapter_factory = lambda _: adapter
-        _, chat_turn, turn = runtime.prepare_chat(
+        _, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -4396,21 +4572,21 @@ def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
         assert [event.type for event in events] == ["status", "error"]
         assert events[0].payload["phase"] == "connecting"
         assert "launch failed" in (events[1].message or "")
-        failed = store.get(HarnessTurn, turn.id)
+        failed = await store.get(HarnessTurn, turn.id)
         assert failed.status == HarnessTurnStatus.INTERRUPTED
-        assert store.get(ChatTurn, chat_turn.id).status.value == "interrupted"
-        activity = runtime.session_activity(failed.harness_session_id)
+        assert (await store.get(ChatTurn, chat_turn.id)).status.value == "interrupted"
+        activity = await runtime.session_activity(failed.harness_session_id)
         assert activity.busy is False
         assert adapter.opens
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_explicit_stdio_mcp_probe_validates_schema_and_closes_process(tmp_path):
+async def test_explicit_stdio_mcp_probe_validates_schema_and_closes_process(tmp_path):
     fixture = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
     store = NebulaStore(tmp_path / "mcp.db")
-    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = await store.create(
         McpServerProfile(
             id="mcp-stdio",
             name="fixture",
@@ -4427,7 +4603,7 @@ def test_explicit_stdio_mcp_probe_validates_schema_and_closes_process(tmp_path):
         workspace_resolver=lambda _: tmp_path,
     )
 
-    report = asyncio.run(service.probe(profile.id, engagement_id=engagement.id))
+    report = await service.probe(profile.id, engagement_id=engagement.id)
 
     assert report.compatible is True
     assert report.capabilities.resources is True
@@ -4437,7 +4613,7 @@ def test_explicit_stdio_mcp_probe_validates_schema_and_closes_process(tmp_path):
     assert tool.annotations_complete is True
     assert tool.read_only is True
 
-    bad = store.create(
+    bad = await store.create(
         profile.model_copy(
             update={
                 "id": "mcp-bad-schema",
@@ -4446,12 +4622,12 @@ def test_explicit_stdio_mcp_probe_validates_schema_and_closes_process(tmp_path):
             }
         )
     )
-    failed = asyncio.run(service.probe(bad.id, engagement_id=engagement.id))
+    failed = await service.probe(bad.id, engagement_id=engagement.id)
     assert failed.compatible is False
     assert "invalid schema" in (failed.detail or "")
 
 
-def test_streamable_http_mcp_probe_injects_bearer_and_closes_session(tmp_path):
+async def test_streamable_http_mcp_probe_injects_bearer_and_closes_session(tmp_path):
     observed: list[tuple[str, str | None]] = []
     deleted = threading.Event()
 
@@ -4521,7 +4697,7 @@ def test_streamable_http_mcp_probe_injects_bearer_and_closes_session(tmp_path):
         )
     )
     store = NebulaStore(tmp_path / "mcp-http.db")
-    profile = store.create(
+    profile = await store.create(
         McpServerProfile(
             id="mcp-http",
             name="http-fixture",
@@ -4538,7 +4714,7 @@ def test_streamable_http_mcp_probe_injects_bearer_and_closes_session(tmp_path):
         workspace_resolver=lambda _: tmp_path,
     )
     try:
-        report = asyncio.run(service.probe(profile.id))
+        report = await service.probe(profile.id)
     finally:
         server.shutdown()
         server.server_close()
@@ -4549,8 +4725,8 @@ def test_streamable_http_mcp_probe_injects_bearer_and_closes_session(tmp_path):
     assert deleted.is_set()
 
 
-def test_harness_transport_error_keeps_one_reference_from_ledger_to_api(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path, fail=True)
+async def test_harness_transport_error_keeps_one_reference_from_ledger_to_api(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path, fail=True)
     manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
     app = create_app(
         store,
@@ -4563,8 +4739,8 @@ def test_harness_transport_error_keeps_one_reference_from_ledger_to_api(tmp_path
         "X-Nebula-Operation-ID": "op_harness_transport_test",
     }
     try:
-        with TestClient(app) as client:
-            response = client.post(
+        async with TestClient(app) as client:
+            response = await client.post(
                 "/api/v1/chat/completions",
                 headers=headers,
                 json={
@@ -4582,10 +4758,10 @@ def test_harness_transport_error_keeps_one_reference_from_ledger_to_api(tmp_path
             assert "uncertain transport loss" in envelope["operator_detail"]
             assert envelope["remediation_id"] == "harnesses.transport_closed"
 
-            [turn] = store.list_entities(
+            [turn] = await store.list_entities(
                 HarnessTurn, engagement_id=engagement.id, limit=100
             )
-            replay = client.get(
+            replay = await client.get(
                 f"/api/v1/harness-turns/{turn.id}/events", headers=headers
             )
             assert replay.status_code == 200
@@ -4595,10 +4771,10 @@ def test_harness_transport_error_keeps_one_reference_from_ledger_to_api(tmp_path
             assert error_event["error_id"] == envelope["error_id"]
             assert error_event["reason_code"] == "transport_closed"
             assert error_event["operation_id"] == "op_harness_transport_test"
-            durable_turn = store.get(HarnessTurn, turn.id)
+            durable_turn = await store.get(HarnessTurn, turn.id)
             assert durable_turn.metadata["diagnostic_error_id"] == envelope["error_id"]
 
-            incident = client.get(
+            incident = await client.get(
                 f"/api/v1/diagnostics/incidents/{envelope['error_id']}",
                 headers=headers,
             )
@@ -4608,8 +4784,8 @@ def test_harness_transport_error_keeps_one_reference_from_ledger_to_api(tmp_path
         manager.close()
 
 
-def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
-    store, engagement, profile, mcp, adapter, runtime = _runtime(tmp_path)
+async def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
+    store, engagement, profile, mcp, adapter, runtime = await _runtime(tmp_path)
     app = create_app(
         store,
         auth_token="test-token",
@@ -4617,8 +4793,8 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
     )
     headers = {"Authorization": "Bearer test-token"}
 
-    with TestClient(app) as client:
-        created_profile = client.post(
+    async with TestClient(app) as client:
+        created_profile = await client.post(
             "/api/v1/harnesses",
             headers=headers,
             json={
@@ -4639,21 +4815,22 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         assert created_native["shell"] is False
         assert created_native["web_search"] is True
 
-        catalog = client.get("/api/v1/harness-catalog", headers=headers)
+        catalog = await client.get("/api/v1/harness-catalog", headers=headers)
         assert catalog.status_code == 200
         assert [item["kind"] for item in catalog.json()] == [
             "codex_app_server",
             "grok_acp",
         ]
-        health = client.post(f"/api/v1/harnesses/{profile.id}/health", headers=headers)
+        health = await client.post(
+            f"/api/v1/harnesses/{profile.id}/health", headers=headers
+        )
         assert health.status_code == 200
         assert health.json()["harness_version"] == "fixture-1"
         assert (
-            store.get(HarnessProfile, profile.id).capabilities.harness_version
-            == "fixture-1"
-        )
+            await store.get(HarnessProfile, profile.id)
+        ).capabilities.harness_version == "fixture-1"
 
-        completion = client.post(
+        completion = await client.post(
             "/api/v1/chat/completions",
             headers=headers,
             json={
@@ -4673,7 +4850,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         )
         assert body["harness_session_id"]
         assert body["harness_turn_id"]
-        replay = client.get(
+        replay = await client.get(
             f"/api/v1/harness-turns/{body['harness_turn_id']}/events",
             headers=headers,
         )
@@ -4684,7 +4861,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
             "nebula.harness-activity/v2"
         )
 
-        unattached_session = store.create(
+        unattached_session = await store.create(
             HarnessSession(
                 engagement_id=engagement.id,
                 harness_profile_id=profile.id,
@@ -4693,18 +4870,20 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
                 status=HarnessSessionStatus.IDLE,
             )
         )
-        store.create(
-            HarnessTurn(
-                engagement_id=engagement.id,
-                harness_session_id=unattached_session.id,
-                origin=HarnessTurnOrigin.ANALYSIS,
-                prompt="ptpcamerad adjacent overflow objects",
-                status=HarnessTurnStatus.COMPLETE,
-                response="Bounded research notes",
+        (
+            await store.create(
+                HarnessTurn(
+                    engagement_id=engagement.id,
+                    harness_session_id=unattached_session.id,
+                    origin=HarnessTurnOrigin.ANALYSIS,
+                    prompt="ptpcamerad adjacent overflow objects",
+                    status=HarnessTurnStatus.COMPLETE,
+                    response="Bounded research notes",
+                )
             )
         )
 
-        sessions = client.get(
+        sessions = await client.get(
             "/api/v1/harness-sessions",
             headers=headers,
             params={"engagement_id": engagement.id},
@@ -4723,12 +4902,12 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         assert listed_unattached["display_name"] == (
             "ptpcamerad adjacent overflow objects"
         )
-        stored_session = client.get(
+        stored_session = await client.get(
             f"/api/v1/harness-sessions/{body['harness_session_id']}", headers=headers
         )
         assert stored_session.status_code == 200
         assert stored_session.json()["external_session_id"] == "vendor-session-1"
-        activity = client.get(
+        activity = await client.get(
             f"/api/v1/harness-sessions/{body['harness_session_id']}/activity",
             headers=headers,
         )
@@ -4742,7 +4921,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
             "This harness session is ready for another turn."
         )
 
-        handoff = client.post(
+        handoff = await client.post(
             f"/api/v1/chat/sessions/{body['session_id']}/continue-as-mission",
             headers=headers,
             json={"objective": "API mission"},
@@ -4751,12 +4930,12 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         run_id = handoff.json()["id"]
         assert handoff.json()["budget"]["max_duration_seconds"] is None
         for _ in range(100):
-            if store.get(AgentRun, run_id).status == RunStatus.COMPLETE:
+            if (await store.get(AgentRun, run_id)).status == RunStatus.COMPLETE:
                 break
             time.sleep(0.01)
-        assert store.get(AgentRun, run_id).status == RunStatus.COMPLETE
+        assert (await store.get(AgentRun, run_id)).status == RunStatus.COMPLETE
 
-        discussed = client.post(f"/api/v1/runs/{run_id}/discuss", headers=headers)
+        discussed = await client.post(f"/api/v1/runs/{run_id}/discuss", headers=headers)
         assert discussed.status_code == 200
         assert discussed.json()["id"] == body["session_id"]
         assert len(adapter.opens) == 3
@@ -4770,21 +4949,21 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         assert adapter.connections[0].closed is True
 
 
-def test_harness_export_closes_references_without_machine_credentials(tmp_path):
-    store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-    profile = store.update(
+async def test_harness_export_closes_references_without_machine_credentials(tmp_path):
+    store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {"auth_mode": "secret_ref", "secret_ref": "env:CODEX_AUTH"},
         expected_revision=profile.revision,
     )
-    mcp = store.update(
+    mcp = await store.update(
         McpServerProfile,
         mcp.id,
         {"auth_mode": McpAuthMode.BEARER, "bearer_secret_ref": "env:MCP_TOKEN"},
         expected_revision=mcp.revision,
     )
-    session = runtime.create_session(
+    session = await runtime.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -4792,7 +4971,7 @@ def test_harness_export_closes_references_without_machine_credentials(tmp_path):
     )
     destination = tmp_path / "harness-export.nebula.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -4812,26 +4991,30 @@ def test_harness_export_closes_references_without_machine_credentials(tmp_path):
     assert exported_session["mcp_snapshot"][0]["bearer_secret_ref"] is None
 
 
-def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_path):
-    store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
-    store.create(
-        KnowledgeSource(
-            id="knowledge-a",
-            engagement_id=engagement.id,
-            name="target.txt",
-            source_type="text/plain",
-            citation="Target notes",
-            metadata={
-                "chunks": [
-                    {
-                        "id": "chunk-a",
-                        "text": "The relevant harness marker is HARNESS_KNOWLEDGE_443.",
-                    }
-                ]
-            },
+async def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(
+    tmp_path,
+):
+    store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+    (
+        await store.create(
+            KnowledgeSource(
+                id="knowledge-a",
+                engagement_id=engagement.id,
+                name="target.txt",
+                source_type="text/plain",
+                citation="Target notes",
+                metadata={
+                    "chunks": [
+                        {
+                            "id": "chunk-a",
+                            "text": "The relevant harness marker is HARNESS_KNOWLEDGE_443.",
+                        }
+                    ]
+                },
+            )
         )
     )
-    profile = store.update(
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {"privacy": {"local_only": False, "permits_sensitive_data": True}},
@@ -4853,12 +5036,14 @@ def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_pat
         "messages": [{"role": "user", "content": "What harness marker is relevant?"}],
     }
 
-    with TestClient(app) as client:
-        blocked = client.post("/api/v1/chat/completions", headers=headers, json=payload)
+    async with TestClient(app) as client:
+        blocked = await client.post(
+            "/api/v1/chat/completions", headers=headers, json=payload
+        )
         assert blocked.status_code == 409
         assert "explicit operator confirmation" in blocked.json()["detail"]
 
-        allowed = client.post(
+        allowed = await client.post(
             "/api/v1/chat/completions",
             headers=headers,
             json={**payload, "allow_cloud_knowledge": True},
@@ -4878,25 +5063,31 @@ def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_pat
             item["name"] for item in adapter.connections[0].request.gateway_tools
         }
         assert {"knowledge.list", "knowledge.search"} <= assigned_gateway_tools
-        harness_turn = store.get(HarnessTurn, allowed.json()["harness_turn_id"])
+        harness_turn = await store.get(HarnessTurn, allowed.json()["harness_turn_id"])
         assert harness_turn.metadata["knowledge_access"] is True
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
         assert any(
             item["name"] == "knowledge.search"
-            for item in runtime._gateway_catalog(session, turn=harness_turn)["tools"]
+            for item in (await runtime._gateway_catalog(session, turn=harness_turn))[
+                "tools"
+            ]
         )
         messages = [
             item
-            for item in store.list_entities(ChatMessage, engagement_id=engagement.id)
+            for item in (
+                await store.list_entities(ChatMessage, engagement_id=engagement.id)
+            )
             if item.session_id == allowed.json()["session_id"]
         ]
         assert messages[0].content == "What harness marker is relevant?"
         assert messages[-1].citations == []
 
 
-def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_path):
-    store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-    profile = store.update(
+async def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(
+    tmp_path,
+):
+    store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {"privacy": {"local_only": False, "permits_sensitive_data": True}},
@@ -4904,18 +5095,22 @@ def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_pa
     )
 
     with pytest.raises(HarnessConfigurationError, match="explicit operator"):
-        runtime.prepare_chat(
-            engagement_id=engagement.id,
-            profile_id=profile.id,
-            model=None,
-            prompt="Use MCP",
-            chat_session_id=None,
-            harness_session_id=None,
-            mcp_server_ids=[mcp.id],
+        (
+            await runtime.prepare_chat(
+                engagement_id=engagement.id,
+                profile_id=profile.id,
+                model=None,
+                prompt="Use MCP",
+                chat_session_id=None,
+                harness_session_id=None,
+                mcp_server_ids=[mcp.id],
+            )
         )
-    assert store.list_entities(HarnessSession, engagement_id=engagement.id) == []
+    assert (
+        await store.list_entities(HarnessSession, engagement_id=engagement.id)
+    ) == []
 
-    chat, _, _ = runtime.prepare_chat(
+    chat, _, _ = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -4928,9 +5123,9 @@ def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_pa
     assert chat.harness_session_id
 
 
-def test_standing_consent_replaces_per_turn_mcp_confirmation(tmp_path):
-    store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-    profile = store.update(
+async def test_standing_consent_replaces_per_turn_mcp_confirmation(tmp_path):
+    store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -4943,7 +5138,7 @@ def test_standing_consent_replaces_per_turn_mcp_confirmation(tmp_path):
         expected_revision=profile.revision,
     )
 
-    chat, _, _ = runtime.prepare_chat(
+    chat, _, _ = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -4956,9 +5151,9 @@ def test_standing_consent_replaces_per_turn_mcp_confirmation(tmp_path):
     assert chat.harness_session_id
 
 
-def test_harness_images_validate_ownership_and_persist_references(tmp_path):
-    store, engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
-    original = store.create(
+async def test_harness_images_validate_ownership_and_persist_references(tmp_path):
+    store, engagement, profile, _mcp, adapter, runtime = await _runtime(tmp_path)
+    original = await store.create(
         runtime.artifact_store.put_bytes(
             b"original image",
             engagement_id=engagement.id,
@@ -4966,7 +5161,7 @@ def test_harness_images_validate_ownership_and_persist_references(tmp_path):
             metadata={"chat_image_original": True},
         )
     )
-    preview = store.create(
+    preview = await store.create(
         runtime.artifact_store.put_bytes(
             b"validated preview",
             engagement_id=engagement.id,
@@ -4991,9 +5186,9 @@ def test_harness_images_validate_ownership_and_persist_references(tmp_path):
         content_blocks=[block],
     )
     with pytest.raises(HarnessConfigurationError, match="image input"):
-        runtime.prepare_chat(**args)
-    assert store.list_entities(ChatSession) == []
-    profile = store.update(
+        (await runtime.prepare_chat(**args))
+    assert (await store.list_entities(ChatSession)) == []
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -5006,22 +5201,22 @@ def test_harness_images_validate_ownership_and_persist_references(tmp_path):
         },
         expected_revision=profile.revision,
     )
-    foreign = store.create(Engagement(name="Other project"))
+    foreign = await store.create(Engagement(name="Other project"))
     with pytest.raises(ChatConfigurationError, match="belong"):
-        runtime.prepare_chat(**{**args, "engagement_id": foreign.id})
-    assert store.list_entities(ChatSession) == []
+        (await runtime.prepare_chat(**{**args, "engagement_id": foreign.id}))
+    assert (await store.list_entities(ChatSession)) == []
 
     async def scenario():
-        chat, _, turn = runtime.prepare_chat(**args)
-        messages = store.list_entities(ChatMessage, engagement_id=engagement.id)
+        chat, _, turn = await runtime.prepare_chat(**args)
+        messages = await store.list_entities(ChatMessage, engagement_id=engagement.id)
         assert messages[0].content_blocks == [block]
         assert "validated preview" not in turn.model_dump_json()
         assert turn.metadata["image_blocks"][0]["artifact_id"] == original.id
         events = [event async for event in runtime.stream_turn(turn.id)]
         assert any(event.type == "completed" for event in events), events
         assert adapter.connections[0].images[0][0]["data"] == "dmFsaWRhdGVkIHByZXZpZXc="
-        assert store.get(ChatSession, chat.id).id == chat.id
-        _, _, corrupted_turn = runtime.prepare_chat(
+        assert (await store.get(ChatSession, chat.id)).id == chat.id
+        _, _, corrupted_turn = await runtime.prepare_chat(
             **{**args, "chat_session_id": chat.id, "mcp_server_ids": None}
         )
         preview_path = runtime.artifact_store.path_for(preview)
@@ -5032,22 +5227,21 @@ def test_harness_images_validate_ownership_and_persist_references(tmp_path):
         ]
         assert any(event.type == "error" for event in failed_events)
         assert (
-            store.get(HarnessTurn, corrupted_turn.id).status
-            == HarnessTurnStatus.INTERRUPTED
-        )
+            await store.get(HarnessTurn, corrupted_turn.id)
+        ).status == HarnessTurnStatus.INTERRUPTED
         assert len(adapter.connections[0].images) == 1
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming(
+async def test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming(
     tmp_path,
 ):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
     app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers={"Authorization": "Bearer test-token"},
             json={
@@ -5069,15 +5263,15 @@ def test_harness_stream_exposes_saved_identity_before_runtime_and_optional_namin
         done = next(frame for frame in frames if frame["type"] == "done")
         assert frames[0]["session_id"] == done["session_id"]
         assert frames[0]["turn_id"] == done["turn_id"]
-        assert store.get(ChatSession, frames[0]["session_id"])
+        assert await store.get(ChatSession, frames[0]["session_id"])
 
 
-def test_supporting_evidence_reads_normalized_harness_events(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+async def test_supporting_evidence_reads_normalized_harness_events(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
     app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
     headers = {"Authorization": "Bearer test-token"}
-    with TestClient(app) as client:
-        completion = client.post(
+    async with TestClient(app) as client:
+        completion = await client.post(
             "/api/v1/chat/completions",
             headers=headers,
             json={
@@ -5090,9 +5284,9 @@ def test_supporting_evidence_reads_normalized_harness_events(tmp_path):
         )
         assert completion.status_code == 200, completion.text
         result = completion.json()
-        events = runtime.activity_events(result["harness_turn_id"]).events
+        events = (await runtime.activity_events(result["harness_turn_id"])).events
         assert any(event.type == "started" for event in events)
-        evidence = client.get(
+        evidence = await client.get(
             f"/api/v1/chat/sessions/{result['session_id']}/messages/{result['message']['id']}/evidence",
             headers=headers,
         )
@@ -5128,19 +5322,23 @@ def test_grok_gateway_alias_fits_qualified_name(name):
     )
 
 
-def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_path):
+async def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(
+    tmp_path,
+):
     from nebula.v3.harnesses import _portable_gateway_tool_name
 
     async def scenario():
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        store.update(
-            HarnessProfile,
-            profile.id,
-            {"kind": "grok_acp"},
-            expected_revision=profile.revision,
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        (
+            await store.update(
+                HarnessProfile,
+                profile.id,
+                {"kind": "grok_acp"},
+                expected_revision=profile.revision,
+            )
         )
         (tmp_path / "marker.txt").write_text("LINKED_FOLDER_CONTENT")
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5149,7 +5347,7 @@ def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
             turn_id=turn.id, connection=None, task=None
         )
@@ -5171,7 +5369,7 @@ def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_
             assert response.get("isError") is not True
             schema_calls = [
                 call
-                for call in store.list_entities(ToolCall)
+                for call in (await store.list_entities(ToolCall))
                 if call.tool_name == "model.discover_schema"
             ]
             assert len(schema_calls) == 1
@@ -5192,18 +5390,20 @@ def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_
             runtime._active.pop(session.id)
             await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-    store.update(
-        HarnessProfile,
-        profile.id,
-        {"kind": "grok_acp"},
-        expected_revision=profile.revision,
+async def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    (
+        await store.update(
+            HarnessProfile,
+            profile.id,
+            {"kind": "grok_acp"},
+            expected_revision=profile.revision,
+        )
     )
-    chat, owner, first = runtime.prepare_chat(
+    chat, owner, first = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -5212,23 +5412,30 @@ def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    store.update(
-        HarnessTurn, first.id, {"status": "complete"}, expected_revision=first.revision
+    (
+        await store.update(
+            HarnessTurn,
+            first.id,
+            {"status": "complete"},
+            expected_revision=first.revision,
+        )
     )
-    store.update(
-        ChatTurn,
-        owner.id,
-        {"status": ChatTurnStatus.COMPLETE},
-        expected_revision=owner.revision,
+    (
+        await store.update(
+            ChatTurn,
+            owner.id,
+            {"status": ChatTurnStatus.COMPLETE},
+            expected_revision=owner.revision,
+        )
     )
-    old = store.get(HarnessSession, first.harness_session_id)
-    old = store.update(
+    old = await store.get(HarnessSession, first.harness_session_id)
+    old = await store.update(
         HarnessSession,
         old.id,
         {"external_session_id": "legacy-native-session"},
         expected_revision=old.revision,
     )
-    updated, _, second = runtime.prepare_chat(
+    updated, _, second = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -5242,17 +5449,17 @@ def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
     assert second.metadata["session_rollover_reason"] == "workspace_connection_changed"
     assert "Remember the project marker" in second.prompt
     assert (
-        store.get(HarnessSession, old.id).external_session_id == "legacy-native-session"
-    )
+        await store.get(HarnessSession, old.id)
+    ).external_session_id == "legacy-native-session"
     assert (
-        store.get(HarnessSession, second.harness_session_id).external_session_id is None
-    )
+        await store.get(HarnessSession, second.harness_session_id)
+    ).external_session_id is None
 
 
-def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path):
+async def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
-        profile = store.update(
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+        profile = await store.update(
             HarnessProfile,
             profile.id,
             {"kind": "grok_acp"},
@@ -5271,7 +5478,7 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
                 del engagement_id
                 raise AutomationRuntimeUnavailable("command runtime is optional")
 
-        session = runtime.create_session(
+        session = await runtime.create_session(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5279,7 +5486,7 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
         legacy_metadata = dict(session.metadata)
         legacy_metadata.pop("execution_mode")
         legacy_metadata["workspace_binding_version"] = 1
-        session = store.update(
+        session = await store.update(
             HarnessSession,
             session.id,
             {
@@ -5290,7 +5497,7 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
         )
         runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
 
-        chat, _, turn = runtime.prepare_chat(
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5299,7 +5506,7 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
             harness_session_id=session.id,
             mcp_server_ids=[],
         )
-        replacement = store.get(HarnessSession, turn.harness_session_id)
+        replacement = await store.get(HarnessSession, turn.harness_session_id)
         assert chat.harness_session_id == replacement.id
         assert replacement.id != session.id
         assert replacement.external_session_id is None
@@ -5312,7 +5519,7 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
         assert adapter.opens[0].workspace == tmp_path
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -5323,12 +5530,12 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
         ("workspace.search", {"query": "text", "glob": "*.md"}, "glob", "query"),
     ],
 )
-def test_workspace_retrieval_reports_actionable_argument_errors(
+async def test_workspace_retrieval_reports_actionable_argument_errors(
     tmp_path, name, arguments, invalid, required
 ):
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        _, chat_turn, turn = runtime.prepare_chat(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        _, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5337,7 +5544,7 @@ def test_workspace_retrieval_reports_actionable_argument_errors(
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
             turn_id=turn.id, connection=None, task=None
         )
@@ -5354,20 +5561,20 @@ def test_workspace_retrieval_reports_actionable_argument_errors(
         assert failure["retry_safe"] is True
         assert failure["next_action"].startswith("Correct the indicated argument")
         assert "keyword" not in response["content"][0]["text"]
-        [call_id] = store.get(ChatTurn, chat_turn.id).tool_call_ids
-        assert store.get(ToolCall, call_id).status == ToolCallStatus.FAILED
+        [call_id] = (await store.get(ChatTurn, chat_turn.id)).tool_call_ids
+        assert (await store.get(ToolCall, call_id)).status == ToolCallStatus.FAILED
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("change", ["model", "profile", "mcp", "provider"])
-def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
+async def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
     tmp_path, change
 ):
-    store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-    chat, _, turn = runtime.prepare_chat(
+    store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+    chat, _, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -5376,13 +5583,13 @@ def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    asyncio.run(runtime.cancel_turn(turn.id, reason="Settle the fixture response"))
-    original = store.get(HarnessSession, turn.harness_session_id)
+    (await runtime.cancel_turn(turn.id, reason="Settle the fixture response"))
+    original = await store.get(HarnessSession, turn.harness_session_id)
     selected = profile
     model = original.model
     if change == "model":
         model = "second-model"
-        selected = store.update(
+        selected = await store.update(
             HarnessProfile,
             profile.id,
             {
@@ -5393,13 +5600,13 @@ def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
             expected_revision=profile.revision,
         )
     if change == "profile":
-        selected = store.create(
+        selected = await store.create(
             profile.model_copy(
                 update={"id": "second-harness", "name": "Second harness"}
             )
         )
     if change == "provider":
-        chat = store.update(
+        chat = await store.update(
             ChatSession,
             chat.id,
             {
@@ -5410,7 +5617,7 @@ def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
             },
             expected_revision=chat.revision,
         )
-    updated, _, next_turn = runtime.prepare_chat(
+    updated, _, next_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=selected.id,
         model=model,
@@ -5426,19 +5633,19 @@ def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
     assert updated.harness_session_id != original.id
     assert updated.backend == ChatBackend.HARNESS
     assert "Remember the first message" in next_turn.prompt
-    assert store.get(HarnessSession, original.id) == original
-    assert len(runtime._chat_messages(engagement.id, chat.id)) == 2
+    assert (await store.get(HarnessSession, original.id)) == original
+    assert len((await runtime._chat_messages(engagement.id, chat.id))) == 2
 
 
 @pytest.mark.parametrize("kind", [HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP])
-def test_account_home_skill_discovery_does_not_cross_accounts(tmp_path, kind):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+async def test_account_home_skill_discovery_does_not_cross_accounts(tmp_path, kind):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
     for name in ("personal", "work"):
         home = tmp_path / name
         skill = home / "skills" / name
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(name)
-        saved = store.create(
+        saved = await store.create(
             HarnessProfile(
                 name=name,
                 kind=kind,
@@ -5450,18 +5657,20 @@ def test_account_home_skill_discovery_does_not_cross_accounts(tmp_path, kind):
         )
         assert [
             item.name
-            for item in runtime.available_skills(
-                engagement_id=engagement.id, profile_id=saved.id
+            for item in (
+                await runtime.available_skills(
+                    engagement_id=engagement.id, profile_id=saved.id
+                )
             )
         ] == [name]
 
 
 @pytest.mark.parametrize("method", ["patch", "put"])
-def test_account_home_api_persists_invalidates_health_and_preserves_used_identity(
+async def test_account_home_api_persists_invalidates_health_and_preserves_used_identity(
     tmp_path, method
 ):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    profile = store.update(
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    profile = await store.update(
         HarnessProfile,
         profile.id,
         {
@@ -5474,14 +5683,14 @@ def test_account_home_api_persists_invalidates_health_and_preserves_used_identit
         expected_revision=profile.revision,
     )
     app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
-    with TestClient(app) as client:
+    async with TestClient(app) as client:
         headers = {"Authorization": "Bearer test-token"}
         url = f"/api/v1/harnesses/{profile.id}"
 
-        def change(home):
-            current = client.get(url, headers=headers).json()
+        async def change(home):
+            current = (await client.get(url, headers=headers)).json()
             if method == "patch":
-                return client.patch(
+                return await client.patch(
                     url,
                     headers=headers,
                     json={
@@ -5489,28 +5698,30 @@ def test_account_home_api_persists_invalidates_health_and_preserves_used_identit
                         "expected_revision": current["revision"],
                     },
                 )
-            return client.put(
+            return await client.put(
                 url, headers=headers, json={**current, "home_directory": home}
             )
 
-        response = change(str(tmp_path / "personal"))
+        response = await change(str(tmp_path / "personal"))
         assert response.status_code == 200, response.text
         assert response.json()["capabilities"]["checked_at"] is None
         assert response.json()["capabilities"]["models"] == []
-        assert client.get(url, headers=headers).json()["home_directory"] == str(
+        assert (await client.get(url, headers=headers)).json()["home_directory"] == str(
             tmp_path / "personal"
         )
-        store.create(
-            HarnessSession(
-                engagement_id=engagement.id,
-                harness_profile_id=profile.id,
-                model="test-model",
+        (
+            await store.create(
+                HarnessSession(
+                    engagement_id=engagement.id,
+                    harness_profile_id=profile.id,
+                    model="test-model",
+                )
             )
         )
-        rejected = change(str(tmp_path / "work"))
+        rejected = await change(str(tmp_path / "work"))
         assert rejected.status_code == 422, rejected.text
         assert "separate harness profile" in rejected.text
-        assert client.get(url, headers=headers).json()["home_directory"] == str(
+        assert (await client.get(url, headers=headers)).json()["home_directory"] == str(
             tmp_path / "personal"
         )
 
@@ -5540,27 +5751,29 @@ def test_remote_endpoint_rejects_local_account_home():
         )
 
 
-def _seed_project_tool_calls(store, engagement_id: str, count: int) -> None:
+async def _seed_project_tool_calls(store, engagement_id: str, count: int) -> None:
     """Fill the project's oldest tool-call page so a page scan misses new rows."""
 
-    with store.transaction() as transaction:
+    async with store.transaction() as transaction:
         for index in range(count):
-            transaction.add(
-                ToolCall(
-                    id=f"older-call-{index:05d}",
-                    engagement_id=engagement_id,
-                    run_id="older-run",
-                    origin=ToolCallOrigin.CHAT,
-                    tool_name="run_command",
-                    status=ToolCallStatus.COMPLETE,
-                    risk_class=RiskClass.LOCAL_READ,
-                    arguments={},
-                    started_at=utc_now(),
+            (
+                await transaction.add(
+                    ToolCall(
+                        id=f"older-call-{index:05d}",
+                        engagement_id=engagement_id,
+                        run_id="older-run",
+                        origin=ToolCallOrigin.CHAT,
+                        tool_name="run_command",
+                        status=ToolCallStatus.COMPLETE,
+                        risk_class=RiskClass.LOCAL_READ,
+                        arguments={},
+                        started_at=utc_now(),
+                    )
                 )
             )
 
 
-def test_native_tool_event_keeps_one_ledger_row_past_the_first_page(tmp_path):
+async def test_native_tool_event_keeps_one_ledger_row_past_the_first_page(tmp_path):
     """HARN-1: a native tool leaves one COMPLETE row, not a stuck duplicate.
 
     The turn's ToolCall was looked up among the project's oldest 1,000 calls,
@@ -5588,10 +5801,10 @@ def test_native_tool_event_keeps_one_ledger_row_past_the_first_page(tmp_path):
             return connection
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         runtime.adapter_factory = lambda _: NativeAdapter()
-        _seed_project_tool_calls(store, engagement.id, 1_000)
-        _chat, chat_turn, turn = runtime.prepare_chat(
+        (await _seed_project_tool_calls(store, engagement.id, 1_000))
+        _chat, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5603,23 +5816,25 @@ def test_native_tool_event_keeps_one_ledger_row_past_the_first_page(tmp_path):
         await runtime.start_chat_turn(turn.id)
         native_rows = [
             call
-            for call in store.find_entities(
-                ToolCall, {"metadata.harness_turn_id": turn.id}
+            for call in (
+                await store.find_entities(
+                    ToolCall, {"metadata.harness_turn_id": turn.id}
+                )
             )
         ]
         assert [row.status for row in native_rows] == [ToolCallStatus.COMPLETE]
-        assert store.get(ChatTurn, chat_turn.id).execution_tool_calls == 1
+        assert (await store.get(ChatTurn, chat_turn.id)).execution_tool_calls == 1
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_settles_the_newest_turn_past_the_first_page(tmp_path):
+async def test_startup_settles_the_newest_turn_past_the_first_page(tmp_path):
     """HARN-2: restart recovery settles a RUNNING turn beyond the oldest page."""
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        _chat, _chat_turn, first = runtime.prepare_chat(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        _chat, _chat_turn, first = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5628,20 +5843,22 @@ def test_startup_settles_the_newest_turn_past_the_first_page(tmp_path):
             harness_session_id=None,
             mcp_server_ids=None,
         )
-        session_id = store.get(HarnessTurn, first.id).harness_session_id
-        with store.transaction() as transaction:
+        session_id = (await store.get(HarnessTurn, first.id)).harness_session_id
+        async with store.transaction() as transaction:
             for index in range(1_000):
-                transaction.add(
-                    HarnessTurn(
-                        id=f"older-turn-{index:04d}",
-                        engagement_id=engagement.id,
-                        harness_session_id=session_id,
-                        origin=HarnessTurnOrigin.ANALYSIS,
-                        prompt="older",
-                        status=HarnessTurnStatus.COMPLETE,
+                (
+                    await transaction.add(
+                        HarnessTurn(
+                            id=f"older-turn-{index:04d}",
+                            engagement_id=engagement.id,
+                            harness_session_id=session_id,
+                            origin=HarnessTurnOrigin.ANALYSIS,
+                            prompt="older",
+                            status=HarnessTurnStatus.COMPLETE,
+                        )
                     )
                 )
-        running = store.create(
+        running = await store.create(
             HarnessTurn(
                 id="newest-running",
                 engagement_id=engagement.id,
@@ -5661,13 +5878,13 @@ def test_startup_settles_the_newest_turn_past_the_first_page(tmp_path):
         )
         await restarted.startup()
         assert (
-            store.get(HarnessTurn, running.id).status == HarnessTurnStatus.INTERRUPTED
-        )
+            await store.get(HarnessTurn, running.id)
+        ).status == HarnessTurnStatus.INTERRUPTED
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_shutdown_and_restart_settle_a_turn_still_connecting(tmp_path):
+async def test_shutdown_and_restart_settle_a_turn_still_connecting(tmp_path):
     """HARN-3: a turn interrupted while connecting must not reserve the chat."""
 
     class SlowOpenAdapter(FakeAdapter):
@@ -5681,10 +5898,10 @@ def test_shutdown_and_restart_settle_a_turn_still_connecting(tmp_path):
             return await super().open(request)
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         adapter = SlowOpenAdapter()
         runtime.adapter_factory = lambda _: adapter
-        chat, chat_turn, turn = runtime.prepare_chat(
+        chat, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5693,11 +5910,15 @@ def test_shutdown_and_restart_settle_a_turn_still_connecting(tmp_path):
             harness_session_id=None,
             mcp_server_ids=None,
         )
-        runtime.start_chat_turn(turn.id)
+        (await runtime.start_chat_turn(turn.id))
         await asyncio.wait_for(adapter.opened.wait(), 5)
         await runtime.shutdown()
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
-        assert store.get(ChatTurn, chat_turn.id).status == ChatTurnStatus.INTERRUPTED
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.INTERRUPTED
+        assert (
+            await store.get(ChatTurn, chat_turn.id)
+        ).status == ChatTurnStatus.INTERRUPTED
 
         # A fresh Core over the same store keeps it settled and free.
         restarted = HarnessRuntimeService(
@@ -5707,12 +5928,14 @@ def test_shutdown_and_restart_settle_a_turn_still_connecting(tmp_path):
             adapter_factory=lambda _: FakeAdapter(),
         )
         await restarted.startup()
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
-        activity = restarted.session_activity(turn.harness_session_id)
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.INTERRUPTED
+        activity = await restarted.session_activity(turn.harness_session_id)
         assert activity.busy is False
 
         # The next message continues the same vendor session, no parallel fork.
-        _chat, _owner, follow_up = restarted.prepare_chat(
+        _chat, _owner, follow_up = await restarted.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5724,15 +5947,15 @@ def test_shutdown_and_restart_settle_a_turn_still_connecting(tmp_path):
         assert follow_up.harness_session_id == turn.harness_session_id
         assert follow_up.metadata.get("forked_from_session_id") is None
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_session_rollover_closes_the_superseded_vendor_session(tmp_path):
+async def test_session_rollover_closes_the_superseded_vendor_session(tmp_path):
     """HARN-6: an edited conversation closes the vendor session it moved off."""
 
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
-        chat, _, turn = runtime.prepare_chat(
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5745,8 +5968,10 @@ def test_session_rollover_closes_the_superseded_vendor_session(tmp_path):
         first_session = turn.harness_session_id
         assert first_session in runtime._connections
 
-        chat = runtime.rewind_chat_session(store.get(ChatSession, chat.id))
-        _, _, turn2 = runtime.prepare_chat(
+        chat = await runtime.rewind_chat_session(
+            (await store.get(ChatSession, chat.id))
+        )
+        _, _, turn2 = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5765,17 +5990,16 @@ def test_session_rollover_closes_the_superseded_vendor_session(tmp_path):
         assert first_session not in runtime._connections
         assert first_session not in runtime._gateways
         assert (
-            store.get(HarnessSession, first_session).status
-            == HarnessSessionStatus.CLOSED
-        )
+            await store.get(HarnessSession, first_session)
+        ).status == HarnessSessionStatus.CLOSED
         # The live session and connection are untouched.
         assert turn2.harness_session_id in runtime._connections
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
+async def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
     """HARN-4: a decision after the turn ended must not kill the gateway.
 
     A gateway approval used to wait unbounded. When Codex timed the tool out
@@ -5825,11 +6049,11 @@ def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
             return connection
 
     async def scenario() -> None:
-        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
         vendor = VendorAdapter()
         runtime.adapter_factory = lambda _: vendor
         phase["turn"] = 1
-        chat, chat_turn, turn = runtime.prepare_chat(
+        chat, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5838,20 +6062,21 @@ def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        initial_session = store.get(HarnessSession, turn.harness_session_id)
+        initial_session = await store.get(HarnessSession, turn.harness_session_id)
         assert (
-            resolve_request_snapshot(
+            await resolve_request_snapshot(
                 store, chat_turn.request_snapshot, session_id=chat.id
-            )["mcp_catalog_snapshot"]
-            == []
-        )
+            )
+        )["mcp_catalog_snapshot"] == []
         await runtime.start_chat_turn(turn.id)
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
 
         # The turn's end expired its pending approval and released the waiter.
         pending = [
             approval
-            for approval in store.list_entities(Approval, limit=100)
+            for approval in (await store.list_entities(Approval, limit=100))
             if approval.status == ApprovalStatus.PENDING
         ]
         assert pending == []
@@ -5864,11 +6089,11 @@ def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
         # A late operator decision on the expired approval is a safe no-op.
         expired = next(
             approval
-            for approval in store.list_entities(Approval, limit=100)
+            for approval in (await store.list_entities(Approval, limit=100))
             if approval.tool_call_id
         )
         assert expired.status == ApprovalStatus.EXPIRED
-        decided = store.update(
+        decided = await store.update(
             Approval,
             expired.id,
             {"status": ApprovalStatus.APPROVED, "decided_by": "operator"},
@@ -5882,7 +6107,7 @@ def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
         # The gateway still works: the next turn lists tools over the same
         # connection instead of failing on a dead socket.
         phase["turn"] = 2
-        _, chat_turn2, turn2 = runtime.prepare_chat(
+        _, chat_turn2, turn2 = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5891,27 +6116,28 @@ def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
             harness_session_id=None,
             mcp_server_ids=None,
         )
-        inherited_session = store.get(HarnessSession, turn2.harness_session_id)
+        inherited_session = await store.get(HarnessSession, turn2.harness_session_id)
         assert inherited_session.id == initial_session.id
         assert inherited_session.mcp_server_ids == [mcp.id]
         assert (
-            resolve_request_snapshot(
+            await resolve_request_snapshot(
                 store, chat_turn2.request_snapshot, session_id=chat.id
-            )["mcp_catalog_snapshot"]
-            == []
-        )
+            )
+        )["mcp_catalog_snapshot"] == []
         await runtime.start_chat_turn(turn2.id)
         assert len(vendor.opens) == 1
-        assert store.get(HarnessTurn, turn2.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, turn2.id)
+        ).status == HarnessTurnStatus.COMPLETE
         assert phase["second_tools"]
         assert VendorConnection.client is not None
         await VendorConnection.client.close()
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_stop_cancels_in_flight_gateway_command(tmp_path):
+async def test_stop_cancels_in_flight_gateway_command(tmp_path):
     """HARN-5: Stop cancels a gateway call that is still running.
 
     A gateway call runs in the gateway server's task, not the turn task, so a
@@ -5932,8 +6158,8 @@ def test_stop_cancels_in_flight_gateway_command(tmp_path):
             raise
 
     async def scenario() -> None:
-        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
-        _chat, chat_turn, turn = runtime.prepare_chat(
+        store, engagement, profile, mcp, _, runtime = await _runtime(tmp_path)
+        _chat, chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -5942,10 +6168,10 @@ def test_stop_cancels_in_flight_gateway_command(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         selected = next(
             item["name"]
-            for item in runtime._gateway_catalog(session)["tools"]
+            for item in (await runtime._gateway_catalog(session))["tools"]
             if item["name"].startswith("mcp_") and item["name"].endswith("read_file")
         )
         runtime._active[session.id] = SimpleNamespace(
@@ -5969,8 +6195,10 @@ def test_stop_cancels_in_flight_gateway_command(tmp_path):
         assert not runtime._gateway_work.get(turn.id)
         row = next(
             item
-            for item in store.find_entities(
-                ToolCall, {"metadata.harness_turn_id": turn.id}
+            for item in (
+                await store.find_entities(
+                    ToolCall, {"metadata.harness_turn_id": turn.id}
+                )
             )
             if item.mcp_server_id == mcp.id
         )
@@ -5978,10 +6206,10 @@ def test_stop_cancels_in_flight_gateway_command(tmp_path):
         runtime._active.pop(session.id, None)
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_naming_analysis_skips_the_gateway_and_command_runtime(tmp_path):
+async def test_naming_analysis_skips_the_gateway_and_command_runtime(tmp_path):
     """HARN-14: a text-only analysis session starts no gateway shim."""
 
     captured: dict[str, object] = {}
@@ -6001,7 +6229,7 @@ def test_naming_analysis_skips_the_gateway_and_command_runtime(tmp_path):
             return connection
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
         runtime.adapter_factory = lambda _: RecordingAdapter()
         turn = await runtime.analyze_structured(
             engagement_id=engagement.id,
@@ -6017,15 +6245,15 @@ def test_naming_analysis_skips_the_gateway_and_command_runtime(tmp_path):
         assert runtime._gateways == {}
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_global_butler_analysis_opens_gateway_using_its_harness_session(tmp_path):
+async def test_global_butler_analysis_opens_gateway_using_its_harness_session(tmp_path):
     """An analysis turn has no chat session, but still owns a harness session."""
 
     async def scenario() -> None:
-        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
-        profile = store.update(
+        store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+        profile = await store.update(
             HarnessProfile,
             profile.id,
             {
@@ -6043,7 +6271,7 @@ def test_global_butler_analysis_opens_gateway_using_its_harness_session(tmp_path
             },
             expected_revision=profile.revision,
         )
-        case = store.create(
+        case = await store.create(
             ButlerRecoveryCase(
                 engagement_id=engagement.id,
                 trigger="periodic",
@@ -6069,39 +6297,36 @@ def test_global_butler_analysis_opens_gateway_using_its_harness_session(tmp_path
 
         assert turn.status == HarnessTurnStatus.COMPLETE
         assert turn.chat_session_id is None
-        assert (
-            store.get(HarnessSession, turn.harness_session_id).metadata[
-                "runtime_options"
-            ]["reasoning_effort"]
-            == "max"
-        )
+        assert (await store.get(HarnessSession, turn.harness_session_id)).metadata[
+            "runtime_options"
+        ]["reasoning_effort"] == "max"
         assert adapter.opens
         assert "nebula.capabilities.search" in {
             item["name"] for item in adapter.opens[0].gateway_tools
         }
-        capabilities = runtime._butler_capabilities(
+        capabilities = await runtime._butler_capabilities(
             engagement.id, turn=turn, background_case_id=case.id
         )
         global_action = capabilities._actions["nebula.global.projects"]
         assert global_action._handler.__self__.runtime_local is True
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_steered_mission_turn_replays_the_guidance_with_its_activity(tmp_path):
+async def test_steered_mission_turn_replays_the_guidance_with_its_activity(tmp_path):
     """Steering a Mission run left a row its turn's activity could not replay."""
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        session = store.create(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        session = await store.create(
             HarnessSession(
                 engagement_id=engagement.id,
                 harness_profile_id=profile.id,
                 model="test-model",
             )
         )
-        run = store.create(
+        run = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="Map the lab",
@@ -6111,7 +6336,7 @@ def test_steered_mission_turn_replays_the_guidance_with_its_activity(tmp_path):
                 status=RunStatus.RUNNING,
             )
         )
-        turn = store.create(
+        turn = await store.create(
             HarnessTurn(
                 engagement_id=engagement.id,
                 harness_session_id=session.id,
@@ -6121,10 +6346,12 @@ def test_steered_mission_turn_replays_the_guidance_with_its_activity(tmp_path):
                 status=HarnessTurnStatus.RUNNING,
             )
         )
-        runtime._persist_activity(
-            turn,
-            session,
-            HarnessEvent(type="message_delta", item_id="answer", delta="Scanning"),
+        (
+            await runtime._persist_activity(
+                turn,
+                session,
+                HarnessEvent(type="message_delta", item_id="answer", delta="Scanning"),
+            )
         )
         steered: list[str] = []
 
@@ -6139,13 +6366,15 @@ def test_steered_mission_turn_replays_the_guidance_with_its_activity(tmp_path):
             await runtime.steer(run.id, "Focus on port 443.", actor_id="operator-1")
         finally:
             runtime._active.pop(session.id)
-        runtime._persist_activity(
-            turn,
-            session,
-            HarnessEvent(type="message_delta", item_id="answer", delta=" 443"),
+        (
+            await runtime._persist_activity(
+                turn,
+                session,
+                HarnessEvent(type="message_delta", item_id="answer", delta=" 443"),
+            )
         )
 
-        events = runtime.activity_events(turn.id).events
+        events = (await runtime.activity_events(turn.id)).events
         assert steered == ["Focus on port 443."]
         assert [event.type for event in events] == [
             "message_delta",
@@ -6162,22 +6391,22 @@ def test_steered_mission_turn_replays_the_guidance_with_its_activity(tmp_path):
         # The run ledger keeps the operator-attributed steering record.
         [recorded] = [
             event
-            for event in store.replay_events(run.id)
+            for event in (await store.replay_events(run.id))
             if event.event_type == "harness.steered"
         ]
         assert recorded.actor_id == "operator-1"
         # Folding the turn's state reads the same rows.
-        runtime._turn_activity_state(turn)
+        (await runtime._turn_activity_state(turn))
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_steer_after_turn_completes_reports_inactive_not_failure(tmp_path):
+async def test_steer_after_turn_completes_reports_inactive_not_failure(tmp_path):
     """HARN-14: a steer that races turn completion is not a hard failure."""
 
     async def scenario() -> None:
-        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-        _chat, _owner, turn = runtime.prepare_chat(
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        _chat, _owner, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -6201,4 +6430,7 @@ def test_steer_after_turn_completes_reports_inactive_not_failure(tmp_path):
         with pytest.raises(harness_module.HarnessStateError):
             await runtime.steer_turn(turn.id, "late guidance", actor_id="operator")
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

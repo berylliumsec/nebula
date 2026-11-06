@@ -36,7 +36,7 @@ def percentile(values: list[float], percent: int) -> float | None:
     return round(ordered[math.ceil(len(ordered) * percent / 100) - 1], 2)
 
 
-def serve_fixture(data_dir: Path, port: int) -> None:
+async def serve_fixture(data_dir: Path, port: int) -> None:
     if not data_dir.is_dir() or any(data_dir.iterdir()):
         raise ValueError("fixture Core requires a newly created empty data directory")
     import uvicorn
@@ -49,31 +49,35 @@ def serve_fixture(data_dir: Path, port: int) -> None:
     from nebula.v3.storage import NebulaStore
 
     store = NebulaStore(data_dir / "nebula.db")
-    store.create(Engagement(id="load-project", name="Synthetic load project"))
+    (await store.create(Engagement(id="load-project", name="Synthetic load project")))
     for start in range(0, 12_000, 500):
-        store.create_many(
-            [
-                Observation(
-                    id=f"note-{index:05}",
-                    engagement_id="load-project",
-                    observation_type="note",
-                    title=f"Load note {index:05}",
-                    body="Synthetic note content. " * 80,
-                )
-                for index in range(start, start + 500)
-            ]
+        (
+            await store.create_many(
+                [
+                    Observation(
+                        id=f"note-{index:05}",
+                        engagement_id="load-project",
+                        observation_type="note",
+                        title=f"Load note {index:05}",
+                        body="Synthetic note content. " * 80,
+                    )
+                    for index in range(start, start + 500)
+                ]
+            )
         )
     for start in range(0, 2_000, 500):
-        store.create_many(
-            [
-                WorkItem(
-                    id=f"work-{index:05}",
-                    engagement_id="load-project",
-                    title=f"Load work {index:05}",
-                    description="Synthetic work. " * 100,
-                )
-                for index in range(start, start + 500)
-            ]
+        (
+            await store.create_many(
+                [
+                    WorkItem(
+                        id=f"work-{index:05}",
+                        engagement_id="load-project",
+                        title=f"Load work {index:05}",
+                        description="Synthetic work. " * 100,
+                    )
+                    for index in range(start, start + 500)
+                ]
+            )
         )
     token = os.environ.pop("NEBULA_LOAD_TEST_TOKEN")
     app = create_app(
@@ -122,7 +126,13 @@ def serve_fixture(data_dir: Path, port: int) -> None:
         lag.clear()
         return result
 
-    uvicorn.run(app, host="0.0.0.0", port=port, access_log=False, log_level="warning")
+    (
+        await uvicorn.Server(
+            uvicorn.Config(
+                app, host="0.0.0.0", port=port, access_log=False, log_level="warning"
+            )
+        ).serve()
+    )
 
 
 async def measure_phase(client, admin, origin, headers, route, params, concurrency):
@@ -337,7 +347,7 @@ async def run(output: Path, source: Path, lan_address: str):
         raise RuntimeError("load requests failed; see report")
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output",
@@ -355,15 +365,15 @@ def main():
     source = args.source_tree.resolve()
     sys.path.insert(0, str(source / "src"))
     if args.serve:
-        serve_fixture(Path(args.serve[0]), int(args.serve[1]))
+        (await serve_fixture(Path(args.serve[0]), int(args.serve[1])))
         return
     address = ipaddress.ip_address(args.lan_address)
     if address.version != 4 or address.is_loopback or address.is_unspecified:
         parser.error(
             "--lan-address must be an IPv4 address of this host on the test LAN"
         )
-    asyncio.run(run(args.output.resolve(), source, str(address)))
+    (await run(args.output.resolve(), source, str(address)))
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

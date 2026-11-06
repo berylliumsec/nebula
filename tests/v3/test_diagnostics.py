@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import json
 import logging
@@ -457,7 +461,7 @@ def test_live_reload_applies_atomic_external_changes(tmp_path: Path) -> None:
         manager.close()
 
 
-def test_background_tasks_receive_child_correlation_and_persist_failures(
+async def test_background_tasks_receive_child_correlation_and_persist_failures(
     manager: DiagnosticManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(diagnostics, "_manager", manager)
@@ -484,7 +488,7 @@ def test_background_tasks_receive_child_correlation_and_persist_failures(
                 await task
             await asyncio.sleep(0)
 
-    asyncio.run(scenario())
+    (await scenario())
 
     assert observed["operation_id"] not in {None, "operation_parent"}
     assert durable.wait(timeout=1)
@@ -713,7 +717,7 @@ def test_diagnostics_cli_status_levels_reset_and_export(tmp_path: Path) -> None:
     diagnostics.shutdown_diagnostics()
 
 
-def test_error_records_on_an_event_loop_return_before_the_writer_acknowledges(
+async def test_error_records_on_an_event_loop_return_before_the_writer_acknowledges(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manager = DiagnosticManager(tmp_path, watch_settings=False)
@@ -735,7 +739,7 @@ def test_error_records_on_an_event_loop_return_before_the_writer_acknowledges(
         # The writer is stuck on a slow disk for 1.5 s. An ERROR recorded from
         # the event loop must not stall the loop for that long.
         threading.Timer(1.5, gate[0].set).start()
-        elapsed = asyncio.run(timed_record("error", "api.test.loop_error"))
+        elapsed = await timed_record("error", "api.test.loop_error")
         assert elapsed < 1.0
         assert manager.flush(timeout=5)
         assert any(
@@ -746,7 +750,7 @@ def test_error_records_on_an_event_loop_return_before_the_writer_acknowledges(
         # CRITICAL keeps its durable acknowledgement even on the loop.
         gate[0] = threading.Event()
         threading.Timer(0.3, gate[0].set).start()
-        elapsed = asyncio.run(timed_record("critical", "api.test.loop_critical"))
+        elapsed = await timed_record("critical", "api.test.loop_critical")
         assert elapsed >= 0.3
         assert any(
             item["event_code"] == "api.test.loop_critical"
@@ -1174,3 +1178,6 @@ def test_settings_save_keeps_session_memory_protected_detail(
         assert after == before
     finally:
         manager.close()
+
+
+pytestmark = pytest.mark.anyio

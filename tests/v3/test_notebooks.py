@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import hashlib
 import importlib.util
@@ -8,7 +12,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.domain import (
@@ -30,11 +34,11 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.credentials import CredentialStore
 
 
-def _project(tmp_path):
+async def _project(tmp_path):
     store = NebulaStore(tmp_path / "store.db")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    project = store.create(
+    project = await store.create(
         Engagement(name="Notebook project", workspace_path=str(workspace))
     )
     notebooks = NotebookService(
@@ -46,8 +50,8 @@ def _project(tmp_path):
     return store, project, notebooks
 
 
-def test_notebook_documents_are_atomic_and_reject_stale_cell_edits(tmp_path):
-    store, project, notebooks = _project(tmp_path)
+async def test_notebook_documents_are_atomic_and_reject_stale_cell_edits(tmp_path):
+    store, project, notebooks = await _project(tmp_path)
 
     async def scenario():
         created = await notebooks.create(project.id, "research/quick.ipynb")
@@ -70,12 +74,15 @@ def test_notebook_documents_are_atomic_and_reject_stale_cell_edits(tmp_path):
                 expected_revision=None,
                 expected_source_hash="0" * 64,
             )
-        previous = notebooks.read(project.id, "research/quick.ipynb")["document"]
+        previous = (await notebooks.read(project.id, "research/quick.ipynb"))[
+            "document"
+        ]
         previous["cells"][0]["outputs"] = [
             {"output_type": "stream", "name": "stdout", "text": "old result"}
         ]
         notebooks.documents._atomic_write(
-            notebooks.documents.path(project.id, "research/quick.ipynb"), previous
+            (await notebooks.documents.path(project.id, "research/quick.ipynb")),
+            previous,
         )
         saved = await notebooks.upsert_cell(
             project.id,
@@ -88,13 +95,13 @@ def test_notebook_documents_are_atomic_and_reject_stale_cell_edits(tmp_path):
         assert saved["document"]["cells"][0]["source"] == "print(3)"
         assert saved["document"]["cells"][0]["outputs"] == []
         with pytest.raises(Exception, match="escapes|project-relative"):
-            notebooks.read(project.id, "../outside.ipynb")
+            (await notebooks.read(project.id, "../outside.ipynb"))
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
-    _, project, notebooks = _project(tmp_path)
+async def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
+    _, project, notebooks = await _project(tmp_path)
     path = tmp_path / "workspace" / "legacy.ipynb"
     original = {
         "nbformat": 4,
@@ -129,13 +136,15 @@ def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
     }
     raw = json.dumps(original).encode()
     path.write_bytes(raw)
-    first = notebooks.read(project.id, "legacy.ipynb")
+    first = await notebooks.read(project.id, "legacy.ipynb")
     ids = [cell["id"] for cell in first["document"]["cells"]]
     assert len(set(ids)) == len(ids)
     assert ids[2] == "existing"
     assert [
         cell["id"]
-        for cell in notebooks.read(project.id, "legacy.ipynb")["document"]["cells"]
+        for cell in (await notebooks.read(project.id, "legacy.ipynb"))["document"][
+            "cells"
+        ]
     ] == ids
     assert first["revision"] == hashlib.sha256(raw).hexdigest()
     assert path.read_bytes() == raw
@@ -150,16 +159,16 @@ def test_legacy_notebook_cells_get_stable_ids_without_writing_on_read(tmp_path):
             expected_source_hash=first["cell_revisions"][ids[1]],
         )
 
-    saved = asyncio.run(save())
+    saved = await save()
     assert [cell["id"] for cell in saved["document"]["cells"]] == ids
     assert [cell["id"] for cell in json.loads(path.read_bytes())["cells"]] == ids
     assert saved["document"]["cells"][1]["source"] == "print(4)"
 
 
-def test_notebook_inventory_does_not_block_core_and_coalesces_scans(
+async def test_notebook_inventory_does_not_block_core_and_coalesces_scans(
     tmp_path, monkeypatch
 ):
-    _, project, notebooks = _project(tmp_path)
+    _, project, notebooks = await _project(tmp_path)
     started = threading.Event()
     release = threading.Event()
     calls = []
@@ -195,11 +204,13 @@ def test_notebook_inventory_does_not_block_core_and_coalesces_scans(
         await notebooks.list_async(project.id, refresh=True)
         assert len(calls) == 2
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_notebook_inventory_route_keeps_core_health_responsive(tmp_path, monkeypatch):
-    store, project, _ = _project(tmp_path)
+async def test_notebook_inventory_route_keeps_core_health_responsive(
+    tmp_path, monkeypatch
+):
+    store, project, _ = await _project(tmp_path)
     started = threading.Event()
     release = threading.Event()
 
@@ -228,35 +239,34 @@ def test_notebook_inventory_route_keeps_core_health_responsive(tmp_path, monkeyp
                 release.set()
             assert (await listing).status_code == 200
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_notebook_mcp_is_project_scoped_and_revocation_is_immediate(tmp_path):
-    store, project, notebooks = _project(tmp_path)
-    other = store.create(
+async def test_notebook_mcp_is_project_scoped_and_revocation_is_immediate(tmp_path):
+    store, project, notebooks = await _project(tmp_path)
+    other = await store.create(
         Engagement(name="Other project", workspace_path=str(tmp_path / "workspace"))
     )
     tools = NotebookMcpTools(store, notebooks)
-    profile = tools.register_profile(project.id)
+    profile = await tools.register_profile(project.id)
     probe = McpProbeService(
         store,
         credential_store=CredentialStore(),
         workspace_resolver=lambda _: tmp_path / "workspace",
     )
     probe.bind_notebooks(notebooks)
-    assert (
-        resolve_mcp_profiles(store, [profile.id], engagement_id=project.id)[0].id
-        == profile.id
-    )
+    assert (await resolve_mcp_profiles(store, [profile.id], engagement_id=project.id))[
+        0
+    ].id == profile.id
     with pytest.raises(McpProbeError, match="another project"):
-        resolve_mcp_profiles(store, [profile.id], engagement_id=other.id)
+        (await resolve_mcp_profiles(store, [profile.id], engagement_id=other.id))
 
     async def scenario():
         result = await probe.call_tool(
             profile, engagement_id=project.id, tool_name="list", arguments={}
         )
         assert result["structuredContent"] == []
-        narrowed = store.update(
+        narrowed = await store.update(
             McpServerProfile,
             profile.id,
             {"disabled_tools": ["list"]},
@@ -266,22 +276,24 @@ def test_notebook_mcp_is_project_scoped_and_revocation_is_immediate(tmp_path):
             await probe.call_tool(
                 profile, engagement_id=project.id, tool_name="list", arguments={}
             )
-        store.update(
-            McpServerProfile,
-            profile.id,
-            {"enabled": False},
-            expected_revision=narrowed.revision,
+        (
+            await store.update(
+                McpServerProfile,
+                profile.id,
+                {"enabled": False},
+                expected_revision=narrowed.revision,
+            )
         )
         with pytest.raises(McpProbeError, match="revoked|disabled"):
             await probe.call_tool(
                 profile, engagement_id=project.id, tool_name="list", arguments={}
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_package_search_respects_project_network_policy(tmp_path):
-    _, project, notebooks = _project(tmp_path)
+async def test_package_search_respects_project_network_policy(tmp_path):
+    _, project, notebooks = await _project(tmp_path)
     policy = AutomationProjectPolicy(
         engagement_id=project.id,
         execution_mode="host",
@@ -299,11 +311,11 @@ def test_package_search_respects_project_network_policy(tmp_path):
         ):
             await notebooks.search_package(project.id, "packages.ipynb", "numpy")
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_package_install_requires_host_consent(tmp_path):
-    _, project, notebooks = _project(tmp_path)
+async def test_package_install_requires_host_consent(tmp_path):
+    _, project, notebooks = await _project(tmp_path)
     policy = AutomationProjectPolicy(
         engagement_id=project.id,
         execution_mode="host",
@@ -319,13 +331,13 @@ def test_package_install_requires_host_consent(tmp_path):
         with pytest.raises(NotebookPermissionRequired, match="Acknowledge Host access"):
             await notebooks.install_package(project.id, "packages.ipynb", "numpy")
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_idle_notebook_worker_is_replaced_after_project_folder_relink(
+async def test_idle_notebook_worker_is_replaced_after_project_folder_relink(
     tmp_path, monkeypatch
 ):
-    store, project, notebooks = _project(tmp_path)
+    store, project, notebooks = await _project(tmp_path)
     old_folder = tmp_path / "workspace"
     new_folder = tmp_path / "new-workspace"
     new_folder.mkdir()
@@ -377,10 +389,14 @@ def test_idle_notebook_worker_is_replaced_after_project_folder_relink(
         old_worker = await notebooks._worker(project.id, "same.ipynb")
         assert await notebooks._worker(project.id, "same.ipynb") is old_worker
         assert launched == [old_folder]
-        store.relink_project_workspace(
-            project.id, str(new_folder), expected_revision=project.revision
+        (
+            await store.relink_project_workspace(
+                project.id, str(new_folder), expected_revision=project.revision
+            )
         )
-        assert notebooks.kernel_status(project.id, "same.ipynb")["state"] == "absent"
+        assert (await notebooks.kernel_status(project.id, "same.ipynb"))[
+            "state"
+        ] == "absent"
         with pytest.raises(NotebookConflict, match="workspace changed"):
             await notebooks.restart(
                 project.id,
@@ -392,12 +408,12 @@ def test_idle_notebook_worker_is_replaced_after_project_folder_relink(
         assert old_worker.process.returncode == 0
         assert launched == [old_folder, new_folder]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_run_replay_uses_an_ordered_sequence_cursor(tmp_path):
-    store, project, notebooks = _project(tmp_path)
-    run = store.create(
+async def test_run_replay_uses_an_ordered_sequence_cursor(tmp_path):
+    store, project, notebooks = await _project(tmp_path)
+    run = await store.create(
         NotebookRun(
             engagement_id=project.id,
             notebook_path="replay.ipynb",
@@ -407,21 +423,20 @@ def test_run_replay_uses_an_ordered_sequence_cursor(tmp_path):
         )
     )
     for number in range(3):
-        store.append_event(run.id, "notebook.output", {"text": str(number)})
-    first = notebooks.run(run.id, engagement_id=project.id)
+        (await store.append_event(run.id, "notebook.output", {"text": str(number)}))
+    first = await notebooks.run(run.id, engagement_id=project.id)
     assert [item["sequence"] for item in first["events"]] == [1, 2, 3]
     assert first["next_sequence"] == 3
-    next_page = notebooks.run(run.id, engagement_id=project.id, after_sequence=2)
+    next_page = await notebooks.run(run.id, engagement_id=project.id, after_sequence=2)
     assert [item["payload"]["text"] for item in next_page["events"]] == ["2"]
-    assert (
-        notebooks.run(run.id, engagement_id=project.id, after_sequence=3)["events"]
-        == []
-    )
+    assert (await notebooks.run(run.id, engagement_id=project.id, after_sequence=3))[
+        "events"
+    ] == []
 
 
-def test_notebook_event_stream_authenticates_and_replays_in_order(tmp_path):
-    store, project, _ = _project(tmp_path)
-    run = store.create(
+async def test_notebook_event_stream_authenticates_and_replays_in_order(tmp_path):
+    store, project, _ = await _project(tmp_path)
+    run = await store.create(
         NotebookRun(
             engagement_id=project.id,
             notebook_path="stream.ipynb",
@@ -430,15 +445,17 @@ def test_notebook_event_stream_authenticates_and_replays_in_order(tmp_path):
             execution_mode="host",
         )
     )
-    store.append_event(run.id, "notebook.output", {"text": "first"})
-    store.append_event(run.id, "notebook.completed", {"status": "succeeded"})
-    store.update(
-        NotebookRun, run.id, {"status": "succeeded"}, expected_revision=run.revision
+    (await store.append_event(run.id, "notebook.output", {"text": "first"}))
+    (await store.append_event(run.id, "notebook.completed", {"status": "succeeded"}))
+    (
+        await store.update(
+            NotebookRun, run.id, {"status": "succeeded"}, expected_revision=run.revision
+        )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
     url = f"/api/v1/engagements/{project.id}/notebooks/runs/{run.id}/events"
-    assert client.get(url).status_code == 401
-    with client.stream(
+    assert (await client.get(url)).status_code == 401
+    async with client.stream(
         "GET", url, headers={"Authorization": "Bearer test-token"}
     ) as response:
         assert response.status_code == 200
@@ -448,13 +465,15 @@ def test_notebook_event_stream_authenticates_and_replays_in_order(tmp_path):
     assert '"text": "first"' in frames
 
 
-def test_mode_change_exposes_active_runs_and_waits_for_an_explicit_interrupt(tmp_path):
-    store, project, notebooks = _project(tmp_path)
+async def test_mode_change_exposes_active_runs_and_waits_for_an_explicit_interrupt(
+    tmp_path,
+):
+    store, project, notebooks = await _project(tmp_path)
     policy = AutomationProjectPolicy(engagement_id=project.id, execution_mode="docker")
     notebooks.automation_runtime = type(
         "Runtime", (), {"project_policy": lambda self, _: policy}
     )()
-    run = store.create(
+    run = await store.create(
         NotebookRun(
             engagement_id=project.id,
             notebook_path="queued.ipynb",
@@ -465,21 +484,23 @@ def test_mode_change_exposes_active_runs_and_waits_for_an_explicit_interrupt(tmp
     )
 
     async def scenario():
-        assert [item.id for item in notebooks.active_runs(project.id)] == [run.id]
+        assert [item.id for item in (await notebooks.active_runs(project.id))] == [
+            run.id
+        ]
         with pytest.raises(NotebookConflict, match="interrupt it"):
             await notebooks.prepare_policy_change(project.id, "host")
         await notebooks.interrupt(run.id, engagement_id=project.id)
-        assert notebooks.active_runs(project.id) == []
+        assert (await notebooks.active_runs(project.id)) == []
         assert await notebooks.prepare_policy_change(project.id, "host") is True
         with pytest.raises(NotebookConflict, match="mode is changing"):
             await notebooks.start_run(project.id, "queued.ipynb", "cell")
         notebooks.finish_policy_change(project.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_queued_interrupt_during_kernel_start_remains_interrupted(tmp_path):
-    store, project, notebooks = _project(tmp_path)
+async def test_queued_interrupt_during_kernel_start_remains_interrupted(tmp_path):
+    store, project, notebooks = await _project(tmp_path)
     policy = AutomationProjectPolicy(
         engagement_id=project.id,
         execution_mode="host",
@@ -514,16 +535,16 @@ def test_queued_interrupt_during_kernel_start_remains_interrupted(tmp_path):
         release.set()
         result = await notebooks.wait_run(run.id, engagement_id=project.id, timeout=5)
         assert result["run"]["status"] == "interrupted"
-        assert store.get(NotebookRun, run.id).status == "interrupted"
+        assert (await store.get(NotebookRun, run.id)).status == "interrupted"
         assert [event["event_type"] for event in result["events"]].count(
             "notebook.completed"
         ) == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_bundled_runtime_restages_when_only_the_worker_changes(tmp_path):
-    _, _, notebooks = _project(tmp_path)
+async def test_bundled_runtime_restages_when_only_the_worker_changes(tmp_path):
+    _, _, notebooks = await _project(tmp_path)
     resource = tmp_path / "bundled-runtime"
     python = resource / "python" / "bin" / "python3"
     python.parent.mkdir(parents=True)
@@ -560,14 +581,14 @@ def test_bundled_runtime_restages_when_only_the_worker_changes(tmp_path):
         assert (first / "worker.py").read_bytes() == b"worker v1"
         assert (second / "worker.py").read_bytes() == b"worker v2"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.skipif(
     importlib.util.find_spec("jupyter_client") is None,
     reason="Jupyter worker dependencies are staged only in the packaged runtime",
 )
-def test_jupyter_worker_streams_and_reuses_a_kernel(tmp_path):
+async def test_jupyter_worker_streams_and_reuses_a_kernel(tmp_path):
     worker_script = Path(__file__).resolve().parents[2] / "packaging/notebook/worker.py"
 
     async def scenario():
@@ -615,4 +636,7 @@ def test_jupyter_worker_streams_and_reuses_a_kernel(tmp_path):
         finally:
             await worker.close()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

@@ -1,10 +1,14 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.chat as chat_module
 from nebula.v3.api import create_app
@@ -108,7 +112,7 @@ def _skill(name: str, instructions: str) -> SimpleNamespace:
     return SimpleNamespace(name=name, instructions=instructions)
 
 
-def test_jev_receives_only_redacted_operator_text_and_tool_summaries():
+async def test_jev_receives_only_redacted_operator_text_and_tool_summaries():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -118,15 +122,13 @@ def test_jev_receives_only_redacted_operator_text_and_tool_summaries():
         return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.7, NONE_OPTION: 0.3}))
 
     deferred = {MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")}
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(handler),
-            deferred=deferred,
-            operator_messages=[
-                "earlier ask",
-                "find issues; token Bearer abcdefghijklmnopqrstuvwxyz0123",
-            ],
-        )
+    receipt = await suggest_tools(
+        _client(handler),
+        deferred=deferred,
+        operator_messages=[
+            "earlier ask",
+            "find issues; token Bearer abcdefghijklmnopqrstuvwxyz0123",
+        ],
     )
 
     assert seen["url"] == "https://api.typesafe.ai/v1/systemone"
@@ -154,72 +156,64 @@ def test_jev_receives_only_redacted_operator_text_and_tool_summaries():
     assert receipt.input_tokens == 321
 
 
-def test_none_of_these_keeps_a_confident_tool_out_of_the_prompt():
+async def test_none_of_these_keeps_a_confident_tool_out_of_the_prompt():
     """ "None of these" replaces the old "does this need a tool at all" gate."""
 
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(
-                lambda _: httpx.Response(
-                    200, json=_jev_answers({MCP_TOOL: 0.55, NONE_OPTION: 0.45})
-                )
-            ),
-            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
-            operator_messages=["find issues"],
-        )
+    receipt = await suggest_tools(
+        _client(
+            lambda _: httpx.Response(
+                200, json=_jev_answers({MCP_TOOL: 0.55, NONE_OPTION: 0.45})
+            )
+        ),
+        deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
+        operator_messages=["find issues"],
     )
     # It cleared PRELOAD_THRESHOLD and beat the none option, so its schema rides
     # along with the turn.
     assert receipt.preloaded == [MCP_TOOL] and receipt.suggested == []
 
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(
-                lambda _: httpx.Response(
-                    200, json=_jev_answers({MCP_TOOL: 0.55, NONE_OPTION: 0.6})
-                )
-            ),
-            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
-            operator_messages=["explain what an MCP server is"],
-        )
+    receipt = await suggest_tools(
+        _client(
+            lambda _: httpx.Response(
+                200, json=_jev_answers({MCP_TOOL: 0.55, NONE_OPTION: 0.6})
+            )
+        ),
+        deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
+        operator_messages=["explain what an MCP server is"],
     )
     # Same probability, but Jev rated "none of these" higher: it stays a hint
     # rather than spending prompt tokens on the schema.
     assert receipt.preloaded == [] and receipt.suggested == [MCP_TOOL]
 
 
-def test_nothing_clearing_the_threshold_is_recorded_as_no_tool_needed():
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(
-                lambda _: httpx.Response(
-                    200, json=_jev_answers({MCP_TOOL: 0.05, NONE_OPTION: 0.95})
-                )
-            ),
-            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
-            operator_messages=["explain what an MCP server is"],
-        )
+async def test_nothing_clearing_the_threshold_is_recorded_as_no_tool_needed():
+    receipt = await suggest_tools(
+        _client(
+            lambda _: httpx.Response(
+                200, json=_jev_answers({MCP_TOOL: 0.05, NONE_OPTION: 0.95})
+            )
+        ),
+        deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
+        operator_messages=["explain what an MCP server is"],
     )
     assert receipt.status == "no_tool_needed"
     assert receipt.preloaded == [] and receipt.suggested == []
 
 
-def test_moderate_probability_is_a_hint_without_preloading():
+async def test_moderate_probability_is_a_hint_without_preloading():
     other = "mcp.tracker.create_issue"
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(
-                lambda _: httpx.Response(
-                    200,
-                    json=_jev_answers({MCP_TOOL: 0.3, other: 0.05, NONE_OPTION: 0.65}),
-                )
-            ),
-            deferred={
-                MCP_TOOL: _spec(MCP_TOOL, "Search."),
-                other: _spec(other, "Create."),
-            },
-            operator_messages=["look for related bugs"],
-        )
+    receipt = await suggest_tools(
+        _client(
+            lambda _: httpx.Response(
+                200,
+                json=_jev_answers({MCP_TOOL: 0.3, other: 0.05, NONE_OPTION: 0.65}),
+            )
+        ),
+        deferred={
+            MCP_TOOL: _spec(MCP_TOOL, "Search."),
+            other: _spec(other, "Create."),
+        },
+        operator_messages=["look for related bugs"],
     )
     assert receipt.preloaded == []
     assert receipt.suggested == [MCP_TOOL]
@@ -282,31 +276,29 @@ def test_the_operators_description_wins_over_handshake_instructions():
     )
 
 
-def test_the_server_ranking_decides_between_equally_rated_tools():
+async def test_the_server_ranking_decides_between_equally_rated_tools():
     tracker_tool, vault_tool = MCP_TOOL, "mcp.vault.read_secret"
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(
-                lambda _: httpx.Response(
-                    200,
-                    json=_jev_answers(
-                        {tracker_tool: 0.6, vault_tool: 0.6},
-                        sources={"mcp:tracker": 0.9, "mcp:vault": 0.05},
-                    ),
-                )
-            ),
-            deferred={
-                tracker_tool: _spec(tracker_tool, "Search issues."),
-                vault_tool: _spec(vault_tool, "Read a secret.", source="mcp:vault"),
-            },
-            operator_messages=["find the login bug"],
-            sources=mcp_sources(
-                [
-                    _mcp_profile("tracker", "issue-tracker", instructions="Issues."),
-                    _mcp_profile("vault", "secrets", instructions="Secrets."),
-                ]
-            ),
-        )
+    receipt = await suggest_tools(
+        _client(
+            lambda _: httpx.Response(
+                200,
+                json=_jev_answers(
+                    {tracker_tool: 0.6, vault_tool: 0.6},
+                    sources={"mcp:tracker": 0.9, "mcp:vault": 0.05},
+                ),
+            )
+        ),
+        deferred={
+            tracker_tool: _spec(tracker_tool, "Search issues."),
+            vault_tool: _spec(vault_tool, "Read a secret.", source="mcp:vault"),
+        },
+        operator_messages=["find the login bug"],
+        sources=mcp_sources(
+            [
+                _mcp_profile("tracker", "issue-tracker", instructions="Issues."),
+                _mcp_profile("vault", "secrets", instructions="Secrets."),
+            ]
+        ),
     )
 
     # Same tool probability: the source's rank is what preloads one schema and
@@ -318,18 +310,14 @@ def test_the_server_ranking_decides_between_equally_rated_tools():
     assert receipt.source_probabilities == {"mcp:tracker": 0.9, "mcp:vault": 0.05}
 
 
-def test_only_the_top_three_tools_survive():
+async def test_only_the_top_three_tools_survive():
     probabilities = {
         f"mcp.tracker.tool_{index}": 0.6 - index / 20 for index in range(6)
     }
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(
-                lambda _: httpx.Response(200, json=_jev_answers(dict(probabilities)))
-            ),
-            deferred={name: _spec(name, "Does a thing.") for name in probabilities},
-            operator_messages=["work the queue"],
-        )
+    receipt = await suggest_tools(
+        _client(lambda _: httpx.Response(200, json=_jev_answers(dict(probabilities)))),
+        deferred={name: _spec(name, "Does a thing.") for name in probabilities},
+        operator_messages=["work the queue"],
     )
 
     picks = [*receipt.preloaded, *receipt.suggested]
@@ -350,14 +338,12 @@ def test_only_the_top_three_tools_survive():
         ),
     ],
 )
-def test_jev_failure_never_raises_and_keeps_the_catalog(handler):
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(handler),
-            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
-            operator_messages=["find issues"],
-            skills=[_skill("triage", "Search the tracker first.")],
-        )
+async def test_jev_failure_never_raises_and_keeps_the_catalog(handler):
+    receipt = await suggest_tools(
+        _client(handler),
+        deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
+        operator_messages=["find issues"],
+        skills=[_skill("triage", "Search the tracker first.")],
     )
     assert receipt.status == "unavailable"
     assert receipt.deferred == [MCP_TOOL]
@@ -366,15 +352,13 @@ def test_jev_failure_never_raises_and_keeps_the_catalog(handler):
     assert receipt.skills == ["triage"]
 
 
-def test_missing_api_key_is_reported_without_a_request(monkeypatch):
+async def test_missing_api_key_is_reported_without_a_request(monkeypatch):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     assert JevClient.from_environment() is None
-    receipt = asyncio.run(
-        suggest_tools(
-            None,
-            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
-            operator_messages=["x"],
-        )
+    receipt = await suggest_tools(
+        None,
+        deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
+        operator_messages=["x"],
     )
     assert receipt.status == "unavailable"
     assert "No TypeSafe key" in (receipt.error or "")
@@ -442,20 +426,18 @@ def test_questions_name_the_skills_only_when_state_carries_them():
     assert with_skills["tools_0"]["criteria"] == plain["tools_0"]["criteria"]
 
 
-def test_receipt_records_the_skills_that_were_sent():
+async def test_receipt_records_the_skills_that_were_sent():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["body"] = json.loads(request.content)
         return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.7, NONE_OPTION: 0.3}))
 
-    receipt = asyncio.run(
-        suggest_tools(
-            _client(handler),
-            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
-            operator_messages=["work the queue"],
-            skills=[_skill("triage", "Search the tracker before anything else.")],
-        )
+    receipt = await suggest_tools(
+        _client(handler),
+        deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+        operator_messages=["work the queue"],
+        skills=[_skill("triage", "Search the tracker before anything else.")],
     )
 
     assert seen["body"]["state"]["operator_selected_skills"] == [
@@ -498,7 +480,7 @@ def test_an_identical_request_is_answered_from_the_cache():
     assert first.input_tokens == 321 and second.input_tokens is None
 
 
-def test_a_changed_catalog_or_message_asks_again():
+async def test_a_changed_catalog_or_message_asks_again():
     cache, counter = SuggestionCache(), []
     _ask(cache, counter)
 
@@ -519,8 +501,8 @@ def test_a_changed_catalog_or_message_asks_again():
 
     # A server re-probed into a new description changes the source criterion,
     # so the ranking it produced is not reused either.
-    asyncio.run(
-        suggest_tools(
+    (
+        await suggest_tools(
             _counting_client(counter),
             deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
             operator_messages=["find the login bug"],
@@ -533,15 +515,13 @@ def test_a_changed_catalog_or_message_asks_again():
     assert len(counter) == 4
 
 
-def test_a_failed_call_is_never_cached():
+async def test_a_failed_call_is_never_cached():
     cache, counter = SuggestionCache(), []
-    failing = asyncio.run(
-        suggest_tools(
-            _client(lambda _: httpx.Response(529, json={"error": "overloaded"})),
-            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
-            operator_messages=["find the login bug"],
-            cache=cache,
-        )
+    failing = await suggest_tools(
+        _client(lambda _: httpx.Response(529, json={"error": "overloaded"})),
+        deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+        operator_messages=["find the login bug"],
+        cache=cache,
     )
 
     assert failing.status == "unavailable" and len(cache) == 0
@@ -582,11 +562,11 @@ class _McpPlatform:
         self.store = store
         self.calls: list[list[str]] = []
 
-    def chat_components(self, *, engagement_id, mcp_profiles=(), **_):
+    async def chat_components(self, *, engagement_id, mcp_profiles=(), **_):
         self.calls.append([profile.id for profile in mcp_profiles])
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else ScopePolicy(
                 id=f"scope:{engagement_id}",
@@ -628,7 +608,7 @@ def _server(identifier, name, tool, description, *, instructions=None, **fields)
     )
 
 
-def _mcp_service(
+async def _mcp_service(
     tmp_path,
     monkeypatch,
     client_factory,
@@ -642,8 +622,12 @@ def _mcp_service(
 
     store = NebulaStore(tmp_path / "chat-suggestions.db")
     if scope is not None:
-        store.create(ScopePolicy(id="scope-jev", engagement_id="eng-jev", **scope))
-    engagement = store.create(
+        (
+            await store.create(
+                ScopePolicy(id="scope-jev", engagement_id="eng-jev", **scope)
+            )
+        )
+    engagement = await store.create(
         Engagement(
             id="eng-jev",
             name="Jev",
@@ -655,19 +639,21 @@ def _mcp_service(
     payload["capability_verifications"] = {
         "model-a": {"model": "model-a", "status": "verified"}
     }
-    profile = store.create(ProviderProfile.model_validate(payload))
+    profile = await store.create(ProviderProfile.model_validate(payload))
     provider = FakeProvider(profile.id, local=True)
     provider.config.capabilities.tools = True
     provider.config.capabilities.strict_tools = True
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
-    store.create(_server("notes", "notes", "read_note", "Read a saved note."))
-    store.create(
-        _server(
-            "tracker",
-            "issue-tracker",
-            "search_issues",
-            "Search tracker issues.",
-            instructions="Issue tracker for this codebase.",
+    (await store.create(_server("notes", "notes", "read_note", "Read a saved note.")))
+    (
+        await store.create(
+            _server(
+                "tracker",
+                "issue-tracker",
+                "search_issues",
+                "Search tracker issues.",
+                instructions="Issue tracker for this codebase.",
+            )
         )
     )
     service = ChatService(
@@ -694,7 +680,9 @@ def _mcp_service(
     return service, request
 
 
-def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkeypatch):
+async def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(
+    tmp_path, monkeypatch
+):
     calls = []
 
     def handler(request):
@@ -704,9 +692,11 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
             json=_jev_answers({MCP_TOOL: 0.8}, sources={"mcp:tracker": 0.9}),
         )
 
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(handler))
+    service, request = await _mcp_service(
+        tmp_path, monkeypatch, lambda: _client(handler)
+    )
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     assert len(calls) == 1
     assert calls[0]["state"]["operator_request"] == "find the login bug"
@@ -745,7 +735,7 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
     assert len(service.suggestion_cache) == 1
 
 
-def test_a_picked_servers_description_reaches_jev_and_then_the_model(
+async def test_a_picked_servers_description_reaches_jev_and_then_the_model(
     tmp_path, monkeypatch
 ):
     calls = []
@@ -757,16 +747,20 @@ def test_a_picked_servers_description_reaches_jev_and_then_the_model(
             json=_jev_answers({MCP_TOOL: 0.3}, sources={"mcp:tracker": 0.9}),
         )
 
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(handler))
-    tracker = service.store.get(McpServerProfile, "tracker")
-    service.store.update(
-        McpServerProfile,
-        tracker.id,
-        {"description": "Bugs for the web app: search, file, and close them."},
-        expected_revision=tracker.revision,
+    service, request = await _mcp_service(
+        tmp_path, monkeypatch, lambda: _client(handler)
+    )
+    tracker = await service.store.get(McpServerProfile, "tracker")
+    (
+        await service.store.update(
+            McpServerProfile,
+            tracker.id,
+            {"description": "Bugs for the web app: search, file, and close them."},
+            expected_revision=tracker.revision,
+        )
     )
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     # Jev ranks the server by what the operator wrote, not its handshake text.
     criteria = calls[0]["questions"]["sources_0"]["criteria"]
@@ -796,21 +790,21 @@ def test_a_picked_servers_description_reaches_jev_and_then_the_model(
     assert "Issue tracker for this codebase" not in instructions
 
 
-def test_prepare_sends_the_selected_skill_instructions(tmp_path, monkeypatch):
+async def test_prepare_sends_the_selected_skill_instructions(tmp_path, monkeypatch):
     calls = []
 
     def handler(request):
         calls.append(json.loads(request.content))
         return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.8}))
 
-    service, request = _mcp_service(
+    service, request = await _mcp_service(
         tmp_path,
         monkeypatch,
         lambda: _client(handler),
         skill="Search the tracker for duplicates before filing anything.",
     )
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     assert calls[0]["state"]["operator_selected_skills"] == [
         {
@@ -824,13 +818,15 @@ def test_prepare_sends_the_selected_skill_instructions(tmp_path, monkeypatch):
     assert prepared.turn.request_snapshot["tool_suggestions"]["skills"] == ["triage"]
 
 
-def test_unavailable_jev_falls_back_to_local_ranking(tmp_path, monkeypatch):
+async def test_unavailable_jev_falls_back_to_local_ranking(tmp_path, monkeypatch):
     def handler(_):
         return httpx.Response(529, json={"error": "overloaded"})
 
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(handler))
+    service, request = await _mcp_service(
+        tmp_path, monkeypatch, lambda: _client(handler)
+    )
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     snapshot = prepared.turn.request_snapshot
     assert snapshot["tool_suggestions"]["status"] == "unavailable"
@@ -838,15 +834,17 @@ def test_unavailable_jev_falls_back_to_local_ranking(tmp_path, monkeypatch):
     assert snapshot["tool_catalog"]["deferred"] == [MCP_TOOL]
 
 
-def test_prepare_skips_jev_when_the_engagement_has_not_opted_in(tmp_path, monkeypatch):
+async def test_prepare_skips_jev_when_the_engagement_has_not_opted_in(
+    tmp_path, monkeypatch
+):
     def fail(_):
         raise AssertionError("Jev must not be called")
 
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(fail))
+    service, request = await _mcp_service(tmp_path, monkeypatch, lambda: _client(fail))
     original = service.tool_platform.chat_components
 
-    def opted_out(**kwargs):
-        components = original(**kwargs)
+    async def opted_out(**kwargs):
+        components = await original(**kwargs)
         return RuntimeToolComponents(
             broker=components.broker,
             scope=components.scope.model_copy(update={"tool_suggestions": False}),
@@ -857,14 +855,14 @@ def test_prepare_skips_jev_when_the_engagement_has_not_opted_in(tmp_path, monkey
 
     service.tool_platform.chat_components = opted_out
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     # Deferral is on by default; only the Jev call is skipped.
     assert prepared.turn.request_snapshot["tool_suggestions"] is None
     assert prepared.turn.request_snapshot["tool_catalog"]["ranker"] == "keyword"
 
 
-def test_scope_update_without_the_field_keeps_the_opt_in(tmp_path):
+async def test_scope_update_without_the_field_keeps_the_opt_in(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     app = create_app(
         store,
@@ -873,14 +871,14 @@ def test_scope_update_without_the_field_keeps_the_opt_in(tmp_path):
     )
     client = TestClient(app)
     headers = {"Authorization": "Bearer test-token"}
-    engagement = store.create(Engagement(id="eng-scope", name="Scope"))
+    engagement = await store.create(Engagement(id="eng-scope", name="Scope"))
     url = f"/api/v1/engagements/{engagement.id}/scope"
 
-    enabled = client.put(url, json={"tool_suggestions": True}, headers=headers)
+    enabled = await client.put(url, json={"tool_suggestions": True}, headers=headers)
     assert enabled.status_code == 200, enabled.text
     assert enabled.json()["tool_suggestions"] is True
 
-    kept = client.put(
+    kept = await client.put(
         url,
         json={"local_only": False, "allowed_domains": ["example.com"]},
         headers=headers,
@@ -888,7 +886,7 @@ def test_scope_update_without_the_field_keeps_the_opt_in(tmp_path):
     assert kept.status_code == 200, kept.text
     assert kept.json()["tool_suggestions"] is True
 
-    cleared = client.put(url, json={"tool_suggestions": False}, headers=headers)
+    cleared = await client.put(url, json={"tool_suggestions": False}, headers=headers)
     assert cleared.json()["tool_suggestions"] is False
 
 
@@ -929,12 +927,12 @@ def _save(client, secret):
     )
 
 
-def test_typesafe_key_is_saved_tested_and_never_returned(typesafe_api):
+async def test_typesafe_key_is_saved_tested_and_never_returned(typesafe_api):
     from nebula.v3.domain import ToolSuggestionSettings
     from nebula.v3.tool_suggestions import resolve_jev_client
 
     client, store, credentials, sent_keys = typesafe_api
-    empty = client.get(TYPESAFE_URL, headers=HEADERS).json()
+    empty = (await client.get(TYPESAFE_URL, headers=HEADERS)).json()
     assert empty["source"] is None and empty["available"] is False
 
     saved = _save(client, "ts-secret-1")
@@ -945,59 +943,72 @@ def test_typesafe_key_is_saved_tested_and_never_returned(typesafe_api):
     assert body["last_test"]["ok"] is True
     assert body["last_test"]["model"] == "jev-1.13.0"
     assert sent_keys == ["ts-secret-1"]
-    reference = store.get(ToolSuggestionSettings, "typesafe").secret_ref
+    reference = (await store.get(ToolSuggestionSettings, "typesafe")).secret_ref
     assert reference.startswith("session:")
     # The generic CRUD API never exposes the settings record.
-    crud = client.get("/api/v1/tool-suggestion-settings", headers=HEADERS)
+    crud = await client.get("/api/v1/tool-suggestion-settings", headers=HEADERS)
     assert crud.status_code in {404, 405}
     # Chat turns resolve the same saved key.
-    assert resolve_jev_client(store, credentials).api_key == "ts-secret-1"
+    assert (await resolve_jev_client(store, credentials)).api_key == "ts-secret-1"
 
 
-def test_replacing_the_key_discards_the_old_secret(typesafe_api):
+async def test_replacing_the_key_discards_the_old_secret(typesafe_api):
     from nebula.v3.domain import ToolSuggestionSettings
 
     client, store, credentials, _ = typesafe_api
     _save(client, "ts-secret-1")
-    first = store.get(ToolSuggestionSettings, "typesafe").secret_ref
+    first = (await store.get(ToolSuggestionSettings, "typesafe")).secret_ref
     _save(client, "ts-secret-2")
     assert credentials.status(first).available is False
-    second = store.get(ToolSuggestionSettings, "typesafe").secret_ref
+    second = (await store.get(ToolSuggestionSettings, "typesafe")).secret_ref
     assert credentials.resolve(second).get_secret_value() == "ts-secret-2"
 
 
-def test_failed_test_is_recorded_and_retest_uses_the_saved_key(typesafe_api):
+async def test_failed_test_is_recorded_and_retest_uses_the_saved_key(typesafe_api):
     client, _, _, sent_keys = typesafe_api
     failed = _save(client, "bad-key").json()
     assert failed["available"] is True
     assert failed["last_test"]["ok"] is False
     assert "refused" in failed["last_test"]["error"]
-    retest = client.post(TYPESAFE_URL + "/test", headers=HEADERS).json()
+    retest = (await client.post(TYPESAFE_URL + "/test", headers=HEADERS)).json()
     assert retest["last_test"]["ok"] is False
     assert sent_keys == ["bad-key", "bad-key"]
 
 
-def test_environment_key_is_the_fallback_and_remove_restores_it(
+async def test_environment_key_is_the_fallback_and_remove_restores_it(
     typesafe_api, monkeypatch
 ):
     client, _, _, sent_keys = typesafe_api
     monkeypatch.setenv("TYPESAFE_API_KEY", "env-key")
-    assert client.get(TYPESAFE_URL, headers=HEADERS).json()["source"] == "environment"
-    assert client.post(TYPESAFE_URL + "/test", headers=HEADERS).json()["last_test"][
-        "ok"
-    ]
+    assert (await client.get(TYPESAFE_URL, headers=HEADERS)).json()[
+        "source"
+    ] == "environment"
+    assert (await client.post(TYPESAFE_URL + "/test", headers=HEADERS)).json()[
+        "last_test"
+    ]["ok"]
     _save(client, "ts-secret-1")
-    removed = client.delete(TYPESAFE_URL, headers=HEADERS).json()
+    removed = (await client.delete(TYPESAFE_URL, headers=HEADERS)).json()
     assert removed["source"] == "environment"
     assert removed["last_test"] is None
     assert sent_keys == ["env-key", "ts-secret-1"]
 
 
-def test_projects_using_counts_opted_in_scopes_that_are_not_local_only(typesafe_api):
+async def test_projects_using_counts_opted_in_scopes_that_are_not_local_only(
+    typesafe_api,
+):
     client, store, _, _ = typesafe_api
-    store.create(ScopePolicy(id="s1", engagement_id="a", tool_suggestions=True))
-    store.create(
-        ScopePolicy(id="s2", engagement_id="b", tool_suggestions=True, local_only=True)
+    (await store.create(ScopePolicy(id="s1", engagement_id="a", tool_suggestions=True)))
+    (
+        await store.create(
+            ScopePolicy(
+                id="s2", engagement_id="b", tool_suggestions=True, local_only=True
+            )
+        )
     )
-    store.create(ScopePolicy(id="s3", engagement_id="c"))
-    assert client.get(TYPESAFE_URL, headers=HEADERS).json()["projects_using"] == 1
+    (await store.create(ScopePolicy(id="s3", engagement_id="c")))
+    assert (await client.get(TYPESAFE_URL, headers=HEADERS)).json()[
+        "projects_using"
+    ] == 1
+
+
+pytestmark = pytest.mark.anyio

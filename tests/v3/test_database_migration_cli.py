@@ -1,6 +1,10 @@
 """Offline migration entry point and a migrated PostgreSQL Core over a real LAN."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import hashlib
@@ -11,7 +15,7 @@ import re
 import socket
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -117,16 +121,22 @@ def test_serve_preserves_local_mission_checkpoint_location(
     )
 
 
-def test_postgresql_inspect_reads_existing_sqlite_without_target_or_changes(
+async def test_postgresql_inspect_reads_existing_sqlite_without_target_or_changes(
     tmp_path, monkeypatch
 ):
     monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
     store = NebulaStore(tmp_path / "nebula.db")
-    store.create(Engagement(id="inspect-project", name="Synthetic migration source"))
-    store.database.engine.dispose()
+    (
+        await store.create(
+            Engagement(id="inspect-project", name="Synthetic migration source")
+        )
+    )
+    (await store.database.engine.dispose())
     before = (tmp_path / "nebula.db").read_bytes()
-    result = CliRunner().invoke(
-        app, ["migrate-to-postgresql", "--data-dir", str(tmp_path), "--inspect"]
+    result = await asyncio.to_thread(
+        CliRunner().invoke,
+        app,
+        ["migrate-to-postgresql", "--data-dir", str(tmp_path), "--inspect"],
     )
     assert result.exit_code == 0, result.output
     report = json.loads(result.stdout)
@@ -289,8 +299,8 @@ def test_postgresql_errors_do_not_reveal_connection_credentials(
     assert "Traceback" not in result.output
 
 
-@contextmanager
-def _migrated_lan_core(url, root, address):
+@asynccontextmanager
+async def _migrated_lan_core(url, root, address):
     store = NebulaStore(url)
     core = create_app(
         store,
@@ -331,14 +341,14 @@ def _migrated_lan_core(url, root, address):
         server.should_exit = True
         worker.join(timeout=40)
         assert not worker.is_alive(), "Disposable PostgreSQL LAN Core did not stop"
-        store.database.engine.dispose()
+        (await store.database.engine.dispose())
 
 
 @pytest.mark.skipif(
     not os.getenv("NEBULA_TEST_POSTGRES_CLI_URL"),
     reason="NEBULA_TEST_POSTGRES_CLI_URL is required for the real migration/LAN journey",
 )
-def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
+async def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
     tmp_path, monkeypatch, record_property
 ):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
@@ -359,8 +369,12 @@ def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
     try:
         source = tmp_path / "nebula.db"
         store = NebulaStore(source)
-        store.create(Engagement(id="migration-project", name="Migration Project"))
-        profile = store.create(
+        (
+            await store.create(
+                Engagement(id="migration-project", name="Migration Project")
+            )
+        )
+        profile = await store.create(
             ProviderProfile(
                 id="migration-provider",
                 name="Synthetic",
@@ -369,7 +383,7 @@ def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
                 model_allowlist=["security-model"],
             )
         )
-        session = store.create(
+        session = await store.create(
             ChatSession(
                 id="migration-chat",
                 engagement_id="migration-project",
@@ -378,25 +392,29 @@ def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
                 provider_profile_id="migration-provider",
             )
         )
-        store.create(
-            ChatMessage(
-                id="migration-message",
-                engagement_id="migration-project",
-                session_id=session.id,
-                sequence=1,
-                role="assistant",
-                content="Saved before migration: café 東京",
+        (
+            await store.create(
+                ChatMessage(
+                    id="migration-message",
+                    engagement_id="migration-project",
+                    session_id=session.id,
+                    sequence=1,
+                    role="assistant",
+                    content="Saved before migration: café 東京",
+                )
             )
         )
-        store.create(
-            AgentRun(
-                id="migration-run",
-                engagement_id="migration-project",
-                objective="Synthetic saved event stream",
-                status=RunStatus.COMPLETE,
+        (
+            await store.create(
+                AgentRun(
+                    id="migration-run",
+                    engagement_id="migration-project",
+                    objective="Synthetic saved event stream",
+                    status=RunStatus.COMPLETE,
+                )
             )
         )
-        first_event = store.append_event(
+        first_event = await store.append_event(
             "migration-run", "fixture.saved", {"saved": True}, idempotency_key="saved"
         )
         scheduled_for = utc_now() + timedelta(days=1)
@@ -416,11 +434,12 @@ def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
             await service.shutdown()
             return scheduled.id
 
-        original_native_id = asyncio.run(queue_existing_native_mission())
-        store.database.engine.dispose()
+        original_native_id = await queue_existing_native_mission()
+        (await store.database.engine.dispose())
         before = hashlib.sha256(source.read_bytes()).hexdigest()
         monkeypatch.setenv("NEBULA_V3_DATABASE_URL", target)
-        copied = CliRunner().invoke(
+        copied = await asyncio.to_thread(
+            CliRunner().invoke,
             app,
             [
                 "migrate-to-postgresql",
@@ -436,7 +455,7 @@ def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
         assert hashlib.sha256(source.read_bytes()).hexdigest() == before
         monkeypatch.setattr("nebula.v3.api.provider_from_profile", RecordingProvider)
 
-        with _migrated_lan_core(target, tmp_path, address) as client:
+        async with _migrated_lan_core(target, tmp_path, address) as client:
             record_property("first_core_origin", str(client.base_url))
             assert client.get("health").json()["dialect"] == "postgresql"
             assert (
@@ -492,7 +511,7 @@ def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
             assert scheduled.status_code == 202, scheduled.text
             new_native_id = scheduled.json()["id"]
 
-        with _migrated_lan_core(target, tmp_path, address) as client:
+        async with _migrated_lan_core(target, tmp_path, address) as client:
             record_property("restarted_core_origin", str(client.base_url))
             selected = client.get(f"chat-sessions/{session.id}")
             assert selected.is_success, selected.text
@@ -523,3 +542,6 @@ def test_postgresql_cli_copy_preserves_chat_and_event_replay_after_lan_restart(
         with administration.begin() as connection:
             connection.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
         administration.dispose()
+
+
+pytestmark = pytest.mark.anyio

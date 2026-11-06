@@ -9,13 +9,18 @@ saved choice.
 """
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.api import create_app
@@ -104,32 +109,36 @@ class ToolProvider(ModelProvider):
         return ProviderHealth(provider_id="provider", healthy=True, models=["model-a"])
 
 
-def _setup(tmp_path: Path):
+async def _setup(tmp_path: Path):
     store = NebulaStore(tmp_path / "choice.db")
-    store.create(Engagement(id="project", name="Project"))
-    store.create(
-        ProviderProfile(
-            id="provider",
-            name="Provider",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
-            metadata={"options": {"context_window": 32768}},
-            capabilities={"streaming": True, "tool_calling": True},
-            capability_verifications={
-                "model-a": ProviderCapabilityVerification(
-                    model="model-a", status=ProviderVerificationStatus.VERIFIED
-                )
-            },
+    (await store.create(Engagement(id="project", name="Project")))
+    (
+        await store.create(
+            ProviderProfile(
+                id="provider",
+                name="Provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={"options": {"context_window": 32768}},
+                capabilities={"streaming": True, "tool_calling": True},
+                capability_verifications={
+                    "model-a": ProviderCapabilityVerification(
+                        model="model-a", status=ProviderVerificationStatus.VERIFIED
+                    )
+                },
+            )
         )
     )
-    store.create(
-        ChatSession(
-            id=SESSION,
-            engagement_id="project",
-            title="Delegating chat",
-            provider_profile_id="provider",
-            model="model-a",
+    (
+        await store.create(
+            ChatSession(
+                id=SESSION,
+                engagement_id="project",
+                title="Delegating chat",
+                provider_profile_id="provider",
+                model="model-a",
+            )
         )
     )
     provider = ToolProvider()
@@ -140,8 +149,8 @@ def _setup(tmp_path: Path):
     return store, provider, chat, client
 
 
-def _patch(client: TestClient, session_id: str, **changes) -> dict:
-    response = client.patch(
+async def _patch(client: TestClient, session_id: str, **changes) -> dict:
+    response = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers={"Authorization": "Bearer test-token"},
         json=changes,
@@ -163,39 +172,50 @@ def _manual_turn(**flags) -> ChatCompletionRequest:
     )
 
 
-def _goal(store: NebulaStore, *, step_budget: int | None = None) -> ChatGoalService:
+async def _goal(
+    store: NebulaStore, *, step_budget: int | None = None
+) -> ChatGoalService:
     goals = ChatGoalService(store)
-    goals.create(
-        SESSION,
-        GoalCreate(
-            objective="Split the review",
-            completion_criteria=["Every area is reviewed"],
-            step_budget=step_budget,
-        ),
+    (
+        await goals.create(
+            SESSION,
+            GoalCreate(
+                objective="Split the review",
+                completion_criteria=["Every area is reviewed"],
+                step_budget=step_budget,
+            ),
+        )
     )
     return goals
 
 
-def _start(goals: ChatGoalService) -> None:
-    goal = goals.get(SESSION)
-    goals.write(SESSION, GoalWrite(expected_revision=goal.revision, action="start"))
+async def _start(goals: ChatGoalService) -> None:
+    goal = await goals.get(SESSION)
+    (
+        await goals.write(
+            SESSION, GoalWrite(expected_revision=goal.revision, action="start")
+        )
+    )
 
 
-def _schedule(store: NebulaStore) -> None:
-    schedule = ChatScheduleService(store).create(
+async def _schedule(store: NebulaStore) -> None:
+    schedule = await ChatScheduleService(store).create(
         SESSION, ScheduleCreate(interval_seconds=3600)
     )
-    store.update(
-        ChatSchedule,
-        schedule.id,
-        {"next_run_at": utc_now() - timedelta(seconds=1)},
-        expected_revision=schedule.revision,
+    (
+        await store.update(
+            ChatSchedule,
+            schedule.id,
+            {"next_run_at": utc_now() - timedelta(seconds=1)},
+            expected_revision=schedule.revision,
+        )
     )
 
 
-def _turns(store: NebulaStore) -> list[ChatTurn]:
+async def _turns(store: NebulaStore) -> list[ChatTurn]:
     return sorted(
-        store.list_session_entities(ChatTurn, SESSION), key=lambda turn: turn.created_at
+        (await store.list_session_entities(ChatTurn, SESSION)),
+        key=lambda turn: turn.created_at,
     )
 
 
@@ -203,7 +223,7 @@ async def _schedule_outcome(store: NebulaStore) -> str | None:
     """The status a dispatched occurrence records once its turn task ends."""
 
     for _ in range(500):
-        status = ChatScheduleService(store).get(SESSION).last_status
+        status = (await ChatScheduleService(store).get(SESSION)).last_status
         if status != "started":
             return status
         await asyncio.sleep(0.01)
@@ -212,25 +232,25 @@ async def _schedule_outcome(store: NebulaStore) -> str | None:
 
 async def _settled(store: NebulaStore, count: int) -> list[ChatTurn]:
     for _ in range(500):
-        turns = _turns(store)
+        turns = await _turns(store)
         if len(turns) == count and all(
             turn.status == ChatTurnStatus.COMPLETE for turn in turns
         ):
-            goal = ChatGoalService(store).get(SESSION)
+            goal = await ChatGoalService(store).get(SESSION)
             if goal.execution_claim_id is None:
                 return turns
         await asyncio.sleep(0.01)
-    raise AssertionError(f"expected {count} settled turns, got {_turns(store)}")
+    raise AssertionError(f"expected {count} settled turns, got {(await _turns(store))}")
 
 
-def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
+async def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
     async def scenario() -> None:
-        store, _, chat, client = _setup(tmp_path)
-        goals = _goal(store, step_budget=2)
+        store, _, chat, client = await _setup(tmp_path)
+        goals = await _goal(store, step_budget=2)
         # The last message went out with Subagents off ...
         await chat.complete(await chat.prepare_async(_manual_turn()))
         # ... then the operator checked it and started the goal.
-        saved = _patch(
+        saved = await _patch(
             client,
             SESSION,
             allow_subagents=True,
@@ -239,7 +259,7 @@ def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
             subagent_reasoning_effort="xhigh",
         )
         assert saved["allow_subagents"] is True
-        _start(goals)
+        (await _start(goals))
         await chat.dispatch_running_goal(SESSION, "Begin work on the goal now.")
 
         manual, dispatched, continued = await _settled(store, 3)
@@ -250,28 +270,27 @@ def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
             assert turn.request_snapshot.get("max_active_subagents") == 2
             assert turn.request_snapshot.get("subagent_reasoning_effort") == "xhigh"
             assert (
-                resolve_request_snapshot(
+                await resolve_request_snapshot(
                     store, turn.request_snapshot, session_id=turn.session_id
-                )["model_request"]["reasoning_effort"]
-                == "high"
-            )
-        metadata = store.get(ChatSession, SESSION).metadata
+                )
+            )["model_request"]["reasoning_effort"] == "high"
+        metadata = (await store.get(ChatSession, SESSION)).metadata
         assert metadata["allow_subagents"] is True
         assert metadata["max_active_subagents"] == 2
         assert metadata["subagent_reasoning_effort"] == "xhigh"
         assert metadata["reasoning_effort"] == "high"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_goal_continuation_follows_subagents_checked_mid_turn(tmp_path):
+async def test_goal_continuation_follows_subagents_checked_mid_turn(tmp_path):
     """A running goal is always mid-response, so the box is checked mid-turn."""
 
     async def scenario() -> None:
-        store, provider, chat, client = _setup(tmp_path)
-        goals = _goal(store, step_budget=2)
-        _start(goals)
+        store, provider, chat, client = await _setup(tmp_path)
+        goals = await _goal(store, step_budget=2)
+        (await _start(goals))
         provider.during_first_turn = lambda: _patch(
             client, SESSION, allow_subagents=True, max_active_subagents=4
         )
@@ -282,29 +301,31 @@ def test_goal_continuation_follows_subagents_checked_mid_turn(tmp_path):
         assert not first.request_snapshot.get("allow_subagents")
         assert continued.request_snapshot.get("allow_subagents") is True
         assert continued.request_snapshot.get("max_active_subagents") == 4
-        metadata = store.get(ChatSession, SESSION).metadata
+        metadata = (await store.get(ChatSession, SESSION)).metadata
         assert metadata["allow_subagents"] is True
         assert metadata["max_active_subagents"] == 4
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_scheduled_run_keeps_subagents_checked_after_the_last_send(tmp_path):
+async def test_scheduled_run_keeps_subagents_checked_after_the_last_send(tmp_path):
     async def scenario() -> None:
-        store, _, chat, client = _setup(tmp_path)
+        store, _, chat, client = await _setup(tmp_path)
         # One goal step: the goal pauses instead of continuing past the run.
-        goals = _goal(store, step_budget=1)
+        goals = await _goal(store, step_budget=1)
         await chat.complete(await chat.prepare_async(_manual_turn()))
-        _patch(
-            client,
-            SESSION,
-            allow_subagents=True,
-            max_active_subagents=2,
-            reasoning_effort="low",
+        (
+            await _patch(
+                client,
+                SESSION,
+                allow_subagents=True,
+                max_active_subagents=2,
+                reasoning_effort="low",
+            )
         )
-        _start(goals)
-        _schedule(store)
+        (await _start(goals))
+        (await _schedule(store))
 
         # The occurrence is dispatched like goal auto-continue, not awaited.
         await chat.fire_due_schedules()
@@ -314,56 +335,59 @@ def test_scheduled_run_keeps_subagents_checked_after_the_last_send(tmp_path):
         assert scheduled.request_snapshot.get("allow_subagents") is True
         assert scheduled.request_snapshot.get("max_active_subagents") == 2
         assert (
-            resolve_request_snapshot(
+            await resolve_request_snapshot(
                 store, scheduled.request_snapshot, session_id=scheduled.session_id
-            )["model_request"]["reasoning_effort"]
-            == "low"
-        )
-        metadata = store.get(ChatSession, SESSION).metadata
+            )
+        )["model_request"]["reasoning_effort"] == "low"
+        metadata = (await store.get(ChatSession, SESSION)).metadata
         assert metadata["allow_subagents"] is True
         assert metadata["max_active_subagents"] == 2
         assert metadata["reasoning_effort"] == "low"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_first_scheduled_run_uses_the_saved_choice(tmp_path):
+async def test_first_scheduled_run_uses_the_saved_choice(tmp_path):
     async def scenario() -> None:
-        store, _, chat, client = _setup(tmp_path)
-        goals = _goal(store, step_budget=1)
+        store, _, chat, client = await _setup(tmp_path)
+        goals = await _goal(store, step_budget=1)
         # Checked before the conversation's first turn: no snapshot to copy.
-        _patch(client, SESSION, allow_subagents=True)
-        _start(goals)
-        _schedule(store)
+        (await _patch(client, SESSION, allow_subagents=True))
+        (await _start(goals))
+        (await _schedule(store))
 
         await chat.fire_due_schedules()
         (scheduled,) = await _settled(store, 1)
 
         assert await _schedule_outcome(store) == "complete"
         assert scheduled.request_snapshot.get("allow_subagents") is True
-        assert store.get(ChatSession, SESSION).metadata["allow_subagents"] is True
+        assert (await store.get(ChatSession, SESSION)).metadata[
+            "allow_subagents"
+        ] is True
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_core_built_turns_send_the_saved_servers_hooks_and_effort(tmp_path):
+async def test_core_built_turns_send_the_saved_servers_hooks_and_effort(tmp_path):
     async def scenario() -> None:
-        store, _, chat, client = _setup(tmp_path)
+        store, _, chat, client = await _setup(tmp_path)
         for server_id in ("mcp-old", "mcp-new", "mcp-later-off"):
-            store.create(
-                McpServerProfile(
-                    id=server_id,
-                    name=server_id,
-                    transport=McpTransport.STREAMABLE_HTTP,
-                    url="http://127.0.0.1:1/mcp",
-                    enabled=True,
+            (
+                await store.create(
+                    McpServerProfile(
+                        id=server_id,
+                        name=server_id,
+                        transport=McpTransport.STREAMABLE_HTTP,
+                        url="http://127.0.0.1:1/mcp",
+                        enabled=True,
+                    )
                 )
             )
-        goals = _goal(store)
-        _start(goals)
-        goal = goals.get(SESSION)
+        goals = await _goal(store)
+        (await _start(goals))
+        goal = await goals.get(SESSION)
         # A goal turn settled with the old selection, which its send recorded
         # on the conversation.
         old = _manual_turn(
@@ -372,7 +396,7 @@ def test_core_built_turns_send_the_saved_servers_hooks_and_effort(tmp_path):
             hook_ids=["old-hook"],
             reasoning_effort="low",
         )
-        old_turn = store.create(
+        old_turn = await store.create(
             ChatTurn(
                 engagement_id="project",
                 session_id=SESSION,
@@ -390,38 +414,44 @@ def test_core_built_turns_send_the_saved_servers_hooks_and_effort(tmp_path):
                 },
             )
         )
-        session = store.get(ChatSession, SESSION)
-        store.update(
-            ChatSession,
-            SESSION,
-            {
-                "metadata": {
-                    **session.metadata,
-                    "mcp_server_ids": ["mcp-old"],
-                    "hook_ids": ["old-hook"],
-                    "reasoning_effort": "low",
-                    "allow_subagents": False,
-                    "max_active_subagents": None,
-                }
-            },
-            expected_revision=session.revision,
+        session = await store.get(ChatSession, SESSION)
+        (
+            await store.update(
+                ChatSession,
+                SESSION,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "mcp_server_ids": ["mcp-old"],
+                        "hook_ids": ["old-hook"],
+                        "reasoning_effort": "low",
+                        "allow_subagents": False,
+                        "max_active_subagents": None,
+                    }
+                },
+                expected_revision=session.revision,
+            )
         )
-        _patch(
-            client,
-            SESSION,
-            mcp_server_ids=["mcp-new", "mcp-later-off"],
-            hook_ids=["pre-commit"],
-            reasoning_effort="medium",
-            allow_subagents=True,
-            max_active_subagents=3,
+        (
+            await _patch(
+                client,
+                SESSION,
+                mcp_server_ids=["mcp-new", "mcp-later-off"],
+                hook_ids=["pre-commit"],
+                reasoning_effort="medium",
+                allow_subagents=True,
+                max_active_subagents=3,
+            )
         )
         # Disabled after it was saved: dropped, not fatal.
-        server = store.get(McpServerProfile, "mcp-later-off")
-        store.update(
-            McpServerProfile,
-            server.id,
-            {"enabled": False},
-            expected_revision=server.revision,
+        server = await store.get(McpServerProfile, "mcp-later-off")
+        (
+            await store.update(
+                McpServerProfile,
+                server.id,
+                {"enabled": False},
+                expected_revision=server.revision,
+            )
         )
         captured: list[ChatCompletionRequest] = []
 
@@ -435,7 +465,7 @@ def test_core_built_turns_send_the_saved_servers_hooks_and_effort(tmp_path):
             SimpleNamespace(turn=old_turn, source_request=old)  # type: ignore[arg-type]
         )
         await chat.dispatch_running_goal(SESSION, "Resume work on the goal now.")
-        _schedule(store)
+        (await _schedule(store))
         await chat.fire_due_schedules()
 
         # Continuation, dispatch and the scheduled occurrence, in that order.
@@ -452,12 +482,12 @@ def test_core_built_turns_send_the_saved_servers_hooks_and_effort(tmp_path):
         ] == [(["mcp-new"], ["pre-commit"], "medium", True, 3)] * 3
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path):
+async def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, _, runtime = _setup_harness(tmp_path)
+        store, project, harness, chat, _, runtime = await _setup_harness(tmp_path)
         chat_session, _, first = _prepare_harness_turn(
             runtime, project, harness, "Hello.", setting=None
         )
@@ -468,7 +498,7 @@ def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path):
             "model": "model-unverified",
             "max_active": 2,
         }
-        saved = _patch(
+        saved = await _patch(
             client,
             chat_session.id,
             allow_subagents=True,
@@ -489,16 +519,15 @@ def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path):
             setting=None,
         )
         assert chat_turn.request_snapshot["provider_subagent"] is None
-        vendor = store.get(HarnessSession, unverified.harness_session_id)
+        vendor = await store.get(HarnessSession, unverified.harness_session_id)
         assert "provider_subagent" not in vendor.metadata
         await runtime.start_chat_turn(unverified.id)
-        assert (
-            store.get(ChatSession, chat_session.id).metadata["provider_subagent"]
-            == choice
-        )
+        assert (await store.get(ChatSession, chat_session.id)).metadata[
+            "provider_subagent"
+        ] == choice
 
         # Unchecking still sticks through the next send.
-        cleared = _patch(client, chat_session.id, allow_subagents=False)
+        cleared = await _patch(client, chat_session.id, allow_subagents=False)
         assert "provider_subagent" not in cleared
         _, _, off = _prepare_harness_turn(
             runtime,
@@ -509,17 +538,17 @@ def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path):
             setting=None,
         )
         await runtime.start_chat_turn(off.id)
-        assert not store.get(ChatSession, chat_session.id).metadata.get(
+        assert not (await store.get(ChatSession, chat_session.id)).metadata.get(
             "provider_subagent"
         )
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_effort_only_patch_updates_saved_subagent_setting(tmp_path):
+async def test_harness_effort_only_patch_updates_saved_subagent_setting(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, _, runtime = _setup_harness(tmp_path)
+        store, project, harness, chat, _, runtime = await _setup_harness(tmp_path)
         chat_session, _, _ = _prepare_harness_turn(
             runtime, project, harness, "Hello.", setting=None
         )
@@ -528,24 +557,29 @@ def test_harness_effort_only_patch_updates_saved_subagent_setting(tmp_path):
             "provider_profile_id": "provider",
             "model": "model-unverified",
         }
-        _patch(
-            client,
-            chat_session.id,
-            allow_subagents=True,
-            subagent_provider_id="provider",
-            subagent_model="model-unverified",
+        (
+            await _patch(
+                client,
+                chat_session.id,
+                allow_subagents=True,
+                subagent_provider_id="provider",
+                subagent_model="model-unverified",
+            )
         )
 
-        forced = _patch(client, chat_session.id, subagent_reasoning_effort="high")
+        forced = await _patch(client, chat_session.id, subagent_reasoning_effort="high")
         assert forced["subagent_reasoning_effort"] == "high"
         assert forced["provider_subagent"] == {
             **choice,
             "reasoning_effort": "high",
         }
 
-        cleared = _patch(client, chat_session.id, subagent_reasoning_effort=None)
+        cleared = await _patch(client, chat_session.id, subagent_reasoning_effort=None)
         assert cleared["subagent_reasoning_effort"] is None
         assert cleared["provider_subagent"] == choice
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

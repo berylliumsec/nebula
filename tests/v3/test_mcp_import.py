@@ -1,8 +1,13 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+import asyncio
 import copy
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from typer.testing import CliRunner
 
 import nebula.v3.cli as cli_module
@@ -83,8 +88,8 @@ CLAUDE_CONFIG = {
 }
 
 
-def _import(store, credentials, config=CLAUDE_CONFIG, **options):
-    return import_mcp_config(
+async def _import(store, credentials, config=CLAUDE_CONFIG, **options):
+    return await import_mcp_config(
         McpImportRequest(config=config, **options),
         store=store,
         credential_store=credentials,
@@ -92,11 +97,11 @@ def _import(store, credentials, config=CLAUDE_CONFIG, **options):
     )
 
 
-def test_preview_describes_servers_without_saving_profiles_or_secrets(tmp_path):
+async def test_preview_describes_servers_without_saving_profiles_or_secrets(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     keyring = MemoryKeyring()
 
-    report = _import(store, CredentialStore(keyring))
+    report = await _import(store, CredentialStore(keyring))
 
     assert report.dry_run is True
     assert (report.created, report.invalid) == (2, 0)
@@ -109,21 +114,23 @@ def test_preview_describes_servers_without_saving_profiles_or_secrets(tmp_path):
         ("env SHODAN_TOKEN", "vault"),
     }
     assert remote.transport == McpTransport.STREAMABLE_HTTP
-    assert store.list_entities(McpServerProfile) == []
+    assert (await store.list_entities(McpServerProfile)) == []
     assert keyring.values == {}
     assert "literal" not in report.model_dump_json()
 
 
-def test_apply_saves_disabled_profiles_with_references_only(tmp_path):
+async def test_apply_saves_disabled_profiles_with_references_only(tmp_path):
     database = tmp_path / "nebula.db"
     store = NebulaStore(database)
     keyring = MemoryKeyring()
     credentials = CredentialStore(keyring)
 
-    report = _import(store, credentials, dry_run=False, source_name="claude.json")
+    report = await _import(store, credentials, dry_run=False, source_name="claude.json")
 
     assert (report.created, report.invalid) == (2, 0)
-    profiles = {item.name: item for item in store.list_entities(McpServerProfile)}
+    profiles = {
+        item.name: item for item in (await store.list_entities(McpServerProfile))
+    }
     burp = profiles["burp"]
     assert burp.enabled is False and burp.trusted_stdio is False
     assert burp.command == "/usr/bin/npx"
@@ -152,25 +159,27 @@ def test_apply_saves_disabled_profiles_with_references_only(tmp_path):
     assert b"literal-" not in database.read_bytes()
 
 
-def test_literal_secrets_can_be_rejected_or_require_a_vault(tmp_path):
+async def test_literal_secrets_can_be_rejected_or_require_a_vault(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
 
-    rejected = _import(
+    rejected = await _import(
         store, CredentialStore(MemoryKeyring()), literal_secrets="reject"
     )
     assert rejected.invalid == 2
     assert "env SHODAN_TOKEN contains a literal credential" in rejected.entries[0].error
 
-    no_vault = _import(store, CredentialStore(UntrustedKeyring()), dry_run=False)
+    no_vault = await _import(store, CredentialStore(UntrustedKeyring()), dry_run=False)
     assert no_vault.invalid == 2
     assert "vault is unavailable" in no_vault.entries[0].error
-    assert store.list_entities(McpServerProfile) == []
+    assert (await store.list_entities(McpServerProfile)) == []
 
     session = CredentialStore(UntrustedKeyring())
-    stored = _import(store, session, dry_run=False, literal_secrets="session")
+    stored = await _import(store, session, dry_run=False, literal_secrets="session")
     assert stored.created == 2
     burp = next(
-        item for item in store.list_entities(McpServerProfile) if item.name == "burp"
+        item
+        for item in (await store.list_entities(McpServerProfile))
+        if item.name == "burp"
     )
     assert burp.environment_secret_refs["SHODAN_TOKEN"].startswith("session:")
 
@@ -196,16 +205,16 @@ def test_literal_secrets_can_be_rejected_or_require_a_vault(tmp_path):
         ("npx", "must be an object"),
     ],
 )
-def test_invalid_servers_explain_the_fix(tmp_path, server, message):
+async def test_invalid_servers_explain_the_fix(tmp_path, server, message):
     store = NebulaStore(tmp_path / "nebula.db")
-    report = _import(
+    report = await _import(
         store, CredentialStore(MemoryKeyring()), {"servers": {"bad": server}}
     )
     assert report.invalid == 1
     assert message in report.entries[0].error
 
 
-def test_document_shape_errors_reject_the_whole_import(tmp_path):
+async def test_document_shape_errors_reject_the_whole_import(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     credentials = CredentialStore(MemoryKeyring())
     for config, message in [
@@ -214,13 +223,13 @@ def test_document_shape_errors_reject_the_whole_import(tmp_path):
         ({"mcpServers": {}}, "does not define any"),
     ]:
         with pytest.raises(ValueError, match=message):
-            _import(store, credentials, config)
+            (await _import(store, credentials, config))
 
 
-def test_vscode_documents_names_and_absolute_commands(tmp_path):
+async def test_vscode_documents_names_and_absolute_commands(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     missing = str(tmp_path / "bin" / "server")
-    report = _import(
+    report = await _import(
         store,
         CredentialStore(MemoryKeyring()),
         {
@@ -244,42 +253,48 @@ def test_vscode_documents_names_and_absolute_commands(tmp_path):
     assert any("renamed" in item for item in first.warnings)
     assert any("does not exist on the Nebula host" in item for item in first.warnings)
     assert second.action == "invalid" and "also named" in second.error
-    profile = store.get(McpServerProfile, first.profile_id)
+    profile = await store.get(McpServerProfile, first.profile_id)
     assert profile.command == missing
     assert profile.cwd_policy == McpCwdPolicy.FIXED and profile.cwd == str(tmp_path)
     assert profile.environment_secret_refs == {"GITHUB_TOKEN": "env:GITHUB_TOKEN"}
 
 
-def test_existing_names_are_skipped_or_replaced_for_review(tmp_path):
+async def test_existing_names_are_skipped_or_replaced_for_review(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     keyring = MemoryKeyring()
     credentials = CredentialStore(keyring)
-    _import(store, credentials, dry_run=False)
+    (await _import(store, credentials, dry_run=False))
     burp = next(
-        item for item in store.list_entities(McpServerProfile) if item.name == "burp"
+        item
+        for item in (await store.list_entities(McpServerProfile))
+        if item.name == "burp"
     )
     old_secret = burp.environment_secret_refs["SHODAN_TOKEN"]
-    store.update(
-        McpServerProfile,
-        burp.id,
-        {
-            "enabled": True,
-            "trusted_stdio": True,
-            "capabilities": McpCapabilitySnapshot(tools=[McpToolSnapshot(name="scan")]),
-        },
-        expected_revision=burp.revision,
+    (
+        await store.update(
+            McpServerProfile,
+            burp.id,
+            {
+                "enabled": True,
+                "trusted_stdio": True,
+                "capabilities": McpCapabilitySnapshot(
+                    tools=[McpToolSnapshot(name="scan")]
+                ),
+            },
+            expected_revision=burp.revision,
+        )
     )
 
-    skipped = _import(store, credentials, dry_run=False, on_conflict="skip")
+    skipped = await _import(store, credentials, dry_run=False, on_conflict="skip")
     assert (skipped.skipped, skipped.created) == (2, 0)
-    assert store.get(McpServerProfile, burp.id).enabled is True
+    assert (await store.get(McpServerProfile, burp.id)).enabled is True
 
     replacement = {"mcpServers": {"burp": {"command": "uvx", "args": ["burp-mcp"]}}}
-    replaced = _import(
+    replaced = await _import(
         store, credentials, replacement, dry_run=False, on_conflict="replace"
     )
     assert replaced.replaced == 1
-    current = store.get(McpServerProfile, burp.id)
+    current = await store.get(McpServerProfile, burp.id)
     assert current.command == "/opt/uv/bin/uvx"
     assert current.arguments == ["burp-mcp"]
     assert current.enabled is False and current.trusted_stdio is False
@@ -287,10 +302,10 @@ def test_existing_names_are_skipped_or_replaced_for_review(tmp_path):
     assert current.capabilities.tools == []
     assert current.created_at == burp.created_at
     assert credentials.status(old_secret).available is False
-    assert len(store.list_entities(McpServerProfile)) == 2
+    assert len((await store.list_entities(McpServerProfile))) == 2
 
 
-def test_new_servers_follow_the_import_choices_and_the_file_wins(tmp_path):
+async def test_new_servers_follow_the_import_choices_and_the_file_wins(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     credentials = CredentialStore(MemoryKeyring())
     config = {
@@ -305,7 +320,7 @@ def test_new_servers_follow_the_import_choices_and_the_file_wins(tmp_path):
     }
     defaults = McpImportDefaults(enabled=True, default_approval=McpApprovalMode.ASK)
 
-    untrusted = _import(store, credentials, config, defaults=defaults)
+    untrusted = await _import(store, credentials, config, defaults=defaults)
     local, plain, strict = untrusted.entries
     assert (local.enabled, local.needs_trust, local.needs_probe) == (False, True, False)
     assert local.default_approval == McpApprovalMode.ASK
@@ -313,7 +328,7 @@ def test_new_servers_follow_the_import_choices_and_the_file_wins(tmp_path):
     assert plain.default_approval == McpApprovalMode.ASK
     assert strict.default_approval == McpApprovalMode.DENY
 
-    applied = _import(
+    applied = await _import(
         store,
         credentials,
         config,
@@ -325,45 +340,55 @@ def test_new_servers_follow_the_import_choices_and_the_file_wins(tmp_path):
     assert applied.entries[0].needs_trust is True
     assert applied.entries[0].enabled is True
     assert applied.entries[0].needs_probe is True
-    profiles = {item.name: item for item in store.list_entities(McpServerProfile)}
+    profiles = {
+        item.name: item for item in (await store.list_entities(McpServerProfile))
+    }
     assert profiles["local"].enabled and profiles["local"].trusted_stdio
     assert profiles["plain"].enabled and not profiles["plain"].trusted_stdio
     assert profiles["plain"].default_approval == McpApprovalMode.ASK
     assert profiles["strict"].default_approval == McpApprovalMode.DENY
 
 
-def test_reimport_updates_only_what_changed(tmp_path):
+async def test_reimport_updates_only_what_changed(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     keyring = MemoryKeyring()
     credentials = CredentialStore(keyring)
-    _import(
-        store,
-        credentials,
-        dry_run=False,
-        defaults=McpImportDefaults(enabled=True),
-        trust_local_programs=True,
+    (
+        await _import(
+            store,
+            credentials,
+            dry_run=False,
+            defaults=McpImportDefaults(enabled=True),
+            trust_local_programs=True,
+        )
     )
-    profiles = {item.name: item for item in store.list_entities(McpServerProfile)}
+    profiles = {
+        item.name: item for item in (await store.list_entities(McpServerProfile))
+    }
     probed = McpCapabilitySnapshot(tools=[McpToolSnapshot(name="scan")])
     for profile in profiles.values():
-        store.update(
-            McpServerProfile,
-            profile.id,
-            {
-                "capabilities": probed,
-                "tool_overrides": {"scan": McpApprovalMode.ALLOW},
-            },
-            expected_revision=profile.revision,
+        (
+            await store.update(
+                McpServerProfile,
+                profile.id,
+                {
+                    "capabilities": probed,
+                    "tool_overrides": {"scan": McpApprovalMode.ALLOW},
+                },
+                expected_revision=profile.revision,
+            )
         )
-    saved = {item.name: item for item in store.list_entities(McpServerProfile)}
+    saved = {item.name: item for item in (await store.list_entities(McpServerProfile))}
     vault_entries = dict(keyring.values)
 
-    same = _import(store, credentials, dry_run=False)
+    same = await _import(store, credentials, dry_run=False)
     assert (same.unchanged, same.updated, same.created) == (2, 0, 0)
     assert all(entry.changes == [] for entry in same.entries)
     assert keyring.values == vault_entries
     for profile in saved.values():
-        assert store.get(McpServerProfile, profile.id).revision == profile.revision
+        assert (
+            await store.get(McpServerProfile, profile.id)
+        ).revision == profile.revision
 
     edited = copy.deepcopy(CLAUDE_CONFIG)
     burp = edited["mcpServers"]["burp"]
@@ -373,7 +398,7 @@ def test_reimport_updates_only_what_changed(tmp_path):
     remote["headers"]["X-Tenant-Key"] = "rotated-tenant-secret"
     remote["nebula"]["default_approval"] = "allow"
 
-    preview = _import(store, credentials, edited)
+    preview = await _import(store, credentials, edited)
     burp_entry, remote_entry = preview.entries
     assert preview.updated == 2
     assert {(c.field, c.before, c.after) for c in burp_entry.changes} == {
@@ -388,9 +413,9 @@ def test_reimport_updates_only_what_changed(tmp_path):
     assert (remote_entry.enabled, remote_entry.needs_probe) == (True, True)
     assert "rotated" not in preview.model_dump_json()
 
-    applied = _import(store, credentials, edited, dry_run=False)
+    applied = await _import(store, credentials, edited, dry_run=False)
     assert applied.updated == 2
-    burp_now = store.get(McpServerProfile, saved["burp"].id)
+    burp_now = await store.get(McpServerProfile, saved["burp"].id)
     assert burp_now.environment == {"LOG_LEVEL": "info"}
     assert set(burp_now.environment_secret_refs) == {"SHODAN_TOKEN"}
     assert (
@@ -400,7 +425,7 @@ def test_reimport_updates_only_what_changed(tmp_path):
     assert burp_now.enabled is False and burp_now.trusted_stdio is False
     assert burp_now.capabilities.tools == []
     assert burp_now.tool_overrides == {"scan": McpApprovalMode.ALLOW}
-    remote_now = store.get(McpServerProfile, saved["remote"].id)
+    remote_now = await store.get(McpServerProfile, saved["remote"].id)
     assert remote_now.enabled is True
     assert remote_now.default_approval == McpApprovalMode.ALLOW
     assert remote_now.tool_overrides == {"scan": McpApprovalMode.ALLOW}
@@ -412,21 +437,23 @@ def test_reimport_updates_only_what_changed(tmp_path):
     assert credentials.resolve(tenant).get_secret_value() == "rotated-tenant-secret"
 
 
-def test_reimport_keeps_a_changed_program_enabled_only_when_trusted(tmp_path):
+async def test_reimport_keeps_a_changed_program_enabled_only_when_trusted(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     credentials = CredentialStore(MemoryKeyring())
     config = {"mcpServers": {"local": {"command": "npx", "args": ["local-mcp"]}}}
-    _import(
-        store,
-        credentials,
-        config,
-        dry_run=False,
-        defaults=McpImportDefaults(enabled=True),
-        trust_local_programs=True,
+    (
+        await _import(
+            store,
+            credentials,
+            config,
+            dry_run=False,
+            defaults=McpImportDefaults(enabled=True),
+            trust_local_programs=True,
+        )
     )
     config["mcpServers"]["local"]["args"] = ["local-mcp@2"]
 
-    report = _import(
+    report = await _import(
         store, credentials, config, dry_run=False, trust_local_programs=True
     )
 
@@ -435,68 +462,78 @@ def test_reimport_keeps_a_changed_program_enabled_only_when_trusted(tmp_path):
         ("args", "local-mcp", "local-mcp@2")
     ]
     assert (entry.enabled, entry.needs_trust, entry.needs_probe) == (True, True, True)
-    profile = store.get(McpServerProfile, entry.profile_id)
+    profile = await store.get(McpServerProfile, entry.profile_id)
     assert profile.enabled and profile.trusted_stdio
     assert profile.arguments == ["local-mcp@2"]
 
 
-def test_descriptions_import_update_and_export(tmp_path):
+async def test_descriptions_import_update_and_export(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     credentials = CredentialStore(MemoryKeyring())
     config = copy.deepcopy(CLAUDE_CONFIG)
     config["mcpServers"]["remote"]["description"] = "  Tenant API: users and billing. "
     config["mcpServers"]["burp"]["description"] = "x" * 600
 
-    created = _import(store, credentials, config, dry_run=False)
+    created = await _import(store, credentials, config, dry_run=False)
 
     assert created.created == 2
     burp_entry, remote_entry = created.entries
     assert "description: shortened to 500 characters" in burp_entry.warnings
     assert not any("description" in item for item in remote_entry.warnings)
-    saved = {item.name: item for item in store.list_entities(McpServerProfile)}
+    saved = {item.name: item for item in (await store.list_entities(McpServerProfile))}
     assert saved["remote"].description == "Tenant API: users and billing."
     assert saved["burp"].description == "x" * 500
 
     # A file without a description keeps the one written in Nebula.
     remote = saved["remote"]
-    store.update(
-        McpServerProfile,
-        remote.id,
-        {"description": "Written in Nebula."},
-        expected_revision=remote.revision,
+    (
+        await store.update(
+            McpServerProfile,
+            remote.id,
+            {"description": "Written in Nebula."},
+            expected_revision=remote.revision,
+        )
     )
-    silent = _import(store, credentials, CLAUDE_CONFIG, dry_run=False)
+    silent = await _import(store, credentials, CLAUDE_CONFIG, dry_run=False)
     assert silent.entries[1].action == "unchanged"
-    assert store.get(McpServerProfile, remote.id).description == "Written in Nebula."
+    assert (
+        await store.get(McpServerProfile, remote.id)
+    ).description == "Written in Nebula."
 
     # A file that describes the server replaces it, and the preview says so.
     config["mcpServers"]["remote"]["description"] = "Tenant API, read-only."
-    preview = _import(store, credentials, config)
+    preview = await _import(store, credentials, config)
     assert [(c.field, c.before, c.after) for c in preview.entries[1].changes] == [
         ("description", "Written in Nebula.", "Tenant API, read-only.")
     ]
-    _import(store, credentials, config, dry_run=False)
-    assert store.get(McpServerProfile, remote.id).description == (
+    (await _import(store, credentials, config, dry_run=False))
+    assert (await store.get(McpServerProfile, remote.id)).description == (
         "Tenant API, read-only."
     )
 
-    exported = export_mcp_config(store.list_entities(McpServerProfile))
+    exported = export_mcp_config((await store.list_entities(McpServerProfile)))
     assert exported.config["mcpServers"]["remote"]["description"] == (
         "Tenant API, read-only."
     )
     target = NebulaStore(tmp_path / "target.db")
-    _import(target, CredentialStore(UntrustedKeyring()), exported.config, dry_run=False)
-    copied = {item.name: item for item in target.list_entities(McpServerProfile)}
+    (
+        await _import(
+            target, CredentialStore(UntrustedKeyring()), exported.config, dry_run=False
+        )
+    )
+    copied = {
+        item.name: item for item in (await target.list_entities(McpServerProfile))
+    }
     assert copied["remote"].description == "Tenant API, read-only."
 
     wrong = copy.deepcopy(CLAUDE_CONFIG)
     wrong["mcpServers"]["remote"]["description"] = ["not", "text"]
-    invalid = _import(store, credentials, wrong)
+    invalid = await _import(store, credentials, wrong)
     assert invalid.entries[1].action == "invalid"
     assert "description must be a string" in invalid.entries[1].error
 
 
-def test_api_saves_and_edits_a_server_description(tmp_path):
+async def test_api_saves_and_edits_a_server_description(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -513,11 +550,11 @@ def test_api_saves_and_edits_a_server_description(tmp_path):
         "description": "Bugs for the web app.",
     }
 
-    with client:
-        created = client.post("/api/v1/mcp-servers", headers=auth, json=server)
+    async with client:
+        created = await client.post("/api/v1/mcp-servers", headers=auth, json=server)
         assert created.status_code in (200, 201), created.text
         assert created.json()["description"] == "Bugs for the web app."
-        edited = client.patch(
+        edited = await client.patch(
             f"/api/v1/mcp-servers/{created.json()['id']}",
             headers=auth,
             json={
@@ -527,7 +564,7 @@ def test_api_saves_and_edits_a_server_description(tmp_path):
         )
         assert edited.status_code == 200, edited.text
         assert edited.json()["description"] == "Bugs and releases."
-        too_long = client.post(
+        too_long = await client.post(
             "/api/v1/mcp-servers",
             headers=auth,
             json={**server, "name": "other", "description": "x" * 501},
@@ -535,12 +572,12 @@ def test_api_saves_and_edits_a_server_description(tmp_path):
         assert too_long.status_code == 422
 
 
-def test_export_round_trips_without_leaking_stored_credentials(tmp_path):
+async def test_export_round_trips_without_leaking_stored_credentials(tmp_path):
     store = NebulaStore(tmp_path / "source.db")
     credentials = CredentialStore(MemoryKeyring())
-    _import(store, credentials, dry_run=False)
+    (await _import(store, credentials, dry_run=False))
 
-    exported = export_mcp_config(store.list_entities(McpServerProfile))
+    exported = export_mcp_config((await store.list_entities(McpServerProfile)))
     text = json.dumps(exported.config)
 
     assert "literal-" not in text and "vault:" not in text
@@ -563,11 +600,13 @@ def test_export_round_trips_without_leaking_stored_credentials(tmp_path):
     assert len(exported.warnings) == 2
 
     target = NebulaStore(tmp_path / "target.db")
-    report = _import(
+    report = await _import(
         target, CredentialStore(UntrustedKeyring()), exported.config, dry_run=False
     )
     assert (report.created, report.invalid) == (2, 0)
-    reimported = {item.name: item for item in target.list_entities(McpServerProfile)}
+    reimported = {
+        item.name: item for item in (await target.list_entities(McpServerProfile))
+    }
     assert reimported["burp"].environment_secret_refs == {
         "BURP_API_KEY": "env:BURP_API_KEY",
         "SHODAN_TOKEN": "env:SHODAN_TOKEN",
@@ -577,7 +616,7 @@ def test_export_round_trips_without_leaking_stored_credentials(tmp_path):
     }
 
 
-def test_api_previews_applies_and_exports(tmp_path, monkeypatch):
+async def test_api_previews_applies_and_exports(tmp_path, monkeypatch):
     monkeypatch.setattr("nebula.v3.mcp_import.shutil.which", _which)
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
@@ -589,34 +628,33 @@ def test_api_previews_applies_and_exports(tmp_path, monkeypatch):
     )
     auth = {"Authorization": "Bearer test-token"}
 
-    with client:
+    async with client:
         assert (
-            client.post(
+            await client.post(
                 "/api/v1/mcp-servers/import", json={"config": CLAUDE_CONFIG}
-            ).status_code
-            == 401
-        )
-        preview = client.post(
+            )
+        ).status_code == 401
+        preview = await client.post(
             "/api/v1/mcp-servers/import",
             headers=auth,
             json={"config": CLAUDE_CONFIG},
         )
         assert preview.status_code == 200, preview.text
         assert preview.json()["created"] == 2
-        assert client.get("/api/v1/mcp-servers", headers=auth).json() == []
+        assert (await client.get("/api/v1/mcp-servers", headers=auth)).json() == []
 
-        applied = client.post(
+        applied = await client.post(
             "/api/v1/mcp-servers/import",
             headers=auth,
             json={"config": CLAUDE_CONFIG, "dry_run": False},
         )
         assert applied.status_code == 200, applied.text
-        listed = client.get("/api/v1/mcp-servers", headers=auth).json()
+        listed = (await client.get("/api/v1/mcp-servers", headers=auth)).json()
         assert sorted(item["name"] for item in listed) == ["burp", "remote"]
         assert all(item["enabled"] is False for item in listed)
 
         remote_id = next(item["id"] for item in listed if item["name"] == "remote")
-        exported = client.get(
+        exported = await client.get(
             "/api/v1/mcp-servers/export",
             headers=auth,
             params={"profile_id": remote_id},
@@ -624,7 +662,7 @@ def test_api_previews_applies_and_exports(tmp_path, monkeypatch):
         assert exported.status_code == 200, exported.text
         assert list(exported.json()["config"]["mcpServers"]) == ["remote"]
 
-        malformed = client.post(
+        malformed = await client.post(
             "/api/v1/mcp-servers/import",
             headers=auth,
             json={"config": {"servers": []}},
@@ -633,7 +671,7 @@ def test_api_previews_applies_and_exports(tmp_path, monkeypatch):
         assert "object keyed by name" in malformed.text
 
 
-def test_cli_previews_then_applies_and_exports(tmp_path, monkeypatch):
+async def test_cli_previews_then_applies_and_exports(tmp_path, monkeypatch):
     monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
     monkeypatch.setattr("nebula.v3.mcp_import.shutil.which", _which)
     monkeypatch.setattr(
@@ -644,22 +682,26 @@ def test_cli_previews_then_applies_and_exports(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     runner = CliRunner()
 
-    preview = runner.invoke(
-        cli_module.app, ["mcp", "import", str(source), "--data-dir", str(data_dir)]
+    preview = await asyncio.to_thread(
+        runner.invoke,
+        cli_module.app,
+        ["mcp", "import", str(source), "--data-dir", str(data_dir)],
     )
     assert preview.exit_code == 0, preview.output
     assert json.loads(preview.output)["dry_run"] is True
     store = NebulaStore(data_dir / "nebula.db")
-    assert store.list_entities(McpServerProfile) == []
+    assert (await store.list_entities(McpServerProfile)) == []
 
-    applied = runner.invoke(
+    applied = await asyncio.to_thread(
+        runner.invoke,
         cli_module.app,
         ["mcp", "import", str(source), "--apply", "--data-dir", str(data_dir)],
     )
     assert applied.exit_code == 0, applied.output
-    assert len(store.list_entities(McpServerProfile)) == 2
+    assert len((await store.list_entities(McpServerProfile))) == 2
 
-    rejected = runner.invoke(
+    rejected = await asyncio.to_thread(
+        runner.invoke,
         cli_module.app,
         [
             "mcp",
@@ -674,7 +716,8 @@ def test_cli_previews_then_applies_and_exports(tmp_path, monkeypatch):
     assert rejected.exit_code == 1
 
     destination = tmp_path / "export.json"
-    exported = runner.invoke(
+    exported = await asyncio.to_thread(
+        runner.invoke,
         cli_module.app,
         ["mcp", "export", str(destination), "--data-dir", str(data_dir)],
     )
@@ -683,14 +726,15 @@ def test_cli_previews_then_applies_and_exports(tmp_path, monkeypatch):
         "burp",
         "remote",
     }
-    refused = runner.invoke(
+    refused = await asyncio.to_thread(
+        runner.invoke,
         cli_module.app,
         ["mcp", "export", str(destination), "--data-dir", str(data_dir)],
     )
     assert refused.exit_code != 0
 
 
-def test_api_and_cli_pass_the_import_choices(tmp_path, monkeypatch):
+async def test_api_and_cli_pass_the_import_choices(tmp_path, monkeypatch):
     monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
     monkeypatch.setattr("nebula.v3.mcp_import.shutil.which", _which)
     monkeypatch.setattr(
@@ -705,8 +749,8 @@ def test_api_and_cli_pass_the_import_choices(tmp_path, monkeypatch):
             credential_store=CredentialStore(MemoryKeyring()),
         )
     )
-    with client:
-        response = client.post(
+    async with client:
+        response = await client.post(
             "/api/v1/mcp-servers/import",
             headers={"Authorization": "Bearer test-token"},
             json={
@@ -725,23 +769,30 @@ def test_api_and_cli_pass_the_import_choices(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     runner = CliRunner()
     base = ["mcp", "import", str(source), "--data-dir", str(data_dir)]
-    applied = runner.invoke(
+    applied = await asyncio.to_thread(
+        runner.invoke,
         cli_module.app,
         [*base, "--apply", "--enable", "--approval", "allow", "--trust-local-programs"],
     )
     assert applied.exit_code == 0, applied.output
-    (profile,) = NebulaStore(data_dir / "nebula.db").list_entities(McpServerProfile)
+    (profile,) = await NebulaStore(data_dir / "nebula.db").list_entities(
+        McpServerProfile
+    )
     assert profile.enabled and profile.trusted_stdio
     assert profile.default_approval == McpApprovalMode.ALLOW
-    again = runner.invoke(cli_module.app, base)
+    again = await asyncio.to_thread(runner.invoke, cli_module.app, base)
     assert json.loads(again.output)["unchanged"] == 1
-    skipped = runner.invoke(cli_module.app, [*base, "--skip-existing"])
+    skipped = await asyncio.to_thread(
+        runner.invoke, cli_module.app, [*base, "--skip-existing"]
+    )
     assert json.loads(skipped.output)["skipped"] == 1
-    conflicting = runner.invoke(cli_module.app, [*base, "--replace", "--skip-existing"])
+    conflicting = await asyncio.to_thread(
+        runner.invoke, cli_module.app, [*base, "--replace", "--skip-existing"]
+    )
     assert conflicting.exit_code != 0
 
 
-def test_failed_apply_rolls_back_secrets_it_already_stored(tmp_path):
+async def test_failed_apply_rolls_back_secrets_it_already_stored(tmp_path):
     class FailingKeyring(MemoryKeyring):
         __module__ = MemoryKeyring.__module__
 
@@ -761,12 +812,12 @@ def test_failed_apply_rolls_back_secrets_it_already_stored(tmp_path):
         }
     }
 
-    report = _import(store, CredentialStore(keyring), config, dry_run=False)
+    report = await _import(store, CredentialStore(keyring), config, dry_run=False)
 
     assert report.invalid == 1
     assert "could not save" in report.entries[0].error
     assert keyring.values == {}
-    assert store.list_entities(McpServerProfile) == []
+    assert (await store.list_entities(McpServerProfile)) == []
 
 
 def test_checked_in_schema_matches_the_importer():
@@ -824,61 +875,67 @@ def test_schema_accepts_documented_examples_and_rejects_what_import_rejects():
     assert not validator.is_valid({"mcpServers": {}})
 
 
-def test_schema_is_served_by_api_and_cli(tmp_path):
+async def test_schema_is_served_by_api_and_cli(tmp_path):
     from nebula.v3.mcp_import import mcp_config_json_schema
 
     client = TestClient(create_app(NebulaStore(tmp_path / "n.db"), auth_token="t"))
-    with client:
-        assert client.get("/api/v1/mcp-servers/schema").status_code == 401
-        served = client.get(
+    async with client:
+        assert (await client.get("/api/v1/mcp-servers/schema")).status_code == 401
+        served = await client.get(
             "/api/v1/mcp-servers/schema", headers={"Authorization": "Bearer t"}
         )
     assert served.status_code == 200
     assert served.json() == mcp_config_json_schema()
 
-    printed = CliRunner().invoke(cli_module.app, ["mcp", "schema"])
+    printed = await asyncio.to_thread(
+        CliRunner().invoke, cli_module.app, ["mcp", "schema"]
+    )
     assert printed.exit_code == 0
     assert json.loads(printed.output) == mcp_config_json_schema()
 
 
 @pytest.mark.parametrize("on_conflict", ["update", "replace"])
-def test_apply_refuses_a_server_edited_while_importing(tmp_path, on_conflict):
+async def test_apply_refuses_a_server_edited_while_importing(tmp_path, on_conflict):
     class EditedWhileImporting(NebulaStore):
         """A teammate changes the server between the plan and its apply."""
 
         edited = False
 
-        def get(self, model, entity_id):
-            current = super().get(model, entity_id)
+        async def get(self, model, entity_id):
+            current = await super().get(model, entity_id)
             if model is McpServerProfile and not self.edited:
                 self.edited = True
-                super().update(
-                    model,
-                    entity_id,
-                    {"default_approval": McpApprovalMode.DENY},
-                    expected_revision=current.revision,
+                (
+                    await super().update(
+                        model,
+                        entity_id,
+                        {"default_approval": McpApprovalMode.DENY},
+                        expected_revision=current.revision,
+                    )
                 )
-                return super().get(model, entity_id)
+                return await super().get(model, entity_id)
             return current
 
     store = EditedWhileImporting(tmp_path / "nebula.db")
     credentials = CredentialStore(MemoryKeyring())
     config = {"mcpServers": {"local": {"command": "npx", "args": ["local-mcp"]}}}
-    _import(store, credentials, config, dry_run=False)
-    profile = store.list_entities(McpServerProfile)[0]
+    (await _import(store, credentials, config, dry_run=False))
+    profile = (await store.list_entities(McpServerProfile))[0]
     config["mcpServers"]["local"]["args"] = ["local-mcp@2"]
 
-    report = _import(store, credentials, config, dry_run=False, on_conflict=on_conflict)
+    report = await _import(
+        store, credentials, config, dry_run=False, on_conflict=on_conflict
+    )
 
     entry = report.entries[0]
     assert (report.updated, report.replaced, report.invalid) == (0, 0, 1)
     assert "changed while importing" in entry.error
-    current = store.get(McpServerProfile, profile.id)
+    current = await store.get(McpServerProfile, profile.id)
     assert current.arguments == ["local-mcp"]
     assert current.default_approval == McpApprovalMode.DENY
 
 
-def test_export_pages_through_every_server(tmp_path, monkeypatch):
+async def test_export_pages_through_every_server(tmp_path, monkeypatch):
     monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
     monkeypatch.setattr(
         cli_module, "CredentialStore", lambda: CredentialStore(MemoryKeyring())
@@ -886,15 +943,17 @@ def test_export_pages_through_every_server(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     store = NebulaStore(data_dir / "nebula.db")
-    store.create_many(
-        [
-            McpServerProfile(
-                name=f"server-{index:04d}",
-                transport=McpTransport.STREAMABLE_HTTP,
-                url=f"https://mcp.example.test/{index}",
-            )
-            for index in range(1001)
-        ]
+    (
+        await store.create_many(
+            [
+                McpServerProfile(
+                    name=f"server-{index:04d}",
+                    transport=McpTransport.STREAMABLE_HTTP,
+                    url=f"https://mcp.example.test/{index}",
+                )
+                for index in range(1001)
+            ]
+        )
     )
     client = TestClient(
         create_app(
@@ -904,8 +963,8 @@ def test_export_pages_through_every_server(tmp_path, monkeypatch):
         )
     )
 
-    with client:
-        exported = client.get(
+    async with client:
+        exported = await client.get(
             "/api/v1/mcp-servers/export",
             headers={"Authorization": "Bearer test-token"},
         )
@@ -913,7 +972,8 @@ def test_export_pages_through_every_server(tmp_path, monkeypatch):
     assert len(exported.json()["config"]["mcpServers"]) == 1001
 
     destination = tmp_path / "export.json"
-    result = CliRunner().invoke(
+    result = await asyncio.to_thread(
+        CliRunner().invoke,
         cli_module.app,
         ["mcp", "export", str(destination), "--data-dir", str(data_dir)],
     )
@@ -921,7 +981,7 @@ def test_export_pages_through_every_server(tmp_path, monkeypatch):
     assert len(json.loads(destination.read_text())["mcpServers"]) == 1001
 
 
-def test_server_names_match_case_insensitively(tmp_path):
+async def test_server_names_match_case_insensitively(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     keyring = MemoryKeyring()
     credentials = CredentialStore(keyring)
@@ -931,30 +991,35 @@ def test_server_names_match_case_insensitively(tmp_path):
         "env": {"GITHUB_TOKEN": "literal-github-secret"},
     }
 
-    same_file = _import(
+    same_file = await _import(
         store, credentials, {"mcpServers": {"github": github, "GitHub": github}}
     )
     assert [entry.action for entry in same_file.entries] == ["create", "invalid"]
     assert "also named" in same_file.entries[1].error
 
-    first = _import(
+    first = await _import(
         store, credentials, {"mcpServers": {"github": github}}, dry_run=False
     )
     assert first.created == 1
-    profile = store.list_entities(McpServerProfile)[0]
+    profile = (await store.list_entities(McpServerProfile))[0]
     vault_entries = dict(keyring.values)
 
     recased = {"mcpServers": {"GitHub": copy.deepcopy(github)}}
-    again = _import(store, credentials, recased, dry_run=False)
+    again = await _import(store, credentials, recased, dry_run=False)
     assert (again.created, again.unchanged) == (0, 1)
     assert again.entries[0].profile_id == profile.id
-    assert [item.name for item in store.list_entities(McpServerProfile)] == ["github"]
+    assert [item.name for item in (await store.list_entities(McpServerProfile))] == [
+        "github"
+    ]
     assert keyring.values == vault_entries
 
-    replaced = _import(
+    replaced = await _import(
         store, credentials, recased, dry_run=False, on_conflict="replace"
     )
     assert (replaced.created, replaced.replaced) == (0, 1)
-    profiles = store.list_entities(McpServerProfile)
+    profiles = await store.list_entities(McpServerProfile)
     assert [(item.id, item.name) for item in profiles] == [(profile.id, "GitHub")]
     assert len(keyring.values) == len(vault_entries)
+
+
+pytestmark = pytest.mark.anyio

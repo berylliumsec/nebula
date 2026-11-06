@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 from contextlib import suppress
 from dataclasses import replace
@@ -126,7 +130,7 @@ def test_missing_optional_measurements_do_not_strand_work(tmp_path, monkeypatch)
     assert sample.cpu_ratio is None and sample.memory_available_ratio is None
 
 
-def test_concurrent_refresh_is_shared_and_survives_waiter_cancellation(
+async def test_concurrent_refresh_is_shared_and_survives_waiter_cancellation(
     tmp_path, monkeypatch
 ):
     monitor = HostLoadMonitor(proc=tmp_path, cgroup=tmp_path)
@@ -160,10 +164,10 @@ def test_concurrent_refresh_is_shared_and_survives_waiter_cancellation(
         finally:
             release.set()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_start_budget_is_shared_fair_and_cancellation_does_not_leak():
+async def test_start_budget_is_shared_fair_and_cancellation_does_not_leak():
     monitor = ManualMonitor(busy=False, capacity=1)
     gate = HostLoadGate(monitor)
 
@@ -186,10 +190,12 @@ def test_start_budget_is_shared_fair_and_cancellation_does_not_leak():
         assert started == [0, 1, 3, 4, 5]
         assert not gate._waiters
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_refresh_failure_is_observed_after_every_waiter_cancels(tmp_path, monkeypatch):
+async def test_refresh_failure_is_observed_after_every_waiter_cancels(
+    tmp_path, monkeypatch
+):
     monitor = HostLoadMonitor(proc=tmp_path, cgroup=tmp_path)
     entered, release = threading.Event(), threading.Event()
     diagnostics = []
@@ -229,23 +235,25 @@ def test_refresh_failure_is_observed_after_every_waiter_cancels(tmp_path, monkey
         finally:
             release.set()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
 @pytest.mark.parametrize("entry", ["direct", "butler"])
 @pytest.mark.parametrize("cancel", [False, True])
-def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cancels(
+async def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cancels(
     tmp_path, monkeypatch, entry, cancel
 ):
     store = NebulaStore(tmp_path / "core.db")
-    store.create(Engagement(id="project", name="Synthetic host capacity"))
-    store.create(
-        ProviderProfile(
-            id="provider",
-            name="Synthetic provider",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
+    (await store.create(Engagement(id="project", name="Synthetic host capacity")))
+    (
+        await store.create(
+            ProviderProfile(
+                id="provider",
+                name="Synthetic provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+            )
         )
     )
 
@@ -313,7 +321,7 @@ def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cancels(
                     assert result["status"] == "queued"
                 turn = None
                 for _ in range(300):
-                    rows = store.list_entities(ChatTurn, engagement_id="project")
+                    rows = await store.list_entities(ChatTurn, engagement_id="project")
                     if rows and rows[0].admission_reason:
                         turn = rows[0]
                         break
@@ -347,9 +355,11 @@ def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cancels(
                 # Durable state survives a second connection while queued.
                 reopened = NebulaStore(tmp_path / "core.db")
                 try:
-                    assert reopened.get(ChatTurn, turn.id).status.value == "queued"
+                    assert (
+                        await reopened.get(ChatTurn, turn.id)
+                    ).status.value == "queued"
                 finally:
-                    reopened.database.engine.dispose()
+                    (await reopened.database.engine.dispose())
                 if cancel:
                     stopped = await client.post(f"/chat/turns/{turn.id}/cancel")
                     assert stopped.status_code == 200, stopped.text
@@ -358,7 +368,7 @@ def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cancels(
                     response = await asyncio.wait_for(pending, 8)
                     assert response.status_code == 200, response.text
                 for _ in range(300):
-                    current = store.get(ChatTurn, turn.id)
+                    current = await store.get(ChatTurn, turn.id)
                     if current.status.value in {"complete", "cancelled", "failed"}:
                         break
                     await asyncio.sleep(0.01)
@@ -369,24 +379,30 @@ def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cancels(
                 if not cancel:
                     assert current.admission_reason is None
                     assert (
-                        len(store.list_entities(ChatMessage, engagement_id="project"))
+                        len(
+                            (
+                                await store.list_entities(
+                                    ChatMessage, engagement_id="project"
+                                )
+                            )
+                        )
                         == 2
                     )
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        store.database.engine.dispose()
+        (await store.database.engine.dispose())
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-def test_harness_waits_before_opening_runtime(tmp_path, cancel):
-    store, project, profile, _, adapter, runtime = _runtime(tmp_path)
+async def test_harness_waits_before_opening_runtime(tmp_path, cancel):
+    store, project, profile, _, adapter, runtime = await _runtime(tmp_path)
     monitor = ManualMonitor()
     runtime.host_load = HostLoadGate(monitor)
 
     async def exercise():
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=project.id,
             profile_id=profile.id,
             model="test-model",
@@ -396,33 +412,35 @@ def test_harness_waits_before_opening_runtime(tmp_path, cancel):
             mcp_server_ids=[],
             include_knowledge=False,
         )
-        task = runtime.start_chat_turn(turn.id)
+        task = await runtime.start_chat_turn(turn.id)
         try:
             for _ in range(200):
-                if store.get(HarnessTurn, turn.id).metadata.get("host_load_wait"):
+                if (await store.get(HarnessTurn, turn.id)).metadata.get(
+                    "host_load_wait"
+                ):
                     break
                 await asyncio.sleep(0.01)
             assert not adapter.opens
-            assert store.get(HarnessTurn, turn.id).status.value == "queued"
+            assert (await store.get(HarnessTurn, turn.id)).status.value == "queued"
             if cancel:
                 await runtime.cancel_turn(turn.id, reason="Synthetic cancellation")
             monitor.recover()
             with suppress(asyncio.CancelledError):
                 await asyncio.wait_for(task, 8)
             assert bool(adapter.opens) is (not cancel)
-            assert store.get(HarnessTurn, turn.id).status.value == (
+            assert (await store.get(HarnessTurn, turn.id)).status.value == (
                 "cancelled" if cancel else "complete"
             )
         finally:
             await runtime.shutdown()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_mission_uses_same_calibration_without_interrupting_active_work(tmp_path):
+async def test_mission_uses_same_calibration_without_interrupting_active_work(tmp_path):
     store = NebulaStore(tmp_path / "missions.db")
-    project = store.create(Engagement(name="Synthetic mission"))
-    profile = _profile(store)
+    project = await store.create(Engagement(name="Synthetic mission"))
+    profile = await _profile(store)
     provider = RecordingProvider(profile)
     monitor = ManualMonitor()
     gate = HostLoadGate(monitor)
@@ -445,12 +463,12 @@ def test_mission_uses_same_calibration_without_interrupting_active_work(tmp_path
         )
         try:
             for _ in range(200):
-                if store.get(AgentRun, run.id).metadata.get("host_load_wait"):
+                if (await store.get(AgentRun, run.id)).metadata.get("host_load_wait"):
                     break
                 await asyncio.sleep(0.01)
             assert (
                 stats["active"] == 0
-                and store.get(AgentRun, run.id).status == RunStatus.QUEUED
+                and (await store.get(AgentRun, run.id)).status == RunStatus.QUEUED
             )
             monitor.recover()
             for _ in range(200):
@@ -465,8 +483,11 @@ def test_mission_uses_same_calibration_without_interrupting_active_work(tmp_path
             assert stats["active"] == 1
             gates[run.id].set()
             await service._tasks[run.id]
-            assert store.get(AgentRun, run.id).status == RunStatus.COMPLETE
+            assert (await store.get(AgentRun, run.id)).status == RunStatus.COMPLETE
         finally:
             await service.shutdown()
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

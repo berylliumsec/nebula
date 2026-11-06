@@ -1,10 +1,15 @@
 """Project graph durability, provenance, concurrency and migration boundaries."""
 
-from concurrent.futures import ThreadPoolExecutor
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from copy import deepcopy
 import importlib
 from pathlib import Path
 
+import asyncio
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import insert, select, inspect
@@ -17,10 +22,10 @@ from nebula.v3.application_model.graph import GraphTransaction
 
 
 @pytest.fixture
-def fixture(tmp_path):
+async def fixture(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Site A"))
-    evidence = store.create(
+    project = await store.create(Engagement(name="Site A"))
+    evidence = await store.create(
         Observation(
             engagement_id=project.id,
             title="Recorded response",
@@ -70,7 +75,7 @@ def ref(evidence, role="supporting"):
     )
 
 
-def test_transaction_persistence_claim_history_and_acceptance(fixture):
+async def test_transaction_persistence_claim_history_and_acceptance(fixture):
     store, project, evidence = fixture
     service = ApplicationModelService(store)
     op = obj(
@@ -82,18 +87,20 @@ def test_transaction_persistence_claim_history_and_acceptance(fixture):
             )
         }
     )
-    first = service.transact(project, tx(0, op))
-    assert service.transact(project, tx(0, op)) == first
+    first = await service.transact(project, tx(0, op))
+    assert (await service.transact(project, tx(0, op))) == first
     updated = deepcopy(op)
     updated["classification"].update(
         review="accepted", evidence=[ref(evidence, "conflicting")]
     )
-    service.transact(project, tx(1, updated))
-    graph = ApplicationModelService(NebulaStore(store.database)).workspace(project)
+    (await service.transact(project, tx(1, updated)))
+    graph = await ApplicationModelService(NebulaStore(store.database)).workspace(
+        project
+    )
     assert len(graph["objects"]) == 1
     assert graph["objects"][0]["classification"]["status"] == "hypothesized"
     assert graph["objects"][0]["properties"]["url"]["status"] == "observed"
-    history = service.history(project)["edits"]
+    history = (await service.history(project))["edits"]
     assert len(history) == 2
     assert (
         history[1]["changes"][0]["before"]["classification"]["review"] == "unreviewed"
@@ -104,7 +111,9 @@ def test_transaction_persistence_claim_history_and_acceptance(fixture):
         ]
         == "browser-a"
     )
-    assert "secret=x" not in str(service.evidence(project, "observations", evidence.id))
+    assert "secret=x" not in str(
+        (await service.evidence(project, "observations", evidence.id))
+    )
 
 
 @pytest.mark.parametrize(
@@ -116,34 +125,34 @@ def test_transaction_persistence_claim_history_and_acceptance(fixture):
         {"properties": {"url": {"value": "Bearer sensitive"}}},
     ],
 )
-def test_invalid_claims_roll_back(fixture, change):
+async def test_invalid_claims_roll_back(fixture, change):
     store, project, _ = fixture
     service = ApplicationModelService(store)
     bad = {**obj(), **change}
     with pytest.raises((ValueError, HTTPException)):
-        service.transact(project, tx(0, obj("valid"), bad))
-    assert service.snapshot(project)["revision"] == 0
-    assert not service.history(project)["edits"]
+        (await service.transact(project, tx(0, obj("valid"), bad)))
+    assert (await service.snapshot(project))["revision"] == 0
+    assert not (await service.history(project))["edits"]
 
 
-def test_project_and_evidence_revision_isolation(fixture):
+async def test_project_and_evidence_revision_isolation(fixture):
     store, project, evidence = fixture
-    other = store.create(Engagement(name="Other"))
+    other = await store.create(Engagement(name="Other"))
     service = ApplicationModelService(store)
     operation = obj()
     operation["classification"]["evidence"] = [ref(evidence)]
     with pytest.raises(HTTPException) as failure:
-        service.transact(other.id, tx(0, operation))
+        (await service.transact(other.id, tx(0, operation)))
     assert failure.value.status_code == 404
     with pytest.raises(HTTPException):
-        service.evidence(other.id, "observations", evidence.id)
+        (await service.evidence(other.id, "observations", evidence.id))
     operation["classification"]["evidence"][0]["revision"] += 1
     with pytest.raises(HTTPException) as failure:
-        service.transact(project, tx(0, operation))
+        (await service.transact(project, tx(0, operation)))
     assert failure.value.status_code == 409
 
 
-def test_relationship_inheritance_and_tombstones(fixture):
+async def test_relationship_inheritance_and_tombstones(fixture):
     store, project, _ = fixture
     service = ApplicationModelService(store)
     relation = dict(
@@ -154,23 +163,30 @@ def test_relationship_inheritance_and_tombstones(fixture):
         target="db",
         claim={"value": True},
     )
-    service.transact(
-        project, tx(0, obj("query", "Operation"), obj("db", "Storage"), relation)
+    (
+        await service.transact(
+            project, tx(0, obj("query", "Operation"), obj("db", "Storage"), relation)
+        )
     )
-    assert len(service.neighborhood(project, "query")["objects"]) == 2
-    service.transact(
-        project,
-        tx(
-            1, dict(op="dismiss", kind="object", id="db", reason="Unsupported topology")
-        ),
+    assert len((await service.neighborhood(project, "query"))["objects"]) == 2
+    (
+        await service.transact(
+            project,
+            tx(
+                1,
+                dict(
+                    op="dismiss", kind="object", id="db", reason="Unsupported topology"
+                ),
+            ),
+        )
     )
-    assert not service.snapshot(project)["relationships"]
-    assert store.list_entities(Observation, engagement_id=project)
+    assert not (await service.snapshot(project))["relationships"]
+    assert await store.list_entities(Observation, engagement_id=project)
     with pytest.raises(HTTPException):
-        service.transact(project, tx(2, obj("db", "Storage")))
+        (await service.transact(project, tx(2, obj("db", "Storage"))))
 
 
-def test_context_identity_and_property_dismissal(fixture):
+async def test_context_identity_and_property_dismissal(fixture):
     store, project, _ = fixture
     service = ApplicationModelService(store)
     one = obj(
@@ -179,54 +195,61 @@ def test_context_identity_and_property_dismissal(fixture):
             "display_name": {"value": "Account"},
         }
     )
-    service.transact(project, tx(0, one))
+    (await service.transact(project, tx(0, one)))
     duplicate = {**one, "id": "other"}
     with pytest.raises(HTTPException):
-        service.transact(project, tx(1, duplicate))
+        (await service.transact(project, tx(1, duplicate)))
     duplicate["authentication_context"] = "signed-in"
-    service.transact(project, tx(1, duplicate))
-    service.transact(
-        project,
-        tx(
-            2,
-            dict(
-                op="dismiss",
-                kind="property",
-                id="page",
-                property="display_name",
-                reason="Unsubstantiated",
+    (await service.transact(project, tx(1, duplicate)))
+    (
+        await service.transact(
+            project,
+            tx(
+                2,
+                dict(
+                    op="dismiss",
+                    kind="property",
+                    id="page",
+                    property="display_name",
+                    reason="Unsubstantiated",
+                ),
             ),
-        ),
+        )
     )
     with pytest.raises(HTTPException):
-        service.transact(project, tx(3, one))
+        (await service.transact(project, tx(3, one)))
 
 
-def test_concurrent_writers_and_idempotent_retries(fixture):
+async def test_concurrent_writers_and_idempotent_retries(fixture):
     store, project, _ = fixture
 
-    def write(i):
+    async def write(i):
         try:
-            return ApplicationModelService(NebulaStore(store.database)).transact(
+            return await ApplicationModelService(NebulaStore(store.database)).transact(
                 project, tx(0, obj(str(i)), key=f"writer-{i}")
             )
         except HTTPException as exc:
             return exc.status_code
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(write, [1, 2]))
+    results = list((await asyncio.gather(*(write(_item) for _item in [1, 2]))))
     assert sum(r == 409 for r in results) == 1
-    assert len(ApplicationModelService(store).workspace(project)["objects"]) == 1
+    assert (
+        len((await ApplicationModelService(store).workspace(project))["objects"]) == 1
+    )
     with pytest.raises(HTTPException):
-        ApplicationModelService(store).transact(
-            project,
-            tx(
-                0, obj("different"), key="writer-" + ("1" if results[0] != 409 else "2")
-            ),
+        (
+            await ApplicationModelService(store).transact(
+                project,
+                tx(
+                    0,
+                    obj("different"),
+                    key="writer-" + ("1" if results[0] != 409 else "2"),
+                ),
+            )
         )
 
 
-def test_custom_schema_transaction_and_isolation(fixture):
+async def test_custom_schema_transaction_and_isolation(fixture):
     store, project, _ = fixture
     service = ApplicationModelService(store)
     definition = dict(
@@ -239,23 +262,26 @@ def test_custom_schema_transaction_and_isolation(fixture):
         identity_hints=["name"],
         evidence_examples=["Recorded policy"],
     )
-    service.transact(
-        project,
-        tx(
-            0,
-            dict(op="define_type", definition=definition),
-            obj("boundary", "custom.TenantBoundary"),
-        ),
+    (
+        await service.transact(
+            project,
+            tx(
+                0,
+                dict(op="define_type", definition=definition),
+                obj("boundary", "custom.TenantBoundary"),
+            ),
+        )
     )
     assert any(
-        t["name"] == "custom.TenantBoundary" for t in service.schema(project)["types"]
+        t["name"] == "custom.TenantBoundary"
+        for t in (await service.schema(project))["types"]
     )
-    other = store.create(Engagement(name="Other"))
-    assert len(service.schema(other.id)["types"]) == 33
-    assert service.search(project, type="SecurityPolicy")["total"] == 1
+    other = await store.create(Engagement(name="Other"))
+    assert len((await service.schema(other.id))["types"]) == 33
+    assert (await service.search(project, type="SecurityPolicy"))["total"] == 1
 
 
-def test_legacy_records_survive_but_cannot_seed_new_inventory(fixture):
+async def test_legacy_records_survive_but_cannot_seed_new_inventory(fixture):
     from nebula.v3.application_model.persistence import graphs
     from nebula.v3.application_model.service import empty
 
@@ -279,63 +305,67 @@ def test_legacy_records_survive_but_cannot_seed_new_inventory(fixture):
             evidence_examples=["Historical record"],
         )
     ]
-    with store.database.engine.begin() as connection:
-        connection.execute(
-            insert(graphs).values(project_id=project, revision=1, payload=graph)
+    async with store.database.engine.begin() as connection:
+        (
+            await connection.execute(
+                insert(graphs).values(project_id=project, revision=1, payload=graph)
+            )
         )
     service = ApplicationModelService(store)
-    assert "Asset" not in {t["name"] for t in service.schema(project)["types"]}
+    assert "Asset" not in {t["name"] for t in (await service.schema(project))["types"]}
     assert "custom.LegacyDatabase" not in {
-        t["name"] for t in service.schema(project)["types"]
+        t["name"] for t in (await service.schema(project))["types"]
     }
-    displayed = service.view(project, object_id="old-asset")
+    displayed = await service.view(project, object_id="old-asset")
     assert displayed["objects"][0]["id"] == "old-asset"
     assert next(t for t in displayed["schema"]["types"] if t["name"] == "Asset")[
         "legacy"
     ]
     with pytest.raises(ValueError, match="legacy-only"):
-        service.transact(project, tx(1, obj("new-asset", "Asset")))
-    service.transact(
-        project, tx(1, {"op": "put_object", **old, "label": "Retained legacy asset"})
+        (await service.transact(project, tx(1, obj("new-asset", "Asset"))))
+    (
+        await service.transact(
+            project,
+            tx(1, {"op": "put_object", **old, "label": "Retained legacy asset"}),
+        )
     )
-    assert (
-        ApplicationModelService(NebulaStore(store.database)).search(project)["objects"][
-            0
-        ]["label"]
-        == "Retained legacy asset"
-    )
-    assert (
-        service.relationship_options(project, "old-asset", "old-asset")["options"] == []
-    )
+    assert (await ApplicationModelService(NebulaStore(store.database)).search(project))[
+        "objects"
+    ][0]["label"] == "Retained legacy asset"
+    assert (await service.relationship_options(project, "old-asset", "old-asset"))[
+        "options"
+    ] == []
 
 
-def test_custom_types_cannot_reopen_inventory(fixture):
+async def test_custom_types_cannot_reopen_inventory(fixture):
     store, project, _ = fixture
     service = ApplicationModelService(store)
     with pytest.raises(ValueError, match="specialize an active mechanism"):
-        service.transact(
-            project,
-            tx(
-                0,
-                dict(
-                    op="define_type",
-                    definition=dict(
-                        name="custom.Link",
-                        label="Link",
-                        category="Structure",
-                        description="Inventory link",
-                        extends="Asset",
-                        properties=[],
-                        identity_hints=["url"],
-                        evidence_examples=["Page link"],
+        (
+            await service.transact(
+                project,
+                tx(
+                    0,
+                    dict(
+                        op="define_type",
+                        definition=dict(
+                            name="custom.Link",
+                            label="Link",
+                            category="Structure",
+                            description="Inventory link",
+                            extends="Asset",
+                            properties=[],
+                            identity_hints=["url"],
+                            evidence_examples=["Page link"],
+                        ),
                     ),
                 ),
-            ),
+            )
         )
-    assert service.snapshot(project)["revision"] == 0
+    assert (await service.snapshot(project))["revision"] == 0
 
 
-def test_mechanism_chain_persists_without_per_observation_edits(fixture):
+async def test_mechanism_chain_persists_without_per_observation_edits(fixture):
     store, project, evidence = fixture
     service = ApplicationModelService(store)
     endpoint = obj(
@@ -355,27 +385,28 @@ def test_mechanism_chain_persists_without_per_observation_edits(fixture):
         target="session",
         claim={"value": True},
     )
-    service.transact(
-        project,
-        tx(
-            0,
-            obj("login", "AuthenticationFlow"),
-            obj("session", "Session"),
-            endpoint,
-            edge,
-        ),
+    (
+        await service.transact(
+            project,
+            tx(
+                0,
+                obj("login", "AuthenticationFlow"),
+                obj("session", "Session"),
+                endpoint,
+                edge,
+            ),
+        )
     )
     restarted = ApplicationModelService(NebulaStore(store.database))
-    assert restarted.workspace(project)["revision"] == 1
-    assert (
-        restarted.snapshot(project)["objects"]["endpoint"]["properties"]["method"][
-            "value"
-        ]
-        == "POST"
-    )
+    assert (await restarted.workspace(project))["revision"] == 1
+    assert (await restarted.snapshot(project))["objects"]["endpoint"]["properties"][
+        "method"
+    ]["value"] == "POST"
     assert any(
         o["type"] == "establishes_session"
-        for o in restarted.relationship_options(project, "login", "session")["options"]
+        for o in (await restarted.relationship_options(project, "login", "session"))[
+            "options"
+        ]
     )
 
 
@@ -436,15 +467,18 @@ def test_versioned_reset_preserves_original_and_unrelated_entities(tmp_path):
     command.upgrade(config, "head")
 
 
-def test_project_deletion_cannot_resurrect_previous_graph(fixture):
+async def test_project_deletion_cannot_resurrect_previous_graph(fixture):
     from nebula.v3.application_model.persistence import graphs, edits
 
     store, project, _ = fixture
     service = ApplicationModelService(store)
-    service.transact(project, tx(0, obj()))
-    store.delete(Engagement, project)
-    with store.database.engine.connect() as connection:
-        assert connection.execute(select(graphs)).all() == []
-        assert connection.execute(select(edits)).all() == []
-    store.create(Engagement(id=project, name="New project"))
-    assert service.workspace(project)["objects"] == []
+    (await service.transact(project, tx(0, obj())))
+    (await store.delete(Engagement, project))
+    async with store.database.engine.connect() as connection:
+        assert (await connection.execute(select(graphs))).all() == []
+        assert (await connection.execute(select(edits))).all() == []
+    (await store.create(Engagement(id=project, name="New project")))
+    assert (await service.workspace(project))["objects"] == []
+
+
+pytestmark = pytest.mark.anyio

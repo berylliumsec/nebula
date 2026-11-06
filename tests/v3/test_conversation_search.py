@@ -1,8 +1,11 @@
 """``conversation.search`` and archived-conversation excerpts in chat turns."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import hashlib
 import json
 
@@ -100,33 +103,37 @@ def test_the_tool_is_a_read_that_needs_no_approval_and_may_rerun():
     assert CONVERSATION_SEARCH_TOOL_NAME in RETRIEVAL_TOOL_NAMES
 
 
-def _search_fixture(tmp_path):
+async def _search_fixture(tmp_path):
     store = NebulaStore(tmp_path / "search.db")
-    store.create(Engagement(id="project", name="Project"))
-    scope = store.create(ScopePolicy(id="scope", engagement_id="project"))
+    (await store.create(Engagement(id="project", name="Project")))
+    scope = await store.create(ScopePolicy(id="scope", engagement_id="project"))
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     sessions = [
-        store.create(
-            ChatSession(
-                id=identity,
-                engagement_id="project",
-                title=identity,
-                provider_profile_id="provider-a",
-                model="model-a",
+        (
+            await store.create(
+                ChatSession(
+                    id=identity,
+                    engagement_id="project",
+                    title=identity,
+                    provider_profile_id="provider-a",
+                    model="model-a",
+                )
             )
         )
         for identity in ("session-a", "session-b")
     ]
     for session in sessions:
-        store.create(
-            ChatTurn(
-                id=f"turn-{session.id}",
-                engagement_id="project",
-                session_id=session.id,
-                provider_profile_id="provider-a",
-                model="model-a",
-                tools_enabled=True,
+        (
+            await store.create(
+                ChatTurn(
+                    id=f"turn-{session.id}",
+                    engagement_id="project",
+                    session_id=session.id,
+                    provider_profile_id="provider-a",
+                    model="model-a",
+                    tools_enabled=True,
+                )
             )
         )
     return store, scope, workspace, sessions
@@ -146,8 +153,8 @@ def _invocation(session_id, workspace, **arguments):
     )
 
 
-def test_search_reads_only_this_sessions_archived_active_messages(tmp_path):
-    store, scope, workspace, (session, other) = _search_fixture(tmp_path)
+async def test_search_reads_only_this_sessions_archived_active_messages(tmp_path):
+    store, scope, workspace, (session, other) = await _search_fixture(tmp_path)
     messages = [
         _message(session, 1, "The kerberos keytab lives on auth-01."),
         _message(session, 2, "Retracted: the kerberos keytab lives on auth-99."),
@@ -159,9 +166,13 @@ def test_search_reads_only_this_sessions_archived_active_messages(tmp_path):
     messages[1] = messages[1].model_copy(
         update={"metadata": {"retracted_at": "2026-09-26T00:00:00+00:00"}}
     )
-    store.create_many(messages)
-    store.create(_message(other, 1, "Another chat: kerberos keytab on auth-42."))
-    store.create(_ready_snapshot(session, messages, through=4))
+    (await store.create_many(messages))
+    (
+        await store.create(
+            _message(other, 1, "Another chat: kerberos keytab on auth-42.")
+        )
+    )
+    (await store.create(_ready_snapshot(session, messages, through=4)))
     components = conversation_search_components(
         store,
         scope,
@@ -170,10 +181,8 @@ def test_search_reads_only_this_sessions_archived_active_messages(tmp_path):
         text_of=_stored_model_text,
     )
 
-    result = asyncio.run(
-        components.broker.execute(
-            _invocation(session.id, workspace, query="kerberos keytab"), scope
-        )
+    result = await components.broker.execute(
+        _invocation(session.id, workspace, query="kerberos keytab"), scope
     )
 
     output = result.output
@@ -187,19 +196,19 @@ def test_search_reads_only_this_sessions_archived_active_messages(tmp_path):
         item["message_id"].startswith("session-a-") for item in output["results"]
     )
     # A plain read: completed on the ledger, never waiting for an approval.
-    [call] = store.list_entities(ToolCall, engagement_id="project")
+    [call] = await store.list_entities(ToolCall, engagement_id="project")
     assert call.status == ToolCallStatus.COMPLETE
     assert call.risk_class == RiskClass.LOCAL_READ
-    assert store.list_entities(Approval, engagement_id="project") == []
+    assert (await store.list_entities(Approval, engagement_id="project")) == []
 
 
-def test_search_covers_exactly_the_snapshots_messages(tmp_path):
-    store, scope, workspace, (session, _) = _search_fixture(tmp_path)
+async def test_search_covers_exactly_the_snapshots_messages(tmp_path):
+    store, scope, workspace, (session, _) = await _search_fixture(tmp_path)
     messages = [
         _message(session, index, f"kerberos keytab note {index}")
         for index in range(1, 5)
     ]
-    store.create_many(messages)
+    (await store.create_many(messages))
     snapshot = _ready_snapshot(session, messages, through=4)
     # A message inside the boundary that the memory does not stand for is
     # not archived by it, so search does not claim it either.
@@ -212,42 +221,36 @@ def test_search_covers_exactly_the_snapshots_messages(tmp_path):
             ]
         }
     )
-    store.create(snapshot)
+    (await store.create(snapshot))
     components = conversation_search_components(
         store, scope, workspace, session_id=session.id, text_of=_stored_model_text
     )
 
-    result = asyncio.run(
-        components.broker.execute(
-            _invocation(session.id, workspace, query="kerberos keytab"), scope
-        )
+    result = await components.broker.execute(
+        _invocation(session.id, workspace, query="kerberos keytab"), scope
     )
 
     assert result.output["searched_messages"] == 3
     assert {item["sequence"] for item in result.output["results"]} == {1, 2, 4}
 
 
-def test_search_limit_and_empty_results(tmp_path):
-    store, scope, workspace, (session, _) = _search_fixture(tmp_path)
+async def test_search_limit_and_empty_results(tmp_path):
+    store, scope, workspace, (session, _) = await _search_fixture(tmp_path)
     messages = [
         _message(session, index, f"deploy window note {index}")
         for index in range(1, 15)
     ]
-    store.create_many(messages)
-    store.create(_ready_snapshot(session, messages, through=14))
+    (await store.create_many(messages))
+    (await store.create(_ready_snapshot(session, messages, through=14)))
     components = conversation_search_components(
         store, scope, workspace, session_id=session.id, text_of=_stored_model_text
     )
 
-    limited = asyncio.run(
-        components.broker.execute(
-            _invocation(session.id, workspace, query="deploy window", limit=3), scope
-        )
+    limited = await components.broker.execute(
+        _invocation(session.id, workspace, query="deploy window", limit=3), scope
     )
-    unmatched = asyncio.run(
-        components.broker.execute(
-            _invocation(session.id, workspace, query="zeppelin"), scope
-        )
+    unmatched = await components.broker.execute(
+        _invocation(session.id, workspace, query="zeppelin"), scope
     )
 
     assert limited.output["result_count"] == 3
@@ -255,22 +258,20 @@ def test_search_limit_and_empty_results(tmp_path):
     assert "never said it" in unmatched.output["detail"]
 
 
-def test_search_output_is_bounded_whatever_the_limit(tmp_path):
-    store, scope, workspace, (session, _) = _search_fixture(tmp_path)
+async def test_search_output_is_bounded_whatever_the_limit(tmp_path):
+    store, scope, workspace, (session, _) = await _search_fixture(tmp_path)
     passage = "deploy window note: " + "deploy after the freeze lifts. " * 36
     messages = [
         _message(session, index, f"{index}: {passage}") for index in range(1, 15)
     ]
-    store.create_many(messages)
-    store.create(_ready_snapshot(session, messages, through=14))
+    (await store.create_many(messages))
+    (await store.create(_ready_snapshot(session, messages, through=14)))
     components = conversation_search_components(
         store, scope, workspace, session_id=session.id, text_of=_stored_model_text
     )
 
-    result = asyncio.run(
-        components.broker.execute(
-            _invocation(session.id, workspace, query="deploy window", limit=10), scope
-        )
+    result = await components.broker.execute(
+        _invocation(session.id, workspace, query="deploy window", limit=10), scope
     )
 
     output = result.output
@@ -283,17 +284,15 @@ def test_search_output_is_bounded_whatever_the_limit(tmp_path):
     assert "narrow the query" in output["detail"]
 
 
-def test_search_without_an_archive_says_everything_is_in_view(tmp_path):
-    store, scope, workspace, (session, _) = _search_fixture(tmp_path)
-    store.create(_message(session, 1, "kerberos keytab"))
+async def test_search_without_an_archive_says_everything_is_in_view(tmp_path):
+    store, scope, workspace, (session, _) = await _search_fixture(tmp_path)
+    (await store.create(_message(session, 1, "kerberos keytab")))
     components = conversation_search_components(
         store, scope, workspace, session_id=session.id, text_of=_stored_model_text
     )
 
-    result = asyncio.run(
-        components.broker.execute(
-            _invocation(session.id, workspace, query="kerberos"), scope
-        )
+    result = await components.broker.execute(
+        _invocation(session.id, workspace, query="kerberos"), scope
     )
 
     assert result.output["results"] == []
@@ -301,27 +300,27 @@ def test_search_without_an_archive_says_everything_is_in_view(tmp_path):
     assert "in your context" in result.output["detail"]
 
 
-def test_search_refuses_a_call_from_another_conversation(tmp_path):
-    store, scope, workspace, (session, other) = _search_fixture(tmp_path)
+async def test_search_refuses_a_call_from_another_conversation(tmp_path):
+    store, scope, workspace, (session, other) = await _search_fixture(tmp_path)
     messages = [_message(session, 1, "kerberos keytab on auth-01")]
-    store.create_many(messages)
-    store.create(_ready_snapshot(session, messages, through=1))
+    (await store.create_many(messages))
+    (await store.create(_ready_snapshot(session, messages, through=1)))
     components = conversation_search_components(
         store, scope, workspace, session_id=session.id, text_of=_stored_model_text
     )
 
     with pytest.raises(InvalidToolArguments, match="conversation it was offered in"):
-        asyncio.run(
-            components.broker.execute(
+        (
+            await components.broker.execute(
                 _invocation(other.id, workspace, query="kerberos"), scope
             )
         )
-    [call] = store.list_entities(ToolCall, engagement_id="project")
+    [call] = await store.list_entities(ToolCall, engagement_id="project")
     assert call.status == ToolCallStatus.FAILED
 
 
-def _long_session(store, *, session_id="session", engagement_id="project"):
-    session = store.create(
+async def _long_session(store, *, session_id="session", engagement_id="project"):
+    session = await store.create(
         ChatSession(
             id=session_id,
             engagement_id=engagement_id,
@@ -343,7 +342,7 @@ def _long_session(store, *, session_id="session", engagement_id="project"):
             for sequence in range(3, 61)
         ],
     ]
-    store.create_many(messages)
+    (await store.create_many(messages))
     return session, long_text
 
 
@@ -378,13 +377,13 @@ def _excerpts(prepared) -> list[dict]:
     return json.loads(text.split(EXCERPTS_HEADING, 1)[1].split("\n", 1)[1])
 
 
-def test_compacted_turn_retrieves_the_relevant_paragraph_of_a_long_message(
+async def test_compacted_turn_retrieves_the_relevant_paragraph_of_a_long_message(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "long-message.db")
-    store.create(Engagement(id="project", name="Project"))
-    profile = store.create(_windowed_profile())
-    session, long_text = _long_session(store)
+    (await store.create(Engagement(id="project", name="Project")))
+    profile = await store.create(_windowed_profile())
+    session, long_text = await _long_session(store)
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     limits = chat_module.resolve_context_limits(profile)
@@ -395,7 +394,7 @@ def test_compacted_turn_retrieves_the_relevant_paragraph_of_a_long_message(
         > limits.target_input_tokens // 5
     )
 
-    prepared = ChatService(store).prepare(
+    prepared = await ChatService(store).prepare(
         ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
@@ -418,13 +417,13 @@ def test_compacted_turn_retrieves_the_relevant_paragraph_of_a_long_message(
     assert len(long_parts[0]["content"]) < len(long_text) // 10
 
 
-def test_a_bare_confirmation_retrieves_through_the_recent_operator_request(
+async def test_a_bare_confirmation_retrieves_through_the_recent_operator_request(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "follow-up.db")
-    store.create(Engagement(id="project", name="Project"))
-    profile = store.create(_windowed_profile())
-    session = store.create(
+    (await store.create(Engagement(id="project", name="Project")))
+    profile = await store.create(_windowed_profile())
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id="project",
@@ -452,11 +451,11 @@ def test_a_bare_confirmation_retrieves_through_the_recent_operator_request(
         _message(session, 57, "Can we get the payments-gw key rotation going?"),
         _message(session, 58, "I can start the rotation now if you want."),
     ]
-    store.create_many(messages)
+    (await store.create_many(messages))
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
 
-    prepared = ChatService(store).prepare(
+    prepared = await ChatService(store).prepare(
         ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
@@ -472,7 +471,7 @@ def test_a_bare_confirmation_retrieves_through_the_recent_operator_request(
     assert excerpts[0]["content"] == plan
 
 
-def _tool_service(tmp_path, monkeypatch):
+async def _tool_service(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "tools.db")
     workspace = tmp_path / "workspace"
     skill_path = workspace / ".agents" / "skills" / "review" / "SKILL.md"
@@ -485,13 +484,13 @@ def _tool_service(tmp_path, monkeypatch):
     reference = skill_path.parent / "references" / "checklist.md"
     reference.parent.mkdir()
     reference.write_text("Check the diff.", encoding="utf-8")
-    store.create(Engagement(id="project", name="Project"))
+    (await store.create(Engagement(id="project", name="Project")))
     payload = _windowed_profile().model_dump(mode="python")
     payload["capabilities"]["tool_calling"] = True
     payload["capability_verifications"] = {
         "model-a": {"model": "model-a", "status": "verified"}
     }
-    profile = store.create(ProviderProfile.model_validate(payload))
+    profile = await store.create(ProviderProfile.model_validate(payload))
     provider = FakeProvider(profile.id, local=True)
     provider.config.capabilities.tools = True
     provider.config.capabilities.strict_tools = True
@@ -502,8 +501,8 @@ def _tool_service(tmp_path, monkeypatch):
         workspace_resolver=lambda _: workspace,
     )
 
-    def prepare(session_id, content="When does the staging password rotate?"):
-        return service.prepare(
+    async def prepare(session_id, content="When does the staging password rotate?"):
+        return await service.prepare(
             ChatCompletionRequest(
                 provider_id=profile.id,
                 engagement_id="project",
@@ -518,22 +517,24 @@ def _tool_service(tmp_path, monkeypatch):
     return store, service, prepare
 
 
-def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
+async def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
     tmp_path, monkeypatch
 ):
-    store, service, prepare = _tool_service(tmp_path, monkeypatch)
-    session, _ = _long_session(store)
-    store.create(
-        ChatSession(
-            id="short",
-            engagement_id="project",
-            title="Short",
-            provider_profile_id="provider-a",
-            model="model-a",
+    store, service, prepare = await _tool_service(tmp_path, monkeypatch)
+    session, _ = await _long_session(store)
+    (
+        await store.create(
+            ChatSession(
+                id="short",
+                engagement_id="project",
+                title="Short",
+                provider_profile_id="provider-a",
+                model="model-a",
+            )
         )
     )
 
-    compacted = prepare(session.id)
+    compacted = await prepare(session.id)
 
     assert compacted.context_snapshot is not None
     assert {
@@ -557,27 +558,25 @@ def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
         workspace=compacted.tool_components.workspace,
         requested_by="chat-assistant",
     )
-    result = asyncio.run(
-        compacted.tool_components.broker.execute(
-            invocation, compacted.tool_components.scope
-        )
+    result = await compacted.tool_components.broker.execute(
+        invocation, compacted.tool_components.scope
     )
     assert PLANTED in result.output["results"][0]["content"]
     assert result.output["results"][0]["message_id"] == "session-0002"
-    assert store.list_entities(Approval, engagement_id="project") == []
+    assert (await store.list_entities(Approval, engagement_id="project")) == []
 
     # A resumed turn offers the model exactly the tools it already had.
-    turn = store.update(
+    turn = await store.update(
         ChatTurn,
         compacted.turn.id,
         {"status": ChatTurnStatus.WAITING_APPROVAL},
-        expected_revision=store.get(ChatTurn, compacted.turn.id).revision,
+        expected_revision=(await store.get(ChatTurn, compacted.turn.id)).revision,
     )
-    resumed = service.prepare_resume(turn.id)
+    resumed = await service.prepare_resume(turn.id)
     assert set(resumed.tool_components.specs) == set(compacted.tool_components.specs)
 
     # A conversation that still fits has nothing archived to search.
-    short = prepare("short")
+    short = await prepare("short")
     assert short.context_snapshot is None
     assert set(compacted.tool_components.specs) == set(short.tool_components.specs) | {
         CONVERSATION_SEARCH_TOOL_NAME
@@ -594,7 +593,9 @@ def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
     )
 
 
-def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monkeypatch):
+async def test_semantic_ranking_uses_only_an_already_ready_local_model(
+    tmp_path, monkeypatch
+):
     from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import (
         ONNXMiniLM_L6_V2,
     )
@@ -613,8 +614,8 @@ def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monke
             return [vector[:3] for vector in super().__call__(input)]
 
     store = NebulaStore(tmp_path / "dense.db")
-    store.create(Engagement(id="project", name="Project"))
-    profile = store.create(_windowed_profile())
+    (await store.create(Engagement(id="project", name="Project")))
+    profile = await store.create(_windowed_profile())
     ready = ChromaKnowledgeIndex(
         tmp_path / "ready-index", embedding_function=ConceptEmbedding()
     )
@@ -623,7 +624,7 @@ def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monke
     assert ready.embed([]) == []
     ConceptEmbedding.calls.clear()
 
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id="project",
@@ -634,14 +635,16 @@ def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monke
     )
     filler = "status update with nothing notable to report today. " * 12
     decision = "We chose the vault for every password used at login."
-    store.create_many(
-        [
-            _message(session, 1, decision),
-            *[
-                _message(session, sequence, f"message {sequence}: " + filler)
-                for sequence in range(2, 61)
-            ],
-        ]
+    (
+        await store.create_many(
+            [
+                _message(session, 1, decision),
+                *[
+                    _message(session, sequence, f"message {sequence}: " + filler)
+                    for sequence in range(2, 61)
+                ],
+            ]
+        )
     )
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
@@ -654,7 +657,7 @@ def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monke
 
     # No keyword of the question occurs in the decision: only the embedding
     # model can connect "credential" with "password" and "login".
-    lexical = ChatService(store).prepare(request)
+    lexical = await ChatService(store).prepare(request)
     assert lexical.context_snapshot is not None
     assert EXCERPTS_HEADING not in _current_text(lexical)
 
@@ -663,7 +666,7 @@ def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monke
     service = ChatService(store, knowledge_index=ready)
     found: list[str] = []
     for _ in range(5):
-        prepared = service.prepare(request)
+        prepared = await service.prepare(request)
         if EXCERPTS_HEADING in _current_text(prepared):
             found = [item["message_id"] for item in _excerpts(prepared)]
             break
@@ -678,6 +681,9 @@ def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monke
     assert missing.status.state == "required"
     service = ChatService(store, knowledge_index=missing)
     assert service._conversation_dense() is None
-    service.prepare(request)
+    (await service.prepare(request))
     assert missing.status.state == "required"
     assert missing.status.downloaded_bytes == 0
+
+
+pytestmark = pytest.mark.anyio

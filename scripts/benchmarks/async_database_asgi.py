@@ -8,7 +8,17 @@ they exclude TCP and browser rendering and do not replace LAN browser evidence.
 
 
 def main() -> int:
-    import argparse, asyncio, contextvars, inspect, json, os, pathlib, sys, time, statistics, uuid
+    import argparse
+    import asyncio
+    import contextvars
+    import inspect
+    import json
+    import os
+    import pathlib
+    import sys
+    import time
+    import statistics
+    import uuid
     import hashlib
     import platform
     import subprocess
@@ -50,7 +60,7 @@ def main() -> int:
     }
     sys.path.insert(0, str(pathlib.Path(a.source) / "src"))
     import httpx
-    from sqlalchemy import create_engine, insert, text
+    from sqlalchemy import create_engine, insert
     from sqlalchemy.engine import make_url
     import nebula.v3.database as dbmod
     from nebula.v3.database import Database, EntityRow

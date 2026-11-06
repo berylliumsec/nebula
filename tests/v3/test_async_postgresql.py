@@ -1,5 +1,10 @@
 """Native async storage behavior against isolated PostgreSQL schemas."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import os
 from contextlib import asynccontextmanager
@@ -48,7 +53,9 @@ def postgresql_url():
     ],
     ids=["crud", "rollback", "ledger-retry", "concurrent-ledger", "harness-titles"],
 )
-def test_postgresql_storage_contracts(postgresql_url, tmp_path, monkeypatch, case):
+async def test_postgresql_storage_contracts(
+    postgresql_url, tmp_path, monkeypatch, case
+):
     @asynccontextmanager
     async def store_factory(_):
         store = NebulaStore(
@@ -61,10 +68,10 @@ def test_postgresql_storage_contracts(postgresql_url, tmp_path, monkeypatch, cas
             await store.database.dispose()
 
     monkeypatch.setattr(storage_cases, "open_store", store_factory)
-    case(tmp_path)
+    await case(tmp_path)
 
 
-def test_postgresql_budget_discovery_and_slow_query_leave_loop_responsive(
+async def test_postgresql_budget_discovery_and_slow_query_leave_loop_responsive(
     postgresql_url,
 ):
     async def exercise():
@@ -96,4 +103,7 @@ def test_postgresql_budget_discovery_and_slow_query_leave_loop_responsive(
         finally:
             await database.dispose()
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

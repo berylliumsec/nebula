@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 
@@ -29,7 +33,7 @@ def _echo_gateway() -> McpGatewaySession:
     )
 
 
-def test_gateway_frames_are_measured_as_utf8_not_escaped_json():
+async def test_gateway_frames_are_measured_as_utf8_not_escaped_json():
     async def scenario() -> None:
         text = _text_that_only_fits_unescaped()
         gateway = _echo_gateway()
@@ -44,10 +48,10 @@ def test_gateway_frames_are_measured_as_utf8_not_escaped_json():
             await client.close()
             await gateway.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_gateway_client_refuses_oversized_requests_before_writing():
+async def test_gateway_client_refuses_oversized_requests_before_writing():
     async def scenario() -> None:
         gateway = _echo_gateway()
         launch = await gateway.start()
@@ -69,10 +73,10 @@ def test_gateway_client_refuses_oversized_requests_before_writing():
             await client.close()
             await gateway.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_gateway_session_answers_oversized_frames_and_keeps_the_connection():
+async def test_gateway_session_answers_oversized_frames_and_keeps_the_connection():
     async def scenario() -> None:
         gateway = _echo_gateway()
         launch = await gateway.start()
@@ -109,4 +113,7 @@ def test_gateway_session_answers_oversized_frames_and_keeps_the_connection():
             await writer.wait_closed()
             await gateway.close()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

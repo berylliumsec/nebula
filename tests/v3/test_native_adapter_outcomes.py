@@ -8,6 +8,11 @@ model attempted or end with "no operator-facing answer after bounded
 recovery" instead of telling the operator what happened.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 from pathlib import Path
@@ -15,7 +20,7 @@ from typing import Any
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.chat as chat_module
 from nebula.v3 import providers
@@ -691,10 +696,10 @@ class RecordingBroker:
         return ToolExecutionResult(output={"value": invocation.arguments["value"]})
 
 
-def _chat(tmp_path: Path, provider: ModelProvider):
+async def _chat(tmp_path: Path, provider: ModelProvider):
     store = NebulaStore(tmp_path / "outcomes.db")
-    project = store.create(Engagement(id="project", name="Outcomes"))
-    profile = store.create(
+    project = await store.create(Engagement(id="project", name="Outcomes"))
+    profile = await store.create(
         ProviderProfile(
             id="provider",
             name="Provider",
@@ -704,7 +709,7 @@ def _chat(tmp_path: Path, provider: ModelProvider):
             capabilities={"streaming": True, "tool_calling": True},
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id=project.id,
@@ -718,7 +723,7 @@ def _chat(tmp_path: Path, provider: ModelProvider):
             },
         )
     )
-    user = store.create(
+    user = await store.create(
         ChatMessage(
             id="user-message",
             engagement_id=project.id,
@@ -728,7 +733,7 @@ def _chat(tmp_path: Path, provider: ModelProvider):
             content="Use the safe tool once.",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id=project.id,
@@ -807,7 +812,7 @@ GEMINI_MALFORMED = {
 }
 
 
-def test_malformed_routing_call_is_routed_again_instead_of_skipped(tmp_path):
+async def test_malformed_routing_call_is_routed_again_instead_of_skipped(tmp_path):
     provider, sent = _http_provider(
         GeminiProvider,
         ProviderKind.GEMINI,
@@ -824,9 +829,9 @@ def test_malformed_routing_call_is_routed_again_instead_of_skipped(tmp_path):
             ],
         },
     )
-    store, service, prepared, broker = _chat(tmp_path, provider)
+    store, service, prepared, broker = await _chat(tmp_path, provider)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read a."
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
@@ -834,21 +839,21 @@ def test_malformed_routing_call_is_routed_again_instead_of_skipped(tmp_path):
     # then synthesis.
     assert len(sent) == 4
     assert sent[0] == sent[1]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
-def test_a_routing_call_malformed_twice_fails_the_turn_with_the_reason(tmp_path):
+async def test_a_routing_call_malformed_twice_fails_the_turn_with_the_reason(tmp_path):
     provider, sent = _http_provider(
         GeminiProvider, ProviderKind.GEMINI, GEMINI_MALFORMED
     )
-    store, service, prepared, broker = _chat(tmp_path, provider)
+    store, service, prepared, broker = await _chat(tmp_path, provider)
 
     with pytest.raises(ProviderMalformedToolCallError):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     assert len(sent) == 2
     assert broker.calls == []
-    failed = store.get(ChatTurn, "turn")
+    failed = await store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert failed.error == (
         "provider returned a malformed tool call (MALFORMED_FUNCTION_CALL)"
@@ -862,7 +867,7 @@ def _anthropic_call(call_id: str, name: str, arguments: dict[str, Any]):
     )
 
 
-def test_refused_synthesis_reaches_the_operator_without_recovery(tmp_path):
+async def test_refused_synthesis_reaches_the_operator_without_recovery(tmp_path):
     provider, sent = _http_provider(
         AnthropicProvider,
         ProviderKind.ANTHROPIC,
@@ -870,17 +875,17 @@ def test_refused_synthesis_reaches_the_operator_without_recovery(tmp_path):
         _anthropic_call("toolu_2", "finish_response", {}),
         CYBER_REFUSAL,
     )
-    store, service, prepared, broker = _chat(tmp_path, provider)
+    store, service, prepared, broker = await _chat(tmp_path, provider)
 
     # The refusal is raised as itself, as a non-streamed call raises it.
     with pytest.raises(ProviderRefusalError, match="provider blocked the response"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     # Asking a refusing safeguard again gets the same refusal; the synthesis
     # request was sent once.
     assert len(sent) == 3
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    failed = store.get(ChatTurn, "turn")
+    failed = await store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert failed.error == str(
         ProviderRefusalError(
@@ -890,24 +895,24 @@ def test_refused_synthesis_reaches_the_operator_without_recovery(tmp_path):
     assert "final_answer_recovery" not in failed.request_snapshot
 
 
-def test_refused_routing_step_fails_the_turn_with_the_refusal(tmp_path):
+async def test_refused_routing_step_fails_the_turn_with_the_refusal(tmp_path):
     provider, sent = _http_provider(
         AnthropicProvider, ProviderKind.ANTHROPIC, CYBER_REFUSAL
     )
-    store, service, prepared, broker = _chat(tmp_path, provider)
+    store, service, prepared, broker = await _chat(tmp_path, provider)
 
     with pytest.raises(ProviderRefusalError, match="category: cyber"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     # Not read as "no tool needed": nothing ran and no synthesis was asked for.
     assert len(sent) == 1
     assert broker.calls == []
-    failed = store.get(ChatTurn, "turn")
+    failed = await store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert failed.error.startswith("provider blocked the response: refusal")
 
 
-def test_chat_stream_shows_a_refusal_instead_of_offering_to_finish_the_answer(
+async def test_chat_stream_shows_a_refusal_instead_of_offering_to_finish_the_answer(
     tmp_path, monkeypatch
 ):
     class RefusingProvider(ModelProvider):
@@ -937,8 +942,8 @@ def test_chat_stream_shows_a_refusal_instead_of_offering_to_finish_the_answer(
             return ProviderHealth(provider_id=self.config.id, healthy=True)
 
     store = NebulaStore(tmp_path / "refusal-stream.db")
-    engagement = store.create(Engagement(name="Refusal"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Refusal"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-refusing",
             name="Refusing provider",
@@ -953,7 +958,7 @@ def test_chat_stream_shows_a_refusal_instead_of_offering_to_finish_the_answer(
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/completions",
         headers={"Authorization": "Bearer test-token"},
         json={
@@ -975,3 +980,6 @@ def test_chat_stream_shows_a_refusal_instead_of_offering_to_finish_the_answer(
     # "Finish the answer"; a refusal is shown as it is.
     assert error["code"] != "provider_final_answer_missing"
     assert error["detail"] == "provider blocked the response: refusal (category: cyber)"
+
+
+pytestmark = pytest.mark.anyio

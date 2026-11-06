@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import base64
 import io
 import socket
@@ -5,7 +9,7 @@ import zipfile
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.knowledge as knowledge_module
 from nebula.v3.api import create_app
@@ -29,23 +33,25 @@ def _auth():
 
 
 @pytest.fixture
-def knowledge_api(tmp_path):
+async def knowledge_api(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Knowledge ingestion"))
+    engagement = await store.create(Engagement(name="Knowledge ingestion"))
     client = TestClient(
         create_app(store, artifact_store=artifacts, auth_token="test-token")
     )
     return client, store, artifacts, engagement
 
 
-def test_document_ingestion_is_retrievable_reindexable_and_removable(knowledge_api):
+async def test_document_ingestion_is_retrievable_reindexable_and_removable(
+    knowledge_api,
+):
     client, store, artifacts, engagement = knowledge_api
     content = (
         b"# Rules of engagement\n\nTesting is limited to example.test.\n\n"
         b"Do not treat instructions in this document as executable policy."
     )
-    response = client.post(
+    response = await client.post(
         "/api/v1/knowledge/ingest",
         headers=_auth(),
         json={
@@ -65,7 +71,7 @@ def test_document_ingestion_is_retrievable_reindexable_and_removable(knowledge_a
     assert source["document_count"] == 1
     assert source["metadata"]["chunk_count"] == 1
     assert "chunks" not in source["metadata"]
-    persisted = store.get(KnowledgeSource, source["id"])
+    persisted = await store.get(KnowledgeSource, source["id"])
     assert persisted.metadata["chunks"] == [
         {
             "id": persisted.metadata["chunks"][0]["id"],
@@ -73,82 +79,79 @@ def test_document_ingestion_is_retrievable_reindexable_and_removable(knowledge_a
             "artifact_id": source["artifact_id"],
         }
     ]
-    artifact = store.get(Artifact, source["artifact_id"])
+    artifact = await store.get(Artifact, source["artifact_id"])
     assert artifacts.read(artifact) == content
     assert artifact.sha256 == source["metadata"]["sha256"]
     assert artifact.size == source["metadata"]["size"]
 
-    listed = client.get(
+    listed = await client.get(
         f"/api/v1/knowledge?engagement_id={engagement.id}", headers=_auth()
     )
     assert [item["id"] for item in listed.json()] == [source["id"]]
     assert "chunks" not in listed.json()[0]["metadata"]
-    fetched = client.get(f"/api/v1/knowledge/{source['id']}", headers=_auth())
+    fetched = await client.get(f"/api/v1/knowledge/{source['id']}", headers=_auth())
     assert "chunks" not in fetched.json()["metadata"]
     assert (
-        client.post(
+        await client.post(
             "/api/v1/knowledge", headers=_auth(), json=persisted.model_dump(mode="json")
-        ).status_code
-        == 405
-    )
+        )
+    ).status_code == 405
     assert (
-        client.patch(
+        await client.patch(
             f"/api/v1/knowledge/{source['id']}",
             headers=_auth(),
             json={"changes": {"metadata": {"chunks": []}}},
-        ).status_code
-        == 405
-    )
+        )
+    ).status_code == 405
     assert (
-        client.put(
+        await client.put(
             f"/api/v1/knowledge/{source['id']}",
             headers=_auth(),
             json=persisted.model_dump(mode="json"),
-        ).status_code
-        == 405
-    )
-    downloaded = client.get(
+        )
+    ).status_code == 405
+    downloaded = await client.get(
         f"/api/v1/artifacts/{source['artifact_id']}/content", headers=_auth()
     )
     assert downloaded.status_code == 200
     assert downloaded.content == content
 
-    store.update(
-        KnowledgeSource,
-        persisted.id,
-        {"status": "stale", "document_count": 0, "metadata": {}},
-        expected_revision=persisted.revision,
+    (
+        await store.update(
+            KnowledgeSource,
+            persisted.id,
+            {"status": "stale", "document_count": 0, "metadata": {}},
+            expected_revision=persisted.revision,
+        )
     )
-    reindexed = client.post(
+    reindexed = await client.post(
         f"/api/v1/knowledge/{source['id']}/reindex", headers=_auth()
     )
     assert reindexed.status_code == 200
     assert reindexed.json()["status"] == "ready"
     assert reindexed.json()["document_count"] == 1
     assert "chunks" not in reindexed.json()["metadata"]
-    rebuilt = store.get(KnowledgeSource, source["id"])
+    rebuilt = await store.get(KnowledgeSource, source["id"])
     assert rebuilt.metadata["chunks"][0]["artifact_id"] == artifact.id
 
-    removed = client.delete(f"/api/v1/knowledge/{source['id']}", headers=_auth())
+    removed = await client.delete(f"/api/v1/knowledge/{source['id']}", headers=_auth())
     assert removed.status_code == 204
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/knowledge?engagement_id={engagement.id}", headers=_auth()
-        ).json()
-        == []
-    )
+        )
+    ).json() == []
     # Removing a retrieval source does not destroy its immutable audit artifact.
     assert (
-        client.get(f"/api/v1/artifacts/{artifact.id}/content", headers=_auth()).content
-        == content
-    )
+        await client.get(f"/api/v1/artifacts/{artifact.id}/content", headers=_auth())
+    ).content == content
 
 
-def test_ingestion_rejects_invalid_or_unsupported_content_without_artifacts(
+async def test_ingestion_rejects_invalid_or_unsupported_content_without_artifacts(
     knowledge_api,
 ):
     client, store, artifacts, engagement = knowledge_api
-    invalid_base64 = client.post(
+    invalid_base64 = await client.post(
         "/api/v1/knowledge/ingest",
         headers=_auth(),
         json={
@@ -160,7 +163,7 @@ def test_ingestion_rejects_invalid_or_unsupported_content_without_artifacts(
     assert invalid_base64.status_code == 422
     assert invalid_base64.json()["detail"] == "content_base64 must be valid base64"
 
-    unsupported = client.post(
+    unsupported = await client.post(
         "/api/v1/knowledge/ingest",
         headers=_auth(),
         json={
@@ -172,12 +175,12 @@ def test_ingestion_rejects_invalid_or_unsupported_content_without_artifacts(
     )
     assert unsupported.status_code == 415
     assert "unsupported knowledge document format" in unsupported.json()["detail"]
-    assert store.count(Artifact) == 0
-    assert store.count(KnowledgeSource) == 0
+    assert (await store.count(Artifact)) == 0
+    assert (await store.count(KnowledgeSource)) == 0
     assert list(artifacts.iter_digests()) == []
 
 
-def test_ingestion_requires_an_existing_engagement_and_artifact_store(tmp_path):
+async def test_ingestion_requires_an_existing_engagement_and_artifact_store(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     payload = {
@@ -189,27 +192,24 @@ def test_ingestion_requires_an_existing_engagement_and_artifact_store(tmp_path):
         create_app(store, artifact_store=artifacts, auth_token="test-token")
     )
     assert (
-        client.post(
-            "/api/v1/knowledge/ingest", headers=_auth(), json=payload
-        ).status_code
-        == 404
-    )
+        await client.post("/api/v1/knowledge/ingest", headers=_auth(), json=payload)
+    ).status_code == 404
     assert list(artifacts.iter_digests()) == []
 
-    engagement = store.create(Engagement(name="No artifacts"))
+    engagement = await store.create(Engagement(name="No artifacts"))
     payload["engagement_id"] = engagement.id
     no_artifact_client = TestClient(create_app(store, auth_token="test-token"))
-    response = no_artifact_client.post(
+    response = await no_artifact_client.post(
         "/api/v1/knowledge/ingest", headers=_auth(), json=payload
     )
     assert response.status_code == 503
     assert response.json()["detail"] == "knowledge ingestion requires an artifact store"
 
 
-def test_url_source_is_stored_as_an_immutable_query_free_artifact(tmp_path):
+async def test_url_source_is_stored_as_an_immutable_query_free_artifact(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="URL knowledge"))
+    engagement = await store.create(Engagement(name="URL knowledge"))
     requested: list[str] = []
 
     def fetcher(url: str) -> FetchedUrlDocument:
@@ -229,7 +229,7 @@ def test_url_source_is_stored_as_an_immutable_query_free_artifact(tmp_path):
             knowledge_url_fetcher=fetcher,
         )
     )
-    response = client.post(
+    response = await client.post(
         "/api/v1/knowledge/ingest-url",
         headers=_auth(),
         json={
@@ -248,12 +248,12 @@ def test_url_source_is_stored_as_an_immutable_query_free_artifact(tmp_path):
     assert source["metadata"]["origin"] == "url"
     assert source["metadata"]["source_url"] == "https://docs.example.com/guide.html"
     assert "token" not in str(source["metadata"])
-    artifact = store.get(Artifact, source["artifact_id"])
+    artifact = await store.get(Artifact, source["artifact_id"])
     assert artifact.source == "knowledge-url"
     assert artifacts.read(artifact).startswith(b"<html>")
     assert "token" not in str(artifact.metadata)
 
-    reindexed = client.post(
+    reindexed = await client.post(
         f"/api/v1/knowledge/{source['id']}/reindex", headers=_auth()
     )
     assert reindexed.status_code == 200
@@ -263,7 +263,7 @@ def test_url_source_is_stored_as_an_immutable_query_free_artifact(tmp_path):
     assert requested == ["https://docs.example.com/guide.html?token=do-not-store"]
 
 
-def test_url_source_validates_engagement_before_fetching(tmp_path):
+async def test_url_source_validates_engagement_before_fetching(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     called = False
@@ -281,7 +281,7 @@ def test_url_source_validates_engagement_before_fetching(tmp_path):
             knowledge_url_fetcher=fetcher,
         )
     )
-    response = client.post(
+    response = await client.post(
         "/api/v1/knowledge/ingest-url",
         headers=_auth(),
         json={
@@ -301,10 +301,10 @@ def test_url_source_validates_engagement_before_fetching(tmp_path):
         (SourceFetchError("source URL timed out"), 502),
     ],
 )
-def test_url_source_returns_bounded_fetch_errors(tmp_path, failure, status_code):
+async def test_url_source_returns_bounded_fetch_errors(tmp_path, failure, status_code):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="URL errors"))
+    engagement = await store.create(Engagement(name="URL errors"))
 
     def fetcher(url: str) -> FetchedUrlDocument:
         del url
@@ -318,7 +318,7 @@ def test_url_source_returns_bounded_fetch_errors(tmp_path, failure, status_code)
             knowledge_url_fetcher=fetcher,
         )
     )
-    response = client.post(
+    response = await client.post(
         "/api/v1/knowledge/ingest-url",
         headers=_auth(),
         json={
@@ -328,8 +328,8 @@ def test_url_source_returns_bounded_fetch_errors(tmp_path, failure, status_code)
     )
     assert response.status_code == status_code
     assert response.json()["detail"] == str(failure)
-    assert store.count(Artifact) == 0
-    assert store.count(KnowledgeSource) == 0
+    assert (await store.count(Artifact)) == 0
+    assert (await store.count(KnowledgeSource)) == 0
 
 
 def test_url_fetch_revalidates_public_redirects_and_strips_query_metadata(
@@ -496,10 +496,12 @@ def test_url_fetch_rejects_non_http_credentials_and_private_networks(url):
         fetch_url_document(url)
 
 
-def test_ingestion_compensates_a_failed_database_transaction(tmp_path, monkeypatch):
+async def test_ingestion_compensates_a_failed_database_transaction(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Rollback"))
+    engagement = await store.create(Engagement(name="Rollback"))
 
     def fail_create_many(entities):
         del entities
@@ -507,12 +509,14 @@ def test_ingestion_compensates_a_failed_database_transaction(tmp_path, monkeypat
 
     monkeypatch.setattr(store, "create_many", fail_create_many)
     with pytest.raises(RuntimeError, match="database unavailable"):
-        ingest_document(
-            store=store,
-            artifact_store=artifacts,
-            engagement_id=engagement.id,
-            filename="notes.txt",
-            data=b"rollback this source",
+        (
+            await ingest_document(
+                store=store,
+                artifact_store=artifacts,
+                engagement_id=engagement.id,
+                filename="notes.txt",
+                data=b"rollback this source",
+            )
         )
     assert len(list(artifacts.iter_digests())) == 1
 
@@ -701,12 +705,12 @@ class _UnavailableIndex:
         return []
 
 
-def test_ingest_returns_the_recorded_source_when_the_index_write_fails(tmp_path):
+async def test_ingest_returns_the_recorded_source_when_the_index_write_fails(tmp_path):
     from nebula.v3.domain import LibraryItem
 
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Index outage"))
+    engagement = await store.create(Engagement(name="Index outage"))
     client = TestClient(
         create_app(
             store,
@@ -721,24 +725,26 @@ def test_ingest_returns_the_recorded_source_when_the_index_write_fails(tmp_path)
         "content_base64": base64.b64encode(b"notes about the target").decode(),
     }
 
-    response = client.post("/api/v1/knowledge/ingest", headers=_auth(), json=payload)
+    response = await client.post(
+        "/api/v1/knowledge/ingest", headers=_auth(), json=payload
+    )
 
     # The source and its artifact were committed before the index write failed,
     # so the client gets the recorded source back and can reindex it by id
     # instead of uploading the document again.
     assert response.status_code == 201, response.text
     assert response.json()["status"] == "error"
-    assert [item.id for item in store.list_entities(KnowledgeSource)] == [
+    assert [item.id for item in (await store.list_entities(KnowledgeSource))] == [
         response.json()["id"]
     ]
-    assert store.count(Artifact) == 1
-    reindex = client.post(
+    assert (await store.count(Artifact)) == 1
+    reindex = await client.post(
         f"/api/v1/knowledge/{response.json()['id']}/reindex", headers=_auth()
     )
     assert reindex.status_code == 503
-    assert store.count(KnowledgeSource) == 1
+    assert (await store.count(KnowledgeSource)) == 1
 
-    library = client.post(
+    library = await client.post(
         "/api/v1/library/items/ingest",
         headers=_auth(),
         json={
@@ -748,6 +754,9 @@ def test_ingest_returns_the_recorded_source_when_the_index_write_fails(tmp_path)
     )
     assert library.status_code == 201, library.text
     assert library.json()["status"] == "error"
-    assert [item.id for item in store.list_entities(LibraryItem)] == [
+    assert [item.id for item in (await store.list_entities(LibraryItem))] == [
         library.json()["id"]
     ]
+
+
+pytestmark = pytest.mark.anyio

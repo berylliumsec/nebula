@@ -53,8 +53,8 @@ async def metadata_local_services(_factory):
 
 
 class MetadataSshService(SshEnvironmentService):
-    def discover(self, *, resolve=True):
-        return super().discover(resolve=False)
+    async def discover(self, *, resolve=True):
+        return await super().discover(resolve=False)
 
 
 class InertSearchRuntime(SearchRuntime):
@@ -75,7 +75,7 @@ class InertSearchRuntime(SearchRuntime):
             healthy=True,
         )
 
-    def _profile(self):
+    async def _profile(self):
         return self.runner
 
     async def _run(self, profile, *arguments, **kwargs):
@@ -138,7 +138,7 @@ class MetadataHarnessAdapter:
         )
 
 
-def create_fixture_app(*args: Any, **kwargs: Any):
+async def create_fixture_app(*args: Any, **kwargs: Any):
     store = args[0] if args else kwargs["store"]
     platform = kwargs["tool_platform"]
     project = store.create(
@@ -164,8 +164,10 @@ def create_fixture_app(*args: Any, **kwargs: Any):
             alias=alias, status="reachable", latency_ms=1, system="Fixture OS"
         ),
     )
-    service.save(
-        "fixture-ask", SshEnvironmentSettings(display_name="SSH metadata fixture")
+    (
+        await service.save(
+            "fixture-ask", SshEnvironmentSettings(display_name="SSH metadata fixture")
+        )
     )
     kwargs["ssh_environment_service"] = service
     store.create(

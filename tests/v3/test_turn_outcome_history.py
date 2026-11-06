@@ -9,6 +9,11 @@ parent's answer made assistant,assistant pairs, and the compactor's repair
 request dropped the model's own previous output between two user messages.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -94,10 +99,10 @@ class SilentThenAnsweringProvider(FakeProvider):
         )
 
 
-def _service(tmp_path, provider):
+async def _service(tmp_path, provider):
     store = NebulaStore(tmp_path / "turn-outcome.db")
-    engagement = store.create(Engagement(id="eng", name="Outcomes"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="eng", name="Outcomes"))
+    profile = await store.create(_profile(local=True))
     return (
         store,
         engagement,
@@ -140,17 +145,19 @@ def _roles(request: ModelRequest) -> list[str]:
     return [message.role for message in request.messages]
 
 
-def test_failed_turn_saves_an_outcome_note_so_the_next_request_alternates(tmp_path):
+async def test_failed_turn_saves_an_outcome_note_so_the_next_request_alternates(
+    tmp_path,
+):
     provider = FailOnceProvider("provider-a")
-    store, engagement, profile, service = _service(tmp_path, provider)
-    first = service.prepare(
+    store, engagement, profile, service = await _service(tmp_path, provider)
+    first = await service.prepare(
         _request(engagement, profile, "Scan 10.0.0.5 and summarise open ports.")
     )
-    turn_id = asyncio.run(_run_streamed(service, first))
+    turn_id = await _run_streamed(service, first)
     session_id = first.turn.session_id
 
-    assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.FAILED
-    transcript = service.session_messages(session_id)
+    assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.FAILED
+    transcript = await service.session_messages(session_id)
     assert [message.role for message in transcript] == [
         ChatRole.USER,
         ChatRole.ASSISTANT,
@@ -163,18 +170,20 @@ def test_failed_turn_saves_an_outcome_note_so_the_next_request_alternates(tmp_pa
     # The UI already shows a saved message with this finish reason as
     # stopped (#491), so the note reads as an outcome rather than an answer.
     assert note.finish_reason == "interrupted"
-    assert store.get(ChatSession, session_id).metadata["last_sequence"] == note.sequence
+    assert (await store.get(ChatSession, session_id)).metadata[
+        "last_sequence"
+    ] == note.sequence
 
-    second = service.prepare(
+    second = await service.prepare(
         _request(engagement, profile, "Try again please.", session_id=session_id)
     )
     assert _roles(second.model_request) == ["user", "assistant", "user"]
     assert second.model_request.messages[1].content == note.content
 
 
-def test_failed_tool_turn_note_names_the_steps_that_already_ran(tmp_path):
+async def test_failed_tool_turn_note_names_the_steps_that_already_ran(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(
@@ -196,10 +205,10 @@ def test_failed_tool_turn_note_names_the_steps_that_already_ran(tmp_path):
 
     provider.complete = fail_after_script
     with pytest.raises(Exception, match="upstream 502"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     assert len(broker.calls) == 1
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.FAILED
     notes = _outcome_notes(service, "session")
     assert len(notes) == 1
@@ -211,44 +220,46 @@ def test_failed_tool_turn_note_names_the_steps_that_already_ran(tmp_path):
     assert [item["capability"] for item in note.metadata["tool_results"]] == [
         "safe_read"
     ]
-    assert [message.role for message in service.session_messages("session")] == [
+    assert [
+        message.role for message in (await service.session_messages("session"))
+    ] == [
         ChatRole.USER,
         ChatRole.ASSISTANT,
     ]
 
 
-def test_stopped_turn_saves_an_outcome_note(tmp_path):
+async def test_stopped_turn_saves_an_outcome_note(tmp_path):
     provider = BlockingProvider("provider-a")
-    store, engagement, profile, service = _service(tmp_path, provider)
+    store, engagement, profile, service = await _service(tmp_path, provider)
 
     async def scenario():
         prepared = await service.prepare_async(
             _request(engagement, profile, "Enumerate the web server.")
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         await asyncio.wait_for(provider.started.wait(), 5)
         await service.stop_provider_turn(turn_id)
         return prepared.turn.session_id, turn_id
 
-    session_id, turn_id = asyncio.run(scenario())
+    session_id, turn_id = await scenario()
 
-    assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.CANCELLED
+    assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.CANCELLED
     notes = _outcome_notes(service, session_id)
     assert len(notes) == 1
     assert notes[0].content.startswith("Response stopped")
     assert notes[0].metadata["turn_status"] == "cancelled"
     assert notes[0].finish_reason == "interrupted"
-    following = service.prepare(
+    following = await service.prepare(
         _request(engagement, profile, "Continue from there.", session_id=session_id)
     )
     assert _roles(following.model_request) == ["user", "assistant", "user"]
 
 
-def test_stopping_a_turn_parked_on_approval_says_the_call_never_ran(tmp_path):
-    store, engagement, profile, service = _service(
+async def test_stopping_a_turn_parked_on_approval_says_the_call_never_ran(tmp_path):
+    store, engagement, profile, service = await _service(
         tmp_path, FakeProvider("provider-a", local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="parked",
             engagement_id=engagement.id,
@@ -258,16 +269,18 @@ def test_stopping_a_turn_parked_on_approval_says_the_call_never_ran(tmp_path):
             metadata={"last_sequence": 1, "message_count": 1},
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=engagement.id,
-            session_id=session.id,
-            sequence=1,
-            role=ChatRole.USER,
-            content="Clean up the scratch directory.",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="Clean up the scratch directory.",
+            )
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -287,9 +300,9 @@ def test_stopping_a_turn_parked_on_approval_says_the_call_never_ran(tmp_path):
         )
     )
 
-    service.cancel_turn(turn.id)
+    (await service.cancel_turn(turn.id))
     # A second stop of the same turn must not add a second note.
-    service.cancel_turn(turn.id)
+    (await service.cancel_turn(turn.id))
 
     notes = _outcome_notes(service, session.id)
     assert len(notes) == 1
@@ -300,13 +313,13 @@ def test_stopping_a_turn_parked_on_approval_says_the_call_never_ran(tmp_path):
     assert "did not run" in notes[0].content
 
 
-def test_a_subagent_wait_that_cannot_resume_records_its_outcome(
+async def test_a_subagent_wait_that_cannot_resume_records_its_outcome(
     tmp_path,
 ):
-    store, engagement, profile, service = _service(
+    store, engagement, profile, service = await _service(
         tmp_path, FakeProvider("provider-a", local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="waiting",
             engagement_id=engagement.id,
@@ -316,16 +329,18 @@ def test_a_subagent_wait_that_cannot_resume_records_its_outcome(
             metadata={"last_sequence": 1, "message_count": 1},
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=engagement.id,
-            session_id=session.id,
-            sequence=1,
-            role=ChatRole.USER,
-            content="Split the sweep across subagents and wait.",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="Split the sweep across subagents and wait.",
+            )
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -346,12 +361,14 @@ def test_a_subagent_wait_that_cannot_resume_records_its_outcome(
         )
     )
 
-    asyncio.run(
-        service.subagents._fail_unresumable(turn, RuntimeError("provider went away"))
+    (
+        await service.subagents._fail_unresumable(
+            turn, RuntimeError("provider went away")
+        )
     )
 
-    assert store.get(ChatTurn, turn.id).status == ChatTurnStatus.FAILED
-    transcript = service.session_messages(session.id)
+    assert (await store.get(ChatTurn, turn.id)).status == ChatTurnStatus.FAILED
+    transcript = await service.session_messages(session.id)
     assert [message.role for message in transcript] == [
         ChatRole.USER,
         ChatRole.ASSISTANT,
@@ -362,42 +379,44 @@ def test_a_subagent_wait_that_cannot_resume_records_its_outcome(
     assert "wait_for_subagents" in transcript[1].content
 
 
-def test_final_answer_retry_takes_the_place_of_the_outcome_note(tmp_path):
+async def test_final_answer_retry_takes_the_place_of_the_outcome_note(tmp_path):
     provider = SilentThenAnsweringProvider("provider-a")
-    store, engagement, profile, service = _service(tmp_path, provider)
-    prepared = service.prepare(_request(engagement, profile, "Summarise the findings."))
-    turn_id = asyncio.run(_run_streamed(service, prepared))
+    store, engagement, profile, service = await _service(tmp_path, provider)
+    prepared = await service.prepare(
+        _request(engagement, profile, "Summarise the findings.")
+    )
+    turn_id = await _run_streamed(service, prepared)
     session_id = prepared.turn.session_id
-    assert service.recoverable_final_answer_turn(session_id).id == turn_id
+    assert (await service.recoverable_final_answer_turn(session_id)).id == turn_id
     assert len(_outcome_notes(service, session_id)) == 1
 
     provider.answer = True
 
     async def finish_the_answer():
-        service.start_provider_turn(service.prepare_resume(turn_id))
+        (await service.start_provider_turn((await service.prepare_resume(turn_id))))
         return [event async for event, _ in service.follow_provider_turn(turn_id)]
 
-    assert asyncio.run(finish_the_answer())[-1] == "done"
+    assert (await finish_the_answer())[-1] == "done"
 
-    transcript = service.session_messages(session_id, include_replaced=True)
+    transcript = await service.session_messages(session_id, include_replaced=True)
     assert [(message.role, message.content) for message in transcript] == [
         (ChatRole.USER, "Summarise the findings."),
         (ChatRole.ASSISTANT, "Recovered answer."),
     ]
-    assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.COMPLETE
 
 
-def test_edit_in_place_retracts_the_outcome_note_with_its_message(tmp_path):
+async def test_edit_in_place_retracts_the_outcome_note_with_its_message(tmp_path):
     provider = FailOnceProvider("provider-a")
-    store, engagement, profile, service = _service(tmp_path, provider)
-    first = service.prepare(_request(engagement, profile, "Scan the wrong host."))
-    asyncio.run(_run_streamed(service, first))
+    store, engagement, profile, service = await _service(tmp_path, provider)
+    first = await service.prepare(_request(engagement, profile, "Scan the wrong host."))
+    (await _run_streamed(service, first))
     session_id = first.turn.session_id
-    user_message = service.session_messages(session_id)[0]
+    user_message = (await service.session_messages(session_id))[0]
     assert len(_outcome_notes(service, session_id)) == 1
 
-    service.rewind_session(session_id, before_message_id=user_message.id)
-    edited = service.prepare(
+    (await service.rewind_session(session_id, before_message_id=user_message.id))
+    edited = await service.prepare(
         _request(engagement, profile, "Scan the right host.", session_id=session_id)
     )
 
@@ -409,14 +428,14 @@ def test_edit_in_place_retracts_the_outcome_note_with_its_message(tmp_path):
     assert retracted[0].metadata["retracted_reason"] == "operator_edit"
 
 
-def test_a_client_sending_full_history_without_the_note_still_appends(tmp_path):
+async def test_a_client_sending_full_history_without_the_note_still_appends(tmp_path):
     provider = FailOnceProvider("provider-a")
-    store, engagement, profile, service = _service(tmp_path, provider)
-    first = service.prepare(_request(engagement, profile, "First question."))
-    asyncio.run(_run_streamed(service, first))
+    store, engagement, profile, service = await _service(tmp_path, provider)
+    first = await service.prepare(_request(engagement, profile, "First question."))
+    (await _run_streamed(service, first))
     session_id = first.turn.session_id
 
-    second = service.prepare(
+    second = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -433,8 +452,8 @@ def test_a_client_sending_full_history_without_the_note_still_appends(tmp_path):
     assert [message.content for message in second.new_messages] == ["Second question."]
 
 
-def _parent_with_subagent_posts(store, engagement, profile) -> ChatSession:
-    session = store.create(
+async def _parent_with_subagent_posts(store, engagement, profile) -> ChatSession:
+    session = await store.create(
         ChatSession(
             id="parent",
             engagement_id=engagement.id,
@@ -465,26 +484,28 @@ def _parent_with_subagent_posts(store, engagement, profile) -> ChatSession:
             {"kind": "subagent_message", "subagent_id": "sub-b"},
         ),
     ]:
-        store.create(
-            ChatMessage(
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=role,
-                content=text,
-                metadata=metadata,
+        (
+            await store.create(
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=role,
+                    content=text,
+                    metadata=metadata,
+                )
             )
         )
     return session
 
 
-def test_subagent_posts_join_the_preceding_assistant_message(tmp_path):
-    store, engagement, profile, service = _service(
+async def test_subagent_posts_join_the_preceding_assistant_message(tmp_path):
+    store, engagement, profile, service = await _service(
         tmp_path, FakeProvider("provider-a", local=True)
     )
-    session = _parent_with_subagent_posts(store, engagement, profile)
+    session = await _parent_with_subagent_posts(store, engagement, profile)
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         _request(engagement, profile, "Summarise the results.", session_id=session.id)
     )
 
@@ -496,7 +517,7 @@ def test_subagent_posts_join_the_preceding_assistant_message(tmp_path):
         "Message from subagent host-b:\n\n80/tcp open"
     )
     # The transcript keeps each report as its own message for the UI cards.
-    stored = service.session_messages(session.id)
+    stored = await service.session_messages(session.id)
     assert [message.metadata.get("kind") for message in stored[:4]] == [
         None,
         None,
@@ -505,7 +526,7 @@ def test_subagent_posts_join_the_preceding_assistant_message(tmp_path):
     ]
 
 
-def test_context_length_recovery_also_joins_subagent_posts(tmp_path):
+async def test_context_length_recovery_also_joins_subagent_posts(tmp_path):
     class RejectOnceProvider(FakeProvider):
         def __init__(self, provider_id: str) -> None:
             super().__init__(provider_id, local=True)
@@ -535,17 +556,17 @@ def test_context_length_recovery_also_joins_subagent_posts(tmp_path):
             )
 
     provider = RejectOnceProvider("provider-a")
-    store, engagement, profile, service = _service(tmp_path, provider)
-    session = _parent_with_subagent_posts(store, engagement, profile)
-    prepared = service.prepare(
+    store, engagement, profile, service = await _service(tmp_path, provider)
+    session = await _parent_with_subagent_posts(store, engagement, profile)
+    prepared = await service.prepare(
         _request(engagement, profile, "Summarise the results.", session_id=session.id)
     )
 
     async def answer():
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         return [event async for event, _ in service.follow_provider_turn(turn_id)]
 
-    assert asyncio.run(answer())[-1] == "done"
+    assert (await answer())[-1] == "done"
     retried = [
         request
         for request in provider.requests
@@ -562,7 +583,7 @@ def test_context_length_recovery_also_joins_subagent_posts(tmp_path):
         ("", [ToolCall(id="call-1", name="lookup", arguments={})]),
     ],
 )
-def test_compaction_repair_replays_the_previous_output_as_its_own_turn(
+async def test_compaction_repair_replays_the_previous_output_as_its_own_turn(
     tmp_path, first_output, calls
 ):
     class RepairingProvider(MemoryProvider):
@@ -580,30 +601,28 @@ def test_compaction_repair_replays_the_previous_output_as_its_own_turn(
 
     store = NebulaStore(tmp_path / "compaction-repair.db")
     profile = _context_profile()
-    session = _owner(store, profile)
-    _message(store, session, message_id="message-1", sequence=1, content="Fact")
+    session = await _owner(store, profile)
+    (await _message(store, session, message_id="message-1", sequence=1, content="Fact"))
     provider = RepairingProvider(profile.id)
 
-    result = asyncio.run(
-        ContextCompactor(store).compact(
-            owner_type=ContextOwnerType.CHAT_SESSION,
-            owner_id=session.id,
-            engagement_id=session.engagement_id,
-            provider_profile=profile,
-            provider=provider,
-            model="model-a",
-            sources=[
-                ContextSource(
-                    ContextSourceReference(
-                        source_kind="chat_message",
-                        source_id="message-1",
-                        sequence=1,
-                    ),
-                    "Fact",
-                )
-            ],
-            compacted_through=1,
-        )
+    result = await ContextCompactor(store).compact(
+        owner_type=ContextOwnerType.CHAT_SESSION,
+        owner_id=session.id,
+        engagement_id=session.engagement_id,
+        provider_profile=profile,
+        provider=provider,
+        model="model-a",
+        sources=[
+            ContextSource(
+                ContextSourceReference(
+                    source_kind="chat_message",
+                    source_id="message-1",
+                    sequence=1,
+                ),
+                "Fact",
+            )
+        ],
+        compacted_through=1,
     )
 
     assert result.snapshot.memory is not None
@@ -619,11 +638,11 @@ def test_compaction_repair_replays_the_previous_output_as_its_own_turn(
         assert first_output not in repair.messages[2].content
 
 
-def test_outcome_note_is_bounded_for_long_failures(tmp_path):
-    store, engagement, profile, service = _service(
+async def test_outcome_note_is_bounded_for_long_failures(tmp_path):
+    store, engagement, profile, service = await _service(
         tmp_path, FakeProvider("provider-a", local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="long",
             engagement_id=engagement.id,
@@ -633,13 +652,15 @@ def test_outcome_note_is_bounded_for_long_failures(tmp_path):
             metadata={"last_sequence": 1, "message_count": 1},
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=engagement.id,
-            session_id=session.id,
-            sequence=1,
-            role=ChatRole.USER,
-            content="Run the sweep.",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="Run the sweep.",
+            )
         )
     )
     history = [
@@ -654,7 +675,7 @@ def test_outcome_note_is_bounded_for_long_failures(tmp_path):
         }
         for index in range(40)
     ]
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -665,17 +686,22 @@ def test_outcome_note_is_bounded_for_long_failures(tmp_path):
             tool_history=history,
         )
     )
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"status": ChatTurnStatus.FAILED, "error": "boom " * 190},
-        expected_revision=turn.revision,
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"status": ChatTurnStatus.FAILED, "error": "boom " * 190},
+            expected_revision=turn.revision,
+        )
     )
 
-    note = service.record_turn_outcome(turn.id)
+    note = await service.record_turn_outcome(turn.id)
 
     assert note is not None
     assert len(note.content) <= 6_000
     assert "host-39" in note.content
     assert "earlier" in note.content
-    assert service.record_turn_outcome(turn.id) is None
+    assert (await service.record_turn_outcome(turn.id)) is None
+
+
+pytestmark = pytest.mark.anyio

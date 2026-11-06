@@ -12,6 +12,10 @@
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -101,11 +105,11 @@ def _stream(service: ChatService, prepared: Any) -> list[tuple[str, dict[str, An
 
 
 @UNREADABLE_FRAMES
-def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call(
+async def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call(
     tmp_path, frame
 ):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path,
         [
             _response(
@@ -126,14 +130,14 @@ def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call(
     thought = "".join(
         payload["delta"] for name, payload in events if name == "reasoning_delta"
     )
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         ("safe_read", {"value": "a"})
     ]
     [stored] = [
         item
-        for item in service.session_messages("session")
+        for item in (await service.session_messages("session"))
         if item.role == ChatRole.ASSISTANT
     ]
     # Prose beside a call stays in the saved response, with an exact boundary
@@ -330,14 +334,14 @@ def _recovery_profile() -> ProviderProfile:
 @pytest.mark.parametrize(
     "existing", [False, True], ids=["new-conversation", "existing-conversation"]
 )
-def test_complete_recovers_from_a_context_length_rejection(tmp_path, existing):
+async def test_complete_recovers_from_a_context_length_rejection(tmp_path, existing):
     store = NebulaStore(tmp_path / "complete-recovery.db")
-    engagement = store.create(Engagement(id="eng-recovery", name="Recovery"))
-    profile = store.create(_recovery_profile())
+    engagement = await store.create(Engagement(id="eng-recovery", name="Recovery"))
+    profile = await store.create(_recovery_profile())
     session_id: str | None = None
     history: list[tuple[str, str]] = []
     if existing:
-        session = store.create(
+        session = await store.create(
             ChatSession(
                 id="session-recovery",
                 engagement_id=engagement.id,
@@ -348,24 +352,26 @@ def test_complete_recovers_from_a_context_length_rejection(tmp_path, existing):
             )
         )
         history = [("user", "Which hosts are up?"), ("assistant", "Three hosts.")]
-        store.create_many(
-            [
-                ChatMessage(
-                    engagement_id=engagement.id,
-                    session_id=session.id,
-                    sequence=index + 1,
-                    role=ChatRole(role),
-                    content=content,
-                )
-                for index, (role, content) in enumerate(history)
-            ]
+        (
+            await store.create_many(
+                [
+                    ChatMessage(
+                        engagement_id=engagement.id,
+                        session_id=session.id,
+                        sequence=index + 1,
+                        role=ChatRole(role),
+                        content=content,
+                    )
+                    for index, (role, content) in enumerate(history)
+                ]
+            )
         )
         session_id = session.id
     provider = ContextRejectingProvider(profile.id)
     provider.config.default_model = "author/model-a"
     provider.config.model_allowlist = ["author/model-a"]
     service = ChatService(store, provider_factory=lambda _: provider)
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -380,7 +386,7 @@ def test_complete_recovers_from_a_context_length_rejection(tmp_path, existing):
     # are written only with the answer.
     assert prepared.turn is None
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Evidence-backed answer [source-a:chunk-a]."
     assert provider.normal_attempts == 2
@@ -397,7 +403,7 @@ def test_complete_recovers_from_a_context_length_rejection(tmp_path, existing):
     ]
     limits = json.loads(retried.metadata["resolved_context_limits"])
     assert limits["context_window"] == 4_000
-    stored = store.list_session_entities(ChatMessage, completion.session_id)
+    stored = await store.list_session_entities(ChatMessage, completion.session_id)
     assert [(item.role.value, item.content) for item in stored] == [
         *history,
         ("user", QUESTION),
@@ -484,7 +490,7 @@ def _deepseek_step(model: str, reasoning: str, calls: list[dict[str, Any]]):
     }
 
 
-def test_specialist_replays_a_batch_as_one_message_with_its_reasoning(
+async def test_specialist_replays_a_batch_as_one_message_with_its_reasoning(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv(DEEPSEEK_KEY_ENV, "secret")
@@ -544,9 +550,9 @@ def test_specialist_replays_a_batch_as_one_message_with_its_reasoning(
         model=model,
     )
 
-    first = asyncio.run(specialist.run(_specialist_context()))
-    second = asyncio.run(
-        specialist.run(_specialist_context(prior_turns=[first], turn_index=2))
+    first = await specialist.run(_specialist_context())
+    second = await specialist.run(
+        _specialist_context(prior_turns=[first], turn_index=2)
     )
 
     assert [call.tool_name for call in broker.calls] == ["nmap.tcp", "browser.fetch"]
@@ -611,7 +617,7 @@ class _ReasoningRoutingProvider(ModelProvider):
         return ProviderHealth(provider_id=self.config.id, healthy=True)
 
 
-def test_specialist_history_keeps_each_turn_a_group_of_its_own(tmp_path):
+async def test_specialist_history_keeps_each_turn_a_group_of_its_own(tmp_path):
     provider = _ReasoningRoutingProvider(
         [
             [
@@ -650,8 +656,8 @@ def test_specialist_history_keeps_each_turn_a_group_of_its_own(tmp_path):
     turns = []
     for index in range(3):
         turns.append(
-            asyncio.run(
-                specialist.run(
+            (
+                await specialist.run(
                     _specialist_context(prior_turns=turns, turn_index=index + 1)
                 )
             )
@@ -676,7 +682,7 @@ def test_specialist_history_keeps_each_turn_a_group_of_its_own(tmp_path):
     assert turns[2].outcome is SpecialistOutcome.COMPLETE
 
 
-def test_a_blocked_specialist_result_carries_no_replay_state(tmp_path):
+async def test_a_blocked_specialist_result_carries_no_replay_state(tmp_path):
     # A tool that is not offered is answered unrun; three in a row block the
     # task, and the blocked result is what later tasks and the mission read.
     provider = _ReasoningRoutingProvider(
@@ -698,8 +704,8 @@ def test_a_blocked_specialist_result_carries_no_replay_state(tmp_path):
     turns = []
     for index in range(3):
         turns.append(
-            asyncio.run(
-                specialist.run(
+            (
+                await specialist.run(
                     _specialist_context(prior_turns=turns, turn_index=index + 1)
                 )
             )
@@ -713,3 +719,6 @@ def test_a_blocked_specialist_result_carries_no_replay_state(tmp_path):
         assert not {"response_group", "reasoning_state", "provider_metadata"} & set(
             record
         )
+
+
+pytestmark = pytest.mark.anyio

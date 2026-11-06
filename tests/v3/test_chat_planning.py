@@ -1,8 +1,11 @@
 """Focused advisory planning and legacy pre-use gate contracts."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -72,8 +75,8 @@ def _plan_call(*tools: str, call_id: str = "submit-plan") -> ToolCall:
     )
 
 
-def _enable(store: NebulaStore, prepared):
-    prepared.turn = store.update(
+async def _enable(store: NebulaStore, prepared):
+    prepared.turn = await store.update(
         ChatTurn,
         prepared.turn.id,
         {"request_snapshot": {"planning_enabled": True}},
@@ -81,8 +84,8 @@ def _enable(store: NebulaStore, prepared):
     )
 
 
-def _enable_advisory(store: NebulaStore, service, prepared):
-    prepared.turn = store.update(
+async def _enable_advisory(store: NebulaStore, service, prepared):
+    prepared.turn = await store.update(
         ChatTurn,
         prepared.turn.id,
         {
@@ -102,11 +105,11 @@ def _enable_advisory(store: NebulaStore, service, prepared):
     )
 
 
-def _mark_historical_enforced_turn(store: NebulaStore, harness_turn: HarnessTurn):
-    chat_turn = store.get(ChatTurn, harness_turn.chat_turn_id)
+async def _mark_historical_enforced_turn(store: NebulaStore, harness_turn: HarnessTurn):
+    chat_turn = await store.get(ChatTurn, harness_turn.chat_turn_id)
     snapshot = dict(chat_turn.request_snapshot)
     snapshot.pop("plan_behavior", None)
-    return store.update(
+    return await store.update(
         ChatTurn,
         chat_turn.id,
         {"request_snapshot": snapshot},
@@ -126,7 +129,7 @@ def test_plan_only_mode_allows_advisory_planning():
         assert request.planning_enabled is True
 
 
-def test_advisory_provider_uses_tools_without_sharing_a_plan(tmp_path):
+async def test_advisory_provider_uses_tools_without_sharing_a_plan(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -134,21 +137,21 @@ def test_advisory_provider_uses_tools_without_sharing_a_plan(tmp_path):
         ),
         _response(text="Done."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
-    _enable_advisory(store, service, prepared)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
+    (await _enable_advisory(store, service, prepared))
 
-    result = asyncio.run(service.complete(prepared))
+    result = await service.complete(prepared)
 
     assert result.message.content == "Done."
     assert [item.arguments["value"] for item in broker.calls] == ["early"]
-    assert ChatPlanService(store).for_turn("turn").phase == "discovery"
+    assert (await ChatPlanService(store).for_turn("turn")).phase == "discovery"
     assert {tool.name for tool in provider.requests[0].tools} >= {
         "safe_read",
         "plan.submit",
     }
 
 
-def test_advisory_provider_shares_plan_after_tool_and_continues(tmp_path):
+async def test_advisory_provider_shares_plan_after_tool_and_continues(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -161,20 +164,20 @@ def test_advisory_provider_shares_plan_after_tool_and_continues(tmp_path):
         _response(calls=[_plan_call("safe_read", call_id="revised-plan")]),
         _response(text="Done."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
-    _enable_advisory(store, service, prepared)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
+    (await _enable_advisory(store, service, prepared))
 
-    result = asyncio.run(service.complete(prepared))
+    result = await service.complete(prepared)
 
     assert result.message.content == "Done."
     assert [item.arguments["value"] for item in broker.calls] == ["early", "later"]
-    plan = ChatPlanService(store).for_turn("turn")
+    plan = await ChatPlanService(store).for_turn("turn")
     assert plan is not None and plan.phase == "execution"
     assert plan.plan_version == 2
     assert plan.steps[0]["action"] == "Inspect the selected task"
 
 
-def test_claude_planner_fails_closed_without_preuse_hook(tmp_path, monkeypatch):
+async def test_claude_planner_fails_closed_without_preuse_hook(tmp_path, monkeypatch):
     sdk = SimpleNamespace(__version__="0.2.118")
     monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
     profile = HarnessProfile(
@@ -193,8 +196,8 @@ def test_claude_planner_fails_closed_without_preuse_hook(tmp_path, monkeypatch):
         raise AssertionError("planning never reached a tool permission boundary")
 
     with pytest.raises(HarnessConfigurationError, match="pre-use hook"):
-        asyncio.run(
-            ClaudeAgentSdkAdapter().open(
+        (
+            await ClaudeAgentSdkAdapter().open(
                 AdapterOpenRequest(
                     profile=profile,
                     session=session,
@@ -207,12 +210,12 @@ def test_claude_planner_fails_closed_without_preuse_hook(tmp_path, monkeypatch):
         )
 
 
-def test_provider_discovery_cannot_execute_and_saves_plan_before_tool(tmp_path):
+async def test_provider_discovery_cannot_execute_and_saves_plan_before_tool(tmp_path):
     class GatedBroker(RecordingBroker):
         store: NebulaStore
 
         async def execute(self, invocation, scope, *, approval=None):
-            plan = ChatPlanService(self.store).for_turn(invocation.chat_turn_id)
+            plan = await ChatPlanService(self.store).for_turn(invocation.chat_turn_id)
             assert plan is not None and plan.phase == "execution"
             return await super().execute(invocation, scope, approval=approval)
 
@@ -227,37 +230,39 @@ def test_provider_discovery_cannot_execute_and_saves_plan_before_tool(tmp_path):
         ),
         _response(text="Done."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
     broker.store = store
-    _enable(store, prepared)
+    (await _enable(store, prepared))
 
-    result = asyncio.run(service.complete(prepared))
+    result = await service.complete(prepared)
 
     assert result.message.content == "Done."
     assert [item.arguments["value"] for item in broker.calls] == ["saved"]
-    assert ChatPlanService(store).for_turn("turn").tool_names == ["safe_read"]
+    assert (await ChatPlanService(store).for_turn("turn")).tool_names == ["safe_read"]
     assert {tool.name for tool in provider.requests[0].tools} == {"plan.submit"}
     assert provider.requests[1].tool_results[0].is_error is True
     assert "Core-validated task plan" in provider.requests[2].instructions
-    assert store.get(ChatTurn, "turn").usage.total_tokens == 12
+    assert (await store.get(ChatTurn, "turn")).usage.total_tokens == 12
 
 
-def test_provider_direct_answer_finishes_without_a_plan(tmp_path):
+async def test_provider_direct_answer_finishes_without_a_plan(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path, [_response(text="No tools are needed.")], broker
     )
-    _enable(store, prepared)
+    (await _enable(store, prepared))
 
-    result = asyncio.run(service.complete(prepared))
+    result = await service.complete(prepared)
 
     assert result.message.content == "No tools are needed."
     assert broker.calls == []
-    assert ChatPlanService(store).for_turn("turn").phase == "answered_without_tools"
-    assert store.get(ChatTurn, "turn").usage.total_tokens == 3
+    assert (
+        await ChatPlanService(store).for_turn("turn")
+    ).phase == "answered_without_tools"
+    assert (await store.get(ChatTurn, "turn")).usage.total_tokens == 3
 
 
-def test_undeclared_provider_tool_replans_before_dispatch(tmp_path):
+async def test_undeclared_provider_tool_replans_before_dispatch(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_plan_call()]),
@@ -276,17 +281,17 @@ def test_undeclared_provider_tool_replans_before_dispatch(tmp_path):
         ),
         _response(text="Done."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
-    _enable(store, prepared)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
+    (await _enable(store, prepared))
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     assert [item.arguments["value"] for item in broker.calls] == ["allowed"]
-    plan = ChatPlanService(store).for_turn("turn")
+    plan = await ChatPlanService(store).for_turn("turn")
     assert plan.phase == "execution" and plan.plan_version == 2
 
 
-def test_parallel_batch_is_fully_checked_before_any_tool_runs(tmp_path):
+async def test_parallel_batch_is_fully_checked_before_any_tool_runs(tmp_path):
     broker = RecordingBroker()
     another = ToolSpec(
         name="safe_read2",
@@ -328,30 +333,32 @@ def test_parallel_batch_is_fully_checked_before_any_tool_runs(tmp_path):
         ),
         _response(text="Done."),
     ]
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path, responses, broker, extra_specs=[another], parallel_safe=True
     )
-    _enable(store, prepared)
+    (await _enable(store, prepared))
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     assert [item.arguments["value"] for item in broker.calls] == [
         "allowed-1",
         "allowed-2",
     ]
-    assert ChatPlanService(store).for_turn("turn").plan_version == 2
+    assert (await ChatPlanService(store).for_turn("turn")).plan_version == 2
 
 
-def test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot(tmp_path):
+async def test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot(
+    tmp_path,
+):
     database = tmp_path / "plans.db"
     store = NebulaStore(database)
-    project = store.create(Engagement(name="Planning"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Planning"))
+    provider = await store.create(
         ProviderProfile(
             name="Local", provider_type="ollama", is_local=True, model_allowlist=["m"]
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Parent",
@@ -359,7 +366,7 @@ def test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot(tm
             model="m",
         )
     )
-    child = store.create(
+    child = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Child",
@@ -369,7 +376,7 @@ def test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot(tm
             metadata={"subagent_id": "child-1"},
         )
     )
-    parent_turn = store.create(
+    parent_turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=parent.id,
@@ -379,7 +386,7 @@ def test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot(tm
             request_snapshot={"planning_enabled": True},
         )
     )
-    child_turn = store.create(
+    child_turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=child.id,
@@ -390,27 +397,29 @@ def test_restart_reloads_main_gate_and_skips_existing_child_planning_snapshot(tm
         )
     )
     plans = ChatPlanService(store)
-    first = plans.ensure(parent_turn, parent)
+    first = await plans.ensure(parent_turn, parent)
     assert first is not None
-    second = plans.ensure(child_turn, child)
+    second = await plans.ensure(child_turn, child)
     assert second is None
-    assert plans.required(child_turn, child) is False
+    assert (await plans.required(child_turn, child)) is False
 
     reopened = ChatPlanService(NebulaStore(database))
     with pytest.raises(PlanningBlocked, match="pending a validated plan"):
-        reopened.guard(parent_turn.id, "workspace.read")
-    reopened.submit(
-        first,
-        _submission("workspace.read"),
-        available_tools={"workspace.read"},
-        native_categories=set(),
-        workspace=tmp_path,
+        (await reopened.guard(parent_turn.id, "workspace.read"))
+    (
+        await reopened.submit(
+            first,
+            _submission("workspace.read"),
+            available_tools={"workspace.read"},
+            native_categories=set(),
+            workspace=tmp_path,
+        )
     )
-    reopened.guard(parent_turn.id, "workspace.read")
-    assert reopened.required(child_turn, child) is False
+    (await reopened.guard(parent_turn.id, "workspace.read"))
+    assert (await reopened.required(child_turn, child)) is False
 
 
-def test_filename_discovery_is_bounded_and_paths_are_verified(tmp_path):
+async def test_filename_discovery_is_bounded_and_paths_are_verified(tmp_path):
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "match.txt").write_text("one")
     (tmp_path / "a.match.txt").write_text("between")
@@ -430,8 +439,8 @@ def test_filename_discovery_is_bounded_and_paths_are_verified(tmp_path):
     assert third["matches"] == ["b-match.txt"]
 
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Paths"))
-    session = store.create(
+    project = await store.create(Engagement(name="Paths"))
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Paths",
@@ -439,7 +448,7 @@ def test_filename_discovery_is_bounded_and_paths_are_verified(tmp_path):
             model="m",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -450,17 +459,19 @@ def test_filename_discovery_is_bounded_and_paths_are_verified(tmp_path):
         )
     )
     plans = ChatPlanService(store)
-    plan = plans.ensure(turn, session)
+    plan = await plans.ensure(turn, session)
     for path in ("../outside", "outside-link", "/tmp/absolute"):
         with pytest.raises(ValueError):
-            plans.submit(
-                plan,
-                _submission("workspace.read", files=[path]),
-                available_tools={"workspace.read"},
-                native_categories=set(),
-                workspace=tmp_path,
+            (
+                await plans.submit(
+                    plan,
+                    _submission("workspace.read", files=[path]),
+                    available_tools={"workspace.read"},
+                    native_categories=set(),
+                    workspace=tmp_path,
+                )
             )
-    saved = plans.submit(
+    saved = await plans.submit(
         plan,
         _submission("workspace.read", files=["a/match.txt"]),
         available_tools={"workspace.read"},
@@ -491,15 +502,15 @@ def test_filename_discovery_reports_unreadable_subtree_as_incomplete(
     assert result["after"] is None
 
 
-def test_butler_force_is_revisioned_one_task_and_read_back(tmp_path):
+async def test_butler_force_is_revisioned_one_task_and_read_back(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    provider = await store.create(
         ProviderProfile(
             name="Local", provider_type="ollama", is_local=True, model_allowlist=["m"]
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Agent",
@@ -522,7 +533,7 @@ def test_butler_force_is_revisioned_one_task_and_read_back(tmp_path):
         work.chat_settings(project.id, session.id)["settings"]["planning_enabled"]
         is True
     )
-    session = store.get(ChatSession, session.id)
+    session = await store.get(ChatSession, session.id)
     with pytest.raises(ValueError, match="target changed"):
         work.require_plan(
             project.id,
@@ -545,8 +556,8 @@ def test_butler_force_is_revisioned_one_task_and_read_back(tmp_path):
         },
     )
     directive_id = receipt["directive"]["id"]
-    assert store.get(ChatPlanDirective, directive_id).status == "pending"
-    turn = store.create(
+    assert (await store.get(ChatPlanDirective, directive_id)).status == "pending"
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -556,17 +567,17 @@ def test_butler_force_is_revisioned_one_task_and_read_back(tmp_path):
             request_snapshot={"plan_behavior": "advisory"},
         )
     )
-    plan = ChatPlanService(store).ensure(turn, session)
+    plan = await ChatPlanService(store).ensure(turn, session)
     assert plan.directive_id == directive_id
-    assert ChatPlanService(store).required(turn, session) is False
-    assert store.get(ChatPlanDirective, directive_id).status == "applied"
-    assert ChatPlanService(store).pending_directive(turn, session) is None
+    assert (await ChatPlanService(store).required(turn, session)) is False
+    assert (await store.get(ChatPlanDirective, directive_id)).status == "applied"
+    assert (await ChatPlanService(store).pending_directive(turn, session)) is None
 
 
-def test_active_harness_force_waits_for_next_turn(tmp_path):
+async def test_active_harness_force_waits_for_next_turn(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -586,11 +597,13 @@ def test_active_harness_force_waits_for_next_turn(tmp_path):
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    store.update(
-        HarnessTurn,
-        harness_turn.id,
-        {"status": HarnessTurnStatus.RUNNING},
-        expected_revision=harness_turn.revision,
+    (
+        await store.update(
+            HarnessTurn,
+            harness_turn.id,
+            {"status": HarnessTurnStatus.RUNNING},
+            expected_revision=harness_turn.revision,
+        )
     )
     work = app.state.control_assistant_work
     receipt = work.require_plan(
@@ -603,13 +616,13 @@ def test_active_harness_force_waits_for_next_turn(tmp_path):
             "reason": "Current Core evidence requires a fresh task plan.",
         },
     )
-    directive = store.get(ChatPlanDirective, receipt["directive"]["id"])
+    directive = await store.get(ChatPlanDirective, receipt["directive"]["id"])
     assert (
         receipt["timing"] == "next_turn"
         and directive.deferred_after_turn_id == active.id
     )
-    assert ChatPlanService(store).required(active, session) is False
-    next_turn = store.create(
+    assert (await ChatPlanService(store).required(active, session)) is False
+    next_turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -620,14 +633,14 @@ def test_active_harness_force_waits_for_next_turn(tmp_path):
             request_snapshot={"plan_behavior": "advisory"},
         )
     )
-    assert ChatPlanService(store).requested(next_turn, session) is True
-    assert ChatPlanService(store).required(next_turn, session) is False
+    assert (await ChatPlanService(store).requested(next_turn, session)) is True
+    assert (await ChatPlanService(store).required(next_turn, session)) is False
 
 
-def test_queued_harness_force_applies_before_that_turn_starts(tmp_path):
+async def test_queued_harness_force_applies_before_that_turn_starts(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -658,16 +671,18 @@ def test_queued_harness_force_applies_before_that_turn_starts(tmp_path):
             "reason": "The queued turn needs a fresh tool inventory before starting.",
         },
     )
-    directive = store.get(ChatPlanDirective, receipt["directive"]["id"])
+    directive = await store.get(ChatPlanDirective, receipt["directive"]["id"])
     assert receipt["timing"] == "before_turn"
     assert directive.deferred_after_turn_id is None
-    assert ChatPlanService(store).ensure(queued, session).directive_id == directive.id
+    assert (
+        await ChatPlanService(store).ensure(queued, session)
+    ).directive_id == directive.id
 
 
-def test_advisory_harness_planning_does_not_require_mcp_or_block(tmp_path):
+async def test_advisory_harness_planning_does_not_require_mcp_or_block(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Harness",
             kind=HarnessKind.GROK_ACP,
@@ -689,20 +704,20 @@ def test_advisory_harness_planning_does_not_require_mcp_or_block(tmp_path):
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
-    planned = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
+    planned = await harness._ensure_harness_plan(harness_turn, session)
     assert planned.id == harness_turn.id
     assert (
-        ChatPlanService(store).for_turn(harness_turn.chat_turn_id).phase == "discovery"
-    )
+        await ChatPlanService(store).for_turn(harness_turn.chat_turn_id)
+    ).phase == "discovery"
     assert session.metadata.get("core_plan_isolated") is not True
     assert session.id not in harness._connections
 
 
-def test_existing_grok_chat_rebinds_out_of_old_contained_session(tmp_path):
+async def test_existing_grok_chat_rebinds_out_of_old_contained_session(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Grok",
             kind=HarnessKind.GROK_ACP,
@@ -719,7 +734,7 @@ def test_existing_grok_chat_rebinds_out_of_old_contained_session(tmp_path):
         model="grok-test",
         core_plan_isolated=True,
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Research",
@@ -740,22 +755,21 @@ def test_existing_grok_chat_rebinds_out_of_old_contained_session(tmp_path):
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    current = store.get(HarnessSession, turn.harness_session_id)
+    current = await store.get(HarnessSession, turn.harness_session_id)
     assert saved.id == chat.id
     assert current.id != old_session.id
     assert current.metadata.get("core_plan_isolated") is not True
-    assert (
-        store.get(ChatTurn, turn.chat_turn_id).request_snapshot["plan_behavior"]
-        == "advisory"
-    )
+    assert (await store.get(ChatTurn, turn.chat_turn_id)).request_snapshot[
+        "plan_behavior"
+    ] == "advisory"
 
 
-def test_advisory_grok_shares_plan_without_restricting_normal_tools(
+async def test_advisory_grok_shares_plan_without_restricting_normal_tools(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Grok planning fixture",
             kind=HarnessKind.GROK_ACP,
@@ -778,10 +792,10 @@ def test_advisory_grok_shares_plan_without_restricting_normal_tools(
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
     assert session.metadata.get("core_plan_isolated") is not True
     assert "Planning is requested" in harness_turn.prompt
-    planned = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+    planned = await harness._ensure_harness_plan(harness_turn, session)
     assert planned.id == harness_turn.id
     assert harness.plans.for_turn(chat_turn.id).phase == "discovery"
     monkeypatch.setattr(harness, "_active_gateway_turn", lambda _: harness_turn)
@@ -790,12 +804,10 @@ def test_advisory_grok_shares_plan_without_restricting_normal_tools(
         for item in harness._gateway_catalog(session, turn=harness_turn)["tools"]
     }
     assert {"plan.submit", "workspace.read"} <= offered
-    submitted = asyncio.run(
-        harness._gateway_call_unwrapped(
-            session,
-            "plan.submit",
-            _submission("workspace.read").model_dump(),
-        )
+    submitted = await harness._gateway_call_unwrapped(
+        session,
+        "plan.submit",
+        _submission("workspace.read").model_dump(),
     )
     assert submitted["structuredContent"]["phase"] == "execution"
     assert (
@@ -806,12 +818,12 @@ def test_advisory_grok_shares_plan_without_restricting_normal_tools(
 
 
 @pytest.mark.parametrize("permission_mode", ["managed", "unrestricted"])
-def test_codex_advisory_plan_shares_steps_with_normal_tools(
+async def test_codex_advisory_plan_shares_steps_with_normal_tools(
     tmp_path, monkeypatch, permission_mode
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex planning fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -834,8 +846,8 @@ def test_codex_advisory_plan_shares_steps_with_normal_tools(
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
-    planned = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
+    planned = await harness._ensure_harness_plan(harness_turn, session)
     assert planned.id == harness_turn.id
     assert harness.plans.for_turn(chat_turn.id).phase == "discovery"
     assert session.metadata.get("planning_enforced") is not True
@@ -845,19 +857,17 @@ def test_codex_advisory_plan_shares_steps_with_normal_tools(
         for item in harness._gateway_catalog(session, turn=harness_turn)["tools"]
     }
     assert {"plan.submit", "workspace.read"} <= offered
-    submitted = asyncio.run(
-        harness._gateway_call_unwrapped(
-            session, "plan.submit", _submission().model_dump()
-        )
+    submitted = await harness._gateway_call_unwrapped(
+        session, "plan.submit", _submission().model_dump()
     )
     assert submitted["structuredContent"]["phase"] == "execution"
     assert harness.plans.for_turn(chat_turn.id).phase == "execution"
 
 
-def test_harness_subagent_inherits_advisory_planning_without_a_gate(tmp_path):
+async def test_harness_subagent_inherits_advisory_planning_without_a_gate(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Harness",
             kind=HarnessKind.GROK_ACP,
@@ -871,7 +881,7 @@ def test_harness_subagent_inherits_advisory_planning_without_a_gate(tmp_path):
     vendor_session = harness.create_session(
         engagement_id=project.id, profile_id=profile.id, model="m", mcp_server_ids=[]
     )
-    child = store.create(
+    child = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Delegated child",
@@ -892,16 +902,18 @@ def test_harness_subagent_inherits_advisory_planning_without_a_gate(tmp_path):
         mcp_server_ids=None,
         planning_enabled=True,
     )
-    saved_child = store.get(ChatSession, child.id)
+    saved_child = await store.get(ChatSession, child.id)
     assert saved_child.metadata["planning_enabled"] is True
-    assert ChatPlanService(store).required(chat_turn, saved_child) is False
-    assert ChatPlanService(store).requested(chat_turn, saved_child) is True
+    assert (await ChatPlanService(store).required(chat_turn, saved_child)) is False
+    assert (await ChatPlanService(store).requested(chat_turn, saved_child)) is True
 
 
-def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(tmp_path, monkeypatch):
+async def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(
+    tmp_path, monkeypatch
+):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    unsupported = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    unsupported = await store.create(
         HarnessProfile(
             name="Unsupported",
             kind=HarnessKind.GROK_ACP,
@@ -911,7 +923,7 @@ def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(tmp_path, monkey
             privacy={"local_only": True, "permits_sensitive_data": True},
         )
     )
-    managed = store.create(
+    managed = await store.create(
         HarnessProfile(
             name="Managed",
             kind=HarnessKind.CLAUDE_AGENT_SDK,
@@ -933,53 +945,63 @@ def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(tmp_path, monkey
         planning_enabled=True,
     )
     plans = ChatPlanService(store)
-    original_plan = plans.ensure(first_turn, chat)
-    plans.block(first_turn.id, "This adapter cannot enforce restricted discovery.")
-    store.update(
-        ChatTurn,
-        first_turn.id,
-        {"status": ChatTurnStatus.FAILED},
-        expected_revision=first_turn.revision,
+    original_plan = await plans.ensure(first_turn, chat)
+    (
+        await plans.block(
+            first_turn.id, "This adapter cannot enforce restricted discovery."
+        )
     )
-    store.update(
-        HarnessTurn,
-        failed.id,
-        {"status": HarnessTurnStatus.FAILED},
-        expected_revision=failed.revision,
+    (
+        await store.update(
+            ChatTurn,
+            first_turn.id,
+            {"status": ChatTurnStatus.FAILED},
+            expected_revision=first_turn.revision,
+        )
     )
-    chat = update_chat_assistant_config(
+    (
+        await store.update(
+            HarnessTurn,
+            failed.id,
+            {"status": HarnessTurnStatus.FAILED},
+            expected_revision=failed.revision,
+        )
+    )
+    chat = await update_chat_assistant_config(
         store,
-        store.get(ChatSession, chat.id),
+        (await store.get(ChatSession, chat.id)),
         ChatAssistantConfigPatch(
             backend=ChatBackend.HARNESS,
             profile_id=managed.id,
             model="claude-model",
             planning_enabled=True,
         ),
-        expected_revision=store.get(ChatSession, chat.id).revision,
+        expected_revision=(await store.get(ChatSession, chat.id)).revision,
     )
     started: list[str] = []
     monkeypatch.setattr(harness, "start_chat_turn", started.append)
 
-    replacement = asyncio.run(harness.retry_turn(failed.id))
+    replacement = await harness.retry_turn(failed.id)
 
     assert started == [replacement.id]
     assert replacement.metadata["retry_of_turn_id"] == failed.id
-    replacement_session = store.get(HarnessSession, replacement.harness_session_id)
+    replacement_session = await store.get(
+        HarnessSession, replacement.harness_session_id
+    )
     assert replacement_session.harness_profile_id == managed.id
     assert replacement_session.model == "claude-model"
-    replacement_chat_turn = store.get(ChatTurn, replacement.chat_turn_id)
+    replacement_chat_turn = await store.get(ChatTurn, replacement.chat_turn_id)
     assert replacement_chat_turn.request_snapshot["planning_enabled"] is True
     assert replacement_chat_turn.id != first_turn.id
-    assert plans.for_turn(first_turn.id).id == original_plan.id
-    assert plans.for_turn(first_turn.id).phase == "blocked"
-    assert plans.for_turn(replacement_chat_turn.id) is None
+    assert (await plans.for_turn(first_turn.id)).id == original_plan.id
+    assert (await plans.for_turn(first_turn.id)).phase == "blocked"
+    assert (await plans.for_turn(replacement_chat_turn.id)) is None
 
 
-def test_unrestricted_claude_configuration_blocks_before_connection(tmp_path):
+async def test_unrestricted_claude_configuration_blocks_before_connection(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Claude unrestricted",
             kind=HarnessKind.CLAUDE_AGENT_SDK,
@@ -1001,25 +1023,25 @@ def test_unrestricted_claude_configuration_blocks_before_connection(tmp_path):
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    _mark_historical_enforced_turn(store, harness_turn)
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
-    session = store.update(
+    (await _mark_historical_enforced_turn(store, harness_turn))
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
+    session = await store.update(
         HarnessSession,
         session.id,
         {"metadata": {**session.metadata, "harness_permission_mode": "unrestricted"}},
         expected_revision=session.revision,
     )
     with pytest.raises(PlanningBlocked, match="cannot enforce restricted discovery"):
-        asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+        (await harness._ensure_harness_plan(harness_turn, session))
     assert session.id not in harness._connections
 
 
-def test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan(
+async def test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Claude",
             kind=HarnessKind.CLAUDE_AGENT_SDK,
@@ -1041,8 +1063,8 @@ def test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan(
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    _mark_historical_enforced_turn(store, harness_turn)
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    (await _mark_historical_enforced_turn(store, harness_turn))
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
     observed = {}
 
     async def planner(**kwargs):
@@ -1057,12 +1079,12 @@ def test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan(
         )
 
     monkeypatch.setattr(harness, "analyze_structured", planner)
-    planned_turn = asyncio.run(harness._ensure_harness_plan(harness_turn, session))
+    planned_turn = await harness._ensure_harness_plan(harness_turn, session)
     assert observed["model"] == "claude-test"
     assert observed["nebula_tools"] is False
     assert observed["planning_target_turn_id"] == harness_turn.chat_turn_id
     assert "Core-validated task plan" in planned_turn.prompt
-    planner_session = store.create(
+    planner_session = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
@@ -1082,12 +1104,12 @@ def test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan(
     }
 
 
-def test_harness_gateway_and_native_permission_replan_before_effect(
+async def test_harness_gateway_and_native_permission_replan_before_effect(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Claude",
             kind=HarnessKind.CLAUDE_AGENT_SDK,
@@ -1109,39 +1131,45 @@ def test_harness_gateway_and_native_permission_replan_before_effect(
         mcp_server_ids=[],
         planning_enabled=True,
     )
-    chat_turn = _mark_historical_enforced_turn(store, harness_turn)
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    chat_turn = await _mark_historical_enforced_turn(store, harness_turn)
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
     plans = ChatPlanService(store)
-    plan = plans.ensure(chat_turn, store.get(ChatSession, chat_turn.session_id))
-    plans.submit(
-        plan,
-        _submission("workspace.read"),
-        available_tools={"workspace.read", "goal.block"},
-        native_categories={"shell"},
-        workspace=tmp_path,
+    plan = await plans.ensure(
+        chat_turn, (await store.get(ChatSession, chat_turn.session_id))
+    )
+    (
+        await plans.submit(
+            plan,
+            _submission("workspace.read"),
+            available_tools={"workspace.read", "goal.block"},
+            native_categories={"shell"},
+            workspace=tmp_path,
+        )
     )
     monkeypatch.setattr(harness, "_active_gateway_turn", lambda _: harness_turn)
 
     with pytest.raises(PlanningBlocked, match="goal.block was not declared"):
-        asyncio.run(
-            harness._gateway_call_unwrapped(
+        (
+            await harness._gateway_call_unwrapped(
                 session, "goal.block", {"reason": "blocked"}
             )
         )
-    assert plans.for_turn(chat_turn.id).phase == "replanning"
+    assert (await plans.for_turn(chat_turn.id)).phase == "replanning"
 
-    plans.submit(
-        plan,
-        _submission("workspace.read"),
-        available_tools={"workspace.read"},
-        native_categories={"shell"},
-        workspace=tmp_path,
+    (
+        await plans.submit(
+            plan,
+            _submission("workspace.read"),
+            available_tools={"workspace.read"},
+            native_categories={"shell"},
+            workspace=tmp_path,
+        )
     )
     with pytest.raises(
         PlanningBlocked, match="native capability shell was not declared"
     ):
-        asyncio.run(
-            harness._request_permission(
+        (
+            await harness._request_permission(
                 harness_turn.id,
                 HarnessPermissionRequest(
                     vendor_request_id="native-1",
@@ -1152,4 +1180,7 @@ def test_harness_gateway_and_native_permission_replan_before_effect(
                 ),
             )
         )
-    assert plans.for_turn(chat_turn.id).phase == "replanning"
+    assert (await plans.for_turn(chat_turn.id)).phase == "replanning"
+
+
+pytestmark = pytest.mark.anyio

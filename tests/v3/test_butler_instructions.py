@@ -1,14 +1,17 @@
 """Nebula-wide, operator-owned Butler mandate and durable scheduled clock."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import json
 from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.butler_authority import policy_id
@@ -67,51 +70,61 @@ def test_user_owned_instructions_are_optional_fresh_bounded_and_symlink_safe(tmp
         read_butler_instructions(tmp_path)
 
 
-def test_one_global_check_wakes_idle_projects_and_persists_across_restart(tmp_path):
+async def test_one_global_check_wakes_idle_projects_and_persists_across_restart(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    projects = [store.create(Engagement(name=name)) for name in ("First", "Second")]
-    provider = store.create(
+    projects = [
+        (await store.create(Engagement(name=name))) for name in ("First", "Second")
+    ]
+    provider = await store.create(
         ProviderProfile(name="Fixture", provider_type="ollama", is_local=True)
     )
     worker_id = "worker-1"
     for project in projects:
-        store.create(
-            ButlerAuthorityPolicy(
-                id=policy_id(project.id), engagement_id=project.id, authority="act"
+        (
+            await store.create(
+                ButlerAuthorityPolicy(
+                    id=policy_id(project.id), engagement_id=project.id, authority="act"
+                )
             )
         )
-        store.create(
-            ButlerProjectState(
-                id=project_state_id(project.id),
-                engagement_id=project.id,
-                lease_owner=worker_id,
-                lease_expires_at=utc_now() + timedelta(minutes=10),
+        (
+            await store.create(
+                ButlerProjectState(
+                    id=project_state_id(project.id),
+                    engagement_id=project.id,
+                    lease_owner=worker_id,
+                    lease_expires_at=utc_now() + timedelta(minutes=10),
+                )
             )
         )
-        store.create(
-            ChatSession(
-                engagement_id=project.id,
-                title="Butler",
-                model="fixture-model",
-                provider_profile_id=provider.id,
-                metadata={"control_assistant": True},
+        (
+            await store.create(
+                ChatSession(
+                    engagement_id=project.id,
+                    title="Butler",
+                    model="fixture-model",
+                    provider_profile_id=provider.id,
+                    metadata={"control_assistant": True},
+                )
             )
         )
     recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
-    assert recovery.global_status()["status"] == "missing"
-    assert not recovery.fire_global_periodic_check(projects[0].id, worker_id)
+    assert (await recovery.global_status())["status"] == "missing"
+    assert not (await recovery.fire_global_periodic_check(projects[0].id, worker_id))
     _write(tmp_path)
-    anchor = recovery._global_anchor()
+    anchor = await recovery._global_anchor()
     assert anchor in {project.id for project in projects}
     other = next(project.id for project in projects if project.id != anchor)
-    assert not recovery.fire_global_periodic_check(other, worker_id)
-    assert recovery.fire_global_periodic_check(anchor, worker_id)
-    assert not recovery.fire_global_periodic_check(anchor, worker_id)
-    assert not recovery.fire_periodic_check(anchor, worker_id)
-    events = store.replay_operation_events(project_stream_id(anchor))
+    assert not (await recovery.fire_global_periodic_check(other, worker_id))
+    assert await recovery.fire_global_periodic_check(anchor, worker_id)
+    assert not (await recovery.fire_global_periodic_check(anchor, worker_id))
+    assert not (await recovery.fire_periodic_check(anchor, worker_id))
+    events = await store.replay_operation_events(project_stream_id(anchor))
     assert [event.event_type for event in events] == ["butler.global_periodic_check"]
-    assert recovery.capture_events(anchor, worker_id) == 1
-    case = store.find_entities(ButlerRecoveryCase, {}, engagement_id=anchor)[0]
+    assert (await recovery.capture_events(anchor, worker_id)) == 1
+    case = (await store.find_entities(ButlerRecoveryCase, {}, engagement_id=anchor))[0]
     assert case.signal == "butler.global_periodic_check"
     agent = ButlerRecoveryAgent(
         store,
@@ -122,38 +135,42 @@ def test_one_global_check_wakes_idle_projects_and_persists_across_restart(tmp_pa
         memory=object(),
         instructions_root=tmp_path,
     )
-    assert json.loads(agent._packet(case))["precedents"] is None
-    assert "Check idle work." in agent._global_instructions(case)
-    state = store.get(ButlerGlobalState, GLOBAL_STATE_ID)
-    assert recovery.global_status()["last_check_at"] == state.last_periodic_at
-    assert recovery.global_status()["check_interval_minutes"] == 5
+    assert json.loads((await agent._packet(case)))["precedents"] is None
+    assert "Check idle work." in (await agent._global_instructions(case))
+    state = await store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    assert (await recovery.global_status())["last_check_at"] == state.last_periodic_at
+    assert (await recovery.global_status())["check_interval_minutes"] == 5
     restarted = ButlerRecoveryService(store, instructions_root=tmp_path)
-    assert not restarted.fire_global_periodic_check(anchor, worker_id)
-    store.update(
-        ButlerGlobalState,
-        GLOBAL_STATE_ID,
-        {"last_periodic_at": utc_now() - timedelta(minutes=4)},
-        expected_revision=state.revision,
+    assert not (await restarted.fire_global_periodic_check(anchor, worker_id))
+    (
+        await store.update(
+            ButlerGlobalState,
+            GLOBAL_STATE_ID,
+            {"last_periodic_at": utc_now() - timedelta(minutes=4)},
+            expected_revision=state.revision,
+        )
     )
-    assert not restarted.fire_global_periodic_check(anchor, worker_id)
-    state = store.get(ButlerGlobalState, GLOBAL_STATE_ID)
-    store.update(
-        ButlerGlobalState,
-        GLOBAL_STATE_ID,
-        {"last_periodic_at": utc_now() - timedelta(minutes=6)},
-        expected_revision=state.revision,
+    assert not (await restarted.fire_global_periodic_check(anchor, worker_id))
+    state = await store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    (
+        await store.update(
+            ButlerGlobalState,
+            GLOBAL_STATE_ID,
+            {"last_periodic_at": utc_now() - timedelta(minutes=6)},
+            expected_revision=state.revision,
+        )
     )
     _write(tmp_path, "New operator instructions.")
     with pytest.raises(ButlerInstructionsError, match="changed"):
-        agent._global_instructions(case)
-    assert restarted.fire_global_periodic_check(anchor, worker_id)
-    assert len(store.replay_operation_events(project_stream_id(anchor))) == 2
+        (await agent._global_instructions(case))
+    assert await restarted.fire_global_periodic_check(anchor, worker_id)
+    assert len((await store.replay_operation_events(project_stream_id(anchor)))) == 2
 
 
-def test_global_check_uses_saved_butler_harness_effort(tmp_path):
+async def test_global_check_uses_saved_butler_harness_effort(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Butler harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -171,7 +188,7 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
             ),
         )
     )
-    alternate = store.create(
+    alternate = await store.create(
         HarnessProfile(
             name="Butler alternate account",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -181,51 +198,59 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
             capabilities=profile.capabilities,
         )
     )
-    harness_session = store.create(
+    harness_session = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
             model="test-model",
         )
     )
-    store.create(
-        ChatSession(
-            engagement_id=project.id,
-            title="Butler",
-            backend=ChatBackend.HARNESS,
-            harness_profile_id=profile.id,
-            harness_session_id=harness_session.id,
-            model="test-model",
-            metadata={
-                "control_assistant": True,
-                "assistant_config": {
-                    "backend": "harness",
-                    "profile_id": profile.id,
-                    "model": "test-model",
-                    "harness_reasoning_effort": "max",
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Butler",
+                backend=ChatBackend.HARNESS,
+                harness_profile_id=profile.id,
+                harness_session_id=harness_session.id,
+                model="test-model",
+                metadata={
+                    "control_assistant": True,
+                    "assistant_config": {
+                        "backend": "harness",
+                        "profile_id": profile.id,
+                        "model": "test-model",
+                        "harness_reasoning_effort": "max",
+                    },
                 },
-            },
+            )
         )
     )
-    store.create(
-        ButlerAuthorityPolicy(
-            id=policy_id(project.id), engagement_id=project.id, authority="act"
+    (
+        await store.create(
+            ButlerAuthorityPolicy(
+                id=policy_id(project.id), engagement_id=project.id, authority="act"
+            )
         )
     )
     worker_id = "worker-1"
-    store.create(
-        ButlerProjectState(
-            id=project_state_id(project.id),
-            engagement_id=project.id,
-            lease_owner=worker_id,
-            lease_expires_at=utc_now() + timedelta(minutes=10),
+    (
+        await store.create(
+            ButlerProjectState(
+                id=project_state_id(project.id),
+                engagement_id=project.id,
+                lease_owner=worker_id,
+                lease_expires_at=utc_now() + timedelta(minutes=10),
+            )
         )
     )
     _write(tmp_path)
     recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
-    assert recovery.fire_global_periodic_check(project.id, worker_id)
-    assert recovery.capture_events(project.id, worker_id) == 1
-    case = store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)[0]
+    assert await recovery.fire_global_periodic_check(project.id, worker_id)
+    assert (await recovery.capture_events(project.id, worker_id)) == 1
+    case = (
+        await store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)
+    )[0]
 
     class Runtime:
         def _validate_harness_privacy(self, *_args, **_kwargs):
@@ -272,7 +297,7 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
         memory=None,
         instructions_root=tmp_path,
     )
-    outcome, backend, profile_id, model, turn_id = asyncio.run(agent.run(case))
+    outcome, backend, profile_id, model, turn_id = await agent.run(case)
     assert (outcome, backend.value, profile_id, model, turn_id) == (
         "Checked Core state",
         "harness",
@@ -280,15 +305,15 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
         "test-model",
         "harness-turn",
     )
-    saved_case = store.get(ButlerRecoveryCase, case.id)
+    saved_case = await store.get(ButlerRecoveryCase, case.id)
     assert saved_case.model_turn_id == "harness-turn"
     assert saved_case.model_turn_ids == ["harness-turn"]
     assert saved_case.model_profile_id == alternate.id
-    assert agent._butler_session(project.id).harness_profile_id == profile.id
+    assert (await agent._butler_session(project.id)).harness_profile_id == profile.id
     work.available = False
     with pytest.raises(ValueError, match="confirmed included usage or credits"):
-        asyncio.run(
-            agent._scheduled_harness_profile(
+        (
+            await agent._scheduled_harness_profile(
                 project.id, profile, "test-model", "max", "automatic"
             )
         )
@@ -305,46 +330,43 @@ def test_global_check_uses_saved_butler_harness_effort(tmp_path):
 
     work.harness_quota = credit_only
     assert (
-        asyncio.run(
-            agent._scheduled_harness_profile(
-                project.id, profile, "test-model", "max", "automatic"
-            )
-        ).id
-        == profile.id
-    )
+        await agent._scheduled_harness_profile(
+            project.id, profile, "test-model", "max", "automatic"
+        )
+    ).id == profile.id
 
 
-def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):
+async def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     app = create_app(
         store,
         auth_token="test-token",
         execution_data_root=tmp_path,
     )
     route = f"/api/v1/engagements/{project.id}/butler/overview"
-    with TestClient(app) as client:
-        assert client.get(route).status_code == 401
-        missing = client.get(
-            route, headers={"Authorization": "Bearer test-token"}
+    async with TestClient(app) as client:
+        assert (await client.get(route)).status_code == 401
+        missing = (
+            await client.get(route, headers={"Authorization": "Bearer test-token"})
         ).json()["global_instructions"]
         assert missing["status"] == "missing"
         assert missing["path"] == str(tmp_path / ".butler" / "BUTLER.md")
         _write(tmp_path)
-        present = client.get(
-            route, headers={"Authorization": "Bearer test-token"}
+        present = (
+            await client.get(route, headers={"Authorization": "Bearer test-token"})
         ).json()["global_instructions"]
         assert present["status"] == "needs_act_host"
 
 
-def test_check_interval_is_authenticated_revision_guarded_and_durable(tmp_path):
+async def test_check_interval_is_authenticated_revision_guarded_and_durable(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(store, auth_token="test-token", execution_data_root=tmp_path)
     route = "/api/v1/butler/check-interval"
     auth = {"Authorization": "Bearer test-token"}
-    with TestClient(app) as client:
-        assert client.get(route).status_code == 401
-        default = client.get(route, headers=auth).json()
+    async with TestClient(app) as client:
+        assert (await client.get(route)).status_code == 401
+        default = (await client.get(route, headers=auth)).json()
         assert default == {
             "check_interval_minutes": 5,
             "revision": 0,
@@ -352,14 +374,13 @@ def test_check_interval_is_authenticated_revision_guarded_and_durable(tmp_path):
             "next_check_at": None,
         }
         assert (
-            client.put(
+            await client.put(
                 route,
                 headers=auth,
                 json={"check_interval_minutes": 0, "expected_revision": 0},
-            ).status_code
-            == 422
-        )
-        saved = client.put(
+            )
+        ).status_code == 422
+        saved = await client.put(
             route,
             headers=auth,
             json={"check_interval_minutes": 2, "expected_revision": 0},
@@ -368,13 +389,17 @@ def test_check_interval_is_authenticated_revision_guarded_and_durable(tmp_path):
         assert saved.json()["check_interval_minutes"] == 2
         assert saved.json()["revision"] == 1
         assert (
-            client.put(
+            await client.put(
                 route,
                 headers=auth,
                 json={"check_interval_minutes": 10, "expected_revision": 0},
-            ).status_code
-            == 409
-        )
-        assert client.get(route, headers=auth).json() == saved.json()
+            )
+        ).status_code == 409
+        assert (await client.get(route, headers=auth)).json() == saved.json()
     reloaded = NebulaStore(tmp_path / "core.db")
-    assert reloaded.get(ButlerGlobalState, GLOBAL_STATE_ID).check_interval_minutes == 2
+    assert (
+        await reloaded.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    ).check_interval_minutes == 2
+
+
+pytestmark = pytest.mark.anyio

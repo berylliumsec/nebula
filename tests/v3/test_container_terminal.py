@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import base64
@@ -13,7 +17,7 @@ from functools import wraps
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import ValidationError
 
 from nebula.v3.api import create_app
@@ -159,8 +163,10 @@ class ControllableTerminalProcess:
     async def emit(self, data: bytes) -> None:
         await self._chunks.put(data)
 
-    def emit_from_thread(self, data: bytes) -> None:
-        asyncio.run_coroutine_threadsafe(self.emit(data), self._loop).result(timeout=1)
+    async def emit_from_thread(self, data: bytes) -> None:
+        asyncio.run_coroutine_threadsafe((await self.emit(data)), self._loop).result(
+            timeout=1
+        )
 
     async def exit(self, exit_code: int) -> None:
         self._exit_code = exit_code
@@ -276,7 +282,7 @@ class StubTerminalPlatform:
         )
 
 
-def fixture(
+async def fixture(
     tmp_path,
     *,
     fail_image: bool = False,
@@ -284,7 +290,7 @@ def fixture(
     audit_nonce: str | None = None,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Container Terminal Lab"))
+    engagement = await store.create(Engagement(name="Container Terminal Lab"))
     runner = RecordingTerminalRunner(chunks=chunks)
     platform = StubTerminalPlatform(
         tmp_path / "workspace", runner, fail_image=fail_image
@@ -298,9 +304,9 @@ def fixture(
     return store, engagement, None, runner, platform, service
 
 
-def continuity_fixture(tmp_path, **service_options):
+async def continuity_fixture(tmp_path, **service_options):
     store = NebulaStore(tmp_path / "continuity.db")
-    engagement = store.create(Engagement(name="Terminal Continuity Lab"))
+    engagement = await store.create(Engagement(name="Terminal Continuity Lab"))
     runner = ControllableTerminalRunner()
     platform = StubTerminalPlatform(
         tmp_path / "continuity-workspace",
@@ -344,7 +350,7 @@ async def start_controllable_terminal(
 async def test_project_supports_multiple_independent_terminals_and_bulk_recovery(
     tmp_path,
 ):
-    _store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    _store, engagement, runner, _platform, service = await continuity_fixture(tmp_path)
     first, first_attachment = await start_controllable_terminal(
         service, engagement, idempotency_key="terminal-one"
     )
@@ -397,8 +403,8 @@ async def test_project_supports_multiple_independent_terminals_and_bulk_recovery
 async def test_project_session_listing_and_conditional_close_keep_tickets_private(
     tmp_path,
 ):
-    store, project, runner, _platform, service = continuity_fixture(tmp_path)
-    other = store.create(Engagement(name="Other Project"))
+    store, project, runner, _platform, service = await continuity_fixture(tmp_path)
+    other = await store.create(Engagement(name="Other Project"))
     first, _first_attachment = await start_controllable_terminal(
         service, project, idempotency_key="project-one"
     )
@@ -444,7 +450,7 @@ async def test_project_session_listing_and_conditional_close_keep_tickets_privat
 async def test_project_terminal_cleanup_failure_stays_visible_until_retry(
     tmp_path, monkeypatch
 ):
-    _store, project, runner, _platform, service = continuity_fixture(tmp_path)
+    _store, project, runner, _platform, service = await continuity_fixture(tmp_path)
     started, _attachment = await start_controllable_terminal(service, project)
     process = runner.processes[0]
     original_close = process.close
@@ -487,7 +493,7 @@ async def test_project_terminal_cleanup_failure_stays_visible_until_retry(
 
 @async_test
 async def test_butler_terminal_stop_is_exact_browser_handoff(tmp_path):
-    store, project, _runner, _platform, service = continuity_fixture(tmp_path)
+    store, project, _runner, _platform, service = await continuity_fixture(tmp_path)
     started, _attachment = await start_controllable_terminal(service, project)
     actions = {
         action.spec.name: action
@@ -555,7 +561,7 @@ async def test_butler_terminal_stop_is_exact_browser_handoff(tmp_path):
 
 @async_test
 async def test_closing_terminal_keeps_capacity_and_workspace_reserved(tmp_path):
-    _store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    _store, engagement, runner, _platform, service = await continuity_fixture(tmp_path)
     started, _attachment = await start_controllable_terminal(service, engagement)
     process = runner.processes[0]
     close_started = asyncio.Event()
@@ -592,10 +598,10 @@ async def test_closing_terminal_keeps_capacity_and_workspace_reserved(tmp_path):
 async def test_terminal_global_capacity_allows_32_reservations_and_rejects_33rd(
     tmp_path,
 ):
-    store, engagement, _runner, _platform, service = continuity_fixture(
+    store, engagement, _runner, _platform, service = await continuity_fixture(
         tmp_path, max_active=32
     )
-    other = store.create(Engagement(name="Second Terminal Project"))
+    other = await store.create(Engagement(name="Second Terminal Project"))
     created_ids: list[str] = []
     for index in range(32):
         target = engagement if index < 31 else other
@@ -639,7 +645,7 @@ async def test_terminal_global_capacity_allows_32_reservations_and_rejects_33rd(
 async def test_concurrent_same_project_starts_reserve_unique_sessions_atomically(
     tmp_path,
 ):
-    _store, engagement, _runner, _platform, service = continuity_fixture(
+    _store, engagement, _runner, _platform, service = await continuity_fixture(
         tmp_path, max_active=8
     )
     requests: list[ContainerTerminalStartRequest] = []
@@ -665,7 +671,7 @@ async def test_concurrent_same_project_starts_reserve_unique_sessions_atomically
 
 @async_test
 async def test_public_ip_comes_from_the_live_project_terminal(tmp_path):
-    _store, engagement, _runner, _platform, service = continuity_fixture(tmp_path)
+    _store, engagement, _runner, _platform, service = await continuity_fixture(tmp_path)
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
     started = await service.start(
@@ -693,7 +699,7 @@ async def test_public_ip_polls_share_one_container_read_for_a_short_window(
     from nebula.v3 import container_terminal
     from nebula.v3.sandbox import SandboxUnavailable
 
-    _store, engagement, _runner, _platform, service = continuity_fixture(tmp_path)
+    _store, engagement, _runner, _platform, service = await continuity_fixture(tmp_path)
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
     started = await service.start(
@@ -770,11 +776,11 @@ async def test_startup_settles_only_unsettled_terminals_without_reading_history(
     from nebula.v3.database import OperationEventRow
     from nebula.v3.domain import OperationEvent
 
-    store, engagement, _policy, _runner, _platform, service = fixture(tmp_path)
-    other = store.create(Engagement(name="Unreadable project"))
+    store, engagement, _policy, _runner, _platform, service = await fixture(tmp_path)
+    other = await store.create(Engagement(name="Unreadable project"))
 
-    def record(operation_id, event_type, project=engagement.id, **options):
-        return store.append_operation_event(
+    async def record(operation_id, event_type, project=engagement.id, **options):
+        return await store.append_operation_event(
             operation_id,
             "container_terminal",
             project,
@@ -784,7 +790,7 @@ async def test_startup_settles_only_unsettled_terminals_without_reading_history(
         )
 
     # Event history recovery has no use for, in the same project.
-    with store.database.session() as session:
+    async with store.database.session() as session:
         session.add_all(
             OperationEventRow(
                 **OperationEvent(
@@ -798,31 +804,49 @@ async def test_startup_settles_only_unsettled_terminals_without_reading_history(
             )
             for sequence in range(1, 2_001)
         )
-    record("interrupted", "container_terminal.pending", actor_id="operator-1")
-    record("interrupted", "container_terminal.running", actor_id="operator-2")
-    record("ended", "container_terminal.pending", actor_id="operator-1")
-    record(
-        "ended",
-        "container_terminal.terminal",
-        actor_id="operator-1",
-        idempotency_key="container-terminal:ended:terminal",
+    (await record("interrupted", "container_terminal.pending", actor_id="operator-1"))
+    (await record("interrupted", "container_terminal.running", actor_id="operator-2"))
+    (await record("ended", "container_terminal.pending", actor_id="operator-1"))
+    (
+        await record(
+            "ended",
+            "container_terminal.terminal",
+            actor_id="operator-1",
+            idempotency_key="container-terminal:ended:terminal",
+        )
     )
     # A spool that failed to persist while the session ran is recovered at the
     # next start, after the session's terminal event. The session stays ended.
-    record("ended-then-recovered", "container_terminal.pending", actor_id="operator-1")
-    record(
-        "ended-then-recovered",
-        "container_terminal.terminal",
-        actor_id="operator-1",
-        idempotency_key="container-terminal:ended-then-recovered:terminal",
+    (
+        await record(
+            "ended-then-recovered", "container_terminal.pending", actor_id="operator-1"
+        )
     )
-    record("ended-then-recovered", "container_terminal.command", actor_id="operator-1")
-    record("elsewhere", "container_terminal.running", project=other.id, actor_id="op")
-    with store.database.engine.begin() as connection:
-        connection.exec_driver_sql(
-            "UPDATE entities SET payload = json_set(payload, '$.revision', 0) "
-            "WHERE id = ?",
-            (other.id,),
+    (
+        await record(
+            "ended-then-recovered",
+            "container_terminal.terminal",
+            actor_id="operator-1",
+            idempotency_key="container-terminal:ended-then-recovered:terminal",
+        )
+    )
+    (
+        await record(
+            "ended-then-recovered", "container_terminal.command", actor_id="operator-1"
+        )
+    )
+    (
+        await record(
+            "elsewhere", "container_terminal.running", project=other.id, actor_id="op"
+        )
+    )
+    async with store.database.engine.begin() as connection:
+        (
+            await connection.exec_driver_sql(
+                "UPDATE entities SET payload = json_set(payload, '$.revision', 0) "
+                "WHERE id = ?",
+                (other.id,),
+            )
         )
 
     def unbounded(*_args, **_kwargs):
@@ -842,7 +866,7 @@ async def test_startup_settles_only_unsettled_terminals_without_reading_history(
 
     # Only the unsettled sessions' newest events are loaded.
     assert sorted(loaded) == ["elsewhere", "interrupted"]
-    interrupted = store.replay_operation_events("interrupted")
+    interrupted = await store.replay_operation_events("interrupted")
     assert [item.event_type for item in interrupted] == [
         "container_terminal.pending",
         "container_terminal.running",
@@ -850,45 +874,49 @@ async def test_startup_settles_only_unsettled_terminals_without_reading_history(
     ]
     assert interrupted[-1].payload["status"] == "interrupted"
     assert interrupted[-1].actor_id == "operator-2"
-    assert [item.event_type for item in store.replay_operation_events("ended")] == [
+    assert [
+        item.event_type for item in (await store.replay_operation_events("ended"))
+    ] == [
         "container_terminal.pending",
         "container_terminal.terminal",
     ]
     assert [
         item.event_type
-        for item in store.replay_operation_events("ended-then-recovered")
+        for item in (await store.replay_operation_events("ended-then-recovered"))
     ] == [
         "container_terminal.pending",
         "container_terminal.terminal",
         "container_terminal.command",
     ]
     # An unreadable project is skipped, as before.
-    assert [item.event_type for item in store.replay_operation_events("elsewhere")] == [
-        "container_terminal.running"
-    ]
+    assert [
+        item.event_type for item in (await store.replay_operation_events("elsewhere"))
+    ] == ["container_terminal.running"]
 
     # A second start finds nothing left to settle.
     await service.startup()
-    assert len(store.replay_operation_events("interrupted")) == 3
+    assert len((await store.replay_operation_events("interrupted"))) == 3
 
 
 @async_test
 async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
-    store, engagement, _policy, runner, platform, service = fixture(tmp_path)
-    store.append_operation_event(
-        "orphaned-terminal",
-        "container_terminal",
-        engagement.id,
-        "container_terminal.running",
-        {"status": "running"},
-        actor_id="operator-1",
+    store, engagement, _policy, runner, platform, service = await fixture(tmp_path)
+    (
+        await store.append_operation_event(
+            "orphaned-terminal",
+            "container_terminal",
+            engagement.id,
+            "container_terminal.running",
+            {"status": "running"},
+            actor_id="operator-1",
+        )
     )
     await service.startup()
     assert platform.cleanup_calls == 1
-    recovered = store.replay_operation_events("orphaned-terminal")
+    recovered = await store.replay_operation_events("orphaned-terminal")
     assert recovered[-1].event_type == "container_terminal.terminal"
     assert recovered[-1].payload["status"] == "interrupted"
-    capabilities = service.capabilities(engagement.id)
+    capabilities = await service.capabilities(engagement.id)
     assert capabilities.ready is True
     assert capabilities.source_image == "docker.io/kalilinux/kali-rolling:latest"
     assert capabilities.installed_packages == [
@@ -985,7 +1013,7 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     await service.finish(created.session_id, outcome="completed", exit_code=0)
     assert service.workspace_lock(engagement.id).locked() is False
     assert runner.processes[0].closed == 1
-    events = store.replay_operation_events(created.session_id)
+    events = await store.replay_operation_events(created.session_id)
     assert [event.event_type for event in events] == [
         "container_terminal.pending",
         "container_terminal.claimed",
@@ -1018,7 +1046,7 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
 @async_test
 async def test_unrestricted_kali_terminal_needs_no_runtime_or_scope_policy(tmp_path):
     store = NebulaStore(tmp_path / "default-terminal.db")
-    engagement = store.create(Engagement(name="Default Terminal Lab"))
+    engagement = await store.create(Engagement(name="Default Terminal Lab"))
     runner = RecordingTerminalRunner()
     platform = StubTerminalPlatform(tmp_path / "workspace", runner)
     service = ContainerTerminalService(
@@ -1049,7 +1077,7 @@ async def test_unrestricted_kali_terminal_needs_no_runtime_or_scope_policy(tmp_p
 @async_test
 async def test_selected_vpn_is_frozen_into_new_human_terminal_and_recovery(tmp_path):
     store = NebulaStore(tmp_path / "vpn-terminal.db")
-    engagement = store.create(Engagement(name="VPN Terminal Lab"))
+    engagement = await store.create(Engagement(name="VPN Terminal Lab"))
     runner = RecordingTerminalRunner()
     platform = StubTerminalPlatform(tmp_path / "workspace", runner)
     credentials = CredentialStore()
@@ -1057,7 +1085,7 @@ async def test_selected_vpn_is_frozen_into_new_human_terminal_and_recovery(tmp_p
     secret = credentials.create(
         CredentialCreateRequest(secret=admitted_config, persistence="session")
     )
-    profile = store.create(
+    profile = await store.create(
         VpnProfile(
             name="Company VPN",
             filename="company.ovpn",
@@ -1068,12 +1096,16 @@ async def test_selected_vpn_is_frozen_into_new_human_terminal_and_recovery(tmp_p
             secret_ref=secret.reference,
         )
     )
-    store.create(
-        AutomationProjectPolicy(
-            id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement.id}")),
-            engagement_id=engagement.id,
-            network_enabled=True,
-            vpn_profile_id=profile.id,
+    (
+        await store.create(
+            AutomationProjectPolicy(
+                id=str(
+                    uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement.id}")
+                ),
+                engagement_id=engagement.id,
+                network_enabled=True,
+                vpn_profile_id=profile.id,
+            )
         )
     )
     service = ContainerTerminalService(
@@ -1114,7 +1146,7 @@ async def test_selected_vpn_is_frozen_into_new_human_terminal_and_recovery(tmp_p
 
 @async_test
 async def test_terminal_preview_is_bound_to_the_resolved_project_workspace(tmp_path):
-    _store, engagement, _runner, platform, service = continuity_fixture(tmp_path)
+    _store, engagement, _runner, platform, service = await continuity_fixture(tmp_path)
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
     replacement = tmp_path / "replacement-workspace"
@@ -1145,7 +1177,7 @@ def test_terminal_request_rejects_client_selected_network_boundary():
 
 @async_test
 async def test_terminal_reports_image_unavailable_without_verified_cache(tmp_path):
-    _store, engagement, _unused, _runner, _platform, service = fixture(
+    _store, engagement, _unused, _runner, _platform, service = await fixture(
         tmp_path, fail_image=True
     )
     preview = await service.preflight(
@@ -1160,7 +1192,7 @@ async def test_terminal_reports_image_unavailable_without_verified_cache(tmp_pat
 async def test_terminal_process_survives_detach_and_replays_only_missed_output(
     tmp_path,
 ):
-    _store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    _store, engagement, runner, _platform, service = await continuity_fixture(tmp_path)
     started, first = await start_controllable_terminal(service, engagement)
     process = runner.processes[0]
 
@@ -1202,7 +1234,9 @@ async def test_terminal_process_survives_detach_and_replays_only_missed_output(
 @async_test
 async def test_active_terminal_does_not_hold_the_reviewed_execution_lock(tmp_path):
     store = NebulaStore(tmp_path / "shared-workspace.db")
-    engagement = store.create(Engagement(name="Concurrent Reviewed Execution Lab"))
+    engagement = await store.create(
+        Engagement(name="Concurrent Reviewed Execution Lab")
+    )
     runner = ControllableTerminalRunner()
     platform = StubTerminalPlatform(
         tmp_path / "shared-workspace",
@@ -1234,7 +1268,7 @@ async def test_active_terminal_does_not_hold_the_reviewed_execution_lock(tmp_pat
 async def test_terminal_recovery_rotates_one_use_tickets_without_starting_a_process(
     tmp_path,
 ):
-    _store, engagement, runner, platform, service = continuity_fixture(tmp_path)
+    _store, engagement, runner, platform, service = await continuity_fixture(tmp_path)
     assert (await service.recover(engagement.id)).active is False
 
     started, attachment = await start_controllable_terminal(service, engagement)
@@ -1278,7 +1312,7 @@ async def test_terminal_recovery_rotates_one_use_tickets_without_starting_a_proc
 
 @async_test
 async def test_terminal_replay_is_memory_bounded_and_marks_truncation(tmp_path):
-    _store, engagement, runner, _platform, service = continuity_fixture(
+    _store, engagement, runner, _platform, service = await continuity_fixture(
         tmp_path,
         replay_max_bytes=8,
     )
@@ -1312,7 +1346,7 @@ async def test_terminal_replay_is_memory_bounded_and_marks_truncation(tmp_path):
 
 @async_test
 async def test_terminal_disconnect_grace_expires_and_releases_workspace(tmp_path):
-    store, engagement, runner, _platform, service = continuity_fixture(
+    store, engagement, runner, _platform, service = await continuity_fixture(
         tmp_path,
         reconnect_grace_seconds=0.03,
     )
@@ -1323,13 +1357,13 @@ async def test_terminal_disconnect_grace_expires_and_releases_workspace(tmp_path
     assert runner.processes[0].closed == 1
     assert service.workspace_lock(engagement.id).locked() is False
     assert await service.engagement_active(engagement.id) is False
-    events = store.replay_operation_events(started.session_id)
+    events = await store.replay_operation_events(started.session_id)
     assert events[-1].payload["status"] == "reconnect_timeout"
 
 
 @async_test
 async def test_terminal_idle_timeout_is_based_on_input_and_output_activity(tmp_path):
-    _store, engagement, runner, _platform, service = continuity_fixture(
+    _store, engagement, runner, _platform, service = await continuity_fixture(
         tmp_path,
         idle_timeout_seconds=0.03,
         watchdog_interval_seconds=0.005,
@@ -1352,7 +1386,7 @@ async def test_terminal_idle_timeout_is_based_on_input_and_output_activity(tmp_p
 
 @async_test
 async def test_terminal_has_no_inactivity_timeout_by_default(tmp_path):
-    _store, engagement, runner, _platform, service = continuity_fixture(
+    _store, engagement, runner, _platform, service = await continuity_fixture(
         tmp_path,
         watchdog_interval_seconds=0.005,
     )
@@ -1370,7 +1404,7 @@ async def test_terminal_has_no_inactivity_timeout_by_default(tmp_path):
 async def test_terminal_reconnects_one_hundred_times_without_new_processes_or_tasks(
     tmp_path,
 ):
-    _store, engagement, runner, _platform, service = continuity_fixture(
+    _store, engagement, runner, _platform, service = await continuity_fixture(
         tmp_path,
         reconnect_grace_seconds=1,
     )
@@ -1400,7 +1434,7 @@ async def test_terminal_reconnects_one_hundred_times_without_new_processes_or_ta
 
 @async_test
 async def test_terminal_process_exit_is_delivered_and_cleans_up(tmp_path):
-    _store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    _store, engagement, runner, _platform, service = await continuity_fixture(tmp_path)
     _started, attachment = await start_controllable_terminal(service, engagement)
     process = runner.processes[0]
     await process.emit(b"last output")
@@ -1424,8 +1458,10 @@ async def test_terminal_process_exit_is_delivered_and_cleans_up(tmp_path):
     assert service.workspace_lock(engagement.id).locked() is False
 
 
-def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp_path):
-    store, engagement, _policy, runner, platform, service = fixture(tmp_path)
+async def test_container_terminal_api_streams_container_output_with_one_use_ticket(
+    tmp_path,
+):
+    store, engagement, _policy, runner, platform, service = await fixture(tmp_path)
     workspace = WorkspaceService(
         store=store,
         artifact_store=ArtifactStore(tmp_path / "artifacts"),
@@ -1439,11 +1475,11 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
         workspace_service=workspace,
     )
     headers = {"Authorization": "Bearer test-token"}
-    with TestClient(app) as client:
-        health = client.get("/api/v1/health", headers=headers)
+    async with TestClient(app) as client:
+        health = await client.get("/api/v1/health", headers=headers)
         assert health.json()["human_pty"] == "unavailable"
         assert health.json()["container_terminal"] == "configured"
-        preview = client.post(
+        preview = await client.post(
             "/api/v1/container-terminal/preflight",
             headers=headers,
             json={
@@ -1464,7 +1500,7 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
             "vpn_profile_revision": None,
         }
         assert reviewed["security"]["container_user"] == "root"
-        started = client.post(
+        started = await client.post(
             "/api/v1/container-terminal/sessions",
             headers=headers,
             json={
@@ -1478,7 +1514,7 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
         )
         assert started.status_code == 201
         session = started.json()
-        uploaded = client.put(
+        uploaded = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={**headers, "Content-Type": "application/octet-stream"},
             params={"path": "uploaded-while-terminal-runs.txt"},
@@ -1489,7 +1525,7 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
             uploaded.json()["sha256"]
             == hashlib.sha256(b"available immediately\n").hexdigest()
         )
-        blocked_reset = client.post(
+        blocked_reset = await client.post(
             f"/api/v1/engagements/{engagement.id}/workspace/reset",
             headers=headers,
             json={"engagement_name": engagement.name},
@@ -1502,14 +1538,14 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
             f"nebula.auth.{encoded_token}",
             f"nebula.ticket.{session['websocket_ticket']}",
         ]
-        with client.websocket_connect(
+        async with client.websocket_connect(
             session["websocket_path"], subprotocols=protocols
         ) as socket:
-            assert socket.receive_json()["type"] == "ready"
-            output = socket.receive_json()
+            assert (await socket.receive_json())["type"] == "ready"
+            output = await socket.receive_json()
             assert output["type"] == "output"
             assert base64.b64decode(output["data"]) == b"container-only\r\n"
-            terminal = socket.receive_json()
+            terminal = await socket.receive_json()
             assert terminal == {
                 "type": "exit",
                 "exit_code": 7,
@@ -1520,8 +1556,8 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
     assert runner.processes[0].closed == 1
 
 
-def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
-    store, engagement, _policy, _runner, _platform, service = fixture(tmp_path)
+async def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
+    store, engagement, _policy, _runner, _platform, service = await fixture(tmp_path)
     app = create_app(
         store,
         auth_token="test-token",
@@ -1529,15 +1565,17 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
     )
     headers = {"Authorization": "Bearer test-token"}
 
-    with TestClient(app) as client:
+    async with TestClient(app) as client:
         session_ids: list[str] = []
         for index in range(32):
-            preview = client.post(
-                "/api/v1/container-terminal/preflight",
-                headers=headers,
-                json={"engagement_id": engagement.id},
+            preview = (
+                await client.post(
+                    "/api/v1/container-terminal/preflight",
+                    headers=headers,
+                    json={"engagement_id": engagement.id},
+                )
             ).json()
-            started = client.post(
+            started = await client.post(
                 "/api/v1/container-terminal/sessions",
                 headers=headers,
                 json={
@@ -1552,7 +1590,9 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
             assert started.json()["created_at"]
             session_ids.append(started.json()["session_id"])
 
-        capacity = client.get("/api/v1/container-terminal/capacity", headers=headers)
+        capacity = await client.get(
+            "/api/v1/container-terminal/capacity", headers=headers
+        )
         assert capacity.status_code == 200
         assert capacity.headers["Cache-Control"] == "private, no-store"
         assert capacity.json() == {
@@ -1561,12 +1601,14 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
             "max_active_sessions": 32,
         }
 
-        overflow_preview = client.post(
-            "/api/v1/container-terminal/preflight",
-            headers=headers,
-            json={"engagement_id": engagement.id},
+        overflow_preview = (
+            await client.post(
+                "/api/v1/container-terminal/preflight",
+                headers=headers,
+                json={"engagement_id": engagement.id},
+            )
         ).json()
-        overflow = client.post(
+        overflow = await client.post(
             "/api/v1/container-terminal/sessions",
             headers=headers,
             json={
@@ -1580,7 +1622,7 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
         assert overflow.json()["code"] == "terminal_capacity"
         assert overflow.headers["Cache-Control"] == "private, no-store"
 
-        singular = client.post(
+        singular = await client.post(
             f"/api/v1/engagements/{engagement.id}/container-terminal/recover",
             headers=headers,
         )
@@ -1588,7 +1630,7 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
         assert singular.json()["code"] == "multiple_terminals_active"
         assert singular.headers["Cache-Control"] == "private, no-store"
 
-        recovered = client.post(
+        recovered = await client.post(
             f"/api/v1/engagements/{engagement.id}/container-terminals/recover",
             headers=headers,
         )
@@ -1598,51 +1640,51 @@ def test_multi_terminal_recovery_capacity_and_targeted_close_api(tmp_path):
             item["session"]["session_id"] for item in recovered.json()["sessions"]
         ] == session_ids
 
-        unauthenticated = client.get("/api/v1/container-terminal/capacity")
+        unauthenticated = await client.get("/api/v1/container-terminal/capacity")
         assert unauthenticated.status_code == 401
-        stopped = client.delete(
+        stopped = await client.delete(
             f"/api/v1/container-terminals/{session_ids[0]}", headers=headers
         )
         assert stopped.status_code == 204
         assert stopped.headers["Cache-Control"] == "private, no-store"
         assert (
-            client.delete(
+            await client.delete(
                 f"/api/v1/container-terminals/{session_ids[0]}", headers=headers
-            ).status_code
-            == 204
-        )
+            )
+        ).status_code == 204
         assert (
-            client.get("/api/v1/container-terminal/capacity", headers=headers).json()[
-                "active_sessions"
-            ]
-            == 31
-        )
+            await client.get("/api/v1/container-terminal/capacity", headers=headers)
+        ).json()["active_sessions"] == 31
 
 
-def test_project_terminal_listing_and_conditional_stop_api(tmp_path):
-    store, project, _policy, _runner, _platform, service = fixture(tmp_path)
-    other = store.create(Engagement(name="Other Project"))
+async def test_project_terminal_listing_and_conditional_stop_api(tmp_path):
+    store, project, _policy, _runner, _platform, service = await fixture(tmp_path)
+    other = await store.create(Engagement(name="Other Project"))
     app = create_app(store, auth_token="test-token", container_terminal_service=service)
     headers = {"Authorization": "Bearer test-token"}
 
-    with TestClient(app) as client:
-        preview = client.post(
-            "/api/v1/container-terminal/preflight",
-            headers=headers,
-            json={"engagement_id": project.id},
+    async with TestClient(app) as client:
+        preview = (
+            await client.post(
+                "/api/v1/container-terminal/preflight",
+                headers=headers,
+                json={"engagement_id": project.id},
+            )
         ).json()
-        started = client.post(
-            "/api/v1/container-terminal/sessions",
-            headers=headers,
-            json={
-                "engagement_id": project.id,
-                "preview_token": preview["preview_token"],
-                "preview_fingerprint": preview["preview_fingerprint"],
-                "client_idempotency_key": "butler-list-test",
-            },
+        started = (
+            await client.post(
+                "/api/v1/container-terminal/sessions",
+                headers=headers,
+                json={
+                    "engagement_id": project.id,
+                    "preview_token": preview["preview_token"],
+                    "preview_fingerprint": preview["preview_fingerprint"],
+                    "client_idempotency_key": "butler-list-test",
+                },
+            )
         ).json()
         path = f"/api/v1/engagements/{project.id}/container-terminals"
-        listed = client.get(path, headers=headers)
+        listed = await client.get(path, headers=headers)
         assert listed.status_code == 200
         assert listed.headers["Cache-Control"] == "private, no-store"
         assert [item["session_id"] for item in listed.json()["sessions"]] == [
@@ -1650,24 +1692,23 @@ def test_project_terminal_listing_and_conditional_stop_api(tmp_path):
         ]
         assert "websocket_ticket" not in listed.text
         assert started["websocket_ticket"] not in listed.text
-        assert client.get(path).status_code == 401
+        assert (await client.get(path)).status_code == 401
         assert (
-            client.get(
+            await client.get(
                 f"/api/v1/engagements/{other.id}/container-terminals", headers=headers
-            ).json()["sessions"]
-            == []
-        )
+            )
+        ).json()["sessions"] == []
 
         stop_path = f"{path}/{started['session_id']}/close"
         expected = {"expected_created_at": listed.json()["sessions"][0]["created_at"]}
-        wrong_project = client.post(
+        wrong_project = await client.post(
             f"/api/v1/engagements/{other.id}/container-terminals/{started['session_id']}/close",
             headers=headers,
             json=expected,
         )
         assert wrong_project.status_code == 404
         assert wrong_project.json()["code"] == "terminal_not_found"
-        stale = client.post(
+        stale = await client.post(
             stop_path,
             headers=headers,
             json={"expected_created_at": "2000-01-01T00:00:00Z"},
@@ -1675,23 +1716,22 @@ def test_project_terminal_listing_and_conditional_stop_api(tmp_path):
         assert stale.status_code == 409
         assert stale.json()["code"] == "terminal_changed"
         assert (
-            client.post(
+            await client.post(
                 stop_path,
                 headers=headers,
                 json={"expected_created_at": "2000-01-01T00:00:00"},
-            ).status_code
-            == 422
-        )
+            )
+        ).status_code == 422
 
-        stopped = client.post(stop_path, headers=headers, json=expected)
+        stopped = await client.post(stop_path, headers=headers, json=expected)
         assert stopped.status_code == 200
         assert stopped.headers["Cache-Control"] == "private, no-store"
         assert stopped.json() == {"engagement_id": project.id, "sessions": []}
-        assert client.get(path, headers=headers).json()["sessions"] == []
+        assert (await client.get(path, headers=headers)).json()["sessions"] == []
 
 
-def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
-    store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+async def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
+    store, engagement, runner, _platform, service = await continuity_fixture(tmp_path)
     app = create_app(
         store,
         auth_token="test-token",
@@ -1700,40 +1740,44 @@ def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
     headers = {"Authorization": "Bearer test-token"}
     encoded_token = base64.urlsafe_b64encode(b"test-token").decode().rstrip("=")
 
-    with TestClient(app) as client:
-        preview = client.post(
-            "/api/v1/container-terminal/preflight",
-            headers=headers,
-            json={"engagement_id": engagement.id},
+    async with TestClient(app) as client:
+        preview = (
+            await client.post(
+                "/api/v1/container-terminal/preflight",
+                headers=headers,
+                json={"engagement_id": engagement.id},
+            )
         ).json()
-        session = client.post(
-            "/api/v1/container-terminal/sessions",
-            headers=headers,
-            json={
-                "engagement_id": engagement.id,
-                "preview_token": preview["preview_token"],
-                "preview_fingerprint": preview["preview_fingerprint"],
-                "client_idempotency_key": "api-reconnect",
-            },
+        session = (
+            await client.post(
+                "/api/v1/container-terminal/sessions",
+                headers=headers,
+                json={
+                    "engagement_id": engagement.id,
+                    "preview_token": preview["preview_token"],
+                    "preview_fingerprint": preview["preview_fingerprint"],
+                    "client_idempotency_key": "api-reconnect",
+                },
+            )
         ).json()
         initial_protocols = [
             "nebula.container-terminal.v1",
             f"nebula.auth.{encoded_token}",
             f"nebula.ticket.{session['websocket_ticket']}",
         ]
-        with client.websocket_connect(
+        async with client.websocket_connect(
             session["websocket_path"], subprotocols=initial_protocols
         ) as socket:
-            ready = socket.receive_json()
+            ready = await socket.receive_json()
             assert ready["type"] == "ready"
             original_reconnect_ticket = ready["reconnect_ticket"]
             runner.processes[0].emit_from_thread(b"visible before navigation\r\n")
-            displayed = socket.receive_json()
+            displayed = await socket.receive_json()
             assert displayed["sequence"] == 1
             assert base64.b64decode(displayed["data"]) == (
                 b"visible before navigation\r\n"
             )
-            socket.close()
+            (await socket.close())
             detach_deadline = time.monotonic() + 2
             while (
                 service._sessions[session["session_id"]].attachment is not None
@@ -1744,11 +1788,11 @@ def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
 
         assert len(runner.processes) == 1
         assert runner.processes[0].closed == 0
-        unauthenticated = client.post(
+        unauthenticated = await client.post(
             f"/api/v1/engagements/{engagement.id}/container-terminal/recover"
         )
         assert unauthenticated.status_code == 401
-        recovery_response = client.post(
+        recovery_response = await client.post(
             f"/api/v1/engagements/{engagement.id}/container-terminal/recover",
             headers=headers,
         )
@@ -1766,32 +1810,32 @@ def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
             f"nebula.auth.{encoded_token}",
             f"nebula.ticket.{recovery['session']['websocket_ticket']}",
         ]
-        with client.websocket_connect(
+        async with client.websocket_connect(
             session["websocket_path"] + "?after_sequence=0",
             subprotocols=reconnect_protocols,
         ) as socket:
-            reconnect_ready = socket.receive_json()
+            reconnect_ready = await socket.receive_json()
             assert reconnect_ready["type"] == "ready"
-            replayed = socket.receive_json()
+            replayed = await socket.receive_json()
             assert replayed["type"] == "output"
             assert replayed["sequence"] == 1
             assert base64.b64decode(replayed["data"]) == (
                 b"visible before navigation\r\n"
             )
-            missed = socket.receive_json()
+            missed = await socket.receive_json()
             assert missed["type"] == "output"
             assert missed["sequence"] == 2
             assert base64.b64decode(missed["data"]) == (
                 b"missed while view changed\r\n"
             )
-            socket.send_json({"type": "close"})
-            assert socket.receive_json() == {
+            (await socket.send_json({"type": "close"}))
+            assert (await socket.receive_json()) == {
                 "type": "exit",
                 "exit_code": None,
                 "outcome": "closed",
             }
 
-        inactive = client.post(
+        inactive = await client.post(
             f"/api/v1/engagements/{engagement.id}/container-terminal/recover",
             headers=headers,
         )
@@ -1834,7 +1878,7 @@ def _command_markers(
 async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
     database = tmp_path / "continuity.db"
     history_store = NebulaStore(database)
-    engagement = history_store.create(Engagement(name="History Continuity Lab"))
+    engagement = await history_store.create(Engagement(name="History Continuity Lab"))
     runner = ControllableTerminalRunner()
     platform = StubTerminalPlatform(
         tmp_path / "continuity-workspace",
@@ -1873,16 +1917,16 @@ async def test_command_parser_and_history_span_websocket_reconnects(tmp_path):
     )
 
     for _attempt in range(20):
-        records = history.list(engagement.id).records
+        records = (await history.list(engagement.id)).records
         if records:
             break
         await asyncio.sleep(0.01)
     assert [(item.command, item.cwd, item.exit_code) for item in records] == [
         ("printf reconnect", "/workspace", 4)
     ]
-    assert (
-        history.output_bytes(engagement.id, records[0].id, raw=True)[0] == output_secret
-    )
+    assert (await history.output_bytes(engagement.id, records[0].id, raw=True))[
+        0
+    ] == output_secret
     assert all(
         output_secret not in path.read_bytes()
         for path in database.parent.glob(database.name + "*")
@@ -1896,7 +1940,7 @@ async def test_terminal_audit_persistence_failure_emits_gap_and_retains_spool(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "audit-gap.db")
-    engagement = store.create(Engagement(name="Audit gap lab"))
+    engagement = await store.create(Engagement(name="Audit gap lab"))
     runner = ControllableTerminalRunner()
     platform = StubTerminalPlatform(
         tmp_path / "audit-gap-workspace",
@@ -1926,7 +1970,7 @@ async def test_terminal_audit_persistence_failure_emits_gap_and_retains_spool(
         ContainerTerminalOutput(1, b"result awaiting persistence")
     )
     for _attempt in range(50):
-        events = store.replay_operation_events(started.session_id)
+        events = await store.replay_operation_events(started.session_id)
         if any(event.event_type == "container_terminal.audit_gap" for event in events):
             break
         await asyncio.sleep(0.01)
@@ -1938,7 +1982,7 @@ async def test_terminal_audit_persistence_failure_emits_gap_and_retains_spool(
     assert (
         gaps[0].payload["command_sha256"] == hashlib.sha256(b"printf gap").hexdigest()
     )
-    assert history.status(engagement.id).audit_gap_count == 1
+    assert (await history.status(engagement.id)).audit_gap_count == 1
     assert history.spool_root is not None
     assert sorted(path.suffix for path in history.spool_root.iterdir()) == [
         ".json",
@@ -1947,7 +1991,7 @@ async def test_terminal_audit_persistence_failure_emits_gap_and_retains_spool(
     await service.close_attachment(attachment)
 
 
-def test_terminal_stream_strips_split_markers_and_persists_audited_result(
+async def test_terminal_stream_strips_split_markers_and_persists_audited_result(
     tmp_path,
 ):
     nonce = "terminalstreamnonce123"
@@ -1963,7 +2007,7 @@ def test_terminal_stream_strips_split_markers_and_persists_audited_result(
         malformed[12:] + b"\r\nprompt$ ",
         b"",
     ]
-    store, engagement, _policy, _runner, platform, service = fixture(
+    store, engagement, _policy, _runner, platform, service = await fixture(
         tmp_path,
         chunks=chunks,
         audit_nonce=nonce,
@@ -1984,21 +2028,25 @@ def test_terminal_stream_strips_split_markers_and_persists_audited_result(
     )
     headers = {"Authorization": "Bearer test-token"}
 
-    with TestClient(app) as client:
-        preview = client.post(
-            "/api/v1/container-terminal/preflight",
-            headers=headers,
-            json={"engagement_id": engagement.id},
+    async with TestClient(app) as client:
+        preview = (
+            await client.post(
+                "/api/v1/container-terminal/preflight",
+                headers=headers,
+                json={"engagement_id": engagement.id},
+            )
         ).json()
-        started = client.post(
-            "/api/v1/container-terminal/sessions",
-            headers=headers,
-            json={
-                "engagement_id": engagement.id,
-                "preview_token": preview["preview_token"],
-                "preview_fingerprint": preview["preview_fingerprint"],
-                "client_idempotency_key": "history-stream",
-            },
+        started = (
+            await client.post(
+                "/api/v1/container-terminal/sessions",
+                headers=headers,
+                json={
+                    "engagement_id": engagement.id,
+                    "preview_token": preview["preview_token"],
+                    "preview_fingerprint": preview["preview_fingerprint"],
+                    "client_idempotency_key": "history-stream",
+                },
+            )
         ).json()
         encoded_token = base64.urlsafe_b64encode(b"test-token").decode().rstrip("=")
         protocols = [
@@ -2007,12 +2055,12 @@ def test_terminal_stream_strips_split_markers_and_persists_audited_result(
             f"nebula.ticket.{started['websocket_ticket']}",
         ]
         displayed = bytearray()
-        with client.websocket_connect(
+        async with client.websocket_connect(
             started["websocket_path"], subprotocols=protocols
         ) as socket:
-            assert socket.receive_json()["type"] == "ready"
+            assert (await socket.receive_json())["type"] == "ready"
             while True:
-                message = socket.receive_json()
+                message = await socket.receive_json()
                 if message["type"] == "output":
                     displayed.extend(base64.b64decode(message["data"]))
                     continue
@@ -2026,7 +2074,7 @@ def test_terminal_stream_strips_split_markers_and_persists_audited_result(
                 break
 
         assert bytes(displayed) == output_secret + malformed + b"\r\nprompt$ "
-        history = client.get(
+        history = await client.get(
             f"/api/v1/engagements/{engagement.id}/terminal/commands",
             headers=headers,
         )
@@ -2043,11 +2091,13 @@ def test_terminal_stream_strips_split_markers_and_persists_audited_result(
         assert record["raw_output_available"] is True
 
     destination = tmp_path / "stream-project.nebula.zip"
-    export_engagement(
-        engagement_id=engagement.id,
-        destination=destination,
-        store=store,
-        artifact_store=artifacts,
+    (
+        await export_engagement(
+            engagement_id=engagement.id,
+            destination=destination,
+            store=store,
+            artifact_store=artifacts,
+        )
     )
     with zipfile.ZipFile(destination) as archive:
         archived_payloads = [archive.read(name) for name in archive.namelist()]
@@ -2170,7 +2220,7 @@ def test_bash_debug_frames_cover_aliases_functions_and_executed_branches_only():
 
 @async_test
 async def test_large_workspace_terminal_readiness_does_not_scan(tmp_path, monkeypatch):
-    _, engagement, _, _, platform, service = fixture(tmp_path)
+    _, engagement, _, _, platform, service = await fixture(tmp_path)
     with (platform.workspace / "large.bin").open("wb") as stream:
         stream.truncate(6 * 1024**3)
     for index in range(50_001):
@@ -2180,7 +2230,7 @@ async def test_large_workspace_terminal_readiness_does_not_scan(tmp_path, monkey
         raise AssertionError("terminal readiness must not walk the project")
 
     monkeypatch.setattr("os.walk", no_walk)
-    capabilities = service.capabilities(engagement.id)
+    capabilities = await service.capabilities(engagement.id)
     assert capabilities.ready and capabilities.workspace_max_entries is None
     preview = await service.preflight(
         ContainerTerminalPreflightRequest(engagement_id=engagement.id)
@@ -2190,7 +2240,7 @@ async def test_large_workspace_terminal_readiness_does_not_scan(tmp_path, monkey
 
 @async_test
 async def test_cancelled_attach_releases_a_launching_session(tmp_path):
-    store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    store, engagement, runner, _platform, service = await continuity_fixture(tmp_path)
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
     started = await service.start(
@@ -2226,7 +2276,7 @@ async def test_cancelled_attach_releases_a_launching_session(tmp_path):
     async with service.guard_workspace_operation(engagement.id):
         pass
     assert (await service.recover(engagement.id)).active is False
-    events = store.replay_operation_events(started.session_id)
+    events = await store.replay_operation_events(started.session_id)
     assert events[-1].event_type == "container_terminal.terminal"
     assert events[-1].payload["status"] == "failed"
     assert events[-1].payload["error_code"] == "launch_cancelled"
@@ -2242,7 +2292,7 @@ async def test_cancelled_attach_releases_a_launching_session(tmp_path):
 
 @async_test
 async def test_idempotency_key_can_be_reused_after_the_session_finishes(tmp_path):
-    _store, engagement, _runner, _platform, service = continuity_fixture(tmp_path)
+    _store, engagement, _runner, _platform, service = await continuity_fixture(tmp_path)
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
     start_request = ContainerTerminalStartRequest(
@@ -2264,3 +2314,6 @@ async def test_idempotency_key_can_be_reused_after_the_session_finishes(tmp_path
     assert len(service._idempotency) == 1
     await service.close(retried.session_id)
     assert service._idempotency == {}
+
+
+pytestmark = pytest.mark.anyio

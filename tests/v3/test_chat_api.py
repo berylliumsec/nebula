@@ -1,9 +1,14 @@
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import base64
 import json
 from io import BytesIO
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from PIL import Image
 
 import nebula.v3.chat as chat_module
@@ -117,11 +122,11 @@ def _auth() -> dict[str, str]:
     return {"Authorization": "Bearer test-token"}
 
 
-def test_provider_chat_keeps_running_after_the_viewer_detaches(tmp_path):
+async def test_provider_chat_keeps_running_after_the_viewer_detaches(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "detached-provider.db")
-        engagement = store.create(Engagement(id="project-a", name="Project A"))
-        profile = store.create(
+        engagement = await store.create(Engagement(id="project-a", name="Project A"))
+        profile = await store.create(
             ProviderProfile(
                 id="provider-a",
                 name="Local provider",
@@ -142,7 +147,7 @@ def test_provider_chat_keeps_running_after_the_viewer_detaches(tmp_path):
                 stream=True,
             )
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         follower = service.follow_provider_turn(turn_id)
         assert (await anext(follower))[0] == "queued"
         assert (await anext(follower))[0] == "admitted"
@@ -153,29 +158,30 @@ def test_provider_chat_keeps_running_after_the_viewer_detaches(tmp_path):
         assert service.has_active_provider_turn(turn_id) is True
         provider.release.set()
         for _ in range(100):
-            if store.get(ChatTurn, turn_id).status.value == "complete":
+            if (await store.get(ChatTurn, turn_id)).status.value == "complete":
                 break
             await asyncio.sleep(0.01)
 
-        turn = store.get(ChatTurn, turn_id)
+        turn = await store.get(ChatTurn, turn_id)
         assert turn.status.value == "complete"
         assert turn.final_message_id
         assert [
-            message.content for message in service.session_messages(turn.session_id)
+            message.content
+            for message in (await service.session_messages(turn.session_id))
         ] == [
             "Keep going",
             "Still working. Finished safely.",
         ]
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_stopping_provider_chat_cancels_the_core_owned_turn(tmp_path):
+async def test_stopping_provider_chat_cancels_the_core_owned_turn(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "stopped-provider.db")
-        engagement = store.create(Engagement(id="project-a", name="Project A"))
-        profile = store.create(
+        engagement = await store.create(Engagement(id="project-a", name="Project A"))
+        profile = await store.create(
             ProviderProfile(
                 id="provider-a",
                 name="Local provider",
@@ -196,7 +202,7 @@ def test_stopping_provider_chat_cancels_the_core_owned_turn(tmp_path):
                 stream=True,
             )
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         follower = service.follow_provider_turn(turn_id)
         assert (await anext(follower))[0] == "queued"
         assert (await anext(follower))[0] == "admitted"
@@ -206,18 +212,18 @@ def test_stopping_provider_chat_cancels_the_core_owned_turn(tmp_path):
         stopped = await service.stop_provider_turn(turn_id)
 
         assert stopped.status.value == "cancelled"
-        assert store.get(ChatTurn, turn_id).status.value == "cancelled"
+        assert (await store.get(ChatTurn, turn_id)).status.value == "cancelled"
         await follower.aclose()
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_completed_provider_events_wait_for_a_late_follower(tmp_path):
+async def test_completed_provider_events_wait_for_a_late_follower(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "late-provider-follower.db")
-        engagement = store.create(Engagement(id="project-a", name="Project A"))
-        profile = store.create(
+        engagement = await store.create(Engagement(id="project-a", name="Project A"))
+        profile = await store.create(
             ProviderProfile(
                 id="provider-a",
                 name="Local provider",
@@ -239,9 +245,9 @@ def test_completed_provider_events_wait_for_a_late_follower(tmp_path):
                 stream=True,
             )
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         for _ in range(100):
-            if store.get(ChatTurn, turn_id).status.value == "complete":
+            if (await store.get(ChatTurn, turn_id)).status.value == "complete":
                 break
             await asyncio.sleep(0.01)
 
@@ -264,14 +270,16 @@ def test_completed_provider_events_wait_for_a_late_follower(tmp_path):
         assert runtime.cleanup_task is not None
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypatch):
+async def test_chat_image_upload_preview_and_arbitrary_message_fork(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "chat-media.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-media", name="Media"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-media", name="Media"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-media",
             name="Local provider",
@@ -291,7 +299,7 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
 
     image_buffer = BytesIO()
     Image.new("RGBA", (12, 8), (20, 40, 80, 220)).save(image_buffer, format="PNG")
-    upload = client.post(
+    upload = await client.post(
         "/api/v1/chat/images",
         headers=_auth(),
         json={
@@ -303,7 +311,7 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     )
     assert upload.status_code == 201
     uploaded = upload.json()
-    preview = client.get(
+    preview = await client.get(
         f"/api/v1/chat/images/{uploaded['preview_artifact_id']}/preview",
         headers=_auth(),
     )
@@ -311,27 +319,28 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert preview.headers["cache-control"] == "private, no-store"
     assert preview.content.startswith(b"\x89PNG")
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/chat/images/{uploaded['artifact_id']}/preview", headers=_auth()
-        ).status_code
-        == 404
-    )
+        )
+    ).status_code == 404
 
-    completion = client.post(
-        "/api/v1/chat/completions",
-        headers=_auth(),
-        json={
-            "engagement_id": engagement.id,
-            "provider_id": profile.id,
-            "messages": [{"role": "user", "content": "fork me"}],
-        },
+    completion = (
+        await client.post(
+            "/api/v1/chat/completions",
+            headers=_auth(),
+            json={
+                "engagement_id": engagement.id,
+                "provider_id": profile.id,
+                "messages": [{"role": "user", "content": "fork me"}],
+            },
+        )
     ).json()
     session_id = completion["session_id"]
     boundary = min(
-        store.list_entities(ChatMessage, engagement_id=engagement.id, limit=10),
+        (await store.list_entities(ChatMessage, engagement_id=engagement.id, limit=10)),
         key=lambda message: message.sequence,
     )
-    fork = client.post(
+    fork = await client.post(
         f"/api/v1/chat/sessions/{session_id}/fork",
         headers=_auth(),
         json={"through_message_id": boundary.id, "title": "Branch"},
@@ -339,13 +348,15 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert fork.status_code == 201
     assert fork.json()["parent_session_id"] == session_id
     assert fork.json()["metadata"]["side_chat"] is False
-    copied = client.get(
-        f"/api/v1/chat/sessions/{fork.json()['id']}/messages", headers=_auth()
+    copied = (
+        await client.get(
+            f"/api/v1/chat/sessions/{fork.json()['id']}/messages", headers=_auth()
+        )
     ).json()
     assert len(copied) == 1
     assert copied[0]["source_message_id"] == boundary.id
 
-    side = client.post(
+    side = await client.post(
         f"/api/v1/chat/sessions/{session_id}/fork",
         headers=_auth(),
         json={
@@ -357,21 +368,23 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert side.status_code == 201
     assert side.json()["metadata"]["side_chat"] is True
     assert side.json()["parent_session_id"] == session_id
-    side_messages = client.get(
-        f"/api/v1/chat/sessions/{side.json()['id']}/messages", headers=_auth()
+    side_messages = (
+        await client.get(
+            f"/api/v1/chat/sessions/{side.json()['id']}/messages", headers=_auth()
+        )
     ).json()
     assert [message["source_message_id"] for message in side_messages] == [boundary.id]
 
     original_transaction = store.transaction
     fork_transactions = 0
 
-    def count_fork_transaction():
+    async def count_fork_transaction():
         nonlocal fork_transactions
         fork_transactions += 1
         return original_transaction()
 
     monkeypatch.setattr(store, "transaction", count_fork_transaction)
-    latest_side = client.post(
+    latest_side = await client.post(
         f"/api/v1/chat/sessions/{session_id}/fork",
         headers=_auth(),
         json={"through_latest": True, "side_chat": True},
@@ -380,35 +393,41 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert latest_side.status_code == 201, latest_side.text
     assert fork_transactions == 1
     assert latest_side.json()["metadata"]["inherited_message_count"] == 2
-    latest_messages = client.get(
-        f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages", headers=_auth()
+    latest_messages = (
+        await client.get(
+            f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages",
+            headers=_auth(),
+        )
     ).json()
     assert [message["source_message_id"] for message in latest_messages] == [
         message["id"]
-        for message in client.get(
-            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        for message in (
+            await client.get(
+                f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+            )
         ).json()
     ]
     assert (
-        client.post(
+        await client.post(
             f"/api/v1/chat/sessions/{session_id}/fork",
             headers=_auth(),
             json={"through_latest": True},
-        ).status_code
-        == 422
-    )
+        )
+    ).status_code == 422
 
-    store.create(
-        ChatMessage(
-            engagement_id=engagement.id,
-            session_id=session_id,
-            sequence=3,
-            role=ChatRole.ASSISTANT,
-            content="A later saved answer.",
-            reasoning="Large saved reasoning stays in Core.",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=session_id,
+                sequence=3,
+                role=ChatRole.ASSISTANT,
+                content="A later saved answer.",
+                reasoning="Large saved reasoning stays in Core.",
+            )
         )
     )
-    recent = client.get(
+    recent = await client.get(
         f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true&limit=2",
         headers=_auth(),
     )
@@ -416,30 +435,29 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert [item["sequence"] for item in recent.json()] == [2, 3]
     assert recent.json()[-1]["reasoning"] == ""
     assert recent.json()[-1]["metadata"]["reasoning_available"] is True
-    older = client.get(
+    older = await client.get(
         f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true&limit=2"
         f"&before_message_id={recent.json()[0]['id']}",
         headers=_auth(),
     )
     assert [item["sequence"] for item in older.json()] == [1]
-    reasoning = client.get(
+    reasoning = await client.get(
         f"/api/v1/chat/sessions/{session_id}/messages/{recent.json()[-1]['id']}/reasoning",
         headers=_auth(),
     )
     assert reasoning.json() == {"reasoning": "Large saved reasoning stays in Core."}
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages/{recent.json()[-1]['id']}/reasoning",
             headers=_auth(),
-        ).status_code
-        == 404
-    )
+        )
+    ).status_code == 404
 
 
-def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path):
+async def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path):
     store = NebulaStore(tmp_path / "active-provider-side-chat.db")
-    engagement = store.create(Engagement(name="Active side chat"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Active side chat"))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
@@ -448,7 +466,7 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
             privacy={"local_only": True},
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Parent",
@@ -458,17 +476,23 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
             metadata={"tools_enabled": True, "parent_only_context": "never copy"},
         )
     )
-    store.create(
-        ChatDecision(
-            engagement_id=engagement.id, session_id=parent.id, text="Parent decision"
+    (
+        await store.create(
+            ChatDecision(
+                engagement_id=engagement.id,
+                session_id=parent.id,
+                text="Parent decision",
+            )
         )
     )
-    store.create(
-        ChatDecision(
-            engagement_id=engagement.id, scope="project", text="Project decision"
+    (
+        await store.create(
+            ChatDecision(
+                engagement_id=engagement.id, scope="project", text="Project decision"
+            )
         )
     )
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             engagement_id=engagement.id,
             session_id=parent.id,
@@ -476,7 +500,7 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
             completion_criteria=["Report findings"],
         )
     )
-    earlier = store.create(
+    earlier = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=parent.id,
@@ -486,7 +510,7 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
             metadata={"parent_goal_id": goal.id},
         )
     )
-    current = store.create(
+    current = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=parent.id,
@@ -495,7 +519,7 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
             content="Question sent during the active turn",
         )
     )
-    active = store.create(
+    active = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=parent.id,
@@ -508,11 +532,11 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
     client = TestClient(create_app(store, auth_token="test-token"))
     endpoint = f"/api/v1/chat/sessions/{parent.id}/fork"
 
-    ordinary = client.post(
+    ordinary = await client.post(
         endpoint, headers=_auth(), json={"through_message_id": current.id}
     )
     assert ordinary.status_code == 409
-    side = client.post(
+    side = await client.post(
         endpoint,
         headers=_auth(),
         json={
@@ -525,7 +549,9 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
     assert side.json()["metadata"]["side_chat"] is True
     assert "tools_enabled" not in side.json()["metadata"]
     assert "parent_only_context" not in side.json()["metadata"]
-    copied = client.get(f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth())
+    copied = await client.get(
+        f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth()
+    )
     assert [item["source_message_id"] for item in copied.json()] == [
         earlier.id,
         current.id,
@@ -533,14 +559,13 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
     assert "parent_goal_id" not in copied.json()[0]["metadata"]
     from nebula.v3.chat_decisions import decision_snapshot
 
-    assert decision_snapshot(store, side_id, engagement.id) == []
+    assert (await decision_snapshot(store, side_id, engagement.id)) == []
     assert (
-        store.find_entities(
+        await store.find_entities(
             ChatDecision, {"session_id": side_id}, engagement_id=engagement.id
         )
-        == []
-    )
-    prepared = ChatService(
+    ) == []
+    prepared = await ChatService(
         store, provider_factory=lambda _: ApiChatProvider(profile.id)
     ).prepare(
         ChatCompletionRequest(
@@ -565,39 +590,42 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
         "Side-only question",
     ]
     assert (
-        store.find_entities(
+        await store.find_entities(
             ChatGoal, {"session_id": side_id}, engagement_id=engagement.id
         )
-        == []
-    )
-    assert store.get(ChatGoal, goal.id).session_id == parent.id
-    assert store.get(ChatTurn, active.id).status == ChatTurnStatus.ROUTING
+    ) == []
+    assert (await store.get(ChatGoal, goal.id)).session_id == parent.id
+    assert (await store.get(ChatTurn, active.id)).status == ChatTurnStatus.ROUTING
 
-    store.update(ChatTurn, active.id, {"status": ChatTurnStatus.COMPLETE})
-    ordinary = client.post(
+    (await store.update(ChatTurn, active.id, {"status": ChatTurnStatus.COMPLETE}))
+    ordinary = await client.post(
         endpoint, headers=_auth(), json={"through_message_id": current.id}
     )
     assert ordinary.status_code == 201, ordinary.text
-    ordinary_goals = store.find_entities(
+    ordinary_goals = await store.find_entities(
         ChatGoal, {"session_id": ordinary.json()["id"]}, engagement_id=engagement.id
     )
     assert len(ordinary_goals) == 1
     assert ordinary_goals[0].objective == goal.objective
 
 
-def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_path):
+async def test_side_chat_snapshots_active_harness_with_independent_vendor_session(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "active-harness-side-chat.db")
-    engagement = store.create(Engagement(name="Active harness side chat"))
-    store.create(
-        HarnessProfile(
-            id="harness-1",
-            name="Harness",
-            kind="codex_app_server",
-            executable="/bin/true",
-            default_model="model-a",
+    engagement = await store.create(Engagement(name="Active harness side chat"))
+    (
+        await store.create(
+            HarnessProfile(
+                id="harness-1",
+                name="Harness",
+                kind="codex_app_server",
+                executable="/bin/true",
+                default_model="model-a",
+            )
         )
     )
-    vendor = store.create(
+    vendor = await store.create(
         HarnessSession(
             engagement_id=engagement.id,
             harness_profile_id="harness-1",
@@ -607,7 +635,7 @@ def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_
             metadata={"parent_only_context": "never copy"},
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Harness parent",
@@ -617,7 +645,7 @@ def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_
             model="model-a",
         )
     )
-    current = store.create(
+    current = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=parent.id,
@@ -626,7 +654,7 @@ def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_
             content="Question sent during the active harness turn",
         )
     )
-    active = store.create(
+    active = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=parent.id,
@@ -638,11 +666,11 @@ def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_
     client = TestClient(create_app(store, auth_token="test-token"))
     endpoint = f"/api/v1/chat/sessions/{parent.id}/fork"
 
-    ordinary = client.post(
+    ordinary = await client.post(
         endpoint, headers=_auth(), json={"through_message_id": current.id}
     )
     assert ordinary.status_code == 409
-    side = client.post(
+    side = await client.post(
         endpoint,
         headers=_auth(),
         json={
@@ -655,23 +683,28 @@ def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_
     child_vendor_id = side.json()["harness_session_id"]
     assert child_vendor_id != vendor.id
     assert side.json()["metadata"]["harness_context_handoff_pending"] is True
-    side_vendor = store.get(HarnessSession, child_vendor_id)
+    side_vendor = await store.get(HarnessSession, child_vendor_id)
     assert side_vendor.mcp_server_ids == []
     assert "parent_only_context" not in side_vendor.metadata
-    copied = client.get(f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth())
+    copied = await client.get(
+        f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth()
+    )
     assert [item["source_message_id"] for item in copied.json()] == [current.id]
     assert (
-        store.get(HarnessSession, child_vendor_id).status
-        == HarnessSessionStatus.STARTING
-    )
-    assert store.get(HarnessSession, vendor.id).status == HarnessSessionStatus.RUNNING
-    assert store.get(ChatTurn, active.id).status == ChatTurnStatus.ROUTING
+        await store.get(HarnessSession, child_vendor_id)
+    ).status == HarnessSessionStatus.STARTING
+    assert (
+        await store.get(HarnessSession, vendor.id)
+    ).status == HarnessSessionStatus.RUNNING
+    assert (await store.get(ChatTurn, active.id)).status == ChatTurnStatus.ROUTING
 
 
-def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatch):
+async def test_chat_session_rewind_edits_in_place_without_forking(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "chat-rewind.db")
-    engagement = store.create(Engagement(id="eng-rewind", name="Rewind"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-rewind", name="Rewind"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-rewind",
             name="Local provider",
@@ -687,8 +720,8 @@ def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatc
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    def send(content: str, session_id: str | None) -> str:
-        response = client.post(
+    async def send(content: str, session_id: str | None) -> str:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers=_auth(),
             json={
@@ -702,24 +735,27 @@ def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatc
         assert response.status_code == 200, response.text
         return response.json()["session_id"]
 
-    session_id = send("Summarize the open findings.", None)
-    assert send("Any update on the certificate?", session_id) == session_id
-    messages = client.get(
-        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+    session_id = await send("Summarize the open findings.", None)
+    assert (await send("Any update on the certificate?", session_id)) == session_id
+    messages = (
+        await client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        )
     ).json()
     assert len(messages) == 4
 
     assert (
-        client.post(
+        await client.post(
             f"/api/v1/chat/sessions/{session_id}/rewind",
             headers=_auth(),
             json={"before_message_id": messages[1]["id"]},
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
 
-    current = client.get(f"/api/v1/chat-sessions/{session_id}", headers=_auth()).json()
-    stale = client.post(
+    current = (
+        await client.get(f"/api/v1/chat-sessions/{session_id}", headers=_auth())
+    ).json()
+    stale = await client.post(
         f"/api/v1/chat/sessions/{session_id}/rewind",
         headers=_auth(),
         json={
@@ -731,12 +767,14 @@ def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatc
     assert "current revision" in stale.text
     assert [
         item["id"]
-        for item in client.get(
-            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        for item in (
+            await client.get(
+                f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+            )
         ).json()
     ] == [item["id"] for item in messages]
 
-    rewind = client.post(
+    rewind = await client.post(
         f"/api/v1/chat/sessions/{session_id}/rewind",
         headers=_auth(),
         json={
@@ -754,35 +792,42 @@ def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatc
         item["id"] for item in messages[2:]
     ]
 
-    retained = client.get(
-        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+    retained = (
+        await client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        )
     ).json()
     assert [item["id"] for item in retained] == [item["id"] for item in messages[:2]]
-    everything = client.get(
-        f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true",
-        headers=_auth(),
+    everything = (
+        await client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true",
+            headers=_auth(),
+        )
     ).json()
     assert [item["id"] for item in everything] == [item["id"] for item in messages]
     assert everything[2]["metadata"]["retracted_reason"] == "operator_edit"
     assert (
-        client.post(
+        await client.post(
             f"/api/v1/chat/sessions/{session_id}/rewind",
             headers=_auth(),
             json={
                 "before_message_id": messages[2]["id"],
                 "expected_revision": current["revision"],
             },
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
     assert (
         everything[2]["metadata"]["retraction_id"]
         == everything[3]["metadata"]["retraction_id"]
     )
 
-    assert send("Any update on the certificate and IKEv1?", session_id) == session_id
-    after = client.get(
-        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+    assert (
+        await send("Any update on the certificate and IKEv1?", session_id)
+    ) == session_id
+    after = (
+        await client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        )
     ).json()
     assert [(item["sequence"], item["role"]) for item in after] == [
         (1, "user"),
@@ -791,25 +836,29 @@ def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatc
         (6, "assistant"),
     ]
     assert after[2]["content"] == "Any update on the certificate and IKEv1?"
-    sessions = client.get(
-        f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
+    sessions = (
+        await client.get(
+            f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
+        )
     ).json()
     assert [item["id"] for item in sessions] == [session_id]
 
 
-def test_device_pairing_is_single_use_cookie_authenticated_and_revocable(tmp_path):
+async def test_device_pairing_is_single_use_cookie_authenticated_and_revocable(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "pairing.db")
     app = create_app(store, auth_token="test-token")
     client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
 
-    created = client.post(
+    created = await client.post(
         "/api/v1/auth/pairings",
         headers=_auth(),
         json={"name": "Phone"},
     )
     assert created.status_code == 200
     pairing = created.json()
-    redeemed = client.post(
+    redeemed = await client.post(
         "/api/v1/auth/pairings/redeem",
         json={
             "secret": pairing["secret"],
@@ -818,8 +867,8 @@ def test_device_pairing_is_single_use_cookie_authenticated_and_revocable(tmp_pat
         },
     )
     assert redeemed.status_code == 200
-    assert client.get("/api/v1/auth/devices").status_code == 200
-    replay = client.post(
+    assert (await client.get("/api/v1/auth/devices")).status_code == 200
+    replay = await client.post(
         "/api/v1/auth/pairings/redeem",
         json={
             "secret": pairing["secret"],
@@ -830,18 +879,20 @@ def test_device_pairing_is_single_use_cookie_authenticated_and_revocable(tmp_pat
     assert replay.status_code == 401
     device_id = redeemed.json()["device"]["id"]
     csrf = redeemed.json()["csrf_token"]
-    revoked = client.delete(
+    revoked = await client.delete(
         f"/api/v1/auth/devices/{device_id}",
         headers={"X-Nebula-CSRF": csrf, "Origin": "https://127.0.0.1"},
     )
     assert revoked.status_code == 204
-    assert client.get("/api/v1/auth/devices").status_code == 401
+    assert (await client.get("/api/v1/auth/devices")).status_code == 401
 
 
-def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkeypatch):
+async def test_chat_api_completes_streams_and_exposes_durable_history(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "chat-api.db")
-    engagement = store.create(Engagement(id="eng-a", name="Chat API"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Chat API"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-a",
             name="Local provider",
@@ -856,8 +907,8 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    assert client.post("/api/v1/chat/completions", json={}).status_code == 401
-    response = client.post(
+    assert (await client.post("/api/v1/chat/completions", json={})).status_code == 401
+    response = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -874,7 +925,7 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert completion["message"]["id"]
     assert completion["usage"]["total_tokens"] == 5
     session_id = completion["session_id"]
-    history = client.get(
+    history = await client.get(
         f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
     )
     assert history.status_code == 200
@@ -883,7 +934,9 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         (2, "assistant"),
     ]
     assert history.json()[1]["id"] == completion["message"]["id"]
-    context = client.get(f"/api/v1/chat/sessions/{session_id}/context", headers=_auth())
+    context = await client.get(
+        f"/api/v1/chat/sessions/{session_id}/context", headers=_auth()
+    )
     assert context.status_code == 200
     assert context.json()["status"] == "not_needed"
     assert context.json()["context_window"] == 8192
@@ -895,48 +948,54 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         context.json()["context_window"] - context.json()["max_output_tokens"]
     )
     assert context.json()["input_limit_binds"] is False
-    assert client.get(f"/api/v1/chat/sessions/{session_id}/context").status_code == 401
+    assert (
+        await client.get(f"/api/v1/chat/sessions/{session_id}/context")
+    ).status_code == 401
 
-    store.create(
-        ContextSnapshot(
-            engagement_id=engagement.id,
-            owner_type=ContextOwnerType.CHAT_SESSION,
-            owner_id=session_id,
-            status=ContextSnapshotStatus.READY,
-            compacted_through=1,
-            memory=ContextMemory(summary="Derived API memory"),
-            source_references=[
-                ContextSourceReference(
-                    source_kind="chat_message",
-                    source_id=history.json()[0]["id"],
-                    sequence=1,
-                )
-            ],
-            provider_profile_id=profile.id,
-            model="model-a",
-            prompt_version="test-v1",
-            source_sha256="0" * 64,
-            usage={"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+    (
+        await store.create(
+            ContextSnapshot(
+                engagement_id=engagement.id,
+                owner_type=ContextOwnerType.CHAT_SESSION,
+                owner_id=session_id,
+                status=ContextSnapshotStatus.READY,
+                compacted_through=1,
+                memory=ContextMemory(summary="Derived API memory"),
+                source_references=[
+                    ContextSourceReference(
+                        source_kind="chat_message",
+                        source_id=history.json()[0]["id"],
+                        sequence=1,
+                    )
+                ],
+                provider_profile_id=profile.id,
+                model="model-a",
+                prompt_version="test-v1",
+                source_sha256="0" * 64,
+                usage={"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+            )
         )
     )
     # A conversation within the target is sent whole, so a snapshot prepared
     # for it (by background compaction) is not what the next request uses.
-    prepared_context = client.get(
-        f"/api/v1/chat/sessions/{session_id}/context", headers=_auth()
+    prepared_context = (
+        await client.get(f"/api/v1/chat/sessions/{session_id}/context", headers=_auth())
     ).json()
     assert prepared_context["status"] == "not_needed"
     assert prepared_context["snapshot"] is None
     assert prepared_context["compacted_through"] == 0
     # Once the conversation outgrows the target, the snapshot serves it.
-    first = store.get(ChatMessage, history.json()[0]["id"])
-    store.update(
-        ChatMessage,
-        first.id,
-        {"content": "Hello " + "earlier detail " * 1_200},
-        expected_revision=first.revision,
+    first = await store.get(ChatMessage, history.json()[0]["id"])
+    (
+        await store.update(
+            ChatMessage,
+            first.id,
+            {"content": "Hello " + "earlier detail " * 1_200},
+            expected_revision=first.revision,
+        )
     )
-    ready_context = client.get(
-        f"/api/v1/chat/sessions/{session_id}/context", headers=_auth()
+    ready_context = (
+        await client.get(f"/api/v1/chat/sessions/{session_id}/context", headers=_auth())
     ).json()
     assert ready_context["status"] == "ready"
     assert ready_context["compacted_through"] == 1
@@ -948,16 +1007,17 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert ready_context["compaction_usage"]["total_tokens"] == 6
     assert ready_context["source_references"][0]["sequence"] == 1
     assert (
-        client.post("/api/v1/context-snapshots", headers=_auth(), json={}).status_code
-        == 404
-    )
+        await client.post("/api/v1/context-snapshots", headers=_auth(), json={})
+    ).status_code == 404
     # Reusable leaf memories are Core's own cache: no generic routes.
-    assert client.get("/api/v1/context-segments", headers=_auth()).status_code == 404
-    sessions = client.get(
+    assert (
+        await client.get("/api/v1/context-segments", headers=_auth())
+    ).status_code == 404
+    sessions = await client.get(
         f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
     )
     assert [item["id"] for item in sessions.json()] == [session_id]
-    renamed = client.patch(
+    renamed = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={
@@ -968,8 +1028,10 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert renamed.status_code == 200
     assert renamed.json()["title"] == "Renamed API conversation"
     assert renamed.json()["revision"] == sessions.json()[0]["revision"] + 1
-    assert store.get(ChatSession, session_id).title == "Renamed API conversation"
-    mcp = store.create(
+    assert (
+        await store.get(ChatSession, session_id)
+    ).title == "Renamed API conversation"
+    mcp = await store.create(
         McpServerProfile(
             id="persisted-mcp",
             name="persisted-mcp",
@@ -978,7 +1040,7 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
             enabled=True,
         )
     )
-    settings = client.patch(
+    settings = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={
@@ -992,8 +1054,10 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert settings.json()["metadata"]["mcp_server_ids"] == [mcp.id]
     assert settings.json()["metadata"]["hook_ids"] == ["audit"]
     assert settings.json()["metadata"]["reasoning_effort"] == "high"
-    assert store.get(ChatSession, session_id).metadata["mcp_server_ids"] == [mcp.id]
-    priority = client.patch(
+    assert (await store.get(ChatSession, session_id)).metadata["mcp_server_ids"] == [
+        mcp.id
+    ]
+    priority = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={
@@ -1005,25 +1069,24 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert priority.status_code == 200, priority.text
     assert priority.json()["metadata"]["pinned"] is True
     assert priority.json()["metadata"]["flag_color"] == "red"
-    assert store.get(ChatSession, session_id).metadata["flag_color"] == "red"
+    assert (await store.get(ChatSession, session_id)).metadata["flag_color"] == "red"
     assert (
-        client.patch(
+        await client.patch(
             f"/api/v1/chat-sessions/{session_id}",
             headers=_auth(),
             json={
                 "flag_color": "ultraviolet",
                 "expected_revision": priority.json()["revision"],
             },
-        ).status_code
-        == 422
-    )
-    stale_rename = client.patch(
+        )
+    ).status_code == 422
+    stale_rename = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={"title": "Stale title", "expected_revision": 1},
     )
     assert stale_rename.status_code == 409
-    archived = client.patch(
+    archived = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={"archived": True, "expected_revision": priority.json()["revision"]},
@@ -1031,15 +1094,15 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert archived.status_code == 200
     assert archived.json()["title"] == "Renamed API conversation"
     assert archived.json()["metadata"]["archived_at"]
-    assert store.get(ChatSession, session_id).metadata["archived_at"]
-    unarchived = client.patch(
+    assert (await store.get(ChatSession, session_id)).metadata["archived_at"]
+    unarchived = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={"archived": False},
     )
     assert unarchived.status_code == 200
     assert "archived_at" not in unarchived.json()["metadata"]
-    cleared_priority = client.patch(
+    cleared_priority = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={
@@ -1052,18 +1115,17 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert "pinned" not in cleared_priority.json()["metadata"]
     assert "flag_color" not in cleared_priority.json()["metadata"]
     assert (
-        client.patch(
+        await client.patch(
             f"/api/v1/chat-sessions/{session_id}", headers=_auth(), json={}
-        ).status_code
-        == 422
-    )
-    rearchived = client.patch(
+        )
+    ).status_code == 422
+    rearchived = await client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
         json={"archived": True},
     )
     assert rearchived.json()["metadata"]["archived_at"]
-    continued = client.post(
+    continued = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1074,28 +1136,29 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         },
     )
     assert continued.status_code == 200
-    assert "archived_at" not in store.get(ChatSession, session_id).metadata
+    assert "archived_at" not in (await store.get(ChatSession, session_id)).metadata
     assert (
-        client.post("/api/v1/chat-sessions", headers=_auth(), json={}).status_code
-        == 405
+        await client.post("/api/v1/chat-sessions", headers=_auth(), json={})
+    ).status_code == 405
+    deleted = await client.delete(
+        f"/api/v1/chat-sessions/{session_id}", headers=_auth()
     )
-    deleted = client.delete(f"/api/v1/chat-sessions/{session_id}", headers=_auth())
     assert deleted.status_code == 204
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
-        ).status_code
-        == 404
-    )
+        )
+    ).status_code == 404
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
-        ).json()
-        == []
-    )
-    assert store.list_entities(ContextSnapshot, engagement_id=engagement.id) == []
+        )
+    ).json() == []
+    assert (
+        await store.list_entities(ContextSnapshot, engagement_id=engagement.id)
+    ) == []
 
-    streamed = client.post(
+    streamed = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1112,9 +1175,11 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert '"session_id":null' in streamed.text
 
 
-def test_chat_api_rejects_system_injection_and_disallowed_model(tmp_path, monkeypatch):
+async def test_chat_api_rejects_system_injection_and_disallowed_model(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "chat-validation.db")
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="provider-a",
             name="Local provider",
@@ -1131,7 +1196,7 @@ def test_chat_api_rejects_system_injection_and_disallowed_model(tmp_path, monkey
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    system = client.post(
+    system = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1140,7 +1205,7 @@ def test_chat_api_rejects_system_injection_and_disallowed_model(tmp_path, monkey
         },
     )
     assert system.status_code == 422
-    disallowed = client.post(
+    disallowed = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1153,12 +1218,12 @@ def test_chat_api_rejects_system_injection_and_disallowed_model(tmp_path, monkey
     assert "not allowed" in disallowed.json()["detail"]
 
 
-def test_cloud_tool_turn_without_consent_is_a_typed_refusal_before_acceptance(
+async def test_cloud_tool_turn_without_consent_is_a_typed_refusal_before_acceptance(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "chat-consent.db")
-    engagement = store.create(Engagement(id="project-a", name="Project A"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="project-a", name="Project A"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-cloud",
             name="Cloud provider",
@@ -1180,7 +1245,7 @@ def test_cloud_tool_turn_without_consent_is_a_typed_refusal_before_acceptance(
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    refused = client.post(
+    refused = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1204,21 +1269,21 @@ def test_cloud_tool_turn_without_consent_is_a_typed_refusal_before_acceptance(
         "This turn uses subagents, agent messaging and project Work, whose tool inputs and "
         "results would go to Cloud provider."
     )
-    assert store.list_entities(ChatSession, include_temporary=True) == []
-    assert store.list_entities(ChatTurn) == []
+    assert (await store.list_entities(ChatSession, include_temporary=True)) == []
+    assert (await store.list_entities(ChatTurn)) == []
 
 
-def test_chat_delete_rejects_an_active_response(tmp_path):
+async def test_chat_delete_rejects_an_active_response(tmp_path):
     store = NebulaStore(tmp_path / "active-chat-delete.db")
-    engagement = store.create(Engagement(name="Active chat"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Active chat"))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
             is_local=True,
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Do not interrupt",
@@ -1226,18 +1291,22 @@ def test_chat_delete_rejects_an_active_response(tmp_path):
             model="model-a",
         )
     )
-    store.create(
-        ChatTurn(
-            engagement_id=engagement.id,
-            session_id=session.id,
-            provider_profile_id=profile.id,
-            model="model-a",
+    (
+        await store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
         )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
-    rename_response = client.patch(
+    response = await client.delete(
+        f"/api/v1/chat-sessions/{session.id}", headers=_auth()
+    )
+    rename_response = await client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),
         json={"title": "Still active"},
@@ -1247,13 +1316,13 @@ def test_chat_delete_rejects_an_active_response(tmp_path):
     assert rename_response.status_code == 409
     assert "response is active" in rename_response.json()["detail"]
     assert "response is active" in response.json()["detail"]
-    assert store.get(ChatSession, session.id).id == session.id
+    assert (await store.get(ChatSession, session.id)).id == session.id
 
 
-def test_model_and_effort_change_while_a_response_is_active(tmp_path):
+async def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     store = NebulaStore(tmp_path / "active-runtime-switch.db")
-    engagement = store.create(Engagement(name="Active chat"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Active chat"))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
@@ -1261,7 +1330,7 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
             model_allowlist=["model-a", "model-b"],
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Switch next turn",
@@ -1269,7 +1338,7 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -1279,14 +1348,14 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    effort = client.patch(
+    effort = await client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),
         json={"reasoning_effort": "high"},
     )
     assert effort.status_code == 200, effort.text
     assert effort.json()["metadata"]["reasoning_effort"] == "high"
-    delegation = client.patch(
+    delegation = await client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),
         json={"allow_subagents": True, "max_active_subagents": 3},
@@ -1294,7 +1363,7 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert delegation.status_code == 200, delegation.text
     assert delegation.json()["metadata"]["allow_subagents"] is True
     assert delegation.json()["metadata"]["max_active_subagents"] == 3
-    cleared = client.patch(
+    cleared = await client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),
         json={"allow_subagents": False, "max_active_subagents": None},
@@ -1303,7 +1372,7 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert cleared.json()["metadata"]["allow_subagents"] is False
     assert cleared.json()["metadata"]["max_active_subagents"] is None
     # Everything else about the conversation still waits for the response.
-    selections = client.patch(
+    selections = await client.patch(
         f"/api/v1/chat-sessions/{session.id}",
         headers=_auth(),
         json={"reasoning_effort": "low", "mcp_server_ids": []},
@@ -1313,20 +1382,20 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
 
     revision = cleared.json()["revision"]
     switch = {"provider_id": profile.id, "model": "model-b"}
-    preflight = client.post(
+    preflight = await client.post(
         f"/api/v1/chat/sessions/{session.id}/runtime-switch/preflight",
         headers=_auth(),
         json={**switch, "expected_session_revision": revision},
     )
     assert preflight.status_code == 200, preflight.text
     assert preflight.json()["compatible"] is True
-    stale = client.post(
+    stale = await client.post(
         f"/api/v1/chat/sessions/{session.id}/runtime-switch",
         headers=_auth(),
         json={**switch, "expected_session_revision": session.revision},
     )
     assert stale.status_code == 409
-    switched = client.post(
+    switched = await client.post(
         f"/api/v1/chat/sessions/{session.id}/runtime-switch",
         headers=_auth(),
         json={**switch, "expected_session_revision": revision},
@@ -1334,19 +1403,19 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert switched.status_code == 200, switched.text
     assert switched.json()["model"] == "model-b"
 
-    stored = store.get(ChatSession, session.id)
+    stored = await store.get(ChatSession, session.id)
     assert stored.model == "model-b"
     assert stored.metadata["reasoning_effort"] == "high"
     # The running response keeps the runtime it started with.
-    assert store.get(ChatTurn, turn.id).model == "model-a"
+    assert (await store.get(ChatTurn, turn.id)).model == "model-a"
 
 
-def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
+async def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "harness-to-provider.db")
-    engagement = store.create(Engagement(name="Same conversation"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Same conversation"))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
@@ -1355,7 +1424,7 @@ def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
             metadata={"default_model": "model-a"},
         )
     )
-    vendor = store.create(
+    vendor = await store.create(
         HarnessSession(
             engagement_id=engagement.id,
             harness_profile_id="harness-a",
@@ -1363,7 +1432,7 @@ def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
             status=HarnessSessionStatus.RUNNING,
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Keep this history",
@@ -1381,7 +1450,7 @@ def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
             },
         )
     )
-    original = store.create(
+    original = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -1390,7 +1459,7 @@ def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
             content="Earlier harness context",
         )
     )
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -1410,20 +1479,22 @@ def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
         "model": "model-a",
         "expected_session_revision": session.revision,
     }
-    preflight = client.post(f"{endpoint}/preflight", headers=_auth(), json=request)
+    preflight = await client.post(
+        f"{endpoint}/preflight", headers=_auth(), json=request
+    )
     assert preflight.status_code == 200, preflight.text
     assert preflight.json()["compatible"] is True
     assert preflight.json()["current_provider_id"] is None
-    switched = client.post(endpoint, headers=_auth(), json=request)
+    switched = await client.post(endpoint, headers=_auth(), json=request)
     assert switched.status_code == 200, switched.text
     assert switched.json()["id"] == session.id
     assert switched.json()["backend"] == "provider"
     assert switched.json()["harness_session_id"] is None
     assert switched.json()["metadata"]["assistant_config"]["backend"] == "provider"
-    assert store.get(HarnessSession, vendor.id).id == vendor.id
-    assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED
+    assert (await store.get(HarnessSession, vendor.id)).id == vendor.id
+    assert (await store.get(ChatGoal, goal.id)).status == ChatGoalStatus.PAUSED
 
-    completion = client.post(
+    completion = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1436,18 +1507,20 @@ def test_idle_harness_chat_switches_to_provider_and_saves_provider_turn(
     )
     assert completion.status_code == 200, completion.text
     assert completion.json()["session_id"] == session.id
-    assert store.get(ChatMessage, original.id).content == "Earlier harness context"
+    assert (
+        await store.get(ChatMessage, original.id)
+    ).content == "Earlier harness context"
     assert any(
         message.content == "Continue with the provider"
-        for message in store.list_session_entities(ChatMessage, session.id)
+        for message in (await store.list_session_entities(ChatMessage, session.id))
     )
-    assert store.get(ChatGoal, goal.id).id == goal.id
+    assert (await store.get(ChatGoal, goal.id)).id == goal.id
 
 
-def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
+async def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
     store = NebulaStore(tmp_path / "busy-harness-switch.db")
-    engagement = store.create(Engagement(name="Busy conversation"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Busy conversation"))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
@@ -1455,7 +1528,7 @@ def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Busy harness",
@@ -1472,7 +1545,7 @@ def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
         "model": "model-a",
         "expected_session_revision": session.revision,
     }
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -1481,41 +1554,43 @@ def test_harness_to_provider_switch_waits_for_active_work(tmp_path):
             status=ChatTurnStatus.ROUTING,
         )
     )
-    active = client.post(endpoint, headers=_auth(), json=request)
+    active = await client.post(endpoint, headers=_auth(), json=request)
     assert active.status_code == 200, active.text
     assert active.json()["reason_code"] == "harness_not_idle"
     assert "active response" in active.json()["reason"]
-    store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE})
-    queue = store.create(
+    (await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE}))
+    queue = await store.create(
         ChatQueue(
             engagement_id=engagement.id,
             session_id=session.id,
             items=[{"id": "follow-up", "status": "queued"}],
         )
     )
-    queued = client.post(endpoint, headers=_auth(), json=request)
+    queued = await client.post(endpoint, headers=_auth(), json=request)
     assert queued.json()["reason_code"] == "harness_not_idle"
     assert "queued follow-ups" in queued.json()["reason"]
-    store.update(ChatQueue, queue.id, {"items": []})
-    store.create(
-        ChatGoal(
-            engagement_id=engagement.id,
-            session_id=session.id,
-            objective="Still working",
-            completion_criteria=["Done"],
-            status=ChatGoalStatus.RUNNING,
+    (await store.update(ChatQueue, queue.id, {"items": []}))
+    (
+        await store.create(
+            ChatGoal(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                objective="Still working",
+                completion_criteria=["Done"],
+                status=ChatGoalStatus.RUNNING,
+            )
         )
     )
-    running = client.post(endpoint, headers=_auth(), json=request)
+    running = await client.post(endpoint, headers=_auth(), json=request)
     assert running.json()["reason_code"] == "harness_not_idle"
     assert "Pause the running goal" in running.json()["reason"]
-    assert store.get(ChatSession, session.id).backend == ChatBackend.HARNESS
+    assert (await store.get(ChatSession, session.id)).backend == ChatBackend.HARNESS
 
 
-def test_harness_subagent_choice_is_saved_before_model_verification(tmp_path):
+async def test_harness_subagent_choice_is_saved_before_model_verification(tmp_path):
     store = NebulaStore(tmp_path / "harness-subagent-choice.db")
-    engagement = store.create(Engagement(name="Harness chat"))
-    session = store.create(
+    engagement = await store.create(Engagement(name="Harness chat"))
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Harness chat",
@@ -1528,7 +1603,7 @@ def test_harness_subagent_choice_is_saved_before_model_verification(tmp_path):
     client = TestClient(create_app(store, auth_token="test-token"))
     path = f"/api/v1/chat-sessions/{session.id}"
 
-    enabled = client.patch(
+    enabled = await client.patch(
         path,
         headers=_auth(),
         json={
@@ -1544,21 +1619,23 @@ def test_harness_subagent_choice_is_saved_before_model_verification(tmp_path):
         "model": "model-pending-verification",
         "max_active": 2,
     }
-    disabled = client.patch(path, headers=_auth(), json={"allow_subagents": False})
+    disabled = await client.patch(
+        path, headers=_auth(), json={"allow_subagents": False}
+    )
     assert disabled.status_code == 200, disabled.text
     assert "provider_subagent" not in disabled.json()["metadata"]
 
 
-def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
+async def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
     store = NebulaStore(tmp_path / "chat-session-activity.db")
-    engagement = store.create(Engagement(name="Activity states"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Activity states"))
+    profile = await store.create(
         ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
     )
 
     sessions = {}
     for state in ("working", "waiting", "recovery", "idle"):
-        sessions[state] = store.create(
+        sessions[state] = await store.create(
             ChatSession(
                 engagement_id=engagement.id,
                 title=state.title(),
@@ -1566,7 +1643,7 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
                 model="model-a",
             )
         )
-    temporary = store.create(
+    temporary = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Temporary assistant",
@@ -1575,7 +1652,7 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             metadata={"temporary_assistant": True},
         )
     )
-    subagent = store.create(
+    subagent = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Supervisor-owned child",
@@ -1585,7 +1662,7 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             metadata={"subagent_id": "child-1"},
         )
     )
-    working_turn = store.create(
+    working_turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=sessions["working"].id,
@@ -1593,7 +1670,7 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             model="model-a",
         )
     )
-    waiting_turn = store.create(
+    waiting_turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=sessions["waiting"].id,
@@ -1602,7 +1679,7 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
-    recovery_turn = store.create(
+    recovery_turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=sessions["recovery"].id,
@@ -1612,7 +1689,7 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             request_snapshot={"recovery": {"required": True}},
         )
     )
-    subagent_turn = store.create(
+    subagent_turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=subagent.id,
@@ -1621,17 +1698,19 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
-    store.create(
-        ChatTurn(
-            engagement_id=engagement.id,
-            session_id=temporary.id,
-            provider_profile_id=profile.id,
-            model="model-a",
+    (
+        await store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=temporary.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
         )
     )
 
     client = TestClient(create_app(store, auth_token="test-token"))
-    response = client.get(
+    response = await client.get(
         "/api/v1/chat/session-activity",
         params={"engagement_id": engagement.id},
         headers=_auth(),
@@ -1668,10 +1747,10 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
     }
 
 
-def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
+async def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
     store = NebulaStore(tmp_path / "run-context-api.db")
-    engagement = store.create(Engagement(id="eng-a", name="Run context API"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Run context API"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-a",
             name="Local provider",
@@ -1684,14 +1763,14 @@ def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
             },
         )
     )
-    run = store.create(
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Inspect mission memory",
             supervisor_provider_id=profile.id,
         )
     )
-    task = store.create(
+    task = await store.create(
         Task(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -1699,7 +1778,7 @@ def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
             title="Review scope",
         )
     )
-    snapshot = store.create(
+    snapshot = await store.create(
         ContextSnapshot(
             engagement_id=engagement.id,
             owner_type=ContextOwnerType.AGENT_RUN,
@@ -1721,8 +1800,8 @@ def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    assert client.get(f"/api/v1/runs/{run.id}/context").status_code == 401
-    response = client.get(f"/api/v1/runs/{run.id}/context", headers=_auth())
+    assert (await client.get(f"/api/v1/runs/{run.id}/context")).status_code == 401
+    response = await client.get(f"/api/v1/runs/{run.id}/context", headers=_auth())
 
     assert response.status_code == 200
     payload = response.json()
@@ -1737,10 +1816,12 @@ def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
     assert payload["source_references"][0]["source_id"] == task.id
 
 
-def test_harness_context_capacity_remains_runtime_owned_and_unknown(tmp_path):
+async def test_harness_context_capacity_remains_runtime_owned_and_unknown(tmp_path):
     store = NebulaStore(tmp_path / "harness-context.db")
-    engagement = store.create(Engagement(id="harness-context", name="Harness context"))
-    session = store.create(
+    engagement = await store.create(
+        Engagement(id="harness-context", name="Harness context")
+    )
+    session = await store.create(
         ChatSession(
             id="harness-context-chat",
             engagement_id=engagement.id,
@@ -1751,7 +1832,7 @@ def test_harness_context_capacity_remains_runtime_owned_and_unknown(tmp_path):
             model="gpt-5.6",
         )
     )
-    run = store.create(
+    run = await store.create(
         AgentRun(
             id="harness-context-run",
             engagement_id=engagement.id,
@@ -1763,10 +1844,10 @@ def test_harness_context_capacity_remains_runtime_owned_and_unknown(tmp_path):
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    chat_context = client.get(
+    chat_context = await client.get(
         f"/api/v1/chat/sessions/{session.id}/context", headers=_auth()
     )
-    run_context = client.get(f"/api/v1/runs/{run.id}/context", headers=_auth())
+    run_context = await client.get(f"/api/v1/runs/{run.id}/context", headers=_auth())
 
     assert chat_context.status_code == 200
     assert run_context.status_code == 200
@@ -1782,7 +1863,7 @@ def test_harness_context_capacity_remains_runtime_owned_and_unknown(tmp_path):
         assert payload["estimated_input_tokens"] == 0
 
 
-def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
+async def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
     async def fail_compaction(*_args, **_kwargs):
         raise ChatCompactionError("required context compaction failed")
 
@@ -1791,7 +1872,7 @@ def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
         create_app(NebulaStore(tmp_path / "retryable.db"), auth_token="test-token")
     )
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1811,7 +1892,7 @@ def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
     assert payload["remediation_id"].startswith("chat.")
 
 
-def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch):
+async def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch):
     class ReasoningOnlyProvider(ApiChatProvider):
         @staticmethod
         def response(request: ModelRequest, provider_id: str) -> ModelResponse:
@@ -1838,8 +1919,8 @@ def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch
             )
 
     store = NebulaStore(tmp_path / "final-answer-stream.db")
-    engagement = store.create(Engagement(name="Final answer recovery"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Final answer recovery"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-reasoning-only",
             name="Thinking provider",
@@ -1858,7 +1939,7 @@ def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -1872,8 +1953,8 @@ def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch
     assert response.status_code == 200
     assert '"code":"provider_final_answer_missing"' in response.text
     assert '"retryable":true' in response.text
-    turn = store.list_entities(ChatTurn, engagement_id=engagement.id)[0]
-    recoverable = client.get(
+    turn = (await store.list_entities(ChatTurn, engagement_id=engagement.id))[0]
+    recoverable = await client.get(
         f"/api/v1/chat/sessions/{turn.session_id}/pending-turn",
         headers=_auth(),
     )
@@ -1882,13 +1963,15 @@ def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch
     assert recoverable.json()["status"] == "failed"
 
 
-def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(tmp_path):
+async def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "paused-turn.db")
-    engagement = store.create(Engagement(name="Paused chat"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Paused chat"))
+    profile = await store.create(
         ProviderProfile(name="Provider", provider_type="vllm", is_local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Supervisor",
@@ -1896,7 +1979,7 @@ def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(tmp_pat
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -1908,33 +1991,37 @@ def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(tmp_pat
         )
     )
     ledger = ChatService(store).turn_ledger
-    ledger.append(
-        turn.id,
-        {
-            "step": 0,
-            "tool_call_id": "finished-read",
-            "name": "tool_output.read",
-            "arguments": {"artifact_id": "previous-output"},
-            "status": "complete",
-            "result_summary": "Read previous output.",
-        },
-        event_type="complete",
+    (
+        await ledger.append(
+            turn.id,
+            {
+                "step": 0,
+                "tool_call_id": "finished-read",
+                "name": "tool_output.read",
+                "arguments": {"artifact_id": "previous-output"},
+                "status": "complete",
+                "result_summary": "Read previous output.",
+            },
+            event_type="complete",
+        )
     )
-    ledger.append(
-        turn.id,
-        {
-            "step": 1,
-            "tool_call_id": "running-command",
-            "name": "ssh.simulation-host.run_command",
-            "display_name": "Command runtime",
-            "arguments": {"command": "inspect corpus_index.json"},
-            "status": "running",
-        },
-        event_type="started",
+    (
+        await ledger.append(
+            turn.id,
+            {
+                "step": 1,
+                "tool_call_id": "running-command",
+                "name": "ssh.simulation-host.run_command",
+                "display_name": "Command runtime",
+                "arguments": {"command": "inspect corpus_index.json"},
+                "status": "running",
+            },
+            event_type="started",
+        )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.get(
+    response = await client.get(
         f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
     )
 
@@ -1962,23 +2049,25 @@ def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(tmp_pat
     ]
 
 
-def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
+async def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
     from nebula.v3.domain import ChatSubagent
 
     store = NebulaStore(tmp_path / "subagent-routes.db")
-    engagement = store.create(Engagement(name="Subagents"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Subagents"))
+    profile = await store.create(
         ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
     )
     parent, other, child = (
-        store.create(
-            ChatSession(
-                id=session_id,
-                engagement_id=engagement.id,
-                title=session_id,
-                provider_profile_id=profile.id,
-                model="model-a",
-                **extra,
+        (
+            await store.create(
+                ChatSession(
+                    id=session_id,
+                    engagement_id=engagement.id,
+                    title=session_id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    **extra,
+                )
             )
         )
         for session_id, extra in (
@@ -1990,27 +2079,33 @@ def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
             ),
         )
     )
-    store.create(
-        ChatSubagent(
-            id="sub",
-            engagement_id=engagement.id,
-            parent_session_id=parent.id,
-            parent_turn_id="turn",
-            child_session_id=child.id,
-            name="Map routes",
-            task="Map the routes.",
+    (
+        await store.create(
+            ChatSubagent(
+                id="sub",
+                engagement_id=engagement.id,
+                parent_session_id=parent.id,
+                parent_turn_id="turn",
+                child_session_id=child.id,
+                name="Map routes",
+                task="Map the routes.",
+            )
         )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    listed = client.get(f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth())
-    foreign = client.post(
+    listed = await client.get(
+        f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth()
+    )
+    foreign = await client.post(
         f"/api/v1/chat/sessions/{other.id}/subagents/sub/stop", headers=_auth()
     )
-    stopped = client.post(
+    stopped = await client.post(
         f"/api/v1/chat/sessions/{parent.id}/subagents/sub/stop", headers=_auth()
     )
-    after = client.get(f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth())
+    after = await client.get(
+        f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth()
+    )
 
     assert listed.status_code == 200
     assert listed.headers["cache-control"] == "no-store"
@@ -2024,19 +2119,16 @@ def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
     assert item["finished_at"] is not None
     assert item["result_message_id"] is not None
     assert (
-        client.get(
-            "/api/v1/chat/sessions/missing/subagents", headers=_auth()
-        ).status_code
-        == 404
-    )
+        await client.get("/api/v1/chat/sessions/missing/subagents", headers=_auth())
+    ).status_code == 404
 
 
-def test_failed_harness_fork_does_not_orphan_the_vendor_session(tmp_path):
+async def test_failed_harness_fork_does_not_orphan_the_vendor_session(tmp_path):
     from nebula.v3.domain import HarnessSession
 
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Harness"))
-    vendor = store.create(
+    engagement = await store.create(Engagement(name="Harness"))
+    vendor = await store.create(
         HarnessSession(
             id="vendor-1",
             engagement_id=engagement.id,
@@ -2044,7 +2136,7 @@ def test_failed_harness_fork_does_not_orphan_the_vendor_session(tmp_path):
             model="model-a",
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Harness chat",
@@ -2056,21 +2148,23 @@ def test_failed_harness_fork_does_not_orphan_the_vendor_session(tmp_path):
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/chat/sessions/{session.id}/fork",
         headers=_auth(),
         json={"through_message_id": "not-a-message"},
     )
 
     assert response.status_code == 409, response.text
-    assert [item.id for item in store.list_entities(HarnessSession)] == [vendor.id]
+    assert [item.id for item in (await store.list_entities(HarnessSession))] == [
+        vendor.id
+    ]
 
 
-def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
+async def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "stopped-provider-follower.db")
-        engagement = store.create(Engagement(id="project-a", name="Project A"))
-        profile = store.create(
+        engagement = await store.create(Engagement(id="project-a", name="Project A"))
+        profile = await store.create(
             ProviderProfile(
                 id="provider-a",
                 name="Local provider",
@@ -2091,7 +2185,7 @@ def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
                 stream=True,
             )
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         follower = service.follow_provider_turn(turn_id)
         assert (await anext(follower))[0] == "queued"
         assert (await anext(follower))[0] == "admitted"
@@ -2117,10 +2211,10 @@ def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
             # After queued, admitted, started and delta.
             "sequence": 5,
         }
-        assert store.get(ChatTurn, turn_id).status.value == "cancelled"
+        assert (await store.get(ChatTurn, turn_id)).status.value == "cancelled"
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 class _FakeVendorProcess:
@@ -2131,19 +2225,19 @@ class _FakeVendorProcess:
         self.closed = True
 
 
-def test_deleting_a_harness_chat_closes_its_vendor_session(tmp_path):
+async def test_deleting_a_harness_chat_closes_its_vendor_session(tmp_path):
     from nebula.v3.domain import HarnessSession
 
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Harness"))
-    vendor = store.create(
+    engagement = await store.create(Engagement(name="Harness"))
+    vendor = await store.create(
         HarnessSession(
             engagement_id=engagement.id,
             harness_profile_id="harness-1",
             model="model-a",
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Harness chat",
@@ -2164,24 +2258,28 @@ def test_deleting_a_harness_chat_closes_its_vendor_session(tmp_path):
     # A turn that is still running on the vendor session blocks the delete
     # before anything is closed or removed.
     runtime._active[vendor.id] = object()
-    refused = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
+    refused = await client.delete(
+        f"/api/v1/chat-sessions/{session.id}", headers=_auth()
+    )
     assert refused.status_code == 409, refused.text
     assert connection.closed is False
-    assert store.get(ChatSession, session.id).id == session.id
+    assert (await store.get(ChatSession, session.id)).id == session.id
     del runtime._active[vendor.id]
 
-    response = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
+    response = await client.delete(
+        f"/api/v1/chat-sessions/{session.id}", headers=_auth()
+    )
 
     assert response.status_code == 204, response.text
     assert connection.closed is True
     assert gateway.closed is True
     assert vendor.id not in runtime._connections
     assert vendor.id not in runtime._gateways
-    assert store.list_entities(HarnessSession) == []
-    assert store.engagement_has_dependents(engagement.id) is False
+    assert (await store.list_entities(HarnessSession)) == []
+    assert (await store.engagement_has_dependents(engagement.id)) is False
 
 
-def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
+async def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
     tmp_path, monkeypatch
 ):
     from datetime import timedelta
@@ -2198,14 +2296,14 @@ def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
     clock = {"now": utc_now() - timedelta(hours=1)}
     monkeypatch.setattr(api_module, "utc_now", lambda: clock["now"])
 
-    abandoned = client.post(
+    abandoned = await client.post(
         "/api/v1/auth/pairings", headers=_auth(), json={"name": "Abandoned"}
     )
     assert abandoned.status_code == 200
     assert len(pending) == 1
 
     clock["now"] += timedelta(minutes=6)
-    fresh = client.post(
+    fresh = await client.post(
         "/api/v1/auth/pairings", headers=_auth(), json={"name": "Fresh"}
     )
     assert fresh.status_code == 200
@@ -2213,7 +2311,7 @@ def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
     assert len(pending) == 1
 
     clock["now"] += timedelta(minutes=6)
-    stale = client.post(
+    stale = await client.post(
         "/api/v1/auth/pairings/redeem",
         json={
             "secret": fresh.json()["secret"],
@@ -2223,15 +2321,15 @@ def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
     assert stale.status_code == 401
     assert pending == {}
 
-    third = client.post(
+    third = await client.post(
         "/api/v1/auth/pairings", headers=_auth(), json={"name": "Third"}
     )
     clock["now"] += timedelta(minutes=6)
-    fourth = client.post(
+    fourth = await client.post(
         "/api/v1/auth/pairings", headers=_auth(), json={"name": "Fourth"}
     )
     assert third.status_code == 200 and fourth.status_code == 200
-    redeemed = client.post(
+    redeemed = await client.post(
         "/api/v1/auth/pairings/redeem",
         json={
             "secret": fourth.json()["secret"],
@@ -2243,7 +2341,7 @@ def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
     assert pending == {}
 
 
-def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
+async def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
     from nebula.v3.domain import (
         HarnessSession,
         HarnessSessionStatus,
@@ -2252,15 +2350,15 @@ def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
     )
 
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Harness"))
-    vendor = store.create(
+    engagement = await store.create(Engagement(name="Harness"))
+    vendor = await store.create(
         HarnessSession(
             engagement_id=engagement.id,
             harness_profile_id="harness-1",
             model="model-a",
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Harness chat",
@@ -2270,7 +2368,7 @@ def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -2281,14 +2379,16 @@ def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
     )
     # A harness turn the store still sees as queued (between prepare_chat and
     # the turn task registering itself), so the runtime has nothing active.
-    store.create(
-        HarnessTurn(
-            engagement_id=engagement.id,
-            harness_session_id=vendor.id,
-            origin=HarnessTurnOrigin.CHAT,
-            chat_session_id=session.id,
-            chat_turn_id=turn.id,
-            prompt="Keep going",
+    (
+        await store.create(
+            HarnessTurn(
+                engagement_id=engagement.id,
+                harness_session_id=vendor.id,
+                origin=HarnessTurnOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                prompt="Keep going",
+            )
         )
     )
     app = create_app(store, auth_token="test-token")
@@ -2299,7 +2399,9 @@ def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
     runtime._gateways[vendor.id] = gateway
     client = TestClient(app)
 
-    refused = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
+    refused = await client.delete(
+        f"/api/v1/chat-sessions/{session.id}", headers=_auth()
+    )
 
     assert refused.status_code == 409, refused.text
     assert "harness turn is active" in refused.json()["detail"]
@@ -2308,17 +2410,19 @@ def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
     assert gateway.closed is False
     assert runtime._connections[vendor.id] is connection
     assert runtime._gateways[vendor.id] is gateway
-    assert store.get(HarnessSession, vendor.id).status != HarnessSessionStatus.CLOSED
-    assert store.get(ChatSession, session.id).id == session.id
+    assert (
+        await store.get(HarnessSession, vendor.id)
+    ).status != HarnessSessionStatus.CLOSED
+    assert (await store.get(ChatSession, session.id)).id == session.id
 
 
-def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
+async def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
     store = NebulaStore(tmp_path / "completed-follow.db")
-    engagement = store.create(Engagement(name="Completed follow"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Completed follow"))
+    profile = await store.create(
         ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Already answered",
@@ -2326,7 +2430,7 @@ def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
             model="model-a",
         )
     )
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -2338,7 +2442,7 @@ def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
             approval_wait_ms=1200,
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -2350,7 +2454,7 @@ def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.get(f"/api/v1/chat/turns/{turn.id}/events", headers=_auth())
+    response = await client.get(f"/api/v1/chat/turns/{turn.id}/events", headers=_auth())
 
     assert response.status_code == 200, response.text
     frames = [
@@ -2368,12 +2472,12 @@ def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
     assert done["message"]["reasoning"] == "Weighed both readings first."
 
 
-def test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame(
+async def test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "follow-storage-failure.db")
-    store.create(Engagement(id="project", name="Project"))
-    chat = store.create(
+    (await store.create(Engagement(id="project", name="Project")))
+    chat = await store.create(
         ChatSession(
             id="chat",
             engagement_id="project",
@@ -2384,16 +2488,18 @@ def test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame
         )
     )
     detail = "chat_messages entity not found: missing"
-    store.create(
-        ChatTurn(
-            id="turn",
-            engagement_id="project",
-            session_id=chat.id,
-            backend="provider",
-            provider_profile_id="provider",
-            model="model-a",
-            status=ChatTurnStatus.FAILED,
-            error=detail,
+    (
+        await store.create(
+            ChatTurn(
+                id="turn",
+                engagement_id="project",
+                session_id=chat.id,
+                backend="provider",
+                provider_profile_id="provider",
+                model="model-a",
+                status=ChatTurnStatus.FAILED,
+                error=detail,
+            )
         )
     )
 
@@ -2408,8 +2514,8 @@ def test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame
         chat_module.ChatService, "has_provider_turn_stream", lambda self, turn_id: True
     )
     monkeypatch.setattr(chat_module.ChatService, "follow_provider_turn", failing_follow)
-    with TestClient(create_app(store, auth_token="test-token")) as client:
-        response = client.get("/api/v1/chat/turns/turn/events", headers=_auth())
+    async with TestClient(create_app(store, auth_token="test-token")) as client:
+        response = await client.get("/api/v1/chat/turns/turn/events", headers=_auth())
 
     assert response.status_code == 200
     frames = [
@@ -2419,3 +2525,6 @@ def test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame
     ]
     assert frames[-1]["type"] == "error"
     assert frames[-1]["detail"] == detail
+
+
+pytestmark = pytest.mark.anyio

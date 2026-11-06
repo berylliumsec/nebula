@@ -1,8 +1,11 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import base64
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pypdf import PdfReader
 
 from nebula.v3.api import create_app
@@ -23,17 +26,19 @@ from nebula.v3.report_signoff import ReportSignoffRequest, sign_off_report
 from nebula.v3.storage import ConflictError, NebulaStore, StoreTransaction
 
 
-def test_signoff_finalizes_review_with_active_operator_and_validated_findings(tmp_path):
+async def test_signoff_finalizes_review_with_active_operator_and_validated_findings(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "signoff.db")
-    engagement = store.create(Engagement(name="Report project"))
-    finding = store.create(
+    engagement = await store.create(Engagement(name="Report project"))
+    finding = await store.create(
         Finding(
             engagement_id=engagement.id,
             title="Validated issue",
             status=FindingStatus.VALIDATED,
         )
     )
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Final report",
@@ -41,11 +46,11 @@ def test_signoff_finalizes_review_with_active_operator_and_validated_findings(tm
             finding_ids=[finding.id],
         )
     )
-    operator = OperatorProfileService(store).create_profile(
+    operator = await OperatorProfileService(store).create_profile(
         display_name="Alex Reviewer"
     )
 
-    signed = sign_off_report(
+    signed = await sign_off_report(
         store,
         report.id,
         ReportSignoffRequest(
@@ -62,92 +67,106 @@ def test_signoff_finalizes_review_with_active_operator_and_validated_findings(tm
     assert signed.metadata["signoff"]["attestation"] == "Reviewed and approved."
 
 
-def test_signoff_rejects_draft_stale_and_candidate_finding(tmp_path):
+async def test_signoff_rejects_draft_stale_and_candidate_finding(tmp_path):
     store = NebulaStore(tmp_path / "invalid-signoff.db")
-    engagement = store.create(Engagement(name="Report project"))
-    finding = store.create(Finding(engagement_id=engagement.id, title="Candidate"))
-    operator = OperatorProfileService(store).create_profile(display_name="Reviewer")
-    draft = store.create(
+    engagement = await store.create(Engagement(name="Report project"))
+    finding = await store.create(
+        Finding(engagement_id=engagement.id, title="Candidate")
+    )
+    operator = await OperatorProfileService(store).create_profile(
+        display_name="Reviewer"
+    )
+    draft = await store.create(
         Report(engagement_id=engagement.id, title="Draft", finding_ids=[finding.id])
     )
 
     with pytest.raises(ConflictError, match="in review"):
-        sign_off_report(
-            store,
-            draft.id,
-            ReportSignoffRequest(
-                expected_revision=draft.revision, operator_id=operator.id
-            ),
+        (
+            await sign_off_report(
+                store,
+                draft.id,
+                ReportSignoffRequest(
+                    expected_revision=draft.revision, operator_id=operator.id
+                ),
+            )
         )
 
-    review = store.update(
+    review = await store.update(
         Report,
         draft.id,
         {"status": ReportStatus.REVIEW},
         expected_revision=draft.revision,
     )
     with pytest.raises(ConflictError, match="revision conflict"):
-        sign_off_report(
-            store,
-            review.id,
-            ReportSignoffRequest(expected_revision=1, operator_id=operator.id),
+        (
+            await sign_off_report(
+                store,
+                review.id,
+                ReportSignoffRequest(expected_revision=1, operator_id=operator.id),
+            )
         )
     with pytest.raises(ConflictError, match="must be validated"):
-        sign_off_report(
-            store,
-            review.id,
-            ReportSignoffRequest(
-                expected_revision=review.revision, operator_id=operator.id
-            ),
+        (
+            await sign_off_report(
+                store,
+                review.id,
+                ReportSignoffRequest(
+                    expected_revision=review.revision, operator_id=operator.id
+                ),
+            )
         )
 
 
-def test_signoff_rolls_back_finalization_when_audit_event_cannot_be_created(
+async def test_signoff_rolls_back_finalization_when_audit_event_cannot_be_created(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "atomic-signoff.db")
-    engagement = store.create(Engagement(name="Atomic report project"))
-    report = store.create(
+    engagement = await store.create(Engagement(name="Atomic report project"))
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Atomic final report",
             status=ReportStatus.REVIEW,
         )
     )
-    operator = OperatorProfileService(store).create_profile(display_name="Reviewer")
+    operator = await OperatorProfileService(store).create_profile(
+        display_name="Reviewer"
+    )
 
     def fail_event(*_args, **_kwargs):
         raise RuntimeError("injected operation-event failure")
 
     monkeypatch.setattr(StoreTransaction, "append_operation_event", fail_event)
     with pytest.raises(RuntimeError, match="injected operation-event failure"):
-        sign_off_report(
-            store,
-            report.id,
-            ReportSignoffRequest(
-                expected_revision=report.revision,
-                operator_id=operator.id,
-            ),
+        (
+            await sign_off_report(
+                store,
+                report.id,
+                ReportSignoffRequest(
+                    expected_revision=report.revision,
+                    operator_id=operator.id,
+                ),
+            )
         )
 
-    unchanged = store.get(Report, report.id)
+    unchanged = await store.get(Report, report.id)
     assert unchanged.status == ReportStatus.REVIEW
     assert unchanged.revision == report.revision
     assert unchanged.signed_off_by is None
-    assert store.replay_operation_events(report.id) == []
+    assert (await store.replay_operation_events(report.id)) == []
 
 
-def test_report_signoff_api_is_revision_aware(tmp_path):
+async def test_report_signoff_api_is_revision_aware(tmp_path):
     store = NebulaStore(tmp_path / "signoff-api.db")
-    engagement = store.create(Engagement(name="API report project"))
-    finding = store.create(
+    engagement = await store.create(Engagement(name="API report project"))
+    finding = await store.create(
         Finding(
             engagement_id=engagement.id,
             title="Validated API issue",
             status=FindingStatus.VALIDATED,
         )
     )
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="API final report",
@@ -155,11 +174,13 @@ def test_report_signoff_api_is_revision_aware(tmp_path):
             finding_ids=[finding.id],
         )
     )
-    operator = OperatorProfileService(store).create_profile(display_name="API Reviewer")
+    operator = await OperatorProfileService(store).create_profile(
+        display_name="API Reviewer"
+    )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    with client:
-        response = client.post(
+    async with client:
+        response = await client.post(
             f"/api/v1/reports/{report.id}/sign-off",
             headers={"Authorization": "Bearer test-token"},
             json={
@@ -174,20 +195,20 @@ def test_report_signoff_api_is_revision_aware(tmp_path):
     assert response.json()["signed_off_by"] == operator.id
 
 
-def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
+async def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
     """Release gate: a real artifact reaches a signed, renderable final report."""
 
     store = NebulaStore(tmp_path / "workflow.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="End-to-end report project"))
-    finding = store.create(
+    engagement = await store.create(Engagement(name="End-to-end report project"))
+    finding = await store.create(
         Finding(
             engagement_id=engagement.id,
             title="Evidence-backed issue",
             description="A bounded validation workflow finding.",
         )
     )
-    evidence = upload_evidence(
+    evidence = await upload_evidence(
         store=store,
         artifact_store=artifacts,
         request=EvidenceUploadRequest(
@@ -200,8 +221,8 @@ def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
             content_base64=base64.b64encode(b"validated result\n").decode("ascii"),
         ),
     )
-    evidence_backed = store.get(Finding, finding.id)
-    validated = store.update(
+    evidence_backed = await store.get(Finding, finding.id)
+    validated = await store.update(
         Finding,
         finding.id,
         {"status": FindingStatus.VALIDATED},
@@ -209,7 +230,7 @@ def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
     )
     assert validated.evidence_ids == [evidence.id]
 
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Signed validation report",
@@ -219,10 +240,10 @@ def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
             artifact_ids=[evidence.artifact_id],
         )
     )
-    operator = OperatorProfileService(store).create_profile(
+    operator = await OperatorProfileService(store).create_profile(
         display_name="Release Reviewer"
     )
-    signed = sign_off_report(
+    signed = await sign_off_report(
         store,
         report.id,
         ReportSignoffRequest(
@@ -237,35 +258,35 @@ def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
             signed.id, report_revision=signed.revision
         )
         await service._tasks[queued.id]
-        completed = store.get(ReportRender, queued.id)
-        artifact, path = service.pdf(completed.id)
+        completed = await store.get(ReportRender, queued.id)
+        artifact, path = await service.pdf(completed.id)
         assert artifacts.verify(artifact)
         return completed, "\n".join(
             page.extract_text() or "" for page in PdfReader(path).pages
         )
 
-    completed, pdf_text = asyncio.run(render())
+    completed, pdf_text = await render()
     assert completed.status == ReportRenderStatus.COMPLETED
     assert "Signed validation report" in pdf_text
     assert "FINAL" in pdf_text
     assert "Evidence-backed issue" in pdf_text
 
 
-def test_signoff_records_one_signed_revision_in_metadata_and_ledger(tmp_path):
+async def test_signoff_records_one_signed_revision_in_metadata_and_ledger(tmp_path):
     store = NebulaStore(tmp_path / "signed-revision.db")
-    engagement = store.create(Engagement(name="Ledger project"))
-    report = store.create(
+    engagement = await store.create(Engagement(name="Ledger project"))
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Ledger report",
             status=ReportStatus.REVIEW,
         )
     )
-    operator = OperatorProfileService(store).create_profile(
+    operator = await OperatorProfileService(store).create_profile(
         display_name="Ledger Reviewer"
     )
 
-    signed = sign_off_report(
+    signed = await sign_off_report(
         store,
         report.id,
         ReportSignoffRequest(
@@ -273,33 +294,35 @@ def test_signoff_records_one_signed_revision_in_metadata_and_ledger(tmp_path):
         ),
     )
 
-    events = store.replay_operation_events(report.id)
+    events = await store.replay_operation_events(report.id)
     assert [event.event_type for event in events] == ["report.signed_off"]
     assert signed.metadata["signoff"]["report_revision"] == signed.revision
     assert events[0].payload["report_revision"] == signed.revision
 
 
-def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
+async def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "late-finding.db")
-    engagement = store.create(Engagement(name="Late finding project"))
-    deleted = store.create(
+    engagement = await store.create(Engagement(name="Late finding project"))
+    deleted = await store.create(
         Finding(
             engagement_id=engagement.id,
             title="Deleted later",
             status=FindingStatus.VALIDATED,
         )
     )
-    flipped = store.create(
+    flipped = await store.create(
         Finding(
             engagement_id=engagement.id,
             title="Flipped later",
             status=FindingStatus.VALIDATED,
         )
     )
-    operator = OperatorProfileService(store).create_profile(display_name="Reviewer")
-    references_deleted = store.create(
+    operator = await OperatorProfileService(store).create_profile(
+        display_name="Reviewer"
+    )
+    references_deleted = await store.create(
         Report(
             engagement_id=engagement.id,
             title="References a deleted finding",
@@ -307,7 +330,7 @@ def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
             finding_ids=[deleted.id],
         )
     )
-    references_flipped = store.create(
+    references_flipped = await store.create(
         Report(
             engagement_id=engagement.id,
             title="References a finding flipped late",
@@ -317,15 +340,17 @@ def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
     )
 
     # A finding removed after it was selected is a workflow conflict, not a 404.
-    store.delete(Finding, deleted.id)
+    (await store.delete(Finding, deleted.id))
     with pytest.raises(ConflictError, match="deleted finding"):
-        sign_off_report(
-            store,
-            references_deleted.id,
-            ReportSignoffRequest(
-                expected_revision=references_deleted.revision,
-                operator_id=operator.id,
-            ),
+        (
+            await sign_off_report(
+                store,
+                references_deleted.id,
+                ReportSignoffRequest(
+                    expected_revision=references_deleted.revision,
+                    operator_id=operator.id,
+                ),
+            )
         )
 
     # The sign-off timestamp is taken right before the committing transaction
@@ -335,29 +360,36 @@ def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
 
     real_utc_now = signoff_module.utc_now
 
-    def flip_finding_then_now():
-        current = store.get(Finding, flipped.id)
+    async def flip_finding_then_now():
+        current = await store.get(Finding, flipped.id)
         if current.status == FindingStatus.VALIDATED:
-            store.update(
-                Finding,
-                flipped.id,
-                {"status": FindingStatus.FALSE_POSITIVE},
-                expected_revision=current.revision,
+            (
+                await store.update(
+                    Finding,
+                    flipped.id,
+                    {"status": FindingStatus.FALSE_POSITIVE},
+                    expected_revision=current.revision,
+                )
             )
         return real_utc_now()
 
     monkeypatch.setattr(signoff_module, "utc_now", flip_finding_then_now)
     with pytest.raises(ConflictError, match="must be validated"):
-        sign_off_report(
-            store,
-            references_flipped.id,
-            ReportSignoffRequest(
-                expected_revision=references_flipped.revision,
-                operator_id=operator.id,
-            ),
+        (
+            await sign_off_report(
+                store,
+                references_flipped.id,
+                ReportSignoffRequest(
+                    expected_revision=references_flipped.revision,
+                    operator_id=operator.id,
+                ),
+            )
         )
 
-    unchanged = store.get(Report, references_flipped.id)
+    unchanged = await store.get(Report, references_flipped.id)
     assert unchanged.status == ReportStatus.REVIEW
     assert unchanged.signed_off_by is None
-    assert store.replay_operation_events(references_flipped.id) == []
+    assert (await store.replay_operation_events(references_flipped.id)) == []
+
+
+pytestmark = pytest.mark.anyio

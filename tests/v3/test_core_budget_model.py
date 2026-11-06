@@ -1,5 +1,10 @@
 """Boundary checks for the benchmark-only shared-resource model."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 from contextvars import ContextVar
 import struct
@@ -20,7 +25,7 @@ async def until(predicate):
             await asyncio.sleep(0)
 
 
-def test_noisy_owner_cannot_overtake_waiting_owners():
+async def test_noisy_owner_cannot_overtake_waiting_owners():
     async def scenario():
         release = asyncio.Event()
 
@@ -52,11 +57,11 @@ def test_noisy_owner_cannot_overtake_waiting_owners():
         assert budget.snapshot()["max_owner_active"] == 1
         await budget.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("setting", ["global", "owner"])
-def test_admission_limits_reject_without_growing_reservations(setting):
+async def test_admission_limits_reject_without_growing_reservations(setting):
     async def scenario():
         release = asyncio.Event()
 
@@ -77,10 +82,10 @@ def test_admission_limits_reject_without_growing_reservations(setting):
         assert budget.snapshot()["admitted"] == budget.snapshot()["input_bytes"] == 0
         await budget.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_byte_limit_counts_accepted_work_until_it_finishes():
+async def test_byte_limit_counts_accepted_work_until_it_finishes():
     async def scenario():
         release = asyncio.Event()
 
@@ -99,10 +104,10 @@ def test_byte_limit_counts_accepted_work_until_it_finishes():
         assert budget.bytes == 0
         await budget.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_cancellation_never_executes_a_queued_job_or_frees_running_capacity():
+async def test_cancellation_never_executes_a_queued_job_or_frees_running_capacity():
     async def scenario():
         release = asyncio.Event()
         executed = []
@@ -137,10 +142,10 @@ def test_cancellation_never_executes_a_queued_job_or_frees_running_capacity():
         assert budget.snapshot()["admitted"] == budget.bytes == 0
         await budget.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_start_callback_uses_request_context_and_a_failure_does_not_dispatch():
+async def test_start_callback_uses_request_context_and_a_failure_does_not_dispatch():
     async def scenario():
         owner = ContextVar("synthetic_operator", default="none")
         dispatched = []
@@ -165,10 +170,10 @@ def test_start_callback_uses_request_context_and_a_failure_does_not_dispatch():
         assert len(dispatched) == 1
         await budget.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_compute_failure_releases_capacity_and_later_work_succeeds():
+async def test_compute_failure_releases_capacity_and_later_work_succeeds():
     async def scenario():
         async def run(payload):
             if payload["kind"] == "fail":
@@ -183,10 +188,10 @@ def test_compute_failure_releases_capacity_and_later_work_succeeds():
         assert budget.snapshot()["admitted"] == budget.bytes == 0
         await budget.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_shutdown_cancels_pending_jobs_and_rejects_new_work():
+async def test_shutdown_cancels_pending_jobs_and_rejects_new_work():
     async def scenario():
         release = asyncio.Event()
 
@@ -208,28 +213,30 @@ def test_shutdown_cancels_pending_jobs_and_rejects_new_work():
         await asyncio.gather(active, closing)
         assert budget.snapshot()["admitted"] == budget.bytes == 0
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_rpc_refuses_an_oversized_frame_before_reading_its_body():
+async def test_rpc_refuses_an_oversized_frame_before_reading_its_body():
     async def scenario():
         reader = asyncio.StreamReader()
         reader.feed_data(struct.pack("!I", MAX_FRAME + 1))
         with pytest.raises(ValueError, match="frame exceeds"):
             await read_frame(reader)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_model_uses_current_chat_binding_after_harness_rollover(tmp_path):
+async def test_model_uses_current_chat_binding_after_harness_rollover(tmp_path):
     from scripts.benchmarks.core_budget_model import attached_chat_owner
     from nebula.v3.domain import ChatSession, Engagement, HarnessProfile, HarnessSession
     from nebula.v3.storage import NebulaStore
 
     store = NebulaStore(tmp_path / "synthetic.db")
     try:
-        project = store.create(Engagement(id="project", name="Synthetic ownership"))
-        profile = store.create(
+        project = await store.create(
+            Engagement(id="project", name="Synthetic ownership")
+        )
+        profile = await store.create(
             HarnessProfile(
                 id="profile",
                 name="Inert fixture",
@@ -239,15 +246,17 @@ def test_model_uses_current_chat_binding_after_harness_rollover(tmp_path):
             )
         )
         for identity in ("old-harness", "current-harness", "naming-harness"):
-            store.create(
-                HarnessSession(
-                    id=identity,
-                    engagement_id=project.id,
-                    harness_profile_id=profile.id,
-                    model="fixture",
+            (
+                await store.create(
+                    HarnessSession(
+                        id=identity,
+                        engagement_id=project.id,
+                        harness_profile_id=profile.id,
+                        model="fixture",
+                    )
                 )
             )
-        chat = store.create(
+        chat = await store.create(
             ChatSession(
                 id="chat",
                 engagement_id=project.id,
@@ -259,21 +268,23 @@ def test_model_uses_current_chat_binding_after_harness_rollover(tmp_path):
             )
         )
         assert attached_chat_owner(store, "old-harness") == chat.id
-        store.update(
-            ChatSession,
-            chat.id,
-            {"harness_session_id": "current-harness"},
-            expected_revision=chat.revision,
+        (
+            await store.update(
+                ChatSession,
+                chat.id,
+                {"harness_session_id": "current-harness"},
+                expected_revision=chat.revision,
+            )
         )
         assert attached_chat_owner(store, "current-harness") == chat.id
         assert attached_chat_owner(store, "old-harness") is None
         assert attached_chat_owner(store, "naming-harness") is None
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
 @pytest.mark.parametrize("eventually_succeeds", [False, True])
-def test_report_status_retries_are_bounded_and_every_failure_is_recorded(
+async def test_report_status_retries_are_bounded_and_every_failure_is_recorded(
     eventually_succeeds,
 ):
     import httpx
@@ -312,10 +323,10 @@ def test_report_status_retries_are_bounded_and_every_failure_is_recorded(
                 assert len(failures) == 3 and failures[-1]["retried"] is False
         assert len(calls) == 3 and all(request.method == "GET" for request in calls)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_ordinary_latency_observations_never_retry_transport_errors():
+async def test_ordinary_latency_observations_never_retry_transport_errors():
     import httpx
     from scripts.benchmarks.core_resource_budget import read_core_observation
 
@@ -339,10 +350,10 @@ def test_ordinary_latency_observations_never_retry_transport_errors():
         assert len(calls) == len(failures) == 1
         assert failures[0]["retried"] is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_live_resize_grows_then_drains_without_cancelling_running_jobs():
+async def test_live_resize_grows_then_drains_without_cancelling_running_jobs():
     async def scenario():
         releases = [asyncio.Event() for _ in range(4)]
         started = []
@@ -374,15 +385,15 @@ def test_live_resize_grows_then_drains_without_cancelling_running_jobs():
         assert budget.snapshot()["admitted"] == budget.snapshot()["input_bytes"] == 0
         await budget.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("policy", ["shared-budget", "admission-only"])
-def test_benchmark_lifespan_reads_the_capacity_gate_with_inert_executor(
+async def test_benchmark_lifespan_reads_the_capacity_gate_with_inert_executor(
     tmp_path, monkeypatch, policy
 ):
     from argparse import Namespace
-    from fastapi.testclient import TestClient
+    from tests.v3.async_test_support import AsyncTestClient as TestClient
     from scripts.benchmarks import core_resource_budget as benchmark
 
     observed = []
@@ -410,9 +421,9 @@ def test_benchmark_lifespan_reads_the_capacity_gate_with_inert_executor(
         quota[0] = float(command[command.index("--cpus") + 1])
         return InertProcess()
 
-    def run_app(app, **options):
-        with TestClient(app) as client:
-            response = client.get(
+    async def run_app(app, **options):
+        async with TestClient(app) as client:
+            response = await client.get(
                 "/api/v1/host-cpu-budget",
                 headers={"Authorization": "Bearer synthetic-budget-startup"},
             )
@@ -432,18 +443,23 @@ def test_benchmark_lifespan_reads_the_capacity_gate_with_inert_executor(
     monkeypatch.setattr(benchmark, "ComputeClient", InertCompute)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr("uvicorn.run", run_app)
-    benchmark.serve(
-        Namespace(
-            directory=str(tmp_path),
-            chats=1,
-            history=0,
-            pdfs=0,
-            calls=1,
-            cpu_seconds=0.05,
-            policy=policy,
-            host="127.0.0.1",
-            port=0,
-            output=tmp_path / "startup.json",
+    (
+        await benchmark.serve(
+            Namespace(
+                directory=str(tmp_path),
+                chats=1,
+                history=0,
+                pdfs=0,
+                calls=1,
+                cpu_seconds=0.05,
+                policy=policy,
+                host="127.0.0.1",
+                port=0,
+                output=tmp_path / "startup.json",
+            )
         )
     )
     assert len(observed) == 1
+
+
+pytestmark = pytest.mark.anyio

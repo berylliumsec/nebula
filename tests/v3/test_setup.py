@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -6,7 +10,6 @@ import os
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -14,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 from alembic import command
 from alembic.config import Config
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from sqlalchemy import create_engine
 
 from nebula.v3.api import create_app
@@ -54,16 +57,18 @@ TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
-def test_status_keeps_event_loop_responsive_while_snapshot_waits(tmp_path, monkeypatch):
+async def test_status_keeps_event_loop_responsive_while_snapshot_waits(
+    tmp_path, monkeypatch
+):
     service = SetupService(NebulaStore(tmp_path / "core.db"), None)
     original_snapshot = service._snapshot
     entered = Event()
     release = Event()
 
-    def waiting_snapshot():
+    async def waiting_snapshot():
         entered.set()
         assert release.wait(timeout=2)
-        return original_snapshot()
+        return await original_snapshot()
 
     monkeypatch.setattr(service, "_snapshot", waiting_snapshot)
 
@@ -80,7 +85,7 @@ def test_status_keeps_event_loop_responsive_while_snapshot_waits(tmp_path, monke
             release.set()
         await task
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def _platform(tmp_path: Path, store: NebulaStore) -> RuntimePlatform:
@@ -103,20 +108,20 @@ def _upgrade_to(engine, revision: str) -> None:
         command.upgrade(config, revision)
 
 
-def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
+async def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "fresh.db")
 
-    assert bootstrap_scratch_project(store) == "scratch-project"
-    scratch = store.get(Engagement, "scratch-project")
+    assert (await bootstrap_scratch_project(store)) == "scratch-project"
+    scratch = await store.get(Engagement, "scratch-project")
     assert scratch.name == "Scratch Project"
     assert scratch.metadata == {
         "created_by": "system:bootstrap",
         "bootstrap_kind": "scratch_project_v1",
     }
     assert scratch.scope_policy_id == "scope:scratch-project"
-    default_scope = store.get(ScopePolicy, scratch.scope_policy_id)
+    default_scope = await store.get(ScopePolicy, scratch.scope_policy_id)
     assert default_scope.engagement_id == scratch.id
     assert default_scope.allowed_cidrs == []
     assert default_scope.allowed_domains == []
@@ -124,7 +129,7 @@ def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
     assert default_scope.allowed_ports == []
     assert default_scope.local_only is False
     assert default_scope.max_concurrency == 1
-    [host_policy] = store.list_entities(
+    [host_policy] = await store.list_entities(
         AutomationProjectPolicy, engagement_id=scratch.id
     )
     assert host_policy.execution_mode == "host"
@@ -133,85 +138,98 @@ def test_fresh_database_creates_scratch_once_and_never_recreates_after_delete(
         host_policy.metadata["host_access_source"] == "pending_operator_acknowledgement"
     )
     assert host_policy.network_enabled is False
-    assert bootstrap_scratch_project(store) == scratch.id
-    assert store.count(Engagement) == 1
+    assert (await bootstrap_scratch_project(store)) == scratch.id
+    assert (await store.count(Engagement)) == 1
 
-    store.delete(Engagement, scratch.id, expected_revision=scratch.revision)
+    (await store.delete(Engagement, scratch.id, expected_revision=scratch.revision))
 
-    assert bootstrap_scratch_project(store) is None
-    assert store.count(Engagement) == 0
+    assert (await bootstrap_scratch_project(store)) is None
+    assert (await store.count(Engagement)) == 0
 
 
-def test_new_project_starts_with_durable_host_policy(tmp_path):
+async def test_new_project_starts_with_durable_host_policy(tmp_path):
     store = NebulaStore(tmp_path / "projects.db")
-    created = create_engagement_with_default_scope(
+    created = await create_engagement_with_default_scope(
         store, Engagement(name="Host project")
     )
 
-    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=created.id)
+    [policy] = await store.list_entities(
+        AutomationProjectPolicy, engagement_id=created.id
+    )
     assert policy.execution_mode == "host"
     assert policy.host_access_acknowledged is False
     assert policy.network_enabled is False
     assert policy.metadata["host_access_source"] == "pending_operator_acknowledgement"
-    assert store.get(AutomationProjectPolicy, policy.id) == policy
+    assert (await store.get(AutomationProjectPolicy, policy.id)) == policy
 
 
-def test_new_project_records_explicit_host_access_in_same_transaction(tmp_path):
+async def test_new_project_records_explicit_host_access_in_same_transaction(tmp_path):
     store = NebulaStore(tmp_path / "consented-project.db")
-    created = create_engagement_with_default_scope(
+    created = await create_engagement_with_default_scope(
         store, Engagement(name="Consented Host project"), host_access_acknowledged=True
     )
 
-    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=created.id)
+    [policy] = await store.list_entities(
+        AutomationProjectPolicy, engagement_id=created.id
+    )
     assert policy.execution_mode == "host"
     assert policy.host_access_acknowledged is True
     assert policy.metadata["host_access_source"] == (
         "project_creation_operator_acknowledgement"
     )
-    assert store.get(Engagement, created.id) == created
+    assert (await store.get(Engagement, created.id)) == created
 
 
-def test_project_create_request_is_atomic_retry_safe_and_retained_after_delete(
+async def test_project_create_request_is_atomic_retry_safe_and_retained_after_delete(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "project-retry.db")
-    first = create_engagement_with_default_scope(
+    first = await create_engagement_with_default_scope(
         store,
         Engagement(name="Retry project"),
         actor_id="operator-a",
         request_id="request-one",
     )
-    replay = create_engagement_with_default_scope(
+    replay = await create_engagement_with_default_scope(
         store,
         Engagement(name="Retry project"),
         actor_id="operator-a",
         request_id="request-one",
     )
     assert replay == first
-    assert store.count(Engagement) == 1
-    assert len(store.list_entities(ScopePolicy, engagement_id=first.id)) == 1
+    assert (await store.count(Engagement)) == 1
+    assert len((await store.list_entities(ScopePolicy, engagement_id=first.id))) == 1
     assert (
-        len(store.list_entities(AutomationProjectPolicy, engagement_id=first.id)) == 1
+        len(
+            (await store.list_entities(AutomationProjectPolicy, engagement_id=first.id))
+        )
+        == 1
     )
-    with store.database.session() as session:
-        receipt = session.get(ProjectCreateRequestRow, ("operator-a", "request-one"))
+    async with store.database.session() as session:
+        receipt = await session.get(
+            ProjectCreateRequestRow, ("operator-a", "request-one")
+        )
         assert receipt is not None and receipt.engagement_id == first.id
 
     with pytest.raises(ConflictError, match="different project details"):
-        create_engagement_with_default_scope(
-            store,
-            Engagement(name="Changed details"),
-            actor_id="operator-a",
-            request_id="request-one",
+        (
+            await create_engagement_with_default_scope(
+                store,
+                Engagement(name="Changed details"),
+                actor_id="operator-a",
+                request_id="request-one",
+            )
         )
     with pytest.raises(ConflictError, match="project name already exists"):
-        create_engagement_with_default_scope(
-            store,
-            Engagement(name="  RETRY   project  "),
-            actor_id="operator-a",
-            request_id="request-two",
+        (
+            await create_engagement_with_default_scope(
+                store,
+                Engagement(name="  RETRY   project  "),
+                actor_id="operator-a",
+                request_id="request-two",
+            )
         )
-    other_actor = create_engagement_with_default_scope(
+    other_actor = await create_engagement_with_default_scope(
         store,
         Engagement(name="Different project"),
         actor_id="operator-b",
@@ -219,39 +237,40 @@ def test_project_create_request_is_atomic_retry_safe_and_retained_after_delete(
     )
     assert other_actor.id != first.id
 
-    store.delete(Engagement, first.id, expected_revision=first.revision)
+    (await store.delete(Engagement, first.id, expected_revision=first.revision))
     with pytest.raises(ConflictError, match="since been deleted"):
-        create_engagement_with_default_scope(
-            store,
-            Engagement(name="Retry project"),
-            actor_id="operator-a",
-            request_id="request-one",
+        (
+            await create_engagement_with_default_scope(
+                store,
+                Engagement(name="Retry project"),
+                actor_id="operator-a",
+                request_id="request-one",
+            )
         )
 
 
-def test_concurrent_project_create_retries_share_one_project(tmp_path):
+async def test_concurrent_project_create_retries_share_one_project(tmp_path):
     store = NebulaStore(tmp_path / "project-race.db")
 
-    def create(_index: int) -> Engagement:
-        return create_engagement_with_default_scope(
+    async def create(_index: int) -> Engagement:
+        return await create_engagement_with_default_scope(
             store,
             Engagement(name="Concurrent project"),
             actor_id="operator-a",
             request_id="same-request",
         )
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        projects = list(pool.map(create, range(2)))
+    projects = list((await asyncio.gather(*(create(_item) for _item in range(2)))))
     assert projects[0].id == projects[1].id
-    assert store.count(Engagement) == 1
+    assert (await store.count(Engagement)) == 1
 
 
-def test_concurrent_butler_creates_cannot_reuse_project_name(tmp_path):
+async def test_concurrent_butler_creates_cannot_reuse_project_name(tmp_path):
     store = NebulaStore(tmp_path / "project-name-race.db")
 
-    def create(index: int) -> str:
+    async def create(index: int) -> str:
         try:
-            created = create_engagement_with_default_scope(
+            created = await create_engagement_with_default_scope(
                 store,
                 Engagement(
                     name="  Concurrent   project  " if index else "Concurrent project"
@@ -264,24 +283,27 @@ def test_concurrent_butler_creates_cannot_reuse_project_name(tmp_path):
             assert "project name already exists" in str(exc)
             return "conflict"
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(create, range(2)))
+    results = list((await asyncio.gather(*(create(_item) for _item in range(2)))))
     assert results.count("conflict") == 1
-    assert store.count(Engagement) == 1
+    assert (await store.count(Engagement)) == 1
 
 
-def test_import_content_arriving_before_first_launch_suppresses_scratch(tmp_path):
+async def test_import_content_arriving_before_first_launch_suppresses_scratch(tmp_path):
     store = NebulaStore(tmp_path / "import.db")
-    imported = store.create(Engagement(name="Imported assessment"))
+    imported = await store.create(Engagement(name="Imported assessment"))
 
-    assert bootstrap_scratch_project(store) is None
-    assert [item.id for item in store.list_entities(Engagement)] == [imported.id]
+    assert (await bootstrap_scratch_project(store)) is None
+    assert [item.id for item in (await store.list_entities(Engagement))] == [
+        imported.id
+    ]
 
-    store.delete(Engagement, imported.id, expected_revision=imported.revision)
-    assert bootstrap_scratch_project(store) is None
+    (await store.delete(Engagement, imported.id, expected_revision=imported.revision))
+    assert (await bootstrap_scratch_project(store)) is None
 
 
-def test_existing_pre_bootstrap_database_is_not_treated_as_a_fresh_install(tmp_path):
+async def test_existing_pre_bootstrap_database_is_not_treated_as_a_fresh_install(
+    tmp_path,
+):
     path = tmp_path / "upgrade.db"
     engine = create_engine(f"sqlite+pysqlite:///{path}", future=True)
     _upgrade_to(engine, "0003_operation_events")
@@ -289,26 +311,33 @@ def test_existing_pre_bootstrap_database_is_not_treated_as_a_fresh_install(tmp_p
 
     store = NebulaStore(Database(path))
 
-    with store.database.session() as session:
-        marker = session.get(BootstrapStateRow, "scratch_project_v1")
+    async with store.database.session() as session:
+        marker = await session.get(BootstrapStateRow, "scratch_project_v1")
         assert marker is not None
         assert marker.status == "complete"
         assert marker.engagement_id is None
-    assert bootstrap_scratch_project(store) is None
-    assert store.count(Engagement) == 0
+    assert (await bootstrap_scratch_project(store)) is None
+    assert (await store.count(Engagement)) == 0
 
 
-def test_concurrent_scratch_bootstrap_is_idempotent(tmp_path):
+async def test_concurrent_scratch_bootstrap_is_idempotent(tmp_path):
     store = NebulaStore(tmp_path / "concurrent.db")
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results = list(pool.map(lambda _: bootstrap_scratch_project(store), range(8)))
+    results = list(
+        (
+            await asyncio.gather(
+                *(
+                    (lambda _: bootstrap_scratch_project(store))(_item)
+                    for _item in range(8)
+                )
+            )
+        )
+    )
 
     assert results == ["scratch-project"] * 8
-    assert store.count(Engagement) == 1
+    assert (await store.count(Engagement)) == 1
 
 
-def test_concurrent_fresh_store_constructors_create_exactly_one_scratch(tmp_path):
+async def test_concurrent_fresh_store_constructors_create_exactly_one_scratch(tmp_path):
     database_path = tmp_path / "concurrent-constructors.db"
     worker_count = 4
     gate_path = tmp_path / "constructor-gate"
@@ -322,17 +351,21 @@ from pathlib import Path
 
 from nebula.v3.setup import bootstrap_scratch_project
 from nebula.v3.storage import NebulaStore
+from nebula.v3.async_utils import close_store_resources
+import asyncio
 
 database_path, gate_path, ready_path = sys.argv[1:]
 Path(ready_path).touch()
 gate = Path(gate_path)
 while not gate.exists():
     time.sleep(0.005)
-store = NebulaStore(database_path)
-try:
-    print(bootstrap_scratch_project(store), flush=True)
-finally:
-    store.database.dispose()
+async def main():
+    store = NebulaStore(database_path)
+    try:
+        print(await bootstrap_scratch_project(store), flush=True)
+    finally:
+        await close_store_resources([store])
+asyncio.run(main())
 """
     environment = os.environ.copy()
     source_root = str(Path(__file__).parents[2] / "src")
@@ -384,20 +417,20 @@ finally:
     ] * worker_count
     store = NebulaStore(database_path)
     try:
-        assert [item.id for item in store.list_entities(Engagement)] == [
+        assert [item.id for item in (await store.list_entities(Engagement))] == [
             "scratch-project"
         ]
-        with store.database.session() as session:
+        async with store.database.session() as session:
             markers = session.query(BootstrapStateRow).all()
         assert len(markers) == 1
         assert markers[0].key == "scratch_project_v1"
         assert markers[0].status == "complete"
         assert markers[0].engagement_id == "scratch-project"
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_interrupted_fresh_migration_preserves_scratch_eligibility(
+async def test_interrupted_fresh_migration_preserves_scratch_eligibility(
     tmp_path, monkeypatch
 ):
     path = tmp_path / "interrupted.db"
@@ -412,19 +445,19 @@ def test_interrupted_fresh_migration_preserves_scratch_eligibility(
     monkeypatch.undo()
     store = NebulaStore(path)
     try:
-        assert bootstrap_scratch_project(store) == "scratch-project"
-        assert store.count(Engagement) == 1
+        assert (await bootstrap_scratch_project(store)) == "scratch-project"
+        assert (await store.count(Engagement)) == 1
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_setup_status_contract_is_authenticated_and_model_optional(tmp_path):
+async def test_setup_status_contract_is_authenticated_and_model_optional(tmp_path):
     store = NebulaStore(tmp_path / "api.db")
     app = create_app(store, auth_token=TOKEN, bootstrap_workspace=True)
     client = TestClient(app)
 
-    assert client.get("/api/v1/setup/status").status_code == 401
-    response = client.get("/api/v1/setup/status", headers=AUTH)
+    assert (await client.get("/api/v1/setup/status")).status_code == 401
+    response = await client.get("/api/v1/setup/status", headers=AUTH)
 
     assert response.status_code == 200
     assert response.json() == {
@@ -464,20 +497,20 @@ def test_setup_status_contract_is_authenticated_and_model_optional(tmp_path):
     }
 
 
-def test_create_app_does_not_bootstrap_embedded_stores_unless_requested(tmp_path):
+async def test_create_app_does_not_bootstrap_embedded_stores_unless_requested(tmp_path):
     store = NebulaStore(tmp_path / "embedded.db")
 
     create_app(store, auth_token=TOKEN)
 
-    assert store.count(Engagement) == 0
+    assert (await store.count(Engagement)) == 0
 
 
-def test_prepared_runtime_survives_health_refresh_but_not_runner_config_change(
+async def test_prepared_runtime_survives_health_refresh_but_not_runner_config_change(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "runner-fingerprint.db")
-    engagement = store.create(Engagement(name="Runner fingerprint"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Runner fingerprint"))
+    profile = await store.create(
         RunnerProfile(
             id="local",
             name="Local Docker",
@@ -504,7 +537,7 @@ def test_prepared_runtime_survives_health_refresh_but_not_runner_config_change(
         ),
         encoding="utf-8",
     )
-    refreshed = store.update(
+    refreshed = await store.update(
         RunnerProfile,
         profile.id,
         {"last_health_at": "2026-07-18T12:00:00Z", "last_health_detail": "ready"},
@@ -512,33 +545,30 @@ def test_prepared_runtime_survives_health_refresh_but_not_runner_config_change(
     )
 
     assert (
-        platform.resolve_operator_runtime(
-            engagement.id, "bash", network=False
-        ).profile.revision
-        == refreshed.revision
-    )
+        await platform.resolve_operator_runtime(engagement.id, "bash", network=False)
+    ).profile.revision == refreshed.revision
 
-    changed = store.update(
+    changed = await store.update(
         RunnerProfile,
         refreshed.id,
         {"context": "alternate-rootless-context"},
         expected_revision=refreshed.revision,
     )
     with pytest.raises(RuntimePlatformError, match="runner has changed"):
-        platform.resolve_operator_runtime(engagement.id, "bash", network=False)
+        (await platform.resolve_operator_runtime(engagement.id, "bash", network=False))
     assert changed.revision > profile.revision
 
 
-def test_human_terminal_runner_admits_only_the_exact_linked_workspace(tmp_path):
+async def test_human_terminal_runner_admits_only_the_exact_linked_workspace(tmp_path):
     store = NebulaStore(tmp_path / "linked-workspace.db")
     linked_workspace = tmp_path / "linked" / "project"
     linked_workspace.mkdir(parents=True)
     sibling_workspace = tmp_path / "linked" / "other-project"
     sibling_workspace.mkdir()
-    engagement = store.create(
+    engagement = await store.create(
         Engagement(name="Linked workspace", workspace_path=str(linked_workspace))
     )
-    profile = store.create(
+    profile = await store.create(
         RunnerProfile(
             id="local",
             name="Local Docker",
@@ -564,7 +594,7 @@ def test_human_terminal_runner_admits_only_the_exact_linked_workspace(tmp_path):
     )
     platform._prepared_images[(profile.id, profile.revision)] = image
 
-    resolution = asyncio.run(platform.resolve_human_terminal_runtime(engagement.id))
+    resolution = await platform.resolve_human_terminal_runtime(engagement.id)
 
     assert resolution.workspace == linked_workspace.resolve()
     assert resolution.runner.egress_controller.certified is True
@@ -597,13 +627,15 @@ def test_human_terminal_runner_admits_only_the_exact_linked_workspace(tmp_path):
         ),
         encoding="utf-8",
     )
-    operator = platform.resolve_operator_runtime(engagement.id, "bash", network=False)
+    operator = await platform.resolve_operator_runtime(
+        engagement.id, "bash", network=False
+    )
     assert operator.workspace == linked_workspace.resolve()
     assert linked_workspace.resolve() in operator.runner.workspace_roots
     assert (tmp_path / "linked").resolve() not in operator.runner.workspace_roots
 
 
-def test_exactly_one_verified_fixed_runtime_is_persisted_as_local(
+async def test_exactly_one_verified_fixed_runtime_is_persisted_as_local(
     tmp_path, monkeypatch
 ):
     runtime = tmp_path / "trusted" / "podman"
@@ -625,7 +657,7 @@ def test_exactly_one_verified_fixed_runtime_is_persisted_as_local(
     store = NebulaStore(tmp_path / "runtime.db")
     service = SetupService(store, _platform(tmp_path, store))
 
-    status = asyncio.run(service.refresh())
+    status = await service.refresh()
 
     assert status.terminal.status == "needs_image"
     assert status.terminal.image_preparation.phase == "not_started"
@@ -633,12 +665,12 @@ def test_exactly_one_verified_fixed_runtime_is_persisted_as_local(
     assert [candidate.executable for candidate in status.terminal.candidates] == [
         str(runtime)
     ]
-    profile = store.get(RunnerProfile, "local")
+    profile = await store.get(RunnerProfile, "local")
     assert profile.executable == str(runtime)
     assert profile.healthy is True
 
 
-def test_multiple_healthy_fixed_runtimes_require_selection_and_persist_nothing(
+async def test_multiple_healthy_fixed_runtimes_require_selection_and_persist_nothing(
     tmp_path, monkeypatch
 ):
     runtimes = (tmp_path / "trusted" / "podman", tmp_path / "trusted" / "docker")
@@ -655,17 +687,17 @@ def test_multiple_healthy_fixed_runtimes_require_selection_and_persist_nothing(
     store = NebulaStore(tmp_path / "ambiguous.db")
     service = SetupService(store, _platform(tmp_path, store))
 
-    status = asyncio.run(service.refresh())
+    status = await service.refresh()
 
     assert status.terminal.status == "needs_runner"
     assert {candidate.runtime.value for candidate in status.terminal.candidates} == {
         "docker",
         "podman",
     }
-    assert store.count(RunnerProfile) == 0
+    assert (await store.count(RunnerProfile)) == 0
 
 
-def test_runtime_detection_never_searches_path_or_environment_override(
+async def test_runtime_detection_never_searches_path_or_environment_override(
     tmp_path, monkeypatch
 ):
     untrusted = tmp_path / "path" / "docker"
@@ -678,14 +710,14 @@ def test_runtime_detection_never_searches_path_or_environment_override(
     store = NebulaStore(tmp_path / "no-path.db")
     service = SetupService(store, _platform(tmp_path, store))
 
-    status = asyncio.run(service.refresh())
+    status = await service.refresh()
 
     assert status.terminal.status == "needs_runner"
     assert status.terminal.candidates == []
-    assert store.count(RunnerProfile) == 0
+    assert (await store.count(RunnerProfile)) == 0
 
 
-def test_fixed_candidate_selection_is_idempotent_and_never_accepts_a_path(
+async def test_fixed_candidate_selection_is_idempotent_and_never_accepts_a_path(
     tmp_path, monkeypatch
 ):
     runtimes = (tmp_path / "trusted" / "podman", tmp_path / "trusted" / "docker")
@@ -722,7 +754,7 @@ def test_fixed_candidate_selection_is_idempotent_and_never_accepts_a_path(
             )
         return selected_candidate, selected, repeated
 
-    candidate, selected, repeated = asyncio.run(scenario())
+    candidate, selected, repeated = await scenario()
 
     assert selected.accepted is True
     assert selected.idempotent is False
@@ -730,12 +762,12 @@ def test_fixed_candidate_selection_is_idempotent_and_never_accepts_a_path(
     assert repeated.setup.terminal.status == "needs_image"
     assert selected.setup.terminal.runner_profile_id == "local"
     assert repeated.idempotent is True
-    profile = store.get(RunnerProfile, "local")
+    profile = await store.get(RunnerProfile, "local")
     assert profile.executable == candidate.executable == str(runtimes[0])
     assert profile.context == candidate.context
 
 
-def test_setup_event_replay_is_monotonic_snapshot_bounded_and_reports_gaps(
+async def test_setup_event_replay_is_monotonic_snapshot_bounded_and_reports_gaps(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(ContainerSandboxRunner, "_trusted_runtime_paths", ())
@@ -747,7 +779,7 @@ def test_setup_event_replay_is_monotonic_snapshot_bounded_and_reports_gaps(
         await service.refresh()
         await service.refresh()
 
-    asyncio.run(refresh_repeatedly())
+    (await refresh_repeatedly())
     replay = service.replay_events(0)
 
     assert replay.truncated is True
@@ -761,18 +793,22 @@ def test_setup_event_replay_is_monotonic_snapshot_bounded_and_reports_gaps(
     assert replay.events[-1].snapshot.terminal.status == "needs_runner"
 
 
-def test_image_preparation_reports_phases_can_cancel_and_retry(tmp_path, monkeypatch):
+async def test_image_preparation_reports_phases_can_cancel_and_retry(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "preparation.db")
-    project = store.create(Engagement(name="Image preparation"))
-    store.create(
-        RunnerProfile(
-            id="local",
-            name="Local Podman",
-            runtime="podman",
-            executable="/usr/bin/podman",
-            platform="linux/amd64",
-            isolation="rootless",
-            healthy=True,
+    project = await store.create(Engagement(name="Image preparation"))
+    (
+        await store.create(
+            RunnerProfile(
+                id="local",
+                name="Local Podman",
+                runtime="podman",
+                executable="/usr/bin/podman",
+                platform="linux/amd64",
+                isolation="rootless",
+                healthy=True,
+            )
         )
     )
     platform = _platform(tmp_path, store)
@@ -850,7 +886,7 @@ def test_image_preparation_reports_phases_can_cancel_and_retry(tmp_path, monkeyp
         repeated_cancel,
         final_retry,
         ready,
-    ) = asyncio.run(scenario())
+    ) = await scenario()
 
     assert first.operation_id != retry.operation_id != final_retry.operation_id
     assert duplicate.idempotent is True
@@ -876,7 +912,7 @@ def test_image_preparation_reports_phases_can_cancel_and_retry(tmp_path, monkeyp
     assert "image_preparation_ready" in reasons
 
 
-def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
+async def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
     tmp_path, monkeypatch
 ):
     runtimes = (tmp_path / "trusted" / "podman", tmp_path / "trusted" / "docker")
@@ -911,40 +947,43 @@ def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
         tool_platform=platform,
     )
 
-    with TestClient(app) as client:
-        assert client.get("/api/v1/setup/events?follow=false").status_code == 401
+    async with TestClient(app) as client:
         assert (
-            client.post(
+            await client.get("/api/v1/setup/events?follow=false")
+        ).status_code == 401
+        assert (
+            await client.post(
                 "/api/v1/setup/runtime/select",
                 json={"candidate_id": "fixed:" + "a" * 32},
-            ).status_code
-            == 401
-        )
+            )
+        ).status_code == 401
 
-        refreshed = client.post("/api/v1/setup/runtime/refresh", headers=AUTH).json()
+        refreshed = (
+            await client.post("/api/v1/setup/runtime/refresh", headers=AUTH)
+        ).json()
         candidate_id = refreshed["terminal"]["candidates"][0]["candidate_id"]
-        rejected_path = client.post(
+        rejected_path = await client.post(
             "/api/v1/setup/runtime/select",
             headers=AUTH,
             json={"candidate_id": candidate_id, "executable": "/tmp/evil"},
         )
         assert rejected_path.status_code == 422
 
-        selected = client.post(
+        selected = await client.post(
             "/api/v1/setup/runtime/select",
             headers=AUTH,
             json={"candidate_id": candidate_id},
         )
         assert selected.status_code == 200
         assert selected.json()["setup"]["terminal"]["runner_profile_id"] == "local"
-        repeated = client.post(
+        repeated = await client.post(
             "/api/v1/setup/runtime/select",
             headers=AUTH,
             json={"candidate_id": candidate_id},
         )
         assert repeated.json()["idempotent"] is True
 
-        prepared = client.post(
+        prepared = await client.post(
             "/api/v1/setup/image/prepare",
             headers=AUTH,
             json={"project_id": "scratch-project"},
@@ -952,26 +991,26 @@ def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
         assert prepared.status_code == 200
         operation_id = prepared.json()["operation_id"]
         for _ in range(100):
-            status = client.get("/api/v1/setup/status", headers=AUTH).json()
+            status = (await client.get("/api/v1/setup/status", headers=AUTH)).json()
             if status["terminal"]["image_preparation"]["phase"] == "ready":
                 break
         else:
             pytest.fail("image preparation API did not reach ready")
 
-        retried = client.post(
+        retried = await client.post(
             "/api/v1/setup/image/retry",
             headers=AUTH,
             json={"project_id": "scratch-project"},
         )
         assert retried.json()["idempotent"] is True
-        cancelled_ready = client.post(
+        cancelled_ready = await client.post(
             "/api/v1/setup/image/cancel",
             headers=AUTH,
             json={"operation_id": operation_id},
         )
         assert cancelled_ready.json()["idempotent"] is True
 
-        events = client.get("/api/v1/setup/events?follow=false", headers=AUTH)
+        events = await client.get("/api/v1/setup/events?follow=false", headers=AUTH)
         assert events.status_code == 200
         assert events.headers["content-type"].startswith("text/event-stream")
         ids = [
@@ -991,7 +1030,7 @@ def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
         )
         assert all("snapshot" in payload for payload in payloads)
 
-        resumed = client.get(
+        resumed = await client.get(
             "/api/v1/setup/events?follow=false",
             headers={**AUTH, "Last-Event-ID": str(ids[-2])},
         )
@@ -1003,7 +1042,7 @@ def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
         assert resumed_ids == [ids[-1]]
 
 
-def test_idle_image_preparation_reports_needs_image_not_preparing(
+async def test_idle_image_preparation_reports_needs_image_not_preparing(
     tmp_path, monkeypatch
 ):
     runtime = tmp_path / "trusted" / "podman"
@@ -1017,7 +1056,7 @@ def test_idle_image_preparation_reports_needs_image_not_preparing(
 
     monkeypatch.setattr(ContainerSandboxRunner, "available", healthy)
     store = NebulaStore(tmp_path / "idle-image.db")
-    project = store.create(Engagement(name="Idle image"))
+    project = await store.create(Engagement(name="Idle image"))
     platform = _platform(tmp_path, store)
     service = SetupService(store, platform)
     started = asyncio.Event()
@@ -1057,7 +1096,7 @@ def test_idle_image_preparation_reports_needs_image_not_preparing(
             await asyncio.sleep(0)
         return detected, preparing, cancelled, ready
 
-    detected, preparing, cancelled, ready = asyncio.run(scenario())
+    detected, preparing, cancelled, ready = await scenario()
 
     # A selected runner with nothing running is idle, not "preparing_image":
     # Settings would otherwise show "Preparing Kali runtime…" and poll forever.
@@ -1073,3 +1112,6 @@ def test_idle_image_preparation_reports_needs_image_not_preparing(
     assert cancelled.setup.terminal.image_preparation.can_retry is True
     assert ready.terminal.image_preparation.phase == "ready"
     assert ready.terminal.status == "ready"
+
+
+pytestmark = pytest.mark.anyio

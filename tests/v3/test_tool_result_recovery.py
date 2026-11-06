@@ -1,6 +1,10 @@
 """Large chat tool results retain an authorized retrieval path."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import json
 from pathlib import Path
@@ -28,13 +32,13 @@ from nebula.v3.tool_results import (
 from nebula.v3.tools import ToolExecutionResult, ToolInvocation
 
 
-def _delivery(tmp_path: Path) -> tuple[ChatService, ToolInvocation, NebulaStore]:
+async def _delivery(tmp_path: Path) -> tuple[ChatService, ToolInvocation, NebulaStore]:
     store = NebulaStore(tmp_path / "core.db")
-    engagement = store.create(Engagement(name="Delivery"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Delivery"))
+    profile = await store.create(
         ProviderProfile(name="Local", provider_type="vllm", is_local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Manifest",
@@ -42,7 +46,7 @@ def _delivery(tmp_path: Path) -> tuple[ChatService, ToolInvocation, NebulaStore]
             model="test-model",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -74,12 +78,12 @@ def _manifest() -> dict:
     return result
 
 
-def test_oversized_capability_result_has_authorized_artifact_and_replays(
+async def test_oversized_capability_result_has_authorized_artifact_and_replays(
     tmp_path: Path,
 ) -> None:
-    chat, invocation, store = _delivery(tmp_path)
+    chat, invocation, store = await _delivery(tmp_path)
     manifest = _manifest()
-    fields, waiting = chat._tool_result_entry(
+    fields, waiting = await chat._tool_result_entry(
         ToolExecutionResult(output=manifest),
         invocation=invocation,
         spec=subagent_specs()["list_subagent_capabilities"],
@@ -103,7 +107,7 @@ def test_oversized_capability_result_has_authorized_artifact_and_replays(
     chunks = []
     cursor = None
     while True:
-        page = service.read(
+        page = await service.read(
             engagement_id=invocation.engagement_id,
             owner_id=invocation.run_id,
             artifact_id=delivered["artifact_id"],
@@ -116,24 +120,26 @@ def test_oversized_capability_result_has_authorized_artifact_and_replays(
             break
     assert json.loads("".join(chunks)) == manifest
     with pytest.raises(ToolOutputAccessError):
-        service.read(
-            engagement_id=invocation.engagement_id,
-            owner_id="other-turn",
-            artifact_id=delivered["artifact_id"],
+        (
+            await service.read(
+                engagement_id=invocation.engagement_id,
+                owner_id="other-turn",
+                artifact_id=delivered["artifact_id"],
+            )
         )
 
 
-def test_failed_large_result_artifact_write_is_explicitly_incomplete(
+async def test_failed_large_result_artifact_write_is_explicitly_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    chat, invocation, _ = _delivery(tmp_path)
+    chat, invocation, _ = await _delivery(tmp_path)
 
     def fail_write(*args: object, **kwargs: object) -> None:
         raise OSError("synthetic write failure")
 
     assert chat.artifact_store is not None
     monkeypatch.setattr(chat.artifact_store, "put_bytes_with_status", fail_write)
-    fields, _ = chat._tool_result_entry(
+    fields, _ = await chat._tool_result_entry(
         ToolExecutionResult(output=_manifest()),
         invocation=invocation,
         spec=subagent_specs()["list_subagent_capabilities"],
@@ -145,3 +151,6 @@ def test_failed_large_result_artifact_write_is_explicitly_incomplete(
     assert delivered["status"] == "incomplete"
     assert delivered.get("artifact_id") is None
     assert "persistence failed" in delivered["warning"]
+
+
+pytestmark = pytest.mark.anyio

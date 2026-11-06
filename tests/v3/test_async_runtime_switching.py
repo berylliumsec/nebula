@@ -1,5 +1,10 @@
 """The same Core goal follows an explicitly selected runtime at an idle boundary."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 from contextlib import asynccontextmanager
 
@@ -95,7 +100,7 @@ def request(session, provider):
         ChatGoalStatus.BLOCKED,
     ],
 )
-def test_idle_switch_retains_goal_identity_status_and_budgets(tmp_path, status):
+async def test_idle_switch_retains_goal_identity_status_and_budgets(tmp_path, status):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             goal = await store.create(
@@ -122,10 +127,12 @@ def test_idle_switch_retains_goal_identity_status_and_budgets(tmp_path, status):
             assert saved.metadata["assistant_config"]["backend"] == "provider"
             assert await store.get(ChatGoal, goal.id) == goal
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_active_turn_selection_is_persisted_then_activates_after_settlement(tmp_path):
+async def test_active_turn_selection_is_persisted_then_activates_after_settlement(
+    tmp_path,
+):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             turn = await store.create(
@@ -163,10 +170,10 @@ def test_active_turn_selection_is_persisted_then_activates_after_settlement(tmp_
             assert current.backend == ChatBackend.PROVIDER
             assert "pending_runtime_switch" not in current.metadata
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_saved_follow_up_preserves_its_authorized_runtime_until_removed(tmp_path):
+async def test_saved_follow_up_preserves_its_authorized_runtime_until_removed(tmp_path):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             queue = await store.create(
@@ -200,10 +207,10 @@ def test_saved_follow_up_preserves_its_authorized_runtime_until_removed(tmp_path
                 current = await store.get(ChatSession, session.id)
             assert current.backend == ChatBackend.PROVIDER
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_metadata_only_settings_writer_uses_the_same_runtime_switch(tmp_path):
+async def test_metadata_only_settings_writer_uses_the_same_runtime_switch(tmp_path):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             saved = await update_chat_assistant_config(
@@ -221,10 +228,10 @@ def test_metadata_only_settings_writer_uses_the_same_runtime_switch(tmp_path):
                 == saved.provider_profile_id
             )
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_explicit_resume_repairs_legacy_split_runtime_without_a_message(tmp_path):
+async def test_explicit_resume_repairs_legacy_split_runtime_without_a_message(tmp_path):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             session = await store.update(
@@ -258,17 +265,17 @@ def test_explicit_resume_repairs_legacy_split_runtime_without_a_message(tmp_path
                 await store.get(ChatSession, session.id)
             ).backend == ChatBackend.PROVIDER
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_competing_runtime_selection_rejects_stale_revision(tmp_path):
+async def test_competing_runtime_selection_rejects_stale_revision(tmp_path):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             await chat.apply_runtime_switch(session.id, request(session, provider))
             with pytest.raises(ChatHistoryConflict):
                 await chat.apply_runtime_switch(session.id, request(session, provider))
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
 async def _settled_session(store, session_id):
@@ -281,7 +288,9 @@ async def _settled_session(store, session_id):
             await asyncio.sleep(0.01)
 
 
-def test_goal_claim_release_activates_selection_without_changing_goal_state(tmp_path):
+async def test_goal_claim_release_activates_selection_without_changing_goal_state(
+    tmp_path,
+):
     from nebula.v3.domain import utc_now
 
     async def exercise():
@@ -317,10 +326,10 @@ def test_goal_claim_release_activates_selection_without_changing_goal_state(tmp_
             ).backend == ChatBackend.PROVIDER
             assert await store.get(ChatGoal, goal.id) == released
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_deferred_compaction_confirmation_requires_review_after_context_changes(
+async def test_deferred_compaction_confirmation_requires_review_after_context_changes(
     tmp_path, monkeypatch
 ):
     from types import SimpleNamespace
@@ -381,10 +390,10 @@ def test_deferred_compaction_confirmation_requires_review_after_context_changes(
                 in current.metadata["pending_runtime_switch"]["reason"].lower()
             )
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_simultaneous_switches_commit_only_one_revision(tmp_path):
+async def test_simultaneous_switches_commit_only_one_revision(tmp_path):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             results = await asyncio.gather(
@@ -406,10 +415,12 @@ def test_simultaneous_switches_commit_only_one_revision(tmp_path):
             assert current.revision == session.revision + 1
             assert current.backend == ChatBackend.PROVIDER
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_resumed_harness_goal_continues_on_provider_in_the_same_conversation(tmp_path):
+async def test_resumed_harness_goal_continues_on_provider_in_the_same_conversation(
+    tmp_path,
+):
     from nebula.v3.domain import ChatMessage, ChatRole
 
     async def exercise():
@@ -477,10 +488,10 @@ def test_resumed_harness_goal_continues_on_provider_in_the_same_conversation(tmp
             assert len(await store.list_session_entities(ChatTurn, session.id)) == 1
             await chat.shutdown()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_deferred_switch_preserves_later_settings_and_transcript_cursor(tmp_path):
+async def test_deferred_switch_preserves_later_settings_and_transcript_cursor(tmp_path):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             turn = await store.create(
@@ -522,10 +533,10 @@ def test_deferred_switch_preserves_later_settings_and_transcript_cursor(tmp_path
             assert saved.metadata["include_knowledge"] is False
             assert saved.metadata["assistant_config"]["planning_enabled"] is True
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_conflicting_setting_edit_keeps_selection_for_review(tmp_path):
+async def test_conflicting_setting_edit_keeps_selection_for_review(tmp_path):
     async def exercise():
         async with fixture(tmp_path) as (store, chat, session, provider):
             turn = await store.create(
@@ -565,11 +576,13 @@ def test_conflicting_setting_edit_keeps_selection_for_review(tmp_path):
             assert saved.metadata["tools_enabled"] is True
             assert saved.metadata["pending_runtime_switch"]["status"] == "needs_review"
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
 @pytest.mark.parametrize("changed", ["privacy", "mode"])
-def test_deferred_harness_selection_revalidates_policy_and_options(tmp_path, changed):
+async def test_deferred_harness_selection_revalidates_policy_and_options(
+    tmp_path, changed
+):
     from nebula.v3.domain import HarnessProfile, ScopePolicy
 
     async def exercise():
@@ -642,10 +655,10 @@ def test_deferred_harness_selection_revalidates_policy_and_options(tmp_path, cha
                 and "mode" in saved.metadata["pending_runtime_switch"]["reason"]
             )
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_target_revision_change_between_preflight_and_commit_is_rejected(
+async def test_target_revision_change_between_preflight_and_commit_is_rejected(
     tmp_path, monkeypatch
 ):
     async def exercise():
@@ -673,10 +686,10 @@ def test_target_revision_change_between_preflight_and_commit_is_rejected(
                 await store.get(ChatSession, session.id)
             ).backend == ChatBackend.HARNESS
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_deferred_compaction_consent_survives_only_its_own_selection_revision(
+async def test_deferred_compaction_consent_survives_only_its_own_selection_revision(
     tmp_path, monkeypatch
 ):
     from types import SimpleNamespace
@@ -748,4 +761,7 @@ def test_deferred_compaction_consent_survives_only_its_own_selection_revision(
             assert saved.backend == ChatBackend.PROVIDER
             assert "pending_runtime_switch" not in saved.metadata
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

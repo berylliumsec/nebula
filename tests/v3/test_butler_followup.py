@@ -1,6 +1,9 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -37,11 +40,11 @@ def _work(tmp_path):
     return store, app.state.control_assistant_work
 
 
-def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
+async def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
     store, work = _work(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Other"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -49,7 +52,7 @@ def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main",
@@ -57,7 +60,7 @@ def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             model="model-a",
         )
     )
-    child = store.create(
+    child = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Delegated child",
@@ -67,7 +70,7 @@ def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             metadata={"subagent_id": "sub-1"},
         )
     )
-    goal_child = store.create(
+    goal_child = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Goal child",
@@ -77,18 +80,20 @@ def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             metadata={"delegated_from_goal_id": "goal-1"},
         )
     )
-    store.create(
-        ChatSubagent(
-            id="sub-1",
-            engagement_id=project.id,
-            parent_session_id=parent.id,
-            parent_turn_id="parent-turn",
-            child_session_id=child.id,
-            name="Files",
-            task="Inspect files",
+    (
+        await store.create(
+            ChatSubagent(
+                id="sub-1",
+                engagement_id=project.id,
+                parent_session_id=parent.id,
+                parent_turn_id="parent-turn",
+                child_session_id=child.id,
+                name="Files",
+                task="Inspect files",
+            )
         )
     )
-    nested = store.create(
+    nested = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Nested delegated child",
@@ -98,15 +103,17 @@ def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             metadata={"subagent_id": "sub-2"},
         )
     )
-    store.create(
-        ChatSubagent(
-            id="sub-2",
-            engagement_id=project.id,
-            parent_session_id=child.id,
-            parent_turn_id="child-turn",
-            child_session_id=nested.id,
-            name="Nested",
-            task="Check details",
+    (
+        await store.create(
+            ChatSubagent(
+                id="sub-2",
+                engagement_id=project.id,
+                parent_session_id=child.id,
+                parent_turn_id="child-turn",
+                child_session_id=nested.id,
+                name="Nested",
+                task="Check details",
+            )
         )
     )
     assert work.subagent_detail(project.id, "sub-1")["parent_session_id"] == parent.id
@@ -183,7 +190,7 @@ def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
             "content"
         ] == ("Please redirect Files to the new question")
 
-    asyncio.run(scenario())
+    (await scenario())
     actions = work.catalog(project.id)["actions"]
     assert {
         "nebula.work.fork_chat",
@@ -193,11 +200,11 @@ def test_butler_messages_parent_and_rejects_child_queue_paths(tmp_path):
     assert "nebula.work.message_subagent" not in actions
 
 
-def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypatch):
+async def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypatch):
     store, work = _work(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Other"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         HarnessProfile(
             name="Claude fixture",
             kind=HarnessKind.CLAUDE_AGENT_SDK,
@@ -207,7 +214,7 @@ def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypatch):
             native_capabilities={"subagents": True},
         )
     )
-    session = store.create(
+    session = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
@@ -215,7 +222,7 @@ def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypatch):
             metadata={"native_capabilities": {"subagents": True}},
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main harness",
@@ -225,7 +232,7 @@ def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypatch):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=session.id,
@@ -237,19 +244,21 @@ def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypatch):
         )
     )
     work.harness._active[session.id] = SimpleNamespace(turn_id=turn.id)
-    store.append_operation_event(
-        turn.id,
-        "harness_turn",
-        project.id,
-        "harness.item_upsert",
-        {
-            "type": "item_upsert",
-            "item_kind": "subagent",
-            "item_id": "task-1",
-            "item_status": "running",
-            "title": "Code review",
-            "summary": "Checking repository",
-        },
+    (
+        await store.append_operation_event(
+            turn.id,
+            "harness_turn",
+            project.id,
+            "harness.item_upsert",
+            {
+                "type": "item_upsert",
+                "item_kind": "subagent",
+                "item_id": "task-1",
+                "item_status": "running",
+                "title": "Code review",
+                "summary": "Checking repository",
+            },
+        )
     )
     roster = work.subagents_overview(project.id, {})
     native = roster["native_subagents"][0]
@@ -270,38 +279,38 @@ def test_butler_native_harness_subagent_roster_and_stop(tmp_path, monkeypatch):
     async def fake_request(method, path, body, **kwargs):
         assert method == "POST"
         assert path.endswith(f"/harness-turns/{turn.id}/tasks/task-1/stop")
-        store.append_operation_event(
-            turn.id,
-            "harness_turn",
-            project.id,
-            "harness.item_upsert",
-            {
-                "type": "item_upsert",
-                "item_kind": "subagent",
-                "item_id": "task-1",
-                "item_status": "cancelled",
-                "title": "Code review",
-            },
+        (
+            await store.append_operation_event(
+                turn.id,
+                "harness_turn",
+                project.id,
+                "harness.item_upsert",
+                {
+                    "type": "item_upsert",
+                    "item_kind": "subagent",
+                    "item_id": "task-1",
+                    "item_status": "cancelled",
+                    "title": "Code review",
+                },
+            )
         )
         return {}
 
     monkeypatch.setattr(work, "_request", fake_request)
-    stopped = asyncio.run(
-        dispatch_work_tool(
-            work,
-            project.id,
-            "nebula.work.stop_native_subagent",
-            {"turn_id": turn.id, "task_id": "task-1"},
-        )
+    stopped = await dispatch_work_tool(
+        work,
+        project.id,
+        "nebula.work.stop_native_subagent",
+        {"turn_id": turn.id, "task_id": "task-1"},
     )
     assert stopped["status"] == "cancelled"
     assert stopped["can_stop"] is False
 
 
-def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
+async def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
     store, work = _work(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -310,14 +319,14 @@ def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
             capabilities=HarnessCapabilities(models=["model-a"]),
         )
     )
-    session = store.create(
+    session = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
             model="model-a",
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main harness",
@@ -327,7 +336,7 @@ def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=session.id,
@@ -338,28 +347,32 @@ def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
             status=HarnessTurnStatus.COMPLETE,
         )
     )
-    store.update(
-        HarnessSession,
-        session.id,
-        {"last_turn_id": turn.id},
-        expected_revision=session.revision,
+    (
+        await store.update(
+            HarnessSession,
+            session.id,
+            {"last_turn_id": turn.id},
+            expected_revision=session.revision,
+        )
     )
-    store.append_operation_event(
-        turn.id,
-        "harness_turn",
-        project.id,
-        "harness.item_upsert",
-        {
-            "type": "item_upsert",
-            "item_kind": "goal",
-            "item_id": "native-goal",
-            "item_status": "running",
-            "goal": {
-                "objective": "Audit code",
-                "status": "running",
-                "progress": 0.4,
+    (
+        await store.append_operation_event(
+            turn.id,
+            "harness_turn",
+            project.id,
+            "harness.item_upsert",
+            {
+                "type": "item_upsert",
+                "item_kind": "goal",
+                "item_id": "native-goal",
+                "item_status": "running",
+                "goal": {
+                    "objective": "Audit code",
+                    "status": "running",
+                    "progress": 0.4,
+                },
             },
-        },
+        )
     )
     detail = work.goal_detail(project.id, chat.id)
     assert detail["goal"] is None
@@ -373,3 +386,6 @@ def test_butler_labels_native_harness_goals_as_read_only(tmp_path):
         work.overview(project.id)["chats"][0]["native_harness_goal"]["source"]
         == "native_harness"
     )
+
+
+pytestmark = pytest.mark.anyio

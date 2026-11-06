@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import hashlib
 import json
 import zipfile
@@ -34,12 +38,12 @@ def _sha256(value):
     return hashlib.sha256(value).hexdigest()
 
 
-def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
+async def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Exported engagement"))
+    engagement = await store.create(Engagement(name="Exported engagement"))
     first = artifacts.put_bytes(
         b"immutable evidence",
         engagement_id=engagement.id,
@@ -50,30 +54,34 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
         engagement_id=engagement.id,
         filename="copy.txt",
     )
-    store.create(first)
-    store.create(second)
-    store.create(
-        Evidence(
-            engagement_id=engagement.id,
-            evidence_type="command-output",
-            title="Proof",
-            artifact_id=first.id,
-            sha256=first.sha256,
-            captured_by="operator",
+    (await store.create(first))
+    (await store.create(second))
+    (
+        await store.create(
+            Evidence(
+                engagement_id=engagement.id,
+                evidence_type="command-output",
+                title="Proof",
+                artifact_id=first.id,
+                sha256=first.sha256,
+                captured_by="operator",
+            )
         )
     )
-    run = store.create(
+    run = await store.create(
         AgentRun(engagement_id=engagement.id, objective="Export this run")
     )
-    store.append_event(
-        run.id,
-        "run.started",
-        {"objective": run.objective},
-        idempotency_key="run:started",
+    (
+        await store.append_event(
+            run.id,
+            "run.started",
+            {"objective": run.objective},
+            idempotency_key="run:started",
+        )
     )
     destination = tmp_path / "engagement.nebula.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -104,11 +112,11 @@ def test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest(
         assert json.loads(archive.read("terminal_commands.json")) == []
 
 
-def test_bundle_v3_includes_append_only_operation_events(tmp_path):
+async def test_bundle_v3_includes_append_only_operation_events(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Operation event export"))
-    event = store.append_operation_event(
+    engagement = await store.create(Engagement(name="Operation event export"))
+    event = await store.append_operation_event(
         "execution-1",
         "operator_execution",
         engagement.id,
@@ -119,7 +127,7 @@ def test_bundle_v3_includes_append_only_operation_events(tmp_path):
     )
     destination = tmp_path / "operations.nebula.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -135,43 +143,47 @@ def test_bundle_v3_includes_append_only_operation_events(tmp_path):
     assert archived == [event.model_dump(mode="json")]
 
 
-def test_export_is_atomic_on_integrity_failure_and_refuses_overwrite(tmp_path):
+async def test_export_is_atomic_on_integrity_failure_and_refuses_overwrite(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Integrity failure"))
+    engagement = await store.create(Engagement(name="Integrity failure"))
     artifact = artifacts.put_bytes(b"evidence", engagement_id=engagement.id)
-    store.create(artifact)
+    (await store.create(artifact))
     destination = tmp_path / "bundle.zip"
     artifacts.path_for(artifact).unlink()
 
     with pytest.raises(ExportError, match="integrity verification"):
-        export_engagement(
-            engagement_id=engagement.id,
-            destination=destination,
-            store=store,
-            artifact_store=artifacts,
+        (
+            await export_engagement(
+                engagement_id=engagement.id,
+                destination=destination,
+                store=store,
+                artifact_store=artifacts,
+            )
         )
     assert not destination.exists()
 
     destination.write_bytes(b"existing export")
     with pytest.raises(ExportError, match="destination already exists"):
-        export_engagement(
-            engagement_id=engagement.id,
-            destination=destination,
-            store=store,
-            artifact_store=artifacts,
+        (
+            await export_engagement(
+                engagement_id=engagement.id,
+                destination=destination,
+                store=store,
+                artifact_store=artifacts,
+            )
         )
     assert destination.read_bytes() == b"existing export"
 
 
-def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
+async def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Context export"))
-    provider = store.create(
+    engagement = await store.create(Engagement(name="Context export"))
+    provider = await store.create(
         ProviderProfile(name="Context provider", provider_type="openai")
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Exported chat",
@@ -179,7 +191,7 @@ def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
             model="model-a",
         )
     )
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id=session.id,
@@ -188,7 +200,7 @@ def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
             content="Remember CVE-2026-4242.",
         )
     )
-    snapshot = store.create(
+    snapshot = await store.create(
         ContextSnapshot(
             engagement_id=engagement.id,
             owner_type=ContextOwnerType.CHAT_SESSION,
@@ -209,7 +221,7 @@ def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
             source_sha256="a" * 64,
         )
     )
-    failed = store.create(
+    failed = await store.create(
         ContextSnapshot(
             engagement_id=engagement.id,
             owner_type=ContextOwnerType.CHAT_SESSION,
@@ -233,7 +245,7 @@ def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
     )
     destination = tmp_path / "context.nebula.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -248,23 +260,31 @@ def test_export_includes_successful_and_failed_context_snapshots(tmp_path):
     assert ready["memory"]["summary"] == "CVE context retained."
 
 
-def test_export_includes_only_referenced_global_entities_and_system_blobs(tmp_path):
+async def test_export_includes_only_referenced_global_entities_and_system_blobs(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    operator = store.create(OperatorProfile(display_name="Export Owner"))
-    store.create(OperatorProfile(display_name="Unrelated Operator"))
-    provider = store.create(
+    operator = await store.create(OperatorProfile(display_name="Export Owner"))
+    (await store.create(OperatorProfile(display_name="Unrelated Operator")))
+    provider = await store.create(
         ProviderProfile(name="Export Provider", provider_type="openai")
     )
-    store.create(ProviderProfile(name="Unrelated Provider", provider_type="openai"))
-    engagement = store.create(
+    (
+        await store.create(
+            ProviderProfile(name="Unrelated Provider", provider_type="openai")
+        )
+    )
+    engagement = await store.create(
         Engagement(name="Referenced globals", owner_id=operator.id)
     )
-    store.create(
-        AgentRun(
-            engagement_id=engagement.id,
-            objective="Use the configured provider",
-            supervisor_provider_id=provider.id,
+    (
+        await store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Use the configured provider",
+                supervisor_provider_id=provider.id,
+            )
         )
     )
     system_artifact = artifacts.put_bytes(
@@ -272,15 +292,15 @@ def test_export_includes_only_referenced_global_entities_and_system_blobs(tmp_pa
         engagement_id="system:vulnerability-intelligence",
         filename="feed.json",
     )
-    store.create(system_artifact)
-    snapshot = store.create(
+    (await store.create(system_artifact))
+    snapshot = await store.create(
         SourceSnapshot(
             source="test-feed",
             sha256=system_artifact.sha256,
             artifact_id=system_artifact.id,
         )
     )
-    advisory = store.create(
+    advisory = await store.create(
         Advisory(
             advisory_id="CVE-2099-0001",
             source="test-feed",
@@ -288,26 +308,30 @@ def test_export_includes_only_referenced_global_entities_and_system_blobs(tmp_pa
             source_snapshot_id=snapshot.id,
         )
     )
-    store.create(
-        Advisory(
-            advisory_id="CVE-2099-9999",
-            source="test-feed",
-            title="Unrelated advisory",
+    (
+        await store.create(
+            Advisory(
+                advisory_id="CVE-2099-9999",
+                source="test-feed",
+                title="Unrelated advisory",
+            )
         )
     )
-    store.create(
-        Correlation(
-            engagement_id=engagement.id,
-            advisory_id=advisory.advisory_id,
-            method="purl",
-            confidence=1,
-            rationale="Exact package match",
-            analyst_id=operator.id,
+    (
+        await store.create(
+            Correlation(
+                engagement_id=engagement.id,
+                advisory_id=advisory.advisory_id,
+                method="purl",
+                confidence=1,
+                rationale="Exact package match",
+                analyst_id=operator.id,
+            )
         )
     )
     destination = tmp_path / "globals.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -335,39 +359,43 @@ def test_export_includes_only_referenced_global_entities_and_system_blobs(tmp_pa
         )
 
 
-def test_export_global_advisory_lookup_is_paginated(tmp_path):
+async def test_export_global_advisory_lookup_is_paginated(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Paginated intelligence"))
-    store.create_many(
-        [
-            Advisory(
-                advisory_id=f"CVE-2098-{index:04d}",
-                source="unrelated",
-                title=f"Unrelated advisory {index}",
-            )
-            for index in range(1_001)
-        ]
+    engagement = await store.create(Engagement(name="Paginated intelligence"))
+    (
+        await store.create_many(
+            [
+                Advisory(
+                    advisory_id=f"CVE-2098-{index:04d}",
+                    source="unrelated",
+                    title=f"Unrelated advisory {index}",
+                )
+                for index in range(1_001)
+            ]
+        )
     )
-    referenced = store.create(
+    referenced = await store.create(
         Advisory(
             advisory_id="CVE-2099-4242",
             source="last-page",
             title="Referenced advisory",
         )
     )
-    store.create(
-        Correlation(
-            engagement_id=engagement.id,
-            advisory_id=referenced.advisory_id,
-            method="purl",
-            confidence=1,
-            rationale="Exact match",
+    (
+        await store.create(
+            Correlation(
+                engagement_id=engagement.id,
+                advisory_id=referenced.advisory_id,
+                method="purl",
+                confidence=1,
+                rationale="Exact match",
+            )
         )
     )
     destination = tmp_path / "paginated.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -380,63 +408,75 @@ def test_export_global_advisory_lookup_is_paginated(tmp_path):
     assert [item["id"] for item in archived] == [referenced.id]
 
 
-def test_export_rejects_missing_required_global_reference_without_output(tmp_path):
+async def test_export_rejects_missing_required_global_reference_without_output(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Dangling provider"))
-    store.create(
-        AgentRun(
-            engagement_id=engagement.id,
-            objective="Cannot be made portable",
-            supervisor_provider_id="missing-provider",
+    engagement = await store.create(Engagement(name="Dangling provider"))
+    (
+        await store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Cannot be made portable",
+                supervisor_provider_id="missing-provider",
+            )
         )
     )
     destination = tmp_path / "dangling.zip"
 
     with pytest.raises(ExportError, match="missing providers entity"):
-        export_engagement(
-            engagement_id=engagement.id,
-            destination=destination,
-            store=store,
-            artifact_store=artifacts,
+        (
+            await export_engagement(
+                engagement_id=engagement.id,
+                destination=destination,
+                store=store,
+                artifact_store=artifacts,
+            )
         )
 
     assert not destination.exists()
 
 
-def test_export_keeps_recorded_browser_headers_with_credentials_redacted(tmp_path):
+async def test_export_keeps_recorded_browser_headers_with_credentials_redacted(
+    tmp_path,
+):
     from datetime import timedelta
 
     from nebula.v3.domain import BrowserInterceptItem, utc_now
 
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Browser evidence"))
-    store.create(
-        BrowserInterceptItem(
-            engagement_id=engagement.id,
-            session_id="browser-session",
-            tab_id="tab-1",
-            identity_id="identity-1",
-            transaction_id="txn-1",
-            phase="request",
-            method="GET",
-            url="https://example.test/login",
-            headers=[
-                ("host", "example.test"),
-                ("authorization", "Bearer secret-token"),
-                ("cookie", "sid=abc"),
-            ],
-            expires_at=utc_now() + timedelta(hours=1),
+    engagement = await store.create(Engagement(name="Browser evidence"))
+    (
+        await store.create(
+            BrowserInterceptItem(
+                engagement_id=engagement.id,
+                session_id="browser-session",
+                tab_id="tab-1",
+                identity_id="identity-1",
+                transaction_id="txn-1",
+                phase="request",
+                method="GET",
+                url="https://example.test/login",
+                headers=[
+                    ("host", "example.test"),
+                    ("authorization", "Bearer secret-token"),
+                    ("cookie", "sid=abc"),
+                ],
+                expires_at=utc_now() + timedelta(hours=1),
+            )
         )
     )
     destination = tmp_path / "browser.nebula.zip"
 
-    export_engagement(
-        engagement_id=engagement.id,
-        destination=destination,
-        store=store,
-        artifact_store=artifacts,
+    (
+        await export_engagement(
+            engagement_id=engagement.id,
+            destination=destination,
+            store=store,
+            artifact_store=artifacts,
+        )
     )
 
     with zipfile.ZipFile(destination) as archive:
@@ -448,14 +488,16 @@ def test_export_keeps_recorded_browser_headers_with_credentials_redacted(tmp_pat
     ]
 
 
-def test_export_includes_temporary_assistant_sessions_with_their_messages(tmp_path):
+async def test_export_includes_temporary_assistant_sessions_with_their_messages(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Popup export"))
-    provider = store.create(
+    engagement = await store.create(Engagement(name="Popup export"))
+    provider = await store.create(
         ProviderProfile(name="Local", provider_type="vllm", is_local=True)
     )
-    popup = store.create(
+    popup = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Ask Nebula",
@@ -464,18 +506,20 @@ def test_export_includes_temporary_assistant_sessions_with_their_messages(tmp_pa
             metadata={"temporary_assistant": True},
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=engagement.id,
-            session_id=popup.id,
-            sequence=1,
-            role=ChatRole.USER,
-            content="What does this mean?",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=popup.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="What does this mean?",
+            )
         )
     )
     destination = tmp_path / "popup.nebula.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -489,32 +533,34 @@ def test_export_includes_temporary_assistant_sessions_with_their_messages(tmp_pa
     assert [item["id"] for item in sessions] == [popup.id]
 
 
-def test_export_keeps_harness_profile_for_run_with_supervisor_provider(tmp_path):
+async def test_export_keeps_harness_profile_for_run_with_supervisor_provider(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(name="Supervisor provider", provider_type="openai")
     )
-    harness = store.create(
+    harness = await store.create(
         HarnessProfile(
             name="Export harness",
             kind=HarnessKind.CODEX_APP_SERVER,
             executable="/usr/bin/codex",
         )
     )
-    engagement = store.create(Engagement(name="Harness run with supervisor"))
-    store.create(
-        AgentRun(
-            engagement_id=engagement.id,
-            objective="Supervised harness run",
-            backend=RunBackend.HARNESS,
-            supervisor_provider_id=provider.id,
-            harness_profile_id=harness.id,
+    engagement = await store.create(Engagement(name="Harness run with supervisor"))
+    (
+        await store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Supervised harness run",
+                backend=RunBackend.HARNESS,
+                supervisor_provider_id=provider.id,
+                harness_profile_id=harness.id,
+            )
         )
     )
     destination = tmp_path / "harness-run.zip"
 
-    manifest = export_engagement(
+    manifest = await export_engagement(
         engagement_id=engagement.id,
         destination=destination,
         store=store,
@@ -527,3 +573,6 @@ def test_export_keeps_harness_profile_for_run_with_supervisor_provider(tmp_path)
         assert [
             item["id"] for item in json.loads(archive.read("entities/harnesses.json"))
         ] == [harness.id]
+
+
+pytestmark = pytest.mark.anyio

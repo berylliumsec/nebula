@@ -2720,12 +2720,16 @@ def create_app(
                 ("storage", "event-history-prune", _stop_event_history_prune)
             )
         except BaseException:
-            await stop_components()
+            from .async_utils import finish_cleanup
+
+            await finish_cleanup(stop_components())
             raise
         try:
             yield
         finally:
-            failures = await stop_components()
+            from .async_utils import finish_cleanup
+
+            failures = await finish_cleanup(stop_components())
             if failures:
                 raise RuntimeError(
                     f"{len(failures)} Nebula Core service cleanup operation(s) failed"
@@ -2733,16 +2737,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
-        from .async_utils import drain_callback_tasks
+        from .async_utils import close_store_resources
 
         await store.database.initialize()
         try:
             async with runtime_lifespan(application):
                 yield
         finally:
-            await drain_callback_tasks()
-            await store.event_history.close()
-            await store.database.dispose()
+            await close_store_resources([store])
 
     app = FastAPI(
         title="Nebula 3 Core API",

@@ -1,7 +1,12 @@
 """A stale harness send must not fork a second turn in one conversation."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.chat import ChatHistoryConflict
@@ -22,12 +27,12 @@ from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.storage import NebulaStore
 
 
-def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
+async def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "butler-harness-history.db")
-    engagement = store.create(Engagement(name="Butler history"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Butler history"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -41,19 +46,19 @@ def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
         credential_store=CredentialStore(),
         workspace_resolver=lambda _: tmp_path,
     )
-    vendor = first_core.create_session(
+    vendor = await first_core.create_session(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model="test-model",
         control_assistant=True,
     )
-    vendor = store.update(
+    vendor = await store.update(
         HarnessSession,
         vendor.id,
         {"external_session_id": "saved-codex-thread"},
         expected_revision=vendor.revision,
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Butler",
@@ -67,13 +72,15 @@ def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
             },
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=engagement.id,
-            session_id=chat.id,
-            sequence=1,
-            role=ChatRole.USER,
-            content="Remember the earlier project question.",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=chat.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="Remember the earlier project question.",
+            )
         )
     )
 
@@ -82,7 +89,7 @@ def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
         credential_store=CredentialStore(),
         workspace_resolver=lambda _: tmp_path,
     )
-    continued_chat, _, continued_turn = restarted.prepare_chat(
+    continued_chat, _, continued_turn = await restarted.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -96,18 +103,22 @@ def test_butler_harness_reuses_saved_chat_and_vendor_session_after_core_restart(
     assert continued_chat.harness_session_id == vendor.id
     assert continued_turn.harness_session_id == vendor.id
     assert (
-        store.get(HarnessSession, vendor.id).external_session_id == "saved-codex-thread"
+        await store.get(HarnessSession, vendor.id)
+    ).external_session_id == "saved-codex-thread"
+    assert (
+        len((await store.list_entities(HarnessSession, engagement_id=engagement.id)))
+        == 1
     )
-    assert len(store.list_entities(HarnessSession, engagement_id=engagement.id)) == 1
     assert [
-        message.content for message in store.list_session_entities(ChatMessage, chat.id)
+        message.content
+        for message in (await store.list_session_entities(ChatMessage, chat.id))
     ] == ["Remember the earlier project question.", "Continue that question."]
 
 
-def test_busy_chat_rejects_second_harness_send_without_fork_or_message(tmp_path):
+async def test_busy_chat_rejects_second_harness_send_without_fork_or_message(tmp_path):
     store = NebulaStore(tmp_path / "single-active.db")
-    engagement = store.create(Engagement(name="Single active chat"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Single active chat"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -121,7 +132,7 @@ def test_busy_chat_rejects_second_harness_send_without_fork_or_message(tmp_path)
         credential_store=CredentialStore(),
         workspace_resolver=lambda _: tmp_path,
     )
-    chat, first_chat_turn, _ = runtime.prepare_chat(
+    chat, first_chat_turn, _ = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -134,21 +145,23 @@ def test_busy_chat_rejects_second_harness_send_without_fork_or_message(tmp_path)
     original_revision = chat.revision
 
     with pytest.raises(ChatHistoryConflict, match="already has an active response"):
-        runtime.prepare_chat(
-            engagement_id=engagement.id,
-            profile_id=profile.id,
-            model=None,
-            prompt="Second prompt from a stale tab",
-            chat_session_id=chat.id,
-            harness_session_id=original_session_id,
-            mcp_server_ids=[],
+        (
+            await runtime.prepare_chat(
+                engagement_id=engagement.id,
+                profile_id=profile.id,
+                model=None,
+                prompt="Second prompt from a stale tab",
+                chat_session_id=chat.id,
+                harness_session_id=original_session_id,
+                mcp_server_ids=[],
+            )
         )
 
     headers = {"Authorization": "Bearer test-token"}
     client = TestClient(
         create_app(store, auth_token="test-token", harness_runtime_service=runtime)
     )
-    refused = client.post(
+    refused = await client.post(
         "/api/v1/chat/completions",
         headers=headers,
         json={
@@ -162,33 +175,41 @@ def test_busy_chat_rejects_second_harness_send_without_fork_or_message(tmp_path)
     )
     assert refused.status_code == 409, refused.text
     assert "already has an active response" in refused.json()["detail"]
-    pending = client.get(
+    pending = await client.get(
         f"/api/v1/chat/sessions/{chat.id}/pending-turn", headers=headers
     )
     assert pending.status_code == 200
     assert pending.json()["id"] == first_chat_turn.id
-    assert store.get(ChatSession, chat.id).harness_session_id == original_session_id
-    assert store.get(ChatSession, chat.id).revision == original_revision
-    assert len(store.list_entities(ChatTurn, engagement_id=engagement.id)) == 1
-    assert len(store.list_entities(HarnessTurn, engagement_id=engagement.id)) == 1
-    assert len(store.list_entities(HarnessSession, engagement_id=engagement.id)) == 1
+    assert (
+        await store.get(ChatSession, chat.id)
+    ).harness_session_id == original_session_id
+    assert (await store.get(ChatSession, chat.id)).revision == original_revision
+    assert len((await store.list_entities(ChatTurn, engagement_id=engagement.id))) == 1
+    assert (
+        len((await store.list_entities(HarnessTurn, engagement_id=engagement.id))) == 1
+    )
+    assert (
+        len((await store.list_entities(HarnessSession, engagement_id=engagement.id)))
+        == 1
+    )
     assert [
         message.content
-        for message in store.list_entities(ChatMessage, engagement_id=engagement.id)
+        for message in (
+            await store.list_entities(ChatMessage, engagement_id=engagement.id)
+        )
     ] == ["Continue the research"]
 
-    stopped = client.post(
+    stopped = await client.post(
         f"/api/v1/chat/turns/{first_chat_turn.id}/cancel", headers=headers
     )
     assert stopped.status_code == 200
     assert stopped.json()["status"] == "cancelled"
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/chat/sessions/{chat.id}/pending-turn", headers=headers
-        ).json()
-        is None
-    )
-    resumed_chat, resumed_turn, _ = runtime.prepare_chat(
+        )
+    ).json() is None
+    resumed_chat, resumed_turn, _ = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -200,3 +221,6 @@ def test_busy_chat_rejects_second_harness_send_without_fork_or_message(tmp_path)
     assert resumed_chat.id == chat.id
     assert resumed_chat.harness_session_id == original_session_id
     assert resumed_turn.id != first_chat_turn.id
+
+
+pytestmark = pytest.mark.anyio

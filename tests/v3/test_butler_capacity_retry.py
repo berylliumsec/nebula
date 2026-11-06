@@ -1,8 +1,12 @@
 """A vendor load failure may retry one scheduled case without replaying writes."""
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 from datetime import timedelta
 
 from nebula.v3.butler_authority import policy_id
@@ -23,24 +27,26 @@ from nebula.v3.domain import (
 from nebula.v3.storage import NebulaStore
 
 
-def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
+async def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    policy = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    policy = await store.create(
         ButlerAuthorityPolicy(
             id=policy_id(project.id), engagement_id=project.id, authority="act"
         )
     )
     worker_id = "worker-1"
-    store.create(
-        ButlerProjectState(
-            id=project_state_id(project.id),
-            engagement_id=project.id,
-            lease_owner=worker_id,
-            lease_expires_at=utc_now() + timedelta(minutes=10),
+    (
+        await store.create(
+            ButlerProjectState(
+                id=project_state_id(project.id),
+                engagement_id=project.id,
+                lease_owner=worker_id,
+                lease_expires_at=utc_now() + timedelta(minutes=10),
+            )
         )
     )
-    case = store.create(
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=project.id,
             trigger="periodic",
@@ -64,12 +70,12 @@ def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
             ),
         )
     )
-    session = store.create(
+    session = await store.create(
         HarnessSession(
             engagement_id=project.id, harness_profile_id="codex", model="gpt-6-sol"
         )
     )
-    turn = store.create(
+    turn = await store.create(
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=session.id,
@@ -80,24 +86,26 @@ def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
             metadata={"butler_recovery_case_id": case.id},
         )
     )
-    case = store.update(
+    case = await store.update(
         ButlerRecoveryCase,
         case.id,
         {"model_backend": ChatBackend.HARNESS, "model_turn_id": turn.id},
         expected_revision=case.revision,
     )
-    store.append_operation_event(
-        turn.id,
-        "harness_turn",
-        project.id,
-        "harness.notice",
-        {"type": "notice", "payload": {"error": {"codexErrorInfo": error_code}}},
+    (
+        await store.append_operation_event(
+            turn.id,
+            "harness_turn",
+            project.id,
+            "harness.notice",
+            {"type": "notice", "payload": {"error": {"codexErrorInfo": error_code}}},
+        )
     )
     return store, project, case, turn, worker_id
 
 
-def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path):
-    store, project, case, first_turn, worker_id = _failed_case(
+async def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path):
+    store, project, case, first_turn, worker_id = await _failed_case(
         tmp_path, "serverOverloaded"
     )
     recorder = ButlerRecoveryAgent(
@@ -114,8 +122,14 @@ def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path):
             return "Current mandate"
 
         async def run(self, active_case):
-            recorder._record_model_turn(
-                active_case.id, ChatBackend.HARNESS, "codex", "gpt-6-sol", "retry-turn"
+            (
+                await recorder._record_model_turn(
+                    active_case.id,
+                    ChatBackend.HARNESS,
+                    "codex",
+                    "gpt-6-sol",
+                    "retry-turn",
+                )
             )
             return (
                 "Core state inspected",
@@ -126,21 +140,28 @@ def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path):
             )
 
     service = ButlerRecoveryService(store, Agent())
-    asyncio.run(service.process_project(project.id, worker_id))
-    saved = store.get(ButlerRecoveryCase, case.id)
+    (await service.process_project(project.id, worker_id))
+    saved = await store.get(ButlerRecoveryCase, case.id)
     assert saved.capacity_retry_count == 1
     assert saved.model_turn_ids == [first_turn.id, "retry-turn"]
     assert saved.model_turn_id == "retry-turn"
     assert saved.status == "needs_attention"
-    assert service.retry_overloaded_cases(project.id, worker_id) == 0
+    assert (await service.retry_overloaded_cases(project.id, worker_id)) == 0
 
 
-def test_quota_error_or_attempted_change_never_reopens(tmp_path):
+async def test_quota_error_or_attempted_change_never_reopens(tmp_path):
     for code, changed in (("usageLimitExceeded", False), ("serverOverloaded", True)):
         branch = tmp_path / ("changed" if changed else "quota")
         branch.mkdir()
-        store, project, case, _, worker_id = _failed_case(branch, code, changed=changed)
+        store, project, case, _, worker_id = await _failed_case(
+            branch, code, changed=changed
+        )
         agent = type("Agent", (), {"_global_instructions": lambda self, _: "mandate"})()
         service = ButlerRecoveryService(store, agent)
-        assert service.retry_overloaded_cases(project.id, worker_id) == 0
-        assert store.get(ButlerRecoveryCase, case.id).status == "needs_attention"
+        assert (await service.retry_overloaded_cases(project.id, worker_id)) == 0
+        assert (
+            await store.get(ButlerRecoveryCase, case.id)
+        ).status == "needs_attention"
+
+
+pytestmark = pytest.mark.anyio

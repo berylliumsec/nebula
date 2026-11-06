@@ -31,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
 from .api import create_app
+from .async_utils import call_async
 from .artifacts import ArtifactStore
 from .automation_runtime import AutomationRuntimeManager, resolve_callback_origin
 from .automation_tools import (
@@ -41,6 +42,7 @@ from .automation_tools import (
 from .context import default_output_tokens
 from .credentials import CredentialStore
 from .database import Database, DatabaseInUseError, vacuum_sqlite
+from .database_pool import PoolSettings
 from .diagnostics import (
     configure_diagnostics,
     get_diagnostics,
@@ -132,13 +134,12 @@ def _async_command(function):
             try:
                 return await function(*args, **kwargs)
             finally:
-                from .async_utils import drain_callback_tasks
+                from .async_utils import close_store_resources
 
-                await drain_callback_tasks()
-                for store in reversed(stores):
-                    await store.event_history.close()
-                    await store.database.dispose()
-                _cli_stores.reset(token)
+                try:
+                    await close_store_resources(stores)
+                finally:
+                    _cli_stores.reset(token)
 
         return asyncio.run(run())
 
@@ -188,15 +189,26 @@ def _diagnostic_manager(root: Path, *, level_override: str | None = None):
 
 
 def _services(
-    value: Path | None = None, *, diagnostics_level: str | None = None
+    value: Path | None = None,
+    *,
+    diagnostics_level: str | None = None,
+    runtime_pool: bool = False,
 ) -> tuple[Path, NebulaStore, ArtifactStore]:
     root = _data_dir(value)
     _diagnostic_manager(root, level_override=diagnostics_level)
     database_url = os.getenv("NEBULA_V3_DATABASE_URL")
-    database = Database(database_url or root / "nebula.db")
+    stores = _cli_stores.get()
+    settings = None
+    if (
+        not runtime_pool
+        and stores is not None
+        and database_url
+        and database_url.startswith(("postgres://", "postgresql://", "postgresql+"))
+    ):
+        settings = PoolSettings.from_environment().auxiliary()
+    database = Database(database_url or root / "nebula.db", pool_settings=settings)
     artifact_root = Path(os.getenv("NEBULA_V3_ARTIFACT_DIR", root / "artifacts"))
     store = NebulaStore(database)
-    stores = _cli_stores.get()
     if stores is not None:
         stores.append(store)
     return root, store, ArtifactStore(artifact_root)
@@ -411,7 +423,8 @@ def _browser_diagnostic_ingress_allowed(
 
 
 @app.command()
-def serve(
+@_async_command
+async def serve(
     host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=0, max=65535)] = 8000,
     token: Annotated[
@@ -508,19 +521,22 @@ def serve(
         auth_token = bootstrap["ipc_token"]
     else:
         auth_token = token or secrets.token_urlsafe(32)
-    root, store, artifacts = _services(data_dir, diagnostics_level=diagnostics_level)
+    root, store, artifacts = _services(
+        data_dir, diagnostics_level=diagnostics_level, runtime_pool=True
+    )
     reranker = CrossEncoderReranker(
         Path(os.getenv("NEBULA_V3_KNOWLEDGE_MODELS_DIR", root / "knowledge-models")),
         # "off" keeps retrieval as it was, and nothing is downloaded.
         enabled=os.getenv("NEBULA_V3_KNOWLEDGE_RERANKER", "on").strip().casefold()
         not in {"0", "false", "no", "off"},
     )
-    knowledge_index = ChromaKnowledgeIndex(
+    knowledge_index = await asyncio.to_thread(
+        ChromaKnowledgeIndex,
         Path(os.getenv("NEBULA_V3_KNOWLEDGE_INDEX_DIR", root / "knowledge-index")),
         reranker=reranker,
     )
     # A model already on disk is verified and loaded now, not on the first turn.
-    reranker.start_if_present()
+    await asyncio.to_thread(reranker.start_if_present)
     record_diagnostic(
         "info",
         "api",
@@ -532,7 +548,8 @@ def serve(
     tool_platform = default_runtime_platform(
         store=store, artifact_store=artifacts, data_root=root
     )
-    api = create_app(
+    api = await call_async(
+        create_app,
         store,
         artifact_store=artifacts,
         auth_token=auth_token,
@@ -659,7 +676,7 @@ def serve(
             daemon=True,
         ).start()
     try:
-        server.run(sockets=[listener])
+        await server.serve(sockets=[listener])
     except BaseException as exc:
         record_caught_exception(
             "diagnostics",

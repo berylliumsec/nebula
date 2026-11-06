@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import re
 import json
@@ -56,7 +60,7 @@ def _config(kind, *, capabilities=None, local=False, residency=None):
     )
 
 
-def test_openai_responses_translates_flattened_tools_and_parses_calls():
+async def test_openai_responses_translates_flattened_tools_and_parses_calls():
     observed = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -98,21 +102,19 @@ def test_openai_responses_translates_flattened_tools_and_parses_calls():
         ),
         transport=httpx.MockTransport(handler),
     )
-    response = asyncio.run(
-        provider.complete(
-            ModelRequest(
-                instructions="Use structured evidence.",
-                messages=[ModelMessage(role="user", content="Inspect the asset")],
-                tools=[TOOL],
-                response_schema={
-                    "type": "object",
-                    "properties": {"summary": {"type": "string"}},
-                    "required": ["summary"],
-                    "additionalProperties": False,
-                },
-                parallel_tool_calls=True,
-                metadata={"engagement": "eng-1"},
-            )
+    response = await provider.complete(
+        ModelRequest(
+            instructions="Use structured evidence.",
+            messages=[ModelMessage(role="user", content="Inspect the asset")],
+            tools=[TOOL],
+            response_schema={
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            parallel_tool_calls=True,
+            metadata={"engagement": "eng-1"},
         )
     )
 
@@ -140,7 +142,7 @@ def test_openai_responses_translates_flattened_tools_and_parses_calls():
     assert response.usage.total_tokens == 8
 
 
-def test_openai_compatible_uses_chat_completions_shape():
+async def test_openai_compatible_uses_chat_completions_shape():
     observed = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -187,13 +189,11 @@ def test_openai_compatible_uses_chat_completions_shape():
         ),
         transport=httpx.MockTransport(handler),
     )
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(
-                instructions="Stay in scope.",
-                messages=[ModelMessage(role="user", content="continue")],
-                tools=[TOOL],
-            )
+    result = await provider.complete(
+        ModelRequest(
+            instructions="Stay in scope.",
+            messages=[ModelMessage(role="user", content="continue")],
+            tools=[TOOL],
         )
     )
     assert result.raw_body is not None
@@ -214,7 +214,7 @@ def test_openai_compatible_uses_chat_completions_shape():
     assert result.reasoning == "The lookup is needed."
 
 
-def test_openai_compatible_reads_reasoning_when_content_is_empty():
+async def test_openai_compatible_reads_reasoning_when_content_is_empty():
     def handler(request: httpx.Request) -> httpx.Response:
         del request
         return httpx.Response(
@@ -249,16 +249,14 @@ def test_openai_compatible_reads_reasoning_when_content_is_empty():
         ),
         transport=httpx.MockTransport(handler),
     )
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(messages=[ModelMessage(role="user", content="continue")])
-        )
+    result = await provider.complete(
+        ModelRequest(messages=[ModelMessage(role="user", content="continue")])
     )
     assert result.text == ""
     assert result.reasoning == "GOAL_SEEN SKILL_MARKER_FLASH"
 
 
-def test_openai_compatible_keeps_reasoning_out_of_the_reply():
+async def test_openai_compatible_keeps_reasoning_out_of_the_reply():
     observed = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -302,10 +300,8 @@ def test_openai_compatible_keeps_reasoning_out_of_the_reply():
         ),
         transport=httpx.MockTransport(handler),
     )
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(messages=[ModelMessage(role="user", content="continue")])
-        )
+    result = await provider.complete(
+        ModelRequest(messages=[ModelMessage(role="user", content="continue")])
     )
     assert observed["payload"]["reasoning"] == {"exclude": False}
     # Oversized prompts must fail loudly instead of losing their middle.
@@ -316,7 +312,7 @@ def test_openai_compatible_keeps_reasoning_out_of_the_reply():
     assert result.reasoning == "Private chain of thought."
 
 
-def test_openai_compatible_reads_reasoning_details_without_a_plain_channel():
+async def test_openai_compatible_reads_reasoning_details_without_a_plain_channel():
     def handler(request: httpx.Request) -> httpx.Response:
         del request
         return httpx.Response(
@@ -354,10 +350,8 @@ def test_openai_compatible_reads_reasoning_details_without_a_plain_channel():
         ),
         transport=httpx.MockTransport(handler),
     )
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(messages=[ModelMessage(role="user", content="continue")])
-        )
+    result = await provider.complete(
+        ModelRequest(messages=[ModelMessage(role="user", content="continue")])
     )
     assert result.text == "FLASH_OK"
     assert result.reasoning == "Consider it."
@@ -390,7 +384,7 @@ def test_openai_compatible_reads_reasoning_details_without_a_plain_channel():
         ),
     ],
 )
-def test_openai_compatible_returns_partial_or_unidentified_tool_calls(
+async def test_openai_compatible_returns_partial_or_unidentified_tool_calls(
     tool_call, expected
 ):
     """A call Core cannot read goes back to the model; it never fails the reply.
@@ -426,12 +420,10 @@ def test_openai_compatible_returns_partial_or_unidentified_tool_calls(
         transport=httpx.MockTransport(handler),
     )
 
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(
-                messages=[ModelMessage(role="user", content="continue")],
-                tools=[TOOL],
-            )
+    result = await provider.complete(
+        ModelRequest(
+            messages=[ModelMessage(role="user", content="continue")],
+            tools=[TOOL],
         )
     )
 
@@ -446,7 +438,7 @@ def test_openai_compatible_returns_partial_or_unidentified_tool_calls(
 
 
 @pytest.mark.parametrize("capture_enabled", [False, True])
-def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
+async def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
     monkeypatch, tmp_path, capture_enabled
 ):
     malformed = '{"address":"sensitive.example"'
@@ -508,12 +500,10 @@ def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
 
     try:
         # The call goes back to the model; its text stays in the diagnostic.
-        result = asyncio.run(
-            provider.complete(
-                ModelRequest(
-                    messages=[ModelMessage(role="user", content="continue")],
-                    tools=[TOOL],
-                )
+        result = await provider.complete(
+            ModelRequest(
+                messages=[ModelMessage(role="user", content="continue")],
+                tools=[TOOL],
             )
         )
         assert manager.flush()
@@ -572,7 +562,9 @@ def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
         (GeminiProvider, ProviderKind.GEMINI),
     ],
 )
-def test_native_providers_translate_tool_definitions(monkeypatch, provider_class, kind):
+async def test_native_providers_translate_tool_definitions(
+    monkeypatch, provider_class, kind
+):
     monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret-not-in-payload")
     observed = {}
 
@@ -630,12 +622,10 @@ def test_native_providers_translate_tool_definitions(monkeypatch, provider_class
         ),
         transport=httpx.MockTransport(handler),
     )
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(
-                messages=[ModelMessage(role="user", content="inspect")],
-                tools=[TOOL],
-            )
+    result = await provider.complete(
+        ModelRequest(
+            messages=[ModelMessage(role="user", content="inspect")],
+            tools=[TOOL],
         )
     )
 
@@ -649,7 +639,9 @@ def test_native_providers_translate_tool_definitions(monkeypatch, provider_class
         assert declaration["parametersJsonSchema"] == TOOL.input_schema
 
 
-def test_anthropic_health_discovers_models_without_a_configured_default(monkeypatch):
+async def test_anthropic_health_discovers_models_without_a_configured_default(
+    monkeypatch,
+):
     monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
     observed = {}
 
@@ -677,14 +669,14 @@ def test_anthropic_health_discovers_models_without_a_configured_default(monkeypa
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert observed == {"path": "/v1/models", "api_key": "secret"}
     assert health.healthy is True
     assert health.models == ["claude-opus-4-1", "claude-sonnet-4-5"]
 
 
-def test_capability_checks_and_registry_routing_are_explicit():
+async def test_capability_checks_and_registry_routing_are_explicit():
     cloud = OpenAICompatibleProvider(
         _config(ProviderKind.OPENAI_COMPATIBLE, residency="us")
     )
@@ -707,8 +699,8 @@ def test_capability_checks_and_registry_routing_are_explicit():
     with pytest.raises(UnsupportedCapability, match="no provider"):
         registry.select(local_only=True, required=["vision"])
     with pytest.raises(UnsupportedCapability, match="strict_tools"):
-        asyncio.run(
-            cloud.complete(
+        (
+            await cloud.complete(
                 ModelRequest(
                     messages=[ModelMessage(role="user", content="unsafe")],
                     tools=[TOOL],
@@ -717,7 +709,7 @@ def test_capability_checks_and_registry_routing_are_explicit():
         )
 
 
-def test_vllm_is_an_explicit_local_openai_compatible_provider():
+async def test_vllm_is_an_explicit_local_openai_compatible_provider():
     observed = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -742,10 +734,8 @@ def test_vllm_is_an_explicit_local_openai_compatible_provider():
         capabilities=ModelCapabilities(),
     )
     provider = OpenAICompatibleProvider(config, transport=httpx.MockTransport(handler))
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(messages=[ModelMessage(role="user", content="hello")])
-        )
+    result = await provider.complete(
+        ModelRequest(messages=[ModelMessage(role="user", content="hello")])
     )
 
     assert config.local is True
@@ -770,7 +760,7 @@ def test_orcarouter_catalog_entry_maps_to_openai_compatible_wire():
     assert config.local is False
 
 
-def test_orcarouter_openai_compatible_chat_round_trip():
+async def test_orcarouter_openai_compatible_chat_round_trip():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/chat/completions"
         return httpx.Response(
@@ -799,16 +789,14 @@ def test_orcarouter_openai_compatible_chat_round_trip():
         transport=httpx.MockTransport(handler),
     )
 
-    result = asyncio.run(
-        provider.complete(
-            ModelRequest(messages=[ModelMessage(role="user", content="hello")])
-        )
+    result = await provider.complete(
+        ModelRequest(messages=[ModelMessage(role="user", content="hello")])
     )
 
     assert result.text == "ok"
 
 
-def test_vllm_discovers_served_models_from_the_runtime():
+async def test_vllm_discovers_served_models_from_the_runtime():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"
         return httpx.Response(
@@ -830,13 +818,13 @@ def test_vllm_discovers_served_models_from_the_runtime():
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert health.models == ["security-model", "vision-model"]
 
 
-def test_openrouter_discovers_account_models_with_bounded_metadata():
+async def test_openrouter_discovers_account_models_with_bounded_metadata():
     observed = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -891,7 +879,7 @@ def test_openrouter_discovers_account_models_with_bounded_metadata():
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert observed == ["/api/v1/key", "/api/v1/models/user", "/api/v1/providers"]
@@ -942,7 +930,7 @@ def _alias_catalog_handler(public: httpx.Response):
     return handler
 
 
-def test_openrouter_health_fills_alias_targets_from_the_public_catalog():
+async def test_openrouter_health_fills_alias_targets_from_the_public_catalog():
     # /models/user describes aliases without alias_target; only /models carries it.
     public = httpx.Response(
         200,
@@ -971,7 +959,7 @@ def test_openrouter_health_fills_alias_targets_from_the_public_catalog():
         transport=httpx.MockTransport(_alias_catalog_handler(public)),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     # The public catalog fills one field; it never widens account membership.
@@ -983,7 +971,7 @@ def test_openrouter_health_fills_alias_targets_from_the_public_catalog():
     }
 
 
-def test_openrouter_health_survives_an_unreadable_public_catalog():
+async def test_openrouter_health_survives_an_unreadable_public_catalog():
     provider = OpenAICompatibleProvider(
         config_from_catalog(
             provider_id="openrouter-alias-targets-down",
@@ -995,7 +983,7 @@ def test_openrouter_health_survives_an_unreadable_public_catalog():
         ),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert health.models == ["~author/family-latest", "author/model-a"]
@@ -1003,7 +991,7 @@ def test_openrouter_health_survives_an_unreadable_public_catalog():
     assert all(item.alias_target is None for item in health.model_descriptors)
 
 
-def test_openrouter_health_retries_a_refused_connection_before_recovering():
+async def test_openrouter_health_retries_a_refused_connection_before_recovering():
     attempts: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1023,13 +1011,13 @@ def test_openrouter_health_retries_a_refused_connection_before_recovering():
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert attempts.count("/api/v1/key") == 2
 
 
-def test_openai_compatible_health_retries_a_refused_connection_before_recovering():
+async def test_openai_compatible_health_retries_a_refused_connection_before_recovering():
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1044,14 +1032,14 @@ def test_openai_compatible_health_retries_a_refused_connection_before_recovering
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert health.models == ["model-a"]
     assert attempts == 2
 
 
-def test_openrouter_health_reports_exhausted_connection_retries():
+async def test_openrouter_health_reports_exhausted_connection_retries():
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1070,7 +1058,7 @@ def test_openrouter_health_reports_exhausted_connection_retries():
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is False
     assert attempts == 2
@@ -1080,7 +1068,7 @@ def test_openrouter_health_reports_exhausted_connection_retries():
     )
 
 
-def test_openrouter_discovery_does_not_fall_back_to_public_catalog():
+async def test_openrouter_discovery_does_not_fall_back_to_public_catalog():
     observed = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1096,7 +1084,7 @@ def test_openrouter_discovery_does_not_fall_back_to_public_catalog():
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is False
     assert observed == ["/api/v1/key"]
@@ -1104,7 +1092,7 @@ def test_openrouter_discovery_does_not_fall_back_to_public_catalog():
     assert "HTTP 403" in (health.detail or "")
 
 
-def test_openrouter_verified_key_does_not_hide_catalog_failure_or_use_public_models():
+async def test_openrouter_verified_key_does_not_hide_catalog_failure_or_use_public_models():
     observed = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1122,7 +1110,7 @@ def test_openrouter_verified_key_does_not_hide_catalog_failure_or_use_public_mod
         transport=httpx.MockTransport(handler),
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is False
     assert health.credential_verified is True
@@ -1269,7 +1257,7 @@ def test_provider_from_openrouter_profile_carries_model_parameters():
     }
 
 
-def test_openrouter_loads_exact_endpoint_limits_for_automatic_routing():
+async def test_openrouter_loads_exact_endpoint_limits_for_automatic_routing():
     observed = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1310,7 +1298,7 @@ def test_openrouter_loads_exact_endpoint_limits_for_automatic_routing():
         transport=httpx.MockTransport(handler),
     )
 
-    routes = asyncio.run(provider.openrouter_route_limits("author/model:free"))
+    routes = await provider.openrouter_route_limits("author/model:free")
 
     assert observed == ["/api/v1/models/author/model:free/endpoints"]
     assert len(routes) == 2
@@ -1347,7 +1335,7 @@ def test_openrouter_catalog_records_the_model_an_alias_redirects_to():
     assert exact.alias_target is None
 
 
-def test_openrouter_alias_endpoint_discovery_explains_the_empty_route_set():
+async def test_openrouter_alias_endpoint_discovery_explains_the_empty_route_set():
     def handler(_request: httpx.Request) -> httpx.Response:
         # Aliases redirect to another model and publish no endpoints of their own.
         return httpx.Response(
@@ -1364,10 +1352,10 @@ def test_openrouter_alias_endpoint_discovery_explains_the_empty_route_set():
     )
 
     with pytest.raises(ProviderError, match="alias models publish no endpoints"):
-        asyncio.run(provider.openrouter_route_limits("~author/family-latest"))
+        (await provider.openrouter_route_limits("~author/family-latest"))
 
 
-def test_openrouter_rejects_incomplete_endpoint_limits():
+async def test_openrouter_rejects_incomplete_endpoint_limits():
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -1395,10 +1383,10 @@ def test_openrouter_rejects_incomplete_endpoint_limits():
     )
 
     with pytest.raises(ProviderError, match="endpoint discovery failed"):
-        asyncio.run(provider.openrouter_route_limits("author/model"))
+        (await provider.openrouter_route_limits("author/model"))
 
 
-def test_openai_compatible_classifies_only_confirmed_context_rejections():
+async def test_openai_compatible_classifies_only_confirmed_context_rejections():
     responses = iter(
         [
             httpx.Response(
@@ -1425,13 +1413,13 @@ def test_openai_compatible_classifies_only_confirmed_context_rejections():
     )
 
     with pytest.raises(ProviderContextLengthError):
-        asyncio.run(provider.complete(request))
+        (await provider.complete(request))
     with pytest.raises(ProviderError) as denied:
-        asyncio.run(provider.complete(request))
+        (await provider.complete(request))
     assert not isinstance(denied.value, ProviderContextLengthError)
 
 
-def test_vllm_openai_compatible_streaming_is_native_sse():
+async def test_vllm_openai_compatible_streaming_is_native_sse():
     body = "\n\n".join(
         [
             'data: {"id":"chat-vllm","model":"served-model","choices":[{"delta":{"content":"hel"}}]}',
@@ -1465,7 +1453,7 @@ def test_vllm_openai_compatible_streaming_is_native_sse():
             )
         ]
 
-    events = asyncio.run(collect())
+    events = await collect()
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
         StreamEventType.TEXT_DELTA,
@@ -1477,7 +1465,7 @@ def test_vllm_openai_compatible_streaming_is_native_sse():
     assert events[-1].response.reasoning == ""
 
 
-def test_openai_compatible_streams_reasoning_apart_from_content():
+async def test_openai_compatible_streams_reasoning_apart_from_content():
     body = "\n\n".join(
         [
             'data: {"choices":[{"delta":{"reasoning_content":"think "}}]}',
@@ -1512,7 +1500,7 @@ def test_openai_compatible_streams_reasoning_apart_from_content():
             )
         ]
 
-    events = asyncio.run(collect())
+    events = await collect()
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
         StreamEventType.REASONING_DELTA,
@@ -1526,7 +1514,7 @@ def test_openai_compatible_streams_reasoning_apart_from_content():
     assert events[-1].response.reasoning == "think"
 
 
-def test_openai_compatible_stream_does_not_repeat_mirrored_reasoning():
+async def test_openai_compatible_stream_does_not_repeat_mirrored_reasoning():
     """OpenRouter repeats each thought fragment in `reasoning_details`."""
 
     chunks = [
@@ -1587,7 +1575,7 @@ def test_openai_compatible_stream_does_not_repeat_mirrored_reasoning():
             )
         ]
 
-    events = asyncio.run(collect())
+    events = await collect()
     reasoning = [
         event.delta for event in events if event.type == StreamEventType.REASONING_DELTA
     ]
@@ -1595,7 +1583,7 @@ def test_openai_compatible_stream_does_not_repeat_mirrored_reasoning():
     assert events[-1].response.reasoning == "The user"
 
 
-def test_openai_compatible_stream_keeps_whitespace_between_deltas():
+async def test_openai_compatible_stream_keeps_whitespace_between_deltas():
     chunks = [
         {"choices": [{"delta": {"reasoning": "Think"}}]},
         {"choices": [{"delta": {"reasoning": " step"}}]},
@@ -1633,7 +1621,7 @@ def test_openai_compatible_stream_keeps_whitespace_between_deltas():
             )
         ]
 
-    events = asyncio.run(collect())
+    events = await collect()
     final = events[-1].response
     assert final.text == "TCP is connection-oriented.\n\nDone"
     assert final.reasoning == "Think step"
@@ -1642,7 +1630,7 @@ def test_openai_compatible_stream_keeps_whitespace_between_deltas():
     ][1] == " connection"
 
 
-def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
+async def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
     from nebula.v3.providers import ModelToolResult, ToolDefinition, _wire_tool_names
 
     dotted = ToolDefinition(
@@ -1710,7 +1698,7 @@ def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(provider.complete(request))
+    response = await provider.complete(request)
 
     assert response.tool_calls[0].name == "tool_output.search"
 
@@ -1792,7 +1780,7 @@ def _endpoints(*rows):
     }
 
 
-def test_openrouter_route_limits_follow_the_provider_allowlist():
+async def test_openrouter_route_limits_follow_the_provider_allowlist():
     payload = _endpoints(
         ("Anthropic", "anthropic", 200_000),
         ("Google", "google-vertex/us-east5", 150_000),
@@ -1802,20 +1790,20 @@ def test_openrouter_route_limits_follow_the_provider_allowlist():
         lambda _request: httpx.Response(200, json=payload)
     )
 
-    routes = asyncio.run(provider.openrouter_route_limits("author/model"))
+    routes = await provider.openrouter_route_limits("author/model")
 
     assert [route.provider_slug for route in routes] == ["anthropic", "google-vertex"]
     assert min(route.context_window for route in routes) == 150_000
 
 
-def test_openrouter_route_limits_explain_when_no_allowed_provider_serves_the_model():
+async def test_openrouter_route_limits_explain_when_no_allowed_provider_serves_the_model():
     payload = _endpoints(("Azure", "azure/global", 32_000))
     provider = _allowlisted_openrouter(
         lambda _request: httpx.Response(200, json=payload)
     )
 
     with pytest.raises(ProviderError, match="None of the allowed OpenRouter providers"):
-        asyncio.run(provider.openrouter_route_limits("author/model"))
+        (await provider.openrouter_route_limits("author/model"))
 
 
 def test_openrouter_upstream_directory_is_parsed_and_sorted():
@@ -1838,7 +1826,7 @@ def test_openrouter_upstream_directory_is_parsed_and_sorted():
     ]
 
 
-def test_openrouter_null_prompt_limit_uses_the_context_window():
+async def test_openrouter_null_prompt_limit_uses_the_context_window():
     """OpenRouter reports max_prompt_tokens as null on real endpoints."""
 
     payload = _endpoints(("Anthropic", "anthropic", 200_000))
@@ -1847,7 +1835,7 @@ def test_openrouter_null_prompt_limit_uses_the_context_window():
         lambda _request: httpx.Response(200, json=payload), allowed=()
     )
 
-    (route,) = asyncio.run(provider.openrouter_route_limits("author/model"))
+    (route,) = await provider.openrouter_route_limits("author/model")
 
     assert route.context_window == 200_000
     assert route.max_input_tokens == 200_000
@@ -1974,7 +1962,7 @@ def _completion_body():
     }
 
 
-def test_overloaded_upstream_is_retried_until_the_provider_answers():
+async def test_overloaded_upstream_is_retried_until_the_provider_answers():
     attempts: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1987,13 +1975,13 @@ def test_overloaded_upstream_is_retried_until_the_provider_answers():
         _retrying_config("retry-success"), transport=httpx.MockTransport(handler)
     )
 
-    result = asyncio.run(provider.complete(_chat_request()))
+    result = await provider.complete(_chat_request())
 
     assert result.text == "ok"
     assert len(attempts) == 3
 
 
-def test_retries_stop_at_the_attempt_limit_and_name_the_attempts():
+async def test_retries_stop_at_the_attempt_limit_and_name_the_attempts():
     attempts: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -2005,7 +1993,7 @@ def test_retries_stop_at_the_attempt_limit_and_name_the_attempts():
     )
 
     with pytest.raises(ProviderOverloadedError) as failure:
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
 
     assert len(attempts) == 3
     assert failure.value.status_code == 503
@@ -2016,7 +2004,7 @@ def test_retries_stop_at_the_attempt_limit_and_name_the_attempts():
     )
 
 
-def test_request_defects_are_never_retried():
+async def test_request_defects_are_never_retried():
     attempts: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -2028,13 +2016,13 @@ def test_request_defects_are_never_retried():
     )
 
     with pytest.raises(ProviderError) as failure:
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
 
     assert attempts == [401]
     assert not isinstance(failure.value, ProviderOverloadedError)
 
 
-def test_retries_can_be_disabled_for_one_provider():
+async def test_retries_can_be_disabled_for_one_provider():
     attempts: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -2047,13 +2035,13 @@ def test_retries_can_be_disabled_for_one_provider():
     )
 
     with pytest.raises(ProviderOverloadedError) as failure:
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
 
     assert attempts == [503]
     assert "attempts" not in str(failure.value)
 
 
-def test_streaming_retries_before_the_first_token_and_not_after():
+async def test_streaming_retries_before_the_first_token_and_not_after():
     calls: list[int] = []
     body = "\n\n".join(
         [
@@ -2077,7 +2065,7 @@ def test_streaming_retries_before_the_first_token_and_not_after():
     async def collect():
         return [event async for event in provider.stream(_chat_request())]
 
-    events = asyncio.run(collect())
+    events = await collect()
 
     assert len(calls) == 2
     assert [event.type for event in events] == [
@@ -2088,7 +2076,7 @@ def test_streaming_retries_before_the_first_token_and_not_after():
     assert events[-1].response.text == "hi"
 
 
-def test_a_stream_that_fails_after_output_is_not_replayed():
+async def test_a_stream_that_fails_after_output_is_not_replayed():
     calls: list[int] = []
     body = "\n\n".join(
         [
@@ -2110,7 +2098,7 @@ def test_a_stream_that_fails_after_output_is_not_replayed():
     async def collect():
         return [event async for event in provider.stream(_chat_request())]
 
-    events = asyncio.run(collect())
+    events = await collect()
 
     assert len(calls) == 1
     assert [event.type for event in events] == [
@@ -2155,7 +2143,7 @@ def test_retry_after_is_honored_within_the_bounded_wait():
     )
 
 
-def test_openai_compatible_stream_surfaces_an_in_band_error_frame():
+async def test_openai_compatible_stream_surfaces_an_in_band_error_frame():
     calls: list[int] = []
     body = "\n\n".join(
         [
@@ -2181,7 +2169,7 @@ def test_openai_compatible_stream_surfaces_an_in_band_error_frame():
     async def collect():
         return [event async for event in provider.stream(_chat_request())]
 
-    events = asyncio.run(collect())
+    events = await collect()
 
     assert len(calls) == 1
     assert [event.type for event in events] == [
@@ -2193,7 +2181,7 @@ def test_openai_compatible_stream_surfaces_an_in_band_error_frame():
     assert "upstream overloaded" in (events[-1].error or "")
 
 
-def test_openai_compatible_stream_error_before_any_token_is_not_an_empty_reply():
+async def test_openai_compatible_stream_error_before_any_token_is_not_an_empty_reply():
     body = "\n\n".join(
         [
             'data: {"error":{"message":"model is overloaded","code":503}}',
@@ -2214,7 +2202,7 @@ def test_openai_compatible_stream_error_before_any_token_is_not_an_empty_reply()
     async def collect():
         return [event async for event in provider.stream(_chat_request())]
 
-    events = asyncio.run(collect())
+    events = await collect()
 
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
@@ -2241,7 +2229,7 @@ def test_stream_error_frame_maps_context_length_to_the_typed_error():
     assert providers._stream_error_frame({"error": None}) is None
 
 
-def test_streaming_context_length_rejection_is_flagged_for_recovery():
+async def test_streaming_context_length_rejection_is_flagged_for_recovery():
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             400,
@@ -2261,7 +2249,7 @@ def test_streaming_context_length_rejection_is_flagged_for_recovery():
     async def collect():
         return [event async for event in provider.stream(_chat_request())]
 
-    events = asyncio.run(collect())
+    events = await collect()
 
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
@@ -2271,7 +2259,7 @@ def test_streaming_context_length_rejection_is_flagged_for_recovery():
     assert "context length" in (events[-1].error or "")
 
 
-def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
+async def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
     from botocore.exceptions import ClientError, NoCredentialsError
 
     class FailingClient:
@@ -2307,7 +2295,7 @@ def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
         )
     )
     with pytest.raises(ProviderError) as failure:
-        asyncio.run(provider.complete(request))
+        (await provider.complete(request))
     assert str(failure.value) == (
         "Bedrock request failed: ValidationException: "
         "The provided model identifier is invalid."
@@ -2324,7 +2312,7 @@ def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
             "ListFoundationModels",
         )
     )
-    health = asyncio.run(provider.health())
+    health = await provider.health()
     assert health.healthy is False
     assert health.detail == (
         "Bedrock health check failed: AccessDeniedException: "
@@ -2334,9 +2322,9 @@ def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
     # Anything that is not a botocore ClientError still reports only its type.
     install(NoCredentialsError())
     with pytest.raises(ProviderError) as failure:
-        asyncio.run(provider.complete(request))
+        (await provider.complete(request))
     assert str(failure.value) == "Bedrock request failed: NoCredentialsError"
-    health = asyncio.run(provider.health())
+    health = await provider.health()
     assert health.detail == "Bedrock health check failed: NoCredentialsError"
 
     # Secrets inside a provider message are redacted before they are surfaced.
@@ -2352,14 +2340,14 @@ def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
         )
     )
     with pytest.raises(ProviderError) as failure:
-        asyncio.run(provider.complete(request))
+        (await provider.complete(request))
     assert "eyJhbGci" not in str(failure.value)
     assert str(failure.value).startswith(
         "Bedrock request failed: UnrecognizedClientException: "
     )
 
 
-def test_stream_fallback_reports_thinking_before_the_reply():
+async def test_stream_fallback_reports_thinking_before_the_reply():
     """A provider without native streaming still shows its thoughts as they land."""
 
     class NonStreamingProvider(providers.ModelProvider):
@@ -2398,7 +2386,7 @@ def test_stream_fallback_reports_thinking_before_the_reply():
             )
         ]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
         StreamEventType.REASONING_DELTA,
@@ -2713,7 +2701,7 @@ def test_an_exhausted_error_frame_is_labelled_retryable():
     assert "attempts" not in (events[-1].error or "")
 
 
-def test_gemini_context_window_rejection_is_typed(monkeypatch):
+async def test_gemini_context_window_rejection_is_typed(monkeypatch):
     monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -2740,10 +2728,10 @@ def test_gemini_context_window_rejection_is_typed(monkeypatch):
     )
 
     with pytest.raises(ProviderContextLengthError):
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
 
 
-def test_bedrock_context_window_rejection_is_typed(monkeypatch):
+async def test_bedrock_context_window_rejection_is_typed(monkeypatch):
     from botocore.exceptions import ClientError
 
     class FailingClient:
@@ -2765,8 +2753,8 @@ def test_bedrock_context_window_rejection_is_typed(monkeypatch):
     provider = BedrockProvider(_config(ProviderKind.BEDROCK))
 
     with pytest.raises(ProviderContextLengthError) as failure:
-        asyncio.run(
-            provider.complete(
+        (
+            await provider.complete(
                 ModelRequest(
                     model="test-model",
                     messages=[ModelMessage(role="user", content="hi")],
@@ -2795,7 +2783,7 @@ def test_stream_null_model_and_id_frames_keep_the_known_values():
     assert events[-1].response.text == "hi"
 
 
-def test_usage_without_total_tokens_is_summed_from_its_parts():
+async def test_usage_without_total_tokens_is_summed_from_its_parts():
     body = (
         'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n'
         'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7}}\n\n'
@@ -2820,7 +2808,7 @@ def test_usage_without_total_tokens_is_summed_from_its_parts():
         _retrying_config("complete-usage"), transport=httpx.MockTransport(handler)
     )
 
-    result = asyncio.run(provider.complete(_chat_request()))
+    result = await provider.complete(_chat_request())
 
     assert result.usage.total_tokens == 107
 
@@ -2857,7 +2845,7 @@ def test_stream_without_a_terminal_frame_is_not_a_clean_completion():
     assert events[-1].response.text == "all"
 
 
-def test_quota_exhaustion_is_not_retried_or_called_an_overload():
+async def test_quota_exhaustion_is_not_retried_or_called_an_overload():
     attempts: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -2881,7 +2869,7 @@ def test_quota_exhaustion_is_not_retried_or_called_an_overload():
     )
 
     with pytest.raises(providers.ProviderQuotaError) as failure:
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
 
     assert attempts == [429]
     assert not isinstance(failure.value, ProviderOverloadedError)
@@ -2905,12 +2893,12 @@ def test_quota_exhaustion_is_not_retried_or_called_an_overload():
     )
 
     with pytest.raises(ProviderOverloadedError):
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
 
     assert len(limited) == 3
 
 
-def test_transport_failures_become_provider_errors_with_a_reason():
+async def test_transport_failures_become_provider_errors_with_a_reason():
     timeouts: list[int] = []
 
     def timeout(_request: httpx.Request) -> httpx.Response:
@@ -2924,7 +2912,7 @@ def test_transport_failures_become_provider_errors_with_a_reason():
     # Inference has no side effects, so a timed-out request is resent and an
     # exhausted one is the operator's to retry.
     with pytest.raises(ProviderOverloadedError) as failure:
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
     assert len(timeouts) == 3
     assert str(failure.value) == (
         "provider request timed out (ReadTimeout) after 3 attempts"
@@ -2953,7 +2941,7 @@ def test_transport_failures_become_provider_errors_with_a_reason():
     )
 
     with pytest.raises(ProviderError) as failure:
-        asyncio.run(provider.complete(_chat_request()))
+        (await provider.complete(_chat_request()))
     assert len(refused) == 3
     assert str(failure.value) == (
         "provider request failed (ConnectError): connection refused"
@@ -3100,7 +3088,7 @@ _DOTTED = ToolDefinition(
 )
 
 
-def test_anthropic_health_follows_model_pagination(monkeypatch):
+async def test_anthropic_health_follows_model_pagination(monkeypatch):
     monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
     pages = []
 
@@ -3130,14 +3118,14 @@ def test_anthropic_health_follows_model_pagination(monkeypatch):
         _keyed_config(ProviderKind.ANTHROPIC), transport=httpx.MockTransport(handler)
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert health.models == ["claude-a", "claude-b"]
     assert pages == [{"limit": "1000"}, {"limit": "1000", "after_id": "claude-a"}]
 
 
-def test_anthropic_tool_names_are_wire_safe_and_decoded(monkeypatch):
+async def test_anthropic_tool_names_are_wire_safe_and_decoded(monkeypatch):
     monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
     observed = {}
 
@@ -3166,7 +3154,7 @@ def test_anthropic_tool_names_are_wire_safe_and_decoded(monkeypatch):
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(provider.complete(_dotted_request()))
+    response = await provider.complete(_dotted_request())
 
     payload = observed["payload"]
     sent = [tool["name"] for tool in payload["tools"]]
@@ -3176,7 +3164,7 @@ def test_anthropic_tool_names_are_wire_safe_and_decoded(monkeypatch):
     assert response.tool_calls[0].name == "tool_output.search"
 
 
-def test_bedrock_sends_image_parts_as_converse_image_blocks(monkeypatch):
+async def test_bedrock_sends_image_parts_as_converse_image_blocks(monkeypatch):
     import base64
 
     observed: dict = {}
@@ -3196,7 +3184,7 @@ def test_bedrock_sends_image_parts_as_converse_image_blocks(monkeypatch):
         ]
     )
 
-    response = asyncio.run(provider.complete(request))
+    response = await provider.complete(request)
 
     assert response.text == "A login form."
     assert observed["messages"] == [
@@ -3227,10 +3215,10 @@ def test_bedrock_sends_image_parts_as_converse_image_blocks(monkeypatch):
         ]
     )
     with pytest.raises(ProviderError, match="png, jpeg, gif or webp"):
-        asyncio.run(provider.complete(unsupported))
+        (await provider.complete(unsupported))
 
 
-def test_bedrock_tool_names_are_wire_safe_and_decoded(monkeypatch):
+async def test_bedrock_tool_names_are_wire_safe_and_decoded(monkeypatch):
     observed: dict = {}
     _bedrock_client(
         monkeypatch,
@@ -3252,7 +3240,7 @@ def test_bedrock_tool_names_are_wire_safe_and_decoded(monkeypatch):
         )
     )
 
-    response = asyncio.run(provider.complete(_dotted_request()))
+    response = await provider.complete(_dotted_request())
 
     sent = [tool["toolSpec"]["name"] for tool in observed["toolConfig"]["tools"]]
     replayed = observed["messages"][1]["content"][0]["toolUse"]["name"]
@@ -3261,7 +3249,7 @@ def test_bedrock_tool_names_are_wire_safe_and_decoded(monkeypatch):
     assert response.tool_calls[0].name == "tool_output.search"
 
 
-def test_gemini_function_calls_without_an_id_get_a_stable_one(monkeypatch):
+async def test_gemini_function_calls_without_an_id_get_a_stable_one(monkeypatch):
     monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
     from nebula.v3.providers import ModelToolResult
 
@@ -3306,8 +3294,8 @@ def test_gemini_function_calls_without_an_id_get_a_stable_one(monkeypatch):
         messages=[ModelMessage(role="user", content="inspect")], tools=[TOOL]
     )
 
-    first = asyncio.run(provider.complete(request))
-    second = asyncio.run(provider.complete(request))
+    first = await provider.complete(request)
+    second = await provider.complete(request)
 
     ids = [call.id for call in first.tool_calls]
     assert all(ids) and len(set(ids)) == 2
@@ -3331,7 +3319,7 @@ def test_gemini_function_calls_without_an_id_get_a_stable_one(monkeypatch):
             ]
         }
     )
-    asyncio.run(provider.complete(replay))
+    (await provider.complete(replay))
     contents = observed["payload"]["contents"]
     calls = [
         part["functionCall"]
@@ -3349,7 +3337,7 @@ def test_gemini_function_calls_without_an_id_get_a_stable_one(monkeypatch):
     assert calls[1]["id"] == "fc_real" and results[1]["id"] == "fc_real"
 
 
-def test_gemini_health_follows_page_tokens_and_skips_unnamed_rows(monkeypatch):
+async def test_gemini_health_follows_page_tokens_and_skips_unnamed_rows(monkeypatch):
     monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
     pages = []
 
@@ -3369,7 +3357,7 @@ def test_gemini_health_follows_page_tokens_and_skips_unnamed_rows(monkeypatch):
         _keyed_config(ProviderKind.GEMINI), transport=httpx.MockTransport(handler)
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert health.models == ["gemini-a", "gemini-b"]
@@ -3383,7 +3371,7 @@ def test_gemini_health_follows_page_tokens_and_skips_unnamed_rows(monkeypatch):
         (OpenAICompatibleProvider, ProviderKind.OPENAI_COMPATIBLE),
     ],
 )
-def test_openai_health_skips_model_rows_without_an_id(provider_class, kind):
+async def test_openai_health_skips_model_rows_without_an_id(provider_class, kind):
     def handler(http_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -3400,7 +3388,7 @@ def test_openai_health_skips_model_rows_without_an_id(provider_class, kind):
 
     provider = provider_class(_config(kind), transport=httpx.MockTransport(handler))
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True, health.detail
     assert health.models == ["served-a", "served-b"]
@@ -3430,7 +3418,7 @@ def test_openai_responses_omits_temperature_for_reasoning_models():
         assert payload(model)["temperature"] == 0, model
 
 
-def test_openai_responses_tool_names_are_wire_safe_and_strict_is_schema_aware():
+async def test_openai_responses_tool_names_are_wire_safe_and_strict_is_schema_aware():
     optional = ToolDefinition(
         name="workspace.read",
         description="Read a workspace file.",
@@ -3476,7 +3464,7 @@ def test_openai_responses_tool_names_are_wire_safe_and_strict_is_schema_aware():
     request = _dotted_request()
     request = request.model_copy(update={"tools": [*request.tools, optional]})
 
-    response = asyncio.run(provider.complete(request))
+    response = await provider.complete(request)
 
     payload = observed["payload"]
     tools = {tool["name"]: tool for tool in payload["tools"]}
@@ -3551,3 +3539,6 @@ def test_openai_strict_schema_check_covers_nested_objects():
             "additionalProperties": False,
         }
     )
+
+
+pytestmark = pytest.mark.anyio

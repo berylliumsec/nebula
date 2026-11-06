@@ -7,7 +7,11 @@ output is, and finishes: from the results it has when even that does not fit,
 and after one retry with more cleared when the provider rejects the context.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 import httpx
@@ -115,10 +119,12 @@ class LongTurnProvider(ScriptedProvider):
         )
 
 
-def _long_turn(tmp_path, provider, broker):
-    store, service, prepared, _ = _prepared(tmp_path, [], broker, max_tool_calls=None)
-    profile = store.get(ProviderProfile, prepared.provider_profile.id)
-    prepared.provider_profile = store.update(
+async def _long_turn(tmp_path, provider, broker):
+    store, service, prepared, _ = await _prepared(
+        tmp_path, [], broker, max_tool_calls=None
+    )
+    profile = await store.get(ProviderProfile, prepared.provider_profile.id)
+    prepared.provider_profile = await store.update(
         ProviderProfile,
         profile.id,
         {"metadata": {**profile.metadata, "options": {"context_window": WINDOW}}},
@@ -160,17 +166,17 @@ def _checkpointed(request: ModelRequest) -> bool:
     )
 
 
-def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
+async def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     """HIST-3: 20 × 7 KB results on a 32K window used to fail after 13 calls."""
 
     broker = ScanBroker()
     provider = LongTurnProvider(calls=20)
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     # No step ran twice and none was skipped.
     assert [call.arguments["value"] for call in broker.calls] == [
@@ -222,7 +228,7 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
         assert not cleared[0].is_error
 
 
-def test_routing_that_cannot_fit_answers_from_results_instead_of_failing(
+async def test_routing_that_cannot_fit_answers_from_results_instead_of_failing(
     tmp_path, monkeypatch
 ):
     """Routing-only overhead fills the window: the turn answers from its results.
@@ -234,7 +240,7 @@ def test_routing_that_cannot_fit_answers_from_results_instead_of_failing(
 
     broker = ScanBroker()
     provider = LongTurnProvider(calls=30)
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
     capacity = resolve_context_limits(
         prepared.provider_profile, model="model-a", required_parameters={"tools"}
     ).input_capacity
@@ -246,10 +252,10 @@ def test_routing_that_cannot_fit_answers_from_results_instead_of_failing(
         chat_module._CHAT_TOOL_INSTRUCTIONS + "R" * ((capacity - 1_500) * 3),
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     # Core stopped routing; the model never had to finish it.
     assert provider.finished is False
     assert 2 <= len(broker.calls) < 30
@@ -331,7 +337,7 @@ def _text_stream(text: str) -> httpx.Response:
     )
 
 
-def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path):
+async def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path):
     """ROUTE-13: a server smaller than its configured window rejects step 3.
 
     The server holds one whole result. Routing step 3 carries two, is
@@ -393,16 +399,16 @@ def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path
         ),
         transport=httpx.MockTransport(handler),
     )
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
 
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     done = [payload for name, payload in events if name == "done"]
     assert done[-1]["message"]["content"] == ANSWER
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     assert [call.arguments["value"] for call in broker.calls] == ["1", "2"]
     # Routing step 3 was rejected once and retried; the synthesis kept the
     # result that retry cleared. OpenAI-compatible automatic routing omits
@@ -433,7 +439,7 @@ def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path
         assert calls == ["call-1", "call-2"]
 
 
-def test_context_rejection_with_nothing_left_to_clear_reads_the_current_turn(
+async def test_context_rejection_with_nothing_left_to_clear_reads_the_current_turn(
     tmp_path,
 ):
     """ROUTE-13: the no-repeat guard read a turn that routing never refreshed."""
@@ -450,7 +456,7 @@ def test_context_rejection_with_nothing_left_to_clear_reads_the_current_turn(
             return item
 
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     prepared.provider = Rejecting(
         [
             _response(
@@ -466,9 +472,9 @@ def test_context_rejection_with_nothing_left_to_clear_reads_the_current_turn(
     # cleared, and the turn is refused as one whose tools already ran, not
     # sent to rebuild a conversation it has no source for.
     with pytest.raises(ChatConfigurationError, match="after tool routing began"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
     assert len(broker.calls) == 1
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.FAILED
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.FAILED
 
 
 def _extends(earlier: ModelRequest, later: ModelRequest) -> bool:
@@ -481,7 +487,7 @@ def _extends(earlier: ModelRequest, later: ModelRequest) -> bool:
     )
 
 
-def test_cleared_results_stay_cleared_so_the_prefix_changes_once_per_crossing(
+async def test_cleared_results_stay_cleared_so_the_prefix_changes_once_per_crossing(
     tmp_path,
 ):
     """F3: past its target a turn cleared one more result on nearly every step.
@@ -496,9 +502,9 @@ def test_cleared_results_stay_cleared_so_the_prefix_changes_once_per_crossing(
 
     broker = ScanBroker()
     provider = LongTurnProvider(calls=40)
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert len(broker.calls) == 40
@@ -532,15 +538,17 @@ def test_cleared_results_stay_cleared_so_the_prefix_changes_once_per_crossing(
     assert 1 <= changes <= len(routing) // 4
 
 
-def _large_window_turn(tmp_path, provider, broker, **options):
+async def _large_window_turn(tmp_path, provider, broker, **options):
     """A turn whose model publishes a 1M-token window (no configured cap)."""
 
-    store, service, prepared, _ = _prepared(tmp_path, [], broker, max_tool_calls=None)
-    profile = store.get(ProviderProfile, prepared.provider_profile.id)
+    store, service, prepared, _ = await _prepared(
+        tmp_path, [], broker, max_tool_calls=None
+    )
+    profile = await store.get(ProviderProfile, prepared.provider_profile.id)
     descriptors = [
         {"id": "model-a", "context_window": 1_000_000, "max_output_tokens": 32_000}
     ]
-    prepared.provider_profile = store.update(
+    prepared.provider_profile = await store.update(
         ProviderProfile,
         profile.id,
         {
@@ -556,7 +564,7 @@ def _large_window_turn(tmp_path, provider, broker, **options):
     return store, service, prepared
 
 
-def test_a_large_window_clears_tool_results_at_the_working_ceiling(
+async def test_a_large_window_clears_tool_results_at_the_working_ceiling(
     tmp_path, monkeypatch
 ):
     """Stream X: context rot applies to tool results too.
@@ -570,9 +578,9 @@ def test_a_large_window_clears_tool_results_at_the_working_ceiling(
     monkeypatch.setattr(context_module, "WORKING_CONTEXT_CEILING", 12_000)
     broker = ScanBroker()
     provider = LongTurnProvider(calls=20)
-    store, service, prepared = _large_window_turn(tmp_path, provider, broker)
+    store, service, prepared = await _large_window_turn(tmp_path, provider, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     routing = [
@@ -590,17 +598,17 @@ def test_a_large_window_clears_tool_results_at_the_working_ceiling(
     assert max(estimate_model_request(req) for req in routing) < 2 * 12_000
 
 
-def test_a_configured_window_above_the_ceiling_keeps_tool_results_whole(
+async def test_a_configured_window_above_the_ceiling_keeps_tool_results_whole(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(context_module, "WORKING_CONTEXT_CEILING", 12_000)
     broker = ScanBroker()
     provider = LongTurnProvider(calls=20)
-    store, service, prepared = _large_window_turn(
+    store, service, prepared = await _large_window_turn(
         tmp_path, provider, broker, context_window=1_000_000
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     routing = [
@@ -613,3 +621,6 @@ def test_a_configured_window_above_the_ceiling_keeps_tool_results_whole(
     # grow past the ceiling.
     assert not any(_cleared(r) for req in routing for r in req.tool_results)
     assert max(estimate_model_request(req) for req in routing) > 2 * 12_000
+
+
+pytestmark = pytest.mark.anyio

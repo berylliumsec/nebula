@@ -1,6 +1,11 @@
 """Only vendor-reported numeric windows can trigger Butler quota thresholds."""
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 from datetime import datetime, timezone
@@ -126,24 +131,28 @@ def test_grok_billing_percentage_and_period_are_vendor_scoped():
     assert grok_quota_snapshots({"usage": {"inputTokens": 1000}}) == []
 
 
-def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
+async def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "quota.db")
-    store.create(
-        HarnessProfile(
-            id="codex",
-            name="Codex",
-            kind=HarnessKind.CODEX_APP_SERVER,
-            executable="/bin/true",
+    (
+        await store.create(
+            HarnessProfile(
+                id="codex",
+                name="Codex",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+            )
         )
     )
-    store.create(
-        HarnessProfile(
-            id="grok",
-            name="Grok",
-            kind=HarnessKind.GROK_ACP,
-            executable="/bin/true",
+    (
+        await store.create(
+            HarnessProfile(
+                id="grok",
+                name="Grok",
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+            )
         )
     )
     calls = []
@@ -179,7 +188,7 @@ def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
         grok = await service.read_harness_quota("grok", refresh=True)
         return codex, grok
 
-    codex, grok = asyncio.run(scenario())
+    codex, grok = await scenario()
     assert calls == ["codex", "grok"]
     assert codex.state == "available"
     assert codex.snapshots[0].remaining_percent == 20
@@ -188,21 +197,23 @@ def test_profile_read_returns_numeric_codex_and_grok_or_explicit_unknown(
     assert grok.snapshots[0].remaining_percent == 55
     assert grok.balances[0].remaining == 3.75
     grok_response["config"].pop("creditUsagePercent")
-    unknown = asyncio.run(service.read_harness_quota("grok", refresh=True))
+    unknown = await service.read_harness_quota("grok", refresh=True)
     assert unknown.state == "available" and unknown.snapshots == []
     assert unknown.balances[0].remaining == 3.75
     response["rateLimits"]["primary"].pop("usedPercent")
-    without_numeric = asyncio.run(service.read_harness_quota("codex", refresh=True))
+    without_numeric = await service.read_harness_quota("codex", refresh=True)
     assert without_numeric.state == "available"
     assert without_numeric.snapshots == []
     assert without_numeric.balances[0].remaining == 5.25
     grok_response["config"].pop("prepaidBalance")
-    truly_unknown = asyncio.run(service.read_harness_quota("grok", refresh=True))
+    truly_unknown = await service.read_harness_quota("grok", refresh=True)
     assert truly_unknown.state == "unavailable"
     assert calls == ["codex", "grok", "grok", "codex", "grok"]
 
 
-def test_claude_adapter_attaches_only_numeric_quota_to_rate_limit_notice(tmp_path):
+async def test_claude_adapter_attaches_only_numeric_quota_to_rate_limit_notice(
+    tmp_path,
+):
     class Client:
         def __init__(self):
             self.messages: asyncio.Queue[object] = asyncio.Queue()
@@ -263,7 +274,7 @@ def test_claude_adapter_attaches_only_numeric_quota_to_rate_limit_notice(tmp_pat
         finally:
             await connection.close()
 
-    events = asyncio.run(scenario())
+    events = await scenario()
     notices = [event for event in events if event.title == "Claude rate limit"]
     assert len(notices) == 2
     assert notices[0].quota_snapshot is not None
@@ -271,3 +282,6 @@ def test_claude_adapter_attaches_only_numeric_quota_to_rate_limit_notice(tmp_pat
     assert notices[1].quota_snapshot is None
     assert notices[1].summary == "rejected"
     assert notices[1].reason_code == "rate_limited"
+
+
+pytestmark = pytest.mark.anyio

@@ -1,5 +1,10 @@
 """Transport observation never equates an idle turn with a disconnected peer."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 from types import SimpleNamespace
 
@@ -17,7 +22,7 @@ from nebula.v3.harnesses import (
     "rpc_class,connection_class",
     [(_CodexRpc, CodexAppServerConnection), (_AcpRpc, GrokAcpConnection)],
 )
-def test_rpc_reports_unstarted_alive_exited_and_closed_transport(
+async def test_rpc_reports_unstarted_alive_exited_and_closed_transport(
     rpc_class, connection_class
 ):
     async def scenario():
@@ -39,4 +44,7 @@ def test_rpc_reports_unstarted_alive_exited_and_closed_transport(
         rpc._closing = True
         assert connection.connection_state == "disconnected"
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

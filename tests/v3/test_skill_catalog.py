@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 from pathlib import Path
 
 import pytest
@@ -178,8 +182,8 @@ def test_blank_link_targets_are_a_validation_error(tmp_path):
         )
 
 
-def test_skill_listing_failures_do_not_reveal_host_paths(tmp_path):
-    from fastapi.testclient import TestClient
+async def test_skill_listing_failures_do_not_reveal_host_paths(tmp_path):
+    from tests.v3.async_test_support import AsyncTestClient as TestClient
 
     from nebula.v3.api import create_app
     from nebula.v3.domain import Engagement
@@ -188,9 +192,13 @@ def test_skill_listing_failures_do_not_reveal_host_paths(tmp_path):
     store = NebulaStore(tmp_path / "app.db")
     client = TestClient(create_app(store, auth_token="test-token"))
     missing = tmp_path / "moved-elsewhere"
-    store.create(Engagement(id="p", name="Project", workspace_path=str(missing)))
+    (
+        await store.create(
+            Engagement(id="p", name="Project", workspace_path=str(missing))
+        )
+    )
 
-    response = client.get(
+    response = await client.get(
         "/api/v1/skills?engagement_id=p",
         headers={"Authorization": "Bearer test-token"},
     )
@@ -199,3 +207,6 @@ def test_skill_listing_failures_do_not_reveal_host_paths(tmp_path):
     detail = response.json()["detail"]
     assert "No such file or directory" in detail
     assert str(tmp_path) not in detail and "Errno" not in detail
+
+
+pytestmark = pytest.mark.anyio

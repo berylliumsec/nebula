@@ -15,7 +15,11 @@ declaration. An adapter that receives tool history with no tools from any
 other caller declares the replayed names itself.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 from typing import Any
 
@@ -244,7 +248,7 @@ def test_responses_synthesis_declares_tools_with_tool_choice_none():
         "claude-mythos-preview",
     ],
 )
-def test_anthropic_synthesis_declares_tools_with_tool_choice_none(model):
+async def test_anthropic_synthesis_declares_tools_with_tool_choice_none(model):
     provider, sent = _http(
         AnthropicProvider,
         ProviderKind.ANTHROPIC,
@@ -252,7 +256,7 @@ def test_anthropic_synthesis_declares_tools_with_tool_choice_none(model):
         _ANTHROPIC_OK,
     )
 
-    asyncio.run(provider.complete(_synthesis(model)))
+    (await provider.complete(_synthesis(model)))
 
     payload = sent[0]
     assert [tool["name"] for tool in payload["tools"]] == [
@@ -262,7 +266,7 @@ def test_anthropic_synthesis_declares_tools_with_tool_choice_none(model):
     assert payload["tool_choice"] == {"type": "none"}
 
 
-def test_gemini_synthesis_declares_tools_with_calling_mode_none():
+async def test_gemini_synthesis_declares_tools_with_calling_mode_none():
     provider, sent = _http(
         GeminiProvider,
         ProviderKind.GEMINI,
@@ -275,7 +279,7 @@ def test_gemini_synthesis_declares_tools_with_calling_mode_none():
         },
     )
 
-    asyncio.run(provider.complete(_synthesis()))
+    (await provider.complete(_synthesis()))
 
     payload = sent[0]
     declared = payload["tools"][0]["functionDeclarations"]
@@ -291,13 +295,15 @@ def test_gemini_synthesis_declares_tools_with_calling_mode_none():
         "amazon.nova-pro-v1:0",
     ],
 )
-def test_bedrock_synthesis_declares_tools_without_a_tool_choice(monkeypatch, model):
+async def test_bedrock_synthesis_declares_tools_without_a_tool_choice(
+    monkeypatch, model
+):
     """Converse has no none choice; its default, auto, is the closest."""
 
     bedrock = _Converse(monkeypatch)
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
-    asyncio.run(provider.complete(_synthesis(model)))
+    (await provider.complete(_synthesis(model)))
 
     sent = bedrock.calls[0]
     # A Claude model's tools also end with a cache point.
@@ -317,7 +323,7 @@ def test_bedrock_synthesis_declares_tools_without_a_tool_choice(monkeypatch, mod
 # --- The adapter backstop for tool history without tools ---------------------
 
 
-def test_anthropic_declares_replayed_tools_when_history_arrives_without_tools():
+async def test_anthropic_declares_replayed_tools_when_history_arrives_without_tools():
     provider, sent = _http(
         AnthropicProvider,
         ProviderKind.ANTHROPIC,
@@ -325,7 +331,7 @@ def test_anthropic_declares_replayed_tools_when_history_arrives_without_tools():
         _ANTHROPIC_OK,
     )
 
-    asyncio.run(provider.complete(_tool_free_history()))
+    (await provider.complete(_tool_free_history()))
 
     payload = sent[0]
     blocks = {
@@ -344,17 +350,17 @@ def test_anthropic_declares_replayed_tools_when_history_arrives_without_tools():
 
     # A request with no tool history is left as it was.
     plain = _tool_free_history().model_copy(update={"tool_results": []})
-    asyncio.run(provider.complete(plain))
+    (await provider.complete(plain))
     assert "tools" not in sent[1] and "tool_choice" not in sent[1]
 
 
-def test_bedrock_declares_replayed_tools_when_history_arrives_without_tools(
+async def test_bedrock_declares_replayed_tools_when_history_arrives_without_tools(
     monkeypatch,
 ):
     bedrock = _Converse(monkeypatch)
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
-    asyncio.run(provider.complete(_tool_free_history("anthropic.claude-sonnet-5")))
+    (await provider.complete(_tool_free_history("anthropic.claude-sonnet-5")))
 
     sent = bedrock.calls[0]
     assert any(
@@ -374,7 +380,7 @@ def test_bedrock_declares_replayed_tools_when_history_arrives_without_tools(
     assert "toolChoice" not in sent["toolConfig"]
 
     plain = _tool_free_history().model_copy(update={"tool_results": []})
-    asyncio.run(provider.complete(plain))
+    (await provider.complete(plain))
     assert "toolConfig" not in bedrock.calls[1]
 
 
@@ -382,7 +388,7 @@ def test_bedrock_declares_replayed_tools_when_history_arrives_without_tools(
 
 
 @pytest.mark.parametrize("reason", ["UNEXPECTED_TOOL_CALL", "MALFORMED_FUNCTION_CALL"])
-def test_gemini_call_attempt_under_tool_choice_none_is_an_empty_reply(reason):
+async def test_gemini_call_attempt_under_tool_choice_none_is_an_empty_reply(reason):
     """Gemini reports a call made with calling off as UNEXPECTED_TOOL_CALL.
 
     The request allowed no call, so this is the caller's final-answer
@@ -400,14 +406,14 @@ def test_gemini_call_attempt_under_tool_choice_none_is_an_empty_reply(reason):
         },
     )
 
-    response = asyncio.run(provider.complete(_synthesis()))
+    response = await provider.complete(_synthesis())
 
     assert response.text == ""
     assert response.tool_calls == []
     assert response.finish_reason == reason
 
 
-def test_bedrock_malformed_output_under_tool_choice_none_is_an_empty_reply(
+async def test_bedrock_malformed_output_under_tool_choice_none_is_an_empty_reply(
     monkeypatch,
 ):
     _Converse(
@@ -420,7 +426,7 @@ def test_bedrock_malformed_output_under_tool_choice_none_is_an_empty_reply(
     )
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
-    response = asyncio.run(provider.complete(_synthesis()))
+    response = await provider.complete(_synthesis())
 
     assert response.text == ""
     assert response.finish_reason == "malformed_tool_use"
@@ -449,11 +455,11 @@ def _dumped(tools: list[ToolDefinition]) -> list[dict[str, Any]]:
     return [tool.model_dump(mode="json") for tool in tools]
 
 
-def test_synthesis_and_its_recovery_declare_the_routing_tools_with_calling_off(
+async def test_synthesis_and_its_recovery_declare_the_routing_tools_with_calling_off(
     tmp_path,
 ):
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -465,7 +471,7 @@ def test_synthesis_and_its_recovery_declare_the_routing_tools_with_calling_off(
         broker,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     routing, _, synthesis, recovery = _turn_requests(provider)
@@ -482,23 +488,23 @@ def test_synthesis_and_its_recovery_declare_the_routing_tools_with_calling_off(
     assert recovery.metadata["final_answer_recovery"] == "missing_answer"
     assert _dumped(recovery.tools) == _dumped(routing.tools)
     assert recovery.tool_choice == NONE
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
-def test_synthesis_declares_the_full_routing_list_after_the_budget_is_spent(
+async def test_synthesis_declares_the_full_routing_list_after_the_budget_is_spent(
     tmp_path,
 ):
     """Budgets trim later routing steps; calling is off at synthesis anyway."""
 
     broker = RecordingBroker()
-    _, service, prepared, provider = _prepared(
+    _, service, prepared, provider = await _prepared(
         tmp_path,
         [_response(calls=[_call("call-1", "a")]), _response(text=ANSWER)],
         broker,
         max_tool_calls=1,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     routing, synthesis = _turn_requests(provider)
@@ -506,10 +512,12 @@ def test_synthesis_declares_the_full_routing_list_after_the_budget_is_spent(
     assert synthesis.tool_choice == NONE
 
 
-def test_output_limit_recovery_is_sized_from_the_routes_that_serve_tools(tmp_path):
+async def test_output_limit_recovery_is_sized_from_the_routes_that_serve_tools(
+    tmp_path,
+):
     """The recovery request declares tools, so only tool routes can serve it."""
 
-    _, service, prepared, _ = _prepared(tmp_path, [], RecordingBroker())
+    _, service, prepared, _ = await _prepared(tmp_path, [], RecordingBroker())
     prepared.provider_profile = ProviderProfile(
         id="provider",
         name="OpenRouter",
@@ -554,7 +562,9 @@ def test_output_limit_recovery_is_sized_from_the_routes_that_serve_tools(tmp_pat
         max_output_tokens=2_048,
     )
 
-    retry = service._final_answer_recovery_request(prepared, synthesis, "output_limit")
+    retry = await service._final_answer_recovery_request(
+        prepared, synthesis, "output_limit"
+    )
 
     assert retry.tools == synthesis.tools
     # Twice the budget, bounded by the 16,000-token tool route; the text-only
@@ -570,7 +580,7 @@ _VENDOR_RULE = (
 )
 
 
-def test_anthropic_tool_turn_completes_where_tool_blocks_require_tools(tmp_path):
+async def test_anthropic_tool_turn_completes_where_tool_blocks_require_tools(tmp_path):
     sent: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -625,7 +635,7 @@ def test_anthropic_tool_turn_completes_where_tool_blocks_require_tools(tmp_path)
         )
 
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     prepared.provider = AnthropicProvider(
         ProviderConfig(
             id="provider",
@@ -640,18 +650,18 @@ def test_anthropic_tool_turn_completes_where_tool_blocks_require_tools(tmp_path)
         transport=httpx.MockTransport(handler),
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert [call.arguments for call in broker.calls] == [{"value": "a"}]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     assert len(sent) == 3
     synthesis = sent[-1]
     assert synthesis["tools"] == sent[0]["tools"]
     assert synthesis["tool_choice"] == {"type": "none"}
 
 
-def test_bedrock_tool_turn_completes_where_tool_blocks_require_a_tool_config(
+async def test_bedrock_tool_turn_completes_where_tool_blocks_require_a_tool_config(
     monkeypatch, tmp_path
 ):
     calls: list[dict[str, Any]] = []
@@ -709,7 +719,7 @@ def test_bedrock_tool_turn_completes_where_tool_blocks_require_a_tool_config(
 
     monkeypatch.setattr(providers.boto3, "client", lambda *a, **k: Converse())
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     prepared.provider = BedrockProvider(
         ProviderConfig(
             id="provider",
@@ -723,18 +733,18 @@ def test_bedrock_tool_turn_completes_where_tool_blocks_require_a_tool_config(
         )
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert [call.arguments for call in broker.calls] == [{"value": "a"}]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     assert len(calls) == 3
     synthesis = calls[-1]
     assert synthesis["toolConfig"]["tools"] == calls[0]["toolConfig"]["tools"]
     assert "toolChoice" not in synthesis["toolConfig"]
 
 
-def test_gemini_tool_turn_recovers_a_call_made_with_calling_off(tmp_path):
+async def test_gemini_tool_turn_recovers_a_call_made_with_calling_off(tmp_path):
     """UNEXPECTED_TOOL_CALL at synthesis is asked again, not a failed turn."""
 
     sent: list[dict[str, Any]] = []
@@ -789,7 +799,7 @@ def test_gemini_tool_turn_recovers_a_call_made_with_calling_off(tmp_path):
         )
 
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     prepared.provider = GeminiProvider(
         ProviderConfig(
             id="provider",
@@ -804,13 +814,16 @@ def test_gemini_tool_turn_recovers_a_call_made_with_calling_off(tmp_path):
         transport=httpx.MockTransport(handler),
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert len(sent) == 4
     for synthesis in sent[2:]:
         assert synthesis["tools"] == sent[0]["tools"]
         assert synthesis["toolConfig"] == {"functionCallingConfig": {"mode": "NONE"}}
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.request_snapshot["final_answer_recovery"]["reason"] == "missing_answer"
+
+
+pytestmark = pytest.mark.anyio

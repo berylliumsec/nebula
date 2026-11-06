@@ -1,5 +1,10 @@
 """Approval delivery contracts; disposable Core, no commands or vendor calls."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 import httpx
@@ -10,15 +15,15 @@ from nebula.v3.domain import Approval, ChatSession, ChatTurn, HarnessTurn, ToolC
 from tests.v3.test_harnesses import _runtime
 
 
-def fixture(tmp_path, tool_name="run_command"):
-    store, project, profile, _, _, runtime = _runtime(tmp_path)
-    session = runtime.create_session(
+async def fixture(tmp_path, tool_name="run_command"):
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
+    session = await runtime.create_session(
         engagement_id=project.id,
         profile_id=profile.id,
         model="test-model",
         mcp_server_ids=[],
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             title="Approval fixture",
             engagement_id=project.id,
@@ -28,7 +33,7 @@ def fixture(tmp_path, tool_name="run_command"):
             model="test-model",
         )
     )
-    owner = store.create(
+    owner = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=chat.id,
@@ -37,7 +42,7 @@ def fixture(tmp_path, tool_name="run_command"):
             status="waiting_approval",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=session.id,
@@ -48,7 +53,7 @@ def fixture(tmp_path, tool_name="run_command"):
             status="waiting_approval",
         )
     )
-    call = store.create(
+    call = await store.create(
         ToolCall(
             engagement_id=project.id,
             run_id=owner.id,
@@ -60,7 +65,7 @@ def fixture(tmp_path, tool_name="run_command"):
             status="waiting_approval",
         )
     )
-    approval = store.create(
+    approval = await store.create(
         Approval(
             engagement_id=project.id,
             run_id=owner.id,
@@ -77,11 +82,13 @@ def fixture(tmp_path, tool_name="run_command"):
             },
         )
     )
-    store.update(
-        ChatTurn,
-        owner.id,
-        {"approval_id": approval.id, "harness_turn_id": turn.id},
-        expected_revision=owner.revision,
+    (
+        await store.update(
+            ChatTurn,
+            owner.id,
+            {"approval_id": approval.id, "harness_turn_id": turn.id},
+            expected_revision=owner.revision,
+        )
     )
     app = create_app(store, auth_token="fixture", harness_runtime_service=runtime)
     return app, store, runtime, approval, turn, owner
@@ -89,11 +96,11 @@ def fixture(tmp_path, tool_name="run_command"):
 
 @pytest.mark.parametrize("tool_name", ["run_command", "read_file"])
 @pytest.mark.parametrize("decision", ["approve", "reject"])
-def test_decision_delivers_to_exact_waiter_and_retry_does_not_redeliver(
+async def test_decision_delivers_to_exact_waiter_and_retry_does_not_redeliver(
     tmp_path, tool_name, decision
 ):
     async def scenario():
-        app, store, runtime, approval, turn, _ = fixture(tmp_path, tool_name)
+        app, store, runtime, approval, turn, _ = await fixture(tmp_path, tool_name)
         waiter = asyncio.get_running_loop().create_future()
         unrelated = asyncio.get_running_loop().create_future()
         runtime._approval_futures[approval.id] = waiter
@@ -112,11 +119,11 @@ def test_decision_delivers_to_exact_waiter_and_retry_does_not_redeliver(
             assert not unrelated.done()
             assert response.json()["continuation"]["status"] == "delivered"
             assert response.json()["continuation"]["harness_turn_id"] == turn.id
-            revision = store.get(Approval, approval.id).revision
+            revision = (await store.get(Approval, approval.id)).revision
             retry = await client.post(url, json={"decision": decision})
             assert retry.status_code == 200
             assert retry.json() == response.json()
-            assert store.get(Approval, approval.id).revision == revision
+            assert (await store.get(Approval, approval.id)).revision == revision
             conflict = await client.post(
                 url, json={"decision": "reject" if decision == "approve" else "approve"}
             )
@@ -126,14 +133,14 @@ def test_decision_delivers_to_exact_waiter_and_retry_does_not_redeliver(
                 == response.json()["status"]
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_missing_waiter_preserves_decision_and_interrupts_instead_of_replaying(
+async def test_missing_waiter_preserves_decision_and_interrupts_instead_of_replaying(
     tmp_path,
 ):
     async def scenario():
-        app, store, _, approval, turn, owner = fixture(tmp_path)
+        app, store, _, approval, turn, owner = await fixture(tmp_path)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
@@ -146,70 +153,78 @@ def test_missing_waiter_preserves_decision_and_interrupts_instead_of_replaying(
             assert response.status_code == 200, response.text
             assert response.json()["status"] == "approved"
             assert response.json()["continuation"]["status"] == "failed"
-            assert store.get(HarnessTurn, turn.id).status.value == "interrupted"
-            assert store.get(ChatTurn, owner.id).status.value == "interrupted"
+            assert (await store.get(HarnessTurn, turn.id)).status.value == "interrupted"
+            assert (await store.get(ChatTurn, owner.id)).status.value == "interrupted"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_cancelled_waiter_does_not_resurrect_terminal_turn(tmp_path):
+async def test_cancelled_waiter_does_not_resurrect_terminal_turn(tmp_path):
     async def scenario():
-        _, store, runtime, approval, turn, owner = fixture(tmp_path)
+        _, store, runtime, approval, turn, owner = await fixture(tmp_path)
         task = asyncio.create_task(runtime._wait_for_broker_approval(turn, approval))
         await asyncio.sleep(0)
-        current = store.get(HarnessTurn, turn.id)
-        store.update(
-            HarnessTurn,
-            current.id,
-            {"status": "cancelled"},
-            expected_revision=current.revision,
+        current = await store.get(HarnessTurn, turn.id)
+        (
+            await store.update(
+                HarnessTurn,
+                current.id,
+                {"status": "cancelled"},
+                expected_revision=current.revision,
+            )
         )
-        current_owner = store.get(ChatTurn, owner.id)
-        store.update(
-            ChatTurn,
-            owner.id,
-            {"status": "cancelled"},
-            expected_revision=current_owner.revision,
+        current_owner = await store.get(ChatTurn, owner.id)
+        (
+            await store.update(
+                ChatTurn,
+                owner.id,
+                {"status": "cancelled"},
+                expected_revision=current_owner.revision,
+            )
         )
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         await asyncio.sleep(0)
-        assert store.get(HarnessTurn, turn.id).status.value == "cancelled"
-        assert store.get(ChatTurn, owner.id).status.value == "cancelled"
+        assert (await store.get(HarnessTurn, turn.id)).status.value == "cancelled"
+        assert (await store.get(ChatTurn, owner.id)).status.value == "cancelled"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_restart_reconciles_recorded_but_undelivered_decision(tmp_path):
+async def test_restart_reconciles_recorded_but_undelivered_decision(tmp_path):
     async def scenario():
-        _, store, runtime, approval, turn, owner = fixture(tmp_path)
-        store.update(
-            Approval,
-            approval.id,
-            {
-                "status": "approved",
-                "continuation": {
-                    "harness_turn_id": turn.id,
-                    "status": "pending",
+        _, store, runtime, approval, turn, owner = await fixture(tmp_path)
+        (
+            await store.update(
+                Approval,
+                approval.id,
+                {
+                    "status": "approved",
+                    "continuation": {
+                        "harness_turn_id": turn.id,
+                        "status": "pending",
+                    },
                 },
-            },
-            expected_revision=approval.revision,
+                expected_revision=approval.revision,
+            )
         )
         await runtime.startup()
-        assert store.get(Approval, approval.id).status.value == "approved"
-        assert store.get(Approval, approval.id).continuation.status == "failed"
-        assert store.get(HarnessTurn, turn.id).status.value == "interrupted"
-        assert store.get(ChatTurn, owner.id).status.value == "interrupted"
+        assert (await store.get(Approval, approval.id)).status.value == "approved"
+        assert (await store.get(Approval, approval.id)).continuation.status == "failed"
+        assert (await store.get(HarnessTurn, turn.id)).status.value == "interrupted"
+        assert (await store.get(ChatTurn, owner.id)).status.value == "interrupted"
         assert not runtime._approval_futures
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_resolving_one_request_keeps_the_other_pending(tmp_path):
+async def test_resolving_one_request_keeps_the_other_pending(tmp_path):
     async def scenario():
-        _, store, runtime, approval, turn, owner = fixture(tmp_path)
-        second = store.create(approval.model_copy(update={"id": "second-request"}))
+        _, store, runtime, approval, turn, owner = await fixture(tmp_path)
+        second = await store.create(
+            approval.model_copy(update={"id": "second-request"})
+        )
         first_task = asyncio.create_task(
             runtime._wait_for_broker_approval(turn, approval)
         )
@@ -217,7 +232,7 @@ def test_resolving_one_request_keeps_the_other_pending(tmp_path):
             runtime._wait_for_broker_approval(turn, second)
         )
         await asyncio.sleep(0)
-        decided = store.update(
+        decided = await store.update(
             Approval,
             approval.id,
             {"status": "approved"},
@@ -225,25 +240,27 @@ def test_resolving_one_request_keeps_the_other_pending(tmp_path):
         )
         await runtime.resolve_approval(decided)
         await first_task
-        assert store.get(HarnessTurn, turn.id).status.value == "waiting_approval"
-        assert store.get(ChatTurn, owner.id).approval_id == second.id
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status.value == "waiting_approval"
+        assert (await store.get(ChatTurn, owner.id)).approval_id == second.id
         assert not second_task.done()
         second_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await second_task
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_activity_write_failure_reconciles_waiter_without_execution(
+async def test_activity_write_failure_reconciles_waiter_without_execution(
     tmp_path, monkeypatch
 ):
     async def scenario():
-        _, store, runtime, approval, turn, owner = fixture(tmp_path)
+        _, store, runtime, approval, turn, owner = await fixture(tmp_path)
         waiter = asyncio.get_running_loop().create_future()
         runtime._approval_futures[approval.id] = waiter
         runtime._broker_approval_ids.add(approval.id)
-        decided = store.update(
+        decided = await store.update(
             Approval,
             approval.id,
             {
@@ -263,36 +280,45 @@ def test_activity_write_failure_reconciles_waiter_without_execution(
             "An undeliverable decision must not leave an orphan waiter"
         )
         assert approval.id not in runtime._approval_futures
-        assert store.get(Approval, approval.id).continuation.status == "failed"
-        assert store.get(HarnessTurn, turn.id).status.value == "interrupted"
-        assert store.get(ChatTurn, owner.id).status.value == "interrupted"
+        assert (await store.get(Approval, approval.id)).continuation.status == "failed"
+        assert (await store.get(HarnessTurn, turn.id)).status.value == "interrupted"
+        assert (await store.get(ChatTurn, owner.id)).status.value == "interrupted"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("missing", ["call", "turn"])
-def test_restart_survives_a_removed_delivery_owner_without_replay(tmp_path, missing):
+async def test_restart_survives_a_removed_delivery_owner_without_replay(
+    tmp_path, missing
+):
     async def scenario():
-        _, store, runtime, approval, turn, _ = fixture(tmp_path)
-        store.update(
-            Approval,
-            approval.id,
-            {
-                "status": "approved",
-                "continuation": {"harness_turn_id": turn.id, "status": "pending"},
-            },
-            expected_revision=approval.revision,
+        _, store, runtime, approval, turn, _ = await fixture(tmp_path)
+        (
+            await store.update(
+                Approval,
+                approval.id,
+                {
+                    "status": "approved",
+                    "continuation": {"harness_turn_id": turn.id, "status": "pending"},
+                },
+                expected_revision=approval.revision,
+            )
         )
-        store.delete(
-            ToolCall if missing == "call" else HarnessTurn,
-            approval.tool_call_id if missing == "call" else turn.id,
+        (
+            await store.delete(
+                ToolCall if missing == "call" else HarnessTurn,
+                approval.tool_call_id if missing == "call" else turn.id,
+            )
         )
         await runtime.startup()
-        saved = store.get(Approval, approval.id)
+        saved = await store.get(Approval, approval.id)
         assert saved.status.value == "approved"
         assert saved.continuation.status == "failed"
         assert saved.continuation.harness_turn_id == turn.id
         assert not runtime._approval_futures
         assert not runtime._connections
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

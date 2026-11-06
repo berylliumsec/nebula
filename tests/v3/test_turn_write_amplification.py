@@ -8,6 +8,10 @@ bounded workspace provenance around turn hooks.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -20,7 +24,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import update
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3 import chat as chat_module
 from nebula.v3 import workspace_provenance
@@ -100,20 +104,22 @@ class _Broker:
         )
 
 
-def _conversation(store: NebulaStore, session_id: str = "session") -> ChatSession:
-    if not store.list_entities(Engagement):
-        store.create(Engagement(id="project", name="Writes"))
-        store.create(
-            ProviderProfile(
-                id="provider",
-                name="Provider",
-                provider_type="vllm",
-                is_local=True,
-                model_allowlist=["model-a"],
-                capabilities={"streaming": True, "tool_calling": True},
+async def _conversation(store: NebulaStore, session_id: str = "session") -> ChatSession:
+    if not (await store.list_entities(Engagement)):
+        (await store.create(Engagement(id="project", name="Writes")))
+        (
+            await store.create(
+                ProviderProfile(
+                    id="provider",
+                    name="Provider",
+                    provider_type="vllm",
+                    is_local=True,
+                    model_allowlist=["model-a"],
+                    capabilities={"streaming": True, "tool_calling": True},
+                )
             )
         )
-    return store.create(
+    return await store.create(
         ChatSession(
             id=session_id,
             engagement_id="project",
@@ -129,12 +135,12 @@ def _conversation(store: NebulaStore, session_id: str = "session") -> ChatSessio
     )
 
 
-def _tool_turn(tmp_path: Path, *, steps: int, prose: bool, thought: str = ""):
+async def _tool_turn(tmp_path: Path, *, steps: int, prose: bool, thought: str = ""):
     """A goal tool turn persisted as prepare_async persists one."""
 
     store = NebulaStore(tmp_path / f"writes-{prose}-{len(thought)}.db")
-    session = _conversation(store)
-    user = store.create(
+    session = await _conversation(store)
+    user = await store.create(
         ChatMessage(
             id="user-message",
             engagement_id="project",
@@ -144,7 +150,7 @@ def _tool_turn(tmp_path: Path, *, steps: int, prose: bool, thought: str = ""):
             content="Read every value.",
         )
     )
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             id="goal",
             engagement_id="project",
@@ -155,8 +161,10 @@ def _tool_turn(tmp_path: Path, *, steps: int, prose: bool, thought: str = ""):
             active_since=utc_now(),
         )
     )
-    ChatGoalService(store).replace_skills(
-        session.id, expected_revision=goal.revision, snapshots=_skills()
+    (
+        await ChatGoalService(store).replace_skills(
+            session.id, expected_revision=goal.revision, snapshots=_skills()
+        )
     )
     turn = ChatTurn(
         id="turn",
@@ -209,7 +217,7 @@ def _tool_turn(tmp_path: Path, *, steps: int, prose: bool, thought: str = ""):
     broker = _Broker()
     prepared = PreparedChat(
         provider=provider,
-        provider_profile=store.get(ProviderProfile, "provider"),
+        provider_profile=(await store.get(ProviderProfile, "provider")),
         model_request=ModelRequest(
             model="model-a", messages=[ModelMessage(role="user", content=user.content)]
         ),
@@ -231,7 +239,7 @@ def _tool_turn(tmp_path: Path, *, steps: int, prose: bool, thought: str = ""):
         turn=turn,
     )
     service = ChatService(store, worker_id="worker")
-    service._persist_turn_inputs(prepared)
+    (await service._persist_turn_inputs(prepared))
     return store, service, prepared, broker
 
 
@@ -239,8 +247,10 @@ def _measure(monkeypatch, store, service, prepared):
     writes: list[tuple[str, int, tuple[str, ...]]] = []
     original_update = StoreTransaction.update
 
-    def recording_update(self, model, entity_id, changes, *, expected_revision=None):
-        result = original_update(
+    async def recording_update(
+        self, model, entity_id, changes, *, expected_revision=None
+    ):
+        result = await original_update(
             self, model, entity_id, changes, expected_revision=expected_revision
         )
         writes.append(
@@ -255,8 +265,8 @@ def _measure(monkeypatch, store, service, prepared):
     fetched: list[int] = []
     original_rows = ChatTurnLedger._rows_after
 
-    def recording_rows(self, turn_id, sequence):
-        rows = original_rows(self, turn_id, sequence)
+    async def recording_rows(self, turn_id, sequence):
+        rows = await original_rows(self, turn_id, sequence)
         fetched.append(len(rows))
         return rows
 
@@ -267,28 +277,30 @@ def _measure(monkeypatch, store, service, prepared):
 
 
 @pytest.mark.parametrize("prose", [False, True])
-def test_routing_steps_rewrite_only_the_turn_and_goal_fields_that_change(
+async def test_routing_steps_rewrite_only_the_turn_and_goal_fields_that_change(
     tmp_path, monkeypatch, prose
 ):
     steps = 24
-    store, service, prepared, broker = _tool_turn(tmp_path, steps=steps, prose=prose)
+    store, service, prepared, broker = await _tool_turn(
+        tmp_path, steps=steps, prose=prose
+    )
 
     completion, writes, fetched = _measure(monkeypatch, store, service, prepared)
 
     # The answer and the tool history are what they always were.
     assert completion.message.content.endswith("Done.")
-    final = store.get(ChatTurn, "turn")
+    final = await store.get(ChatTurn, "turn")
     assert final.status == ChatTurnStatus.COMPLETE
     assert final.final_message_id == completion.message.id
-    history = service._turn_history(final)
+    history = await service._turn_history(final)
     assert [entry["status"] for entry in history] == ["complete"] * steps
     assert broker.calls == steps
     if prose:
         assert "Reading value 23." in final.content
 
     # The write-once request values are stored once, beside the turn.
-    with store.database.session() as session:
-        row = session.get(EntityRow, "turn")
+    async with store.database.session() as session:
+        row = await session.get(EntityRow, "turn")
         assert row is not None
         stored_snapshot = row.payload["request_snapshot"]
     assert "mcp_catalog_snapshot" not in stored_snapshot
@@ -298,7 +310,7 @@ def test_routing_steps_rewrite_only_the_turn_and_goal_fields_that_change(
         "mcp_catalog_snapshot",
         "mcp_snapshot",
     }
-    resolved = resolve_request_snapshot(
+    resolved = await resolve_request_snapshot(
         store, final.request_snapshot, session_id=final.session_id
     )
     assert resolved["mcp_catalog_snapshot"] == CATALOG
@@ -319,16 +331,16 @@ def test_routing_steps_rewrite_only_the_turn_and_goal_fields_that_change(
     ] == [("final_message_id", "status")]
     # Each ledger row is read once, not once per read of the history.
     read = sum(fetched)
-    appended = len(ChatTurnLedger(store.database)._rows_after("turn", 0))
+    appended = len((await ChatTurnLedger(store.database)._rows_after("turn", 0)))
     assert read <= appended
 
 
-def test_long_thinking_is_sealed_out_of_the_turn_row_and_read_back_whole(
+async def test_long_thinking_is_sealed_out_of_the_turn_row_and_read_back_whole(
     tmp_path, monkeypatch
 ):
     steps = 30
     thought = "Considering the next value carefully. " * 300
-    store, service, prepared, _ = _tool_turn(
+    store, service, prepared, _ = await _tool_turn(
         tmp_path, steps=steps, prose=False, thought=thought
     )
 
@@ -340,9 +352,9 @@ def test_long_thinking_is_sealed_out_of_the_turn_row_and_read_back_whole(
             expected, f"Step {index} needs value {index}. {thought}"
         )
     assert len(expected) == chat_module._REASONING_LIMIT
-    final = store.get(ChatTurn, "turn")
+    final = await store.get(ChatTurn, "turn")
     # The whole bounded episode reads back exactly as one row used to hold it.
-    assert service.turn_reasoning(final) == expected
+    assert (await service.turn_reasoning(final)) == expected
     assert completion.message.reasoning == expected
     assert len(final.reasoning) < chat_module._REASONING_SEAL_CHARS
     sealed = final.request_snapshot[chat_module.REASONING_PARTS_KEY]
@@ -352,105 +364,112 @@ def test_long_thinking_is_sealed_out_of_the_turn_row_and_read_back_whole(
     assert max(turn_writes) < 40 * 1024
 
 
-def test_prose_does_not_add_a_turn_write(tmp_path, monkeypatch):
+async def test_prose_does_not_add_a_turn_write(tmp_path, monkeypatch):
     counts = {}
     for prose in (False, True):
-        store, service, prepared, _ = _tool_turn(tmp_path, steps=6, prose=prose)
+        store, service, prepared, _ = await _tool_turn(tmp_path, steps=6, prose=prose)
         _, writes, _ = _measure(monkeypatch, store, service, prepared)
         counts[prose] = sum(1 for item in writes if item[0] == "ChatTurn")
         monkeypatch.undo()
     assert counts[True] == counts[False]
 
 
-def test_snapshot_parts_are_shared_in_a_conversation_and_deleted_with_it(tmp_path):
+async def test_snapshot_parts_are_shared_in_a_conversation_and_deleted_with_it(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "parts.db")
-    first = _conversation(store, "first")
-    second = _conversation(store, "second")
+    first = await _conversation(store, "first")
+    second = await _conversation(store, "second")
     for turn_id, session in (("a", first), ("b", first), ("c", second)):
         compact, parts = split_request_snapshot(
             {"mcp_catalog_snapshot": CATALOG, "include_oci_tools": True},
             engagement_id="project",
             session_id=session.id,
         )
-        with store.transaction() as transaction:
-            stage_snapshot_parts(transaction, parts)
-            transaction.add(
-                ChatTurn(
-                    id=turn_id,
-                    engagement_id="project",
-                    session_id=session.id,
-                    provider_profile_id="provider",
-                    model="model-a",
-                    status=ChatTurnStatus.COMPLETE,
-                    request_snapshot=compact,
+        async with store.transaction() as transaction:
+            (await stage_snapshot_parts(transaction, parts))
+            (
+                await transaction.add(
+                    ChatTurn(
+                        id=turn_id,
+                        engagement_id="project",
+                        session_id=session.id,
+                        provider_profile_id="provider",
+                        model="model-a",
+                        status=ChatTurnStatus.COMPLETE,
+                        request_snapshot=compact,
+                    )
                 )
             )
 
-    def parts_of(session_id: str) -> list[ChatSnapshotPart]:
+    async def parts_of(session_id: str) -> list[ChatSnapshotPart]:
         return [
             item
-            for item in store.list_entities(ChatSnapshotPart, limit=1_000)
+            for item in (await store.list_entities(ChatSnapshotPart, limit=1_000))
             if item.session_id == session_id
         ]
 
     # One catalog, stored once per conversation that uses it.
-    assert len(parts_of("first")) == 1
-    assert len(parts_of("second")) == 1
+    assert len((await parts_of("first"))) == 1
+    assert len((await parts_of("second"))) == 1
 
-    store.delete_chat_session("first")
+    (await store.delete_chat_session("first"))
 
-    assert parts_of("first") == []
-    survivor = store.get(ChatTurn, "c")
+    assert (await parts_of("first")) == []
+    survivor = await store.get(ChatTurn, "c")
     assert (
-        resolve_request_snapshot(
+        await resolve_request_snapshot(
             store, survivor.request_snapshot, session_id=survivor.session_id
-        )["mcp_catalog_snapshot"]
-        == CATALOG
-    )
+        )
+    )["mcp_catalog_snapshot"] == CATALOG
 
 
-def test_altered_or_missing_snapshot_part_is_reported_as_corruption(tmp_path):
+async def test_altered_or_missing_snapshot_part_is_reported_as_corruption(tmp_path):
     store = NebulaStore(tmp_path / "corrupt-part.db")
-    session = _conversation(store)
+    session = await _conversation(store)
     compact, parts = split_request_snapshot(
         {"mcp_catalog_snapshot": CATALOG},
         engagement_id="project",
         session_id=session.id,
     )
-    with store.transaction() as transaction:
-        stage_snapshot_parts(transaction, parts)
-    with store.database.session() as db:
-        db.execute(
-            update(EntityRow)
-            .where(EntityRow.id == parts[0].id)
-            .values(
-                payload={
-                    **parts[0].model_dump(mode="json"),
-                    "value": [{"id": "forged"}],
-                }
+    async with store.transaction() as transaction:
+        (await stage_snapshot_parts(transaction, parts))
+    async with store.database.session() as db:
+        (
+            await db.execute(
+                update(EntityRow)
+                .where(EntityRow.id == parts[0].id)
+                .values(
+                    payload={
+                        **parts[0].model_dump(mode="json"),
+                        "value": [{"id": "forged"}],
+                    }
+                )
             )
         )
     with pytest.raises(CorruptRecordError, match="integrity"):
-        resolve_request_snapshot(store, compact, session_id=session.id)
+        (await resolve_request_snapshot(store, compact, session_id=session.id))
     with pytest.raises(CorruptRecordError, match="missing"):
-        resolve_request_snapshot(
-            store,
-            {SNAPSHOT_PARTS_KEY: {"model_request": "absent-part"}},
-            session_id=session.id,
+        (
+            await resolve_request_snapshot(
+                store,
+                {SNAPSHOT_PARTS_KEY: {"model_request": "absent-part"}},
+                session_id=session.id,
+            )
         )
 
 
-def test_a_part_resolves_only_for_the_conversation_that_stored_it(tmp_path):
+async def test_a_part_resolves_only_for_the_conversation_that_stored_it(tmp_path):
     """A reference written into another conversation's goal or turn reads nothing."""
 
     store = NebulaStore(tmp_path / "foreign-part.db")
-    owner = _conversation(store, "owner")
-    other = _conversation(store, "other")
+    owner = await _conversation(store, "owner")
+    other = await _conversation(store, "other")
     goals = ChatGoalService(store)
-    owner_goal = goals.create(
+    owner_goal = await goals.create(
         owner.id, GoalCreate(objective="Review.", completion_criteria=["done"])
     )
-    owner_goal = goals.replace_skills(
+    owner_goal = await goals.replace_skills(
         owner.id, expected_revision=owner_goal.revision, snapshots=_skills(1)
     )
     compact, parts = split_request_snapshot(
@@ -458,11 +477,11 @@ def test_a_part_resolves_only_for_the_conversation_that_stored_it(tmp_path):
         engagement_id="project",
         session_id=owner.id,
     )
-    with store.transaction() as transaction:
-        stage_snapshot_parts(transaction, parts)
+    async with store.transaction() as transaction:
+        (await stage_snapshot_parts(transaction, parts))
     # However a reference to the owner's part reaches another conversation's
     # goal, it must not carry the owner's instructions there.
-    foreign = store.create(
+    foreign = await store.create(
         ChatGoal(
             engagement_id="project",
             session_id=other.id,
@@ -472,25 +491,25 @@ def test_a_part_resolves_only_for_the_conversation_that_stored_it(tmp_path):
         )
     )
 
-    assert goals.skill_snapshots(owner_goal) == _skills(1)
+    assert (await goals.skill_snapshots(owner_goal)) == _skills(1)
     with pytest.raises(CorruptRecordError, match="another conversation"):
-        goals.skill_snapshots(foreign)
+        (await goals.skill_snapshots(foreign))
     with pytest.raises(CorruptRecordError, match="another conversation"):
-        resolve_request_snapshot(store, compact, session_id=other.id)
+        (await resolve_request_snapshot(store, compact, session_id=other.id))
 
 
-def test_snapshot_parts_have_no_generic_record_routes(tmp_path):
+async def test_snapshot_parts_have_no_generic_record_routes(tmp_path):
     """Parts are read only through the turn or goal that owns them."""
 
     store = NebulaStore(tmp_path / "routes.db")
-    session = _conversation(store)
+    session = await _conversation(store)
     _, parts = split_request_snapshot(
         {"mcp_catalog_snapshot": CATALOG},
         engagement_id="project",
         session_id=session.id,
     )
-    with store.transaction() as transaction:
-        stage_snapshot_parts(transaction, parts)
+    async with store.transaction() as transaction:
+        (await stage_snapshot_parts(transaction, parts))
     app = create_app(
         store,
         artifact_store=ArtifactStore(tmp_path / "artifacts"),
@@ -503,38 +522,41 @@ def test_snapshot_parts_have_no_generic_record_routes(tmp_path):
     client = TestClient(app)
     headers = {"Authorization": "Bearer test-token"}
     base = "/api/v1/chat-snapshot-parts"
-    assert client.get(base, headers=headers).status_code == 404
-    assert client.get(f"{base}/{parts[0].id}", headers=headers).status_code == 404
+    assert (await client.get(base, headers=headers)).status_code == 404
     assert (
-        client.post(base, headers=headers, json=parts[0].model_dump(mode="json"))
+        await client.get(f"{base}/{parts[0].id}", headers=headers)
+    ).status_code == 404
+    assert (
+        await client.post(base, headers=headers, json=parts[0].model_dump(mode="json"))
     ).status_code in {404, 405}
-    assert client.delete(f"{base}/{parts[0].id}", headers=headers).status_code in {
+    assert (
+        await client.delete(f"{base}/{parts[0].id}", headers=headers)
+    ).status_code in {
         404,
         405,
     }
-    assert store.get(ChatSnapshotPart, parts[0].id) == parts[0]
+    assert (await store.get(ChatSnapshotPart, parts[0].id)) == parts[0]
 
 
-def test_value_written_inline_after_the_split_supersedes_its_part(tmp_path):
+async def test_value_written_inline_after_the_split_supersedes_its_part(tmp_path):
     store = NebulaStore(tmp_path / "inline-wins.db")
-    session = _conversation(store)
+    session = await _conversation(store)
     compact, parts = split_request_snapshot(
         {"model_request": MODEL_REQUEST},
         engagement_id="project",
         session_id=session.id,
     )
-    with store.transaction() as transaction:
-        stage_snapshot_parts(transaction, parts)
+    async with store.transaction() as transaction:
+        (await stage_snapshot_parts(transaction, parts))
     newer = {"model": "model-a", "messages": [{"role": "user", "content": "newer"}]}
     assert (
-        resolve_request_snapshot(
+        await resolve_request_snapshot(
             store, {**compact, "model_request": newer}, session_id=session.id
-        )["model_request"]
-        == newer
-    )
+        )
+    )["model_request"] == newer
 
 
-def _resumable_turn(store, service, *, split: bool) -> ChatTurn:
+async def _resumable_turn(store, service, *, split: bool) -> ChatTurn:
     request = ModelRequest(
         model="model-a",
         messages=[{"role": "user", "content": "Summarize the notes. " * 200}],
@@ -550,71 +572,75 @@ def _resumable_turn(store, service, *, split: bool) -> ChatTurn:
         snapshot, parts = split_request_snapshot(
             snapshot, engagement_id="eng-resume", session_id="session-resume"
         )
-    with store.transaction() as transaction:
-        stage_snapshot_parts(transaction, parts)
-        transaction.add(
-            ChatTurn(
-                id=f"turn-{split}",
-                engagement_id="eng-resume",
-                session_id="session-resume",
-                provider_profile_id="provider-a",
-                model="model-a",
-                status=ChatTurnStatus.ROUTING,
-                queued_at=utc_now(),
-                request_snapshot=snapshot,
+    async with store.transaction() as transaction:
+        (await stage_snapshot_parts(transaction, parts))
+        (
+            await transaction.add(
+                ChatTurn(
+                    id=f"turn-{split}",
+                    engagement_id="eng-resume",
+                    session_id="session-resume",
+                    provider_profile_id="provider-a",
+                    model="model-a",
+                    status=ChatTurnStatus.ROUTING,
+                    queued_at=utc_now(),
+                    request_snapshot=snapshot,
+                )
             )
         )
     return service._interrupt_orphaned_turn(
-        store.get(ChatTurn, f"turn-{split}"), [], [], cause="Core restarted"
+        (await store.get(ChatTurn, f"turn-{split}")), [], [], cause="Core restarted"
     )
 
 
 @pytest.mark.parametrize("split", [False, True])
-def test_interrupted_turn_resumes_from_split_and_inline_snapshots(
+async def test_interrupted_turn_resumes_from_split_and_inline_snapshots(
     tmp_path, monkeypatch, split
 ):
     store = NebulaStore(tmp_path / f"resume-{split}.db")
-    store.create(Engagement(id="eng-resume", name="Resume"))
-    profile = store.create(_profile(local=True))
-    store.create(
-        ChatSession(
-            id="session-resume",
-            engagement_id="eng-resume",
-            title="Resume",
-            provider_profile_id=profile.id,
-            model="model-a",
+    (await store.create(Engagement(id="eng-resume", name="Resume")))
+    profile = await store.create(_profile(local=True))
+    (
+        await store.create(
+            ChatSession(
+                id="session-resume",
+                engagement_id="eng-resume",
+                title="Resume",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
         )
     )
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(store)
-    turn = _resumable_turn(store, service, split=split)
+    turn = await _resumable_turn(store, service, split=split)
     assert turn.status == ChatTurnStatus.INTERRUPTED
 
-    prepared = service.prepare_resume(turn.id)
+    prepared = await service.prepare_resume(turn.id)
 
     assert prepared.model_request.messages[0].content.startswith("Summarize the notes.")
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
     assert completion.message.content
-    assert store.get(ChatTurn, turn.id).status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, turn.id)).status == ChatTurnStatus.COMPLETE
 
 
-def test_goal_skill_instructions_live_beside_the_goal(tmp_path):
+async def test_goal_skill_instructions_live_beside_the_goal(tmp_path):
     store = NebulaStore(tmp_path / "goal-skills.db")
-    session = _conversation(store)
+    session = await _conversation(store)
     goals = ChatGoalService(store)
-    goal = goals.create(
+    goal = await goals.create(
         session.id,
         GoalCreate(objective="Review.", completion_criteria=["done"], child_budget=1),
     )
     snapshots = _skills()
 
-    attached = goals.replace_skills(
+    attached = await goals.replace_skills(
         session.id, expected_revision=goal.revision, snapshots=snapshots
     )
 
-    with store.database.session() as db:
-        row = db.get(EntityRow, attached.id)
+    async with store.database.session() as db:
+        row = await db.get(EntityRow, attached.id)
         assert row is not None
         stored = row.payload["skill_snapshots"]
     # The goal keeps what the goal panel and API show, not the instructions.
@@ -625,25 +651,29 @@ def test_goal_skill_instructions_live_beside_the_goal(tmp_path):
         for item in stored
     )
     assert len(json.dumps(row.payload)) < 4 * 1024
-    assert goals.skill_snapshots(attached) == snapshots
+    assert (await goals.skill_snapshots(attached)) == snapshots
 
     # A child goal's copy lives in the child's conversation.
-    goals.write(
-        session.id, GoalWrite(expected_revision=attached.revision, action="start")
+    (
+        await goals.write(
+            session.id, GoalWrite(expected_revision=attached.revision, action="start")
+        )
     )
-    child = goals.start_child(
+    child = await goals.start_child(
         session.id, GoalCreate(objective="Child.", completion_criteria=["done"])
     )
-    assert goals.skill_snapshots(child) == snapshots
-    child_part = store.get(ChatSnapshotPart, child.skill_snapshots[0][SKILL_PART_KEY])
+    assert (await goals.skill_snapshots(child)) == snapshots
+    child_part = await store.get(
+        ChatSnapshotPart, child.skill_snapshots[0][SKILL_PART_KEY]
+    )
     assert child_part.session_id == child.session_id
 
 
-def test_goal_with_inline_skills_from_before_the_split_still_resolves(tmp_path):
+async def test_goal_with_inline_skills_from_before_the_split_still_resolves(tmp_path):
     store = NebulaStore(tmp_path / "goal-inline.db")
-    session = _conversation(store)
+    session = await _conversation(store)
     snapshots = _skills(1)
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             engagement_id="project",
             session_id=session.id,
@@ -652,27 +682,27 @@ def test_goal_with_inline_skills_from_before_the_split_still_resolves(tmp_path):
             skill_snapshots=[item.model_dump(mode="json") for item in snapshots],
         )
     )
-    assert ChatGoalService(store).skill_snapshots(goal) == snapshots
+    assert (await ChatGoalService(store).skill_snapshots(goal)) == snapshots
 
 
-def _answer_messages(store: NebulaStore, session_id: str, turn_id: str):
+async def _answer_messages(store: NebulaStore, session_id: str, turn_id: str):
     return [
         item
-        for item in store.list_session_entities(ChatMessage, session_id)
+        for item in (await store.list_session_entities(ChatMessage, session_id))
         if item.role == ChatRole.ASSISTANT
         and item.metadata.get("chat_turn_id") == turn_id
         and "kind" not in item.metadata
     ]
 
 
-def _answering_service(tmp_path, monkeypatch, name: str):
+async def _answering_service(tmp_path, monkeypatch, name: str):
     store = NebulaStore(tmp_path / f"{name}.db")
-    engagement = store.create(Engagement(id="eng-answer", name="Answer"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="eng-answer", name="Answer"))
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(store)
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -688,15 +718,15 @@ def _answering_service(tmp_path, monkeypatch, name: str):
 _CRASH_EXIT = 17
 
 
-def _answer_then_die(database: str, crash_point: str) -> None:
+async def _answer_then_die(database: str, crash_point: str) -> None:
     """Child process: answer one turn and exit at ``crash_point`` like a killed Core."""
 
     store = NebulaStore(database)
-    engagement = store.create(Engagement(id="eng-answer", name="Answer"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="eng-answer", name="Answer"))
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
     service = ChatService(store, provider_factory=lambda _: provider)
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -710,17 +740,17 @@ def _answer_then_die(database: str, crash_point: str) -> None:
         # second write, completed its turn. The process dies in between.
         naming = ChatService._start_initial_naming
 
-        def die_once_answered(self, prepared, assistant_response=""):
+        async def die_once_answered(self, prepared, assistant_response=""):
             if assistant_response:
                 os._exit(_CRASH_EXIT)
-            return naming(self, prepared, assistant_response)
+            return await naming(self, prepared, assistant_response)
 
         ChatService._start_initial_naming = die_once_answered  # type: ignore[method-assign]
     else:
         add_all = StoreTransaction.add_all
 
-        def die_before_commit(self, entities):
-            add_all(self, entities)
+        async def die_before_commit(self, entities):
+            (await add_all(self, entities))
             if any(
                 isinstance(item, ChatMessage) and item.role == ChatRole.ASSISTANT
                 for item in entities
@@ -729,12 +759,12 @@ def _answer_then_die(database: str, crash_point: str) -> None:
             return entities
 
         StoreTransaction.add_all = die_before_commit  # type: ignore[method-assign]
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
     os._exit(0)
 
 
 @pytest.mark.parametrize("crash_point", ["after_answer_commit", "inside_answer_commit"])
-def test_core_killed_while_saving_the_answer_leaves_one_answer_after_resume(
+async def test_core_killed_while_saving_the_answer_leaves_one_answer_after_resume(
     tmp_path, crash_point
 ):
     database = tmp_path / "killed.db"
@@ -746,40 +776,40 @@ def test_core_killed_while_saving_the_answer_leaves_one_answer_after_resume(
     assert child.exitcode == _CRASH_EXIT
 
     store = NebulaStore(database)
-    (turn,) = store.list_entities(ChatTurn)
+    (turn,) = await store.list_entities(ChatTurn)
     if crash_point == "inside_answer_commit":
         # The answer's commit never happened: nothing of it was saved.
-        assert _answer_messages(store, turn.session_id, turn.id) == []
+        assert (await _answer_messages(store, turn.session_id, turn.id)) == []
         assert turn.final_message_id is None
     provider = FakeProvider("provider-a", local=True)
     restarted = ChatService(store, provider_factory=lambda _: provider)
-    asyncio.run(restarted.startup())
-    pending = restarted.pending_turn(turn.session_id)
+    (await restarted.startup())
+    pending = await restarted.pending_turn(turn.session_id)
     if crash_point == "inside_answer_commit":
         assert pending is not None and pending.id == turn.id
     if pending is not None:
-        asyncio.run(restarted.complete(restarted.prepare_resume(pending.id)))
+        (await restarted.complete((await restarted.prepare_resume(pending.id))))
 
-    answers = _answer_messages(store, turn.session_id, turn.id)
+    answers = await _answer_messages(store, turn.session_id, turn.id)
     assert len(answers) == 1
-    completed = store.get(ChatTurn, turn.id)
+    completed = await store.get(ChatTurn, turn.id)
     assert completed.status == ChatTurnStatus.COMPLETE
     assert completed.final_message_id == answers[0].id
 
 
-def test_turn_resumed_with_its_answer_already_saved_adopts_that_answer(
+async def test_turn_resumed_with_its_answer_already_saved_adopts_that_answer(
     tmp_path, monkeypatch
 ):
     """A turn an older Core left answered but unfinished completes on it."""
 
-    store, service, prepared = _answering_service(tmp_path, monkeypatch, "adopt")
-    turn = store.update(
+    store, service, prepared = await _answering_service(tmp_path, monkeypatch, "adopt")
+    turn = await store.update(
         ChatTurn,
         prepared.turn.id,
         {"status": ChatTurnStatus.ROUTING},
-        expected_revision=store.get(ChatTurn, prepared.turn.id).revision,
+        expected_revision=(await store.get(ChatTurn, prepared.turn.id)).revision,
     )
-    saved = store.create(
+    saved = await store.create(
         ChatMessage(
             engagement_id=turn.engagement_id,
             session_id=turn.session_id,
@@ -790,33 +820,33 @@ def test_turn_resumed_with_its_answer_already_saved_adopts_that_answer(
         )
     )
     restarted = ChatService(store)
-    asyncio.run(restarted.startup())
+    (await restarted.startup())
 
-    completion = asyncio.run(restarted.complete(restarted.prepare_resume(turn.id)))
+    completion = await restarted.complete((await restarted.prepare_resume(turn.id)))
 
     assert completion.message.id == saved.id
     assert completion.message.content == saved.content
-    assert [item.id for item in _answer_messages(store, turn.session_id, turn.id)] == [
-        saved.id
-    ]
-    completed = store.get(ChatTurn, turn.id)
+    assert [
+        item.id for item in (await _answer_messages(store, turn.session_id, turn.id))
+    ] == [saved.id]
+    completed = await store.get(ChatTurn, turn.id)
     assert completed.status == ChatTurnStatus.COMPLETE
     assert completed.final_message_id == saved.id
 
 
-def _hook_service(tmp_path, *, events):
+async def _hook_service(tmp_path, *, events):
     store = NebulaStore(tmp_path / "hooks.db")
     workspace = tmp_path / "workspace"
     _write_native_hook(workspace, "observer", events=events)
-    engagement = store.create(Engagement(id="eng-hooks", name="Hooks"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="eng-hooks", name="Hooks"))
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
     service = ChatService(
         store,
         provider_factory=lambda _: provider,
         workspace_resolver=lambda _: workspace,
     )
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -829,8 +859,10 @@ def _hook_service(tmp_path, *, events):
     return store, service, prepared
 
 
-def test_turn_workspace_provenance_keeps_the_event_loop_running(tmp_path, monkeypatch):
-    store, service, prepared = _hook_service(
+async def test_turn_workspace_provenance_keeps_the_event_loop_running(
+    tmp_path, monkeypatch
+):
+    store, service, prepared = await _hook_service(
         tmp_path, events=["chat.turn.started", "chat.turn.completed"]
     )
     original_snapshot = workspace_provenance.snapshot
@@ -862,17 +894,17 @@ def test_turn_workspace_provenance_keeps_the_event_loop_running(tmp_path, monkey
             await beat
         return gaps
 
-    gaps = asyncio.run(scenario())
+    gaps = await scenario()
 
     assert max(gaps) < 0.3
-    observations = store.list_entities(WorkspaceProvenanceObservation)
+    observations = await store.list_entities(WorkspaceProvenanceObservation)
     assert [item.status for item in observations] == ["complete"]
 
 
-def test_turn_workspace_provenance_is_skipped_for_tool_only_hooks(
+async def test_turn_workspace_provenance_is_skipped_for_tool_only_hooks(
     tmp_path, monkeypatch
 ):
-    store, service, prepared = _hook_service(tmp_path, events=["tool.after"])
+    store, service, prepared = await _hook_service(tmp_path, events=["tool.after"])
     snapshots: list[Path] = []
 
     def recording_snapshot(workspace, **kwargs):
@@ -881,10 +913,10 @@ def test_turn_workspace_provenance_is_skipped_for_tool_only_hooks(
 
     monkeypatch.setattr(workspace_provenance, "snapshot", recording_snapshot)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     assert snapshots == []
-    assert store.list_entities(WorkspaceProvenanceObservation) == []
+    assert (await store.list_entities(WorkspaceProvenanceObservation)) == []
 
 
 def _git_repository(tmp_path: Path) -> Path:
@@ -924,10 +956,10 @@ def test_workspace_snapshot_large_file_has_no_fixed_byte_limit(tmp_path):
     assert observed.paths["capture.bin"]["size"] == 257 * 1024 * 1024
 
 
-def test_entity_update_validates_the_changed_payload_once(tmp_path):
+async def test_entity_update_validates_the_changed_payload_once(tmp_path):
     store = NebulaStore(tmp_path / "update.db")
-    _conversation(store)
-    turn = store.create(
+    (await _conversation(store))
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id="project",
@@ -938,7 +970,7 @@ def test_entity_update_validates_the_changed_payload_once(tmp_path):
         )
     )
 
-    updated = store.update(
+    updated = await store.update(
         ChatTurn,
         turn.id,
         {"usage": ChatTokenUsage(input_tokens=2, output_tokens=1, total_tokens=3)},
@@ -948,23 +980,27 @@ def test_entity_update_validates_the_changed_payload_once(tmp_path):
     assert updated.revision == turn.revision + 1
     assert updated.created_at == turn.created_at
     assert updated.request_snapshot == turn.request_snapshot
-    assert store.get(ChatTurn, turn.id) == updated
+    assert (await store.get(ChatTurn, turn.id)) == updated
     with pytest.raises(ValidationError):
-        store.update(ChatTurn, turn.id, {"next_step": -1})
-    with store.database.session() as db:
-        db.execute(
-            update(EntityRow)
-            .where(EntityRow.id == turn.id)
-            .values(payload={**updated.model_dump(mode="json"), "status": "unknown"})
+        (await store.update(ChatTurn, turn.id, {"next_step": -1}))
+    async with store.database.session() as db:
+        (
+            await db.execute(
+                update(EntityRow)
+                .where(EntityRow.id == turn.id)
+                .values(
+                    payload={**updated.model_dump(mode="json"), "status": "unknown"}
+                )
+            )
         )
     with pytest.raises(CorruptRecordError):
-        store.update(ChatTurn, turn.id, {"next_step": 1})
+        (await store.update(ChatTurn, turn.id, {"next_step": 1}))
 
 
-def test_ledger_history_reads_each_row_once_and_hands_out_copies(tmp_path):
+async def test_ledger_history_reads_each_row_once_and_hands_out_copies(tmp_path):
     store = NebulaStore(tmp_path / "ledger.db")
-    _conversation(store)
-    turn = store.create(
+    (await _conversation(store))
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id="project",
@@ -979,40 +1015,50 @@ def test_ledger_history_reads_each_row_once_and_hands_out_copies(tmp_path):
     fetched: list[int] = []
     original = ledger._rows_after
 
-    def recording(turn_id, sequence):
-        rows = original(turn_id, sequence)
+    async def recording(turn_id, sequence):
+        rows = await original(turn_id, sequence)
         fetched.append(len(rows))
         return rows
 
     ledger._rows_after = recording  # type: ignore[method-assign]
     for step in range(12):
-        ledger.append(
-            turn.id,
-            {"step": step, "status": "running", "arguments": {"path": [str(step)]}},
-            idempotency_key=f"intent:{step}",
+        (
+            await ledger.append(
+                turn.id,
+                {"step": step, "status": "running", "arguments": {"path": [str(step)]}},
+                idempotency_key=f"intent:{step}",
+            )
         )
-        ledger.append(
-            turn.id,
-            {"step": step, "status": "complete", "arguments": {"path": [str(step)]}},
+        (
+            await ledger.append(
+                turn.id,
+                {
+                    "step": step,
+                    "status": "complete",
+                    "arguments": {"path": [str(step)]},
+                },
+            )
         )
-        assert [entry["step"] for entry in ledger.history(turn)] == list(
+        assert [entry["step"] for entry in (await ledger.history(turn))] == list(
             range(step + 1)
         )
-        assert ledger.history(turn)[-1]["status"] == "complete"
+        assert (await ledger.history(turn))[-1]["status"] == "complete"
     # Each of the 24 rows was read once across 24 history reads.
     assert sum(fetched) == 24
 
-    history = ledger.history(turn)
+    history = await ledger.history(turn)
     history[0]["arguments"]["path"].append("mutated")
-    assert ledger.history(turn)[0]["arguments"]["path"] == ["0"]
+    assert (await ledger.history(turn))[0]["arguments"]["path"] == ["0"]
 
     # A row another worker appends is seen on the next read.
-    other_worker.append(turn.id, {"step": 12, "status": "complete"})
-    assert ledger.history(turn)[-1]["step"] == 12
-    assert ledger.history(turn) == other_worker.history(turn)
+    (await other_worker.append(turn.id, {"step": 12, "status": "complete"}))
+    assert (await ledger.history(turn))[-1]["step"] == 12
+    assert (await ledger.history(turn)) == (await other_worker.history(turn))
 
 
-def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(tmp_path):
+async def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(
+    tmp_path,
+):
     """The hosts a child inherits are read back from the parent's snapshot part."""
 
     from nebula.v3.domain import SshEnvironment
@@ -1022,9 +1068,9 @@ def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(tmp_pat
     from tests.v3.test_chat_subagents import RoutedProvider, _setup
 
     async def scenario() -> list:
-        store, _, _, chat = _setup(tmp_path, RoutedProvider([], []))
-        store.create(SshEnvironment(id="ssh-a", alias="lab-a", enabled=True))
-        parent_session = _session(store)
+        store, _, _, chat = await _setup(tmp_path, RoutedProvider([], []))
+        (await store.create(SshEnvironment(id="ssh-a", alias="lab-a", enabled=True)))
+        parent_session = await _session(store)
         hosts = [{"id": "ssh-a", "alias": "lab-a", "notes": "n" * 2_000}]
         compact, parts = split_request_snapshot(
             {
@@ -1044,9 +1090,9 @@ def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(tmp_pat
             status=ChatTurnStatus.ROUTING,
             request_snapshot=compact,
         )
-        with store.transaction() as transaction:
-            stage_snapshot_parts(transaction, parts)
-            transaction.add(parent)
+        async with store.transaction() as transaction:
+            (await stage_snapshot_parts(transaction, parts))
+            (await transaction.add(parent))
         captured: list = []
 
         async def capture(request):
@@ -1073,6 +1119,9 @@ def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(tmp_pat
         await chat.shutdown()
         return captured
 
-    captured = asyncio.run(scenario())
+    captured = await scenario()
 
     assert captured[0].ssh_environment_ids == ["ssh-a"]
+
+
+pytestmark = pytest.mark.anyio

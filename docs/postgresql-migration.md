@@ -32,6 +32,11 @@ PostgreSQL startup requires three explicit deployment allocations:
 - `NEBULA_V3_DB_PEAK_PROCESSES`: maximum simultaneous Core processes, including
   rolling-deployment overlap. Every Core process owns one shared runtime pool.
 
+Each maintenance/CLI process uses a separate one-connection pool. Reserve one
+slot per simultaneous command in `NEBULA_V3_DB_OTHER_CONNECTIONS`, alongside
+other consumers. Commands reject a zero auxiliary allocation. Discovery also
+uses only one connection and closes it before the command's runtime pool opens.
+
 Core reads `max_connections`, PostgreSQL's reserved slots, and role/database
 connection limits. It subtracts the allocations above and divides the remaining
 capacity across the declared process count. Startup refuses an infeasible budget.

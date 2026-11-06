@@ -1,4 +1,7 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import pytest
 
@@ -67,13 +70,15 @@ def test_oversized_agents_md_is_truncated_on_a_character_boundary(tmp_path):
     assert loaded.content == "a" * (MAX_PROJECT_INSTRUCTIONS_BYTES - 1)
 
 
-def _chat(tmp_path, monkeypatch, *, resolver=True):
+async def _chat(tmp_path, monkeypatch, *, resolver=True):
     store = NebulaStore(tmp_path / "agents-md.db")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    engagement = store.create(Engagement(id="eng-agents", name="AGENTS.md project"))
-    profile = store.create(_profile(local=True))
-    session = store.create(
+    engagement = await store.create(
+        Engagement(id="eng-agents", name="AGENTS.md project")
+    )
+    profile = await store.create(_profile(local=True))
+    session = await store.create(
         ChatSession(
             id="session-agents",
             engagement_id=engagement.id,
@@ -101,25 +106,27 @@ def _request(profile, engagement, session, content="Plan the next step."):
     )
 
 
-def test_every_turn_rereads_agents_md_into_the_instructions(tmp_path, monkeypatch):
-    store, workspace, engagement, profile, session, _provider, service = _chat(
+async def test_every_turn_rereads_agents_md_into_the_instructions(
+    tmp_path, monkeypatch
+):
+    store, workspace, engagement, profile, session, _provider, service = await _chat(
         tmp_path, monkeypatch
     )
     (workspace / "AGENTS.md").write_text(RULES, encoding="utf-8")
 
-    first = service.prepare(_request(profile, engagement, session))
+    first = await service.prepare(_request(profile, engagement, session))
 
     assert RULES in (first.model_request.instructions or "")
     assert first.turn is not None
     receipt = first.turn.request_snapshot["project_instructions"]
     assert receipt["path"] == "AGENTS.md"
     assert receipt["truncated"] is False
-    asyncio.run(service.complete(first))
+    (await service.complete(first))
 
     (workspace / "AGENTS.md").write_text(
         "Use the staging cluster only.", encoding="utf-8"
     )
-    second = service.prepare(_request(profile, engagement, session, "And now?"))
+    second = await service.prepare(_request(profile, engagement, session, "And now?"))
 
     instructions = second.model_request.instructions or ""
     assert "Use the staging cluster only." in instructions
@@ -131,26 +138,28 @@ def test_every_turn_rereads_agents_md_into_the_instructions(tmp_path, monkeypatc
     )
 
 
-def test_agents_md_survives_compaction_verbatim(tmp_path, monkeypatch):
-    store, workspace, engagement, profile, session, provider, service = _chat(
+async def test_agents_md_survives_compaction_verbatim(tmp_path, monkeypatch):
+    store, workspace, engagement, profile, session, provider, service = await _chat(
         tmp_path, monkeypatch
     )
     (workspace / "AGENTS.md").write_text(RULES, encoding="utf-8")
-    store.create_many(
-        [
-            ChatMessage(
-                id=f"message-{sequence:04d}",
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=f"message {sequence}",
-            )
-            for sequence in range(1, 1_003)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    id=f"message-{sequence:04d}",
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                    content=f"message {sequence}",
+                )
+                for sequence in range(1, 1_003)
+            ]
+        )
     )
 
-    prepared = service.prepare(_request(profile, engagement, session))
+    prepared = await service.prepare(_request(profile, engagement, session))
 
     instructions = prepared.model_request.instructions or ""
     # The derived memory is history in the conversation; the rules stay the
@@ -170,25 +179,25 @@ def test_agents_md_survives_compaction_verbatim(tmp_path, monkeypatch):
         for request in compaction_inputs
         for message in request.messages
     )
-    with_rules = service.context_status(session.id).estimated_input_tokens
+    with_rules = (await service.context_status(session.id)).estimated_input_tokens
     (workspace / "AGENTS.md").unlink()
-    without_rules = service.context_status(session.id).estimated_input_tokens
+    without_rules = (await service.context_status(session.id)).estimated_input_tokens
     assert with_rules > without_rules
 
 
-def test_chat_without_a_workspace_still_runs(tmp_path, monkeypatch):
-    _store, _workspace, engagement, profile, session, _provider, service = _chat(
+async def test_chat_without_a_workspace_still_runs(tmp_path, monkeypatch):
+    _store, _workspace, engagement, profile, session, _provider, service = await _chat(
         tmp_path, monkeypatch, resolver=False
     )
 
-    prepared = service.prepare(_request(profile, engagement, session))
+    prepared = await service.prepare(_request(profile, engagement, session))
 
     assert prepared.turn is not None
     assert prepared.turn.request_snapshot["project_instructions"] is None
 
 
-def test_unusable_agents_md_is_reported_before_the_turn(tmp_path, monkeypatch):
-    _store, workspace, engagement, profile, session, _provider, service = _chat(
+async def test_unusable_agents_md_is_reported_before_the_turn(tmp_path, monkeypatch):
+    _store, workspace, engagement, profile, session, _provider, service = await _chat(
         tmp_path, monkeypatch
     )
     outside = tmp_path / "outside.md"
@@ -196,7 +205,7 @@ def test_unusable_agents_md_is_reported_before_the_turn(tmp_path, monkeypatch):
     (workspace / "AGENTS.md").symlink_to(outside)
 
     with pytest.raises(ChatConfigurationError, match="AGENTS.md could not be used"):
-        service.prepare(_request(profile, engagement, session))
+        (await service.prepare(_request(profile, engagement, session)))
 
 
 def test_agents_md_may_link_to_a_parent_programs_agents_md(tmp_path):
@@ -223,3 +232,6 @@ def test_agents_md_may_link_to_a_parent_programs_agents_md(tmp_path):
     (workspace / "AGENTS.md").symlink_to(sibling / "AGENTS.md")
     with pytest.raises(ProjectInstructionsError, match="parent folders"):
         load_project_instructions(workspace)
+
+
+pytestmark = pytest.mark.anyio

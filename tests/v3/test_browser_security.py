@@ -1,9 +1,13 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import base64
 from itertools import product
 
 import pytest
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -26,14 +30,16 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
-def _project(client: TestClient, store: NebulaStore) -> tuple[Engagement, ScopePolicy]:
-    response = client.post(
+async def _project(
+    client: TestClient, store: NebulaStore
+) -> tuple[Engagement, ScopePolicy]:
+    response = await client.post(
         "/api/v1/engagements", headers=_auth(), json={"name": "Browser lab"}
     )
     assert response.status_code == 201
-    project = store.get(Engagement, response.json()["id"])
-    scope = store.get(ScopePolicy, project.scope_policy_id)
-    scope = store.update(
+    project = await store.get(Engagement, response.json()["id"])
+    scope = await store.get(ScopePolicy, project.scope_policy_id)
+    scope = await store.update(
         ScopePolicy,
         scope.id,
         {
@@ -46,19 +52,19 @@ def _project(client: TestClient, store: NebulaStore) -> tuple[Engagement, ScopeP
     return project, scope
 
 
-def _workspace(client: TestClient, project: Engagement) -> dict:
-    response = client.get(
+async def _workspace(client: TestClient, project: Engagement) -> dict:
+    response = await client.get(
         f"/api/v1/engagements/{project.id}/browser-workspace", headers=_auth()
     )
     assert response.status_code == 200
     return response.json()
 
 
-def _synced_session(client: TestClient, project: Engagement) -> tuple[dict, dict]:
-    workspace = _workspace(client, project)
+async def _synced_session(client: TestClient, project: Engagement) -> tuple[dict, dict]:
+    workspace = await _workspace(client, project)
     identity = workspace["identities"][0]
     session = workspace["sessions"][0]
-    response = client.put(
+    response = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/tabs",
         headers=_auth(),
         json={
@@ -81,7 +87,7 @@ def _synced_session(client: TestClient, project: Engagement) -> tuple[dict, dict
     return identity, response.json()
 
 
-def test_workspace_bootstrap_is_durable_and_idempotent(tmp_path):
+async def test_workspace_bootstrap_is_durable_and_idempotent(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -90,10 +96,10 @@ def test_workspace_bootstrap_is_durable_and_idempotent(tmp_path):
             auth_token="test-token",
         )
     )
-    project, _ = _project(client, store)
+    project, _ = await _project(client, store)
 
-    first = _workspace(client, project)
-    second = _workspace(client, project)
+    first = await _workspace(client, project)
+    second = await _workspace(client, project)
 
     assert [item["id"] for item in first["identities"]] == [
         item["id"] for item in second["identities"]
@@ -101,35 +107,37 @@ def test_workspace_bootstrap_is_durable_and_idempotent(tmp_path):
     assert [item["id"] for item in first["sessions"]] == [
         item["id"] for item in second["sessions"]
     ]
-    assert store.count(BrowserIdentity) == 1
-    assert store.count(BrowserSession) == 1
+    assert (await store.count(BrowserIdentity)) == 1
+    assert (await store.count(BrowserSession)) == 1
 
 
-def test_workspace_bootstrap_stays_idempotent_after_a_page_of_assistant_browsers(
+async def test_workspace_bootstrap_stays_idempotent_after_a_page_of_assistant_browsers(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(create_app(store, auth_token="test-token"))
-    project, _ = _project(client, store)
-    first = _workspace(client, project)
+    project, _ = await _project(client, store)
+    first = await _workspace(client, project)
     # The Assistant's own browser profiles are hidden from this workspace; a
     # page of them must not make the Project look as if it had none.
     assistant = {"browser_companion_version": 1}
     identity = BrowserIdentity(
         engagement_id=project.id, name="Assistant browser", metadata=assistant
     )
-    seed_older_copies(store, identity)
-    seed_older_copies(
-        store,
-        BrowserSession(
-            engagement_id=project.id,
-            identity_id=identity.id,
-            name="Assistant browser",
-            metadata=assistant,
-        ),
+    (await seed_older_copies(store, identity))
+    (
+        await seed_older_copies(
+            store,
+            BrowserSession(
+                engagement_id=project.id,
+                identity_id=identity.id,
+                name="Assistant browser",
+                metadata=assistant,
+            ),
+        )
     )
 
-    second = _workspace(client, project)
+    second = await _workspace(client, project)
 
     assert [item["id"] for item in second["identities"]] == [
         item["id"] for item in first["identities"]
@@ -137,11 +145,11 @@ def test_workspace_bootstrap_stays_idempotent_after_a_page_of_assistant_browsers
     assert [item["id"] for item in second["sessions"]] == [
         item["id"] for item in first["sessions"]
     ]
-    assert store.count(BrowserIdentity) == 1_001
-    assert store.count(BrowserSession) == 1_001
+    assert (await store.count(BrowserIdentity)) == 1_001
+    assert (await store.count(BrowserSession)) == 1_001
 
 
-def test_traffic_is_scope_bound_and_redacts_reusable_secrets(tmp_path):
+async def test_traffic_is_scope_bound_and_redacts_reusable_secrets(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -150,10 +158,10 @@ def test_traffic_is_scope_bound_and_redacts_reusable_secrets(tmp_path):
             auth_token="test-token",
         )
     )
-    project, _ = _project(client, store)
-    _, session = _synced_session(client, project)
+    project, _ = await _project(client, store)
+    _, session = await _synced_session(client, project)
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/traffic",
         headers=_auth(),
         json={
@@ -181,17 +189,17 @@ def test_traffic_is_scope_bound_and_redacts_reusable_secrets(tmp_path):
     assert exchange["request_headers"]["Accept"] == "application/json"
     assert "reusable" not in response.text and "sid=secret" not in response.text
 
-    outside = client.post(
+    outside = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/traffic",
         headers=_auth(),
         json={"tab_id": "tab-1", "method": "GET", "url": "https://outside.example/"},
     )
     assert outside.status_code == 422
     assert "outside" in outside.json()["detail"]
-    assert store.count(BrowserTrafficExchange) == 1
+    assert (await store.count(BrowserTrafficExchange)) == 1
 
 
-def test_action_requires_approval_and_rechecks_scope_revision(tmp_path):
+async def test_action_requires_approval_and_rechecks_scope_revision(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -200,10 +208,10 @@ def test_action_requires_approval_and_rechecks_scope_revision(tmp_path):
             auth_token="test-token",
         )
     )
-    project, scope = _project(client, store)
-    _, session = _synced_session(client, project)
+    project, scope = await _project(client, store)
+    _, session = await _synced_session(client, project)
 
-    proposal = client.post(
+    proposal = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/actions",
         headers=_auth(),
         json={
@@ -218,14 +226,14 @@ def test_action_requires_approval_and_rechecks_scope_revision(tmp_path):
     )
     assert proposal.status_code == 201, proposal.text
     action = proposal.json()
-    denied_start = client.post(
+    denied_start = await client.post(
         f"/api/v1/browser-actions/{action['id']}/start",
         headers=_auth(),
         json={"expected_revision": action["revision"], "device_id": "desktop-1"},
     )
     assert denied_start.status_code == 422
 
-    approved = client.post(
+    approved = await client.post(
         f"/api/v1/browser-actions/{action['id']}/decision",
         headers=_auth(),
         json={
@@ -239,10 +247,15 @@ def test_action_requires_approval_and_rechecks_scope_revision(tmp_path):
     assert approved_action["status"] == "approved"
     assert approved_action["approved_by"] == "operator-1"
 
-    store.update(
-        ScopePolicy, scope.id, {"allowed_domains": []}, expected_revision=scope.revision
+    (
+        await store.update(
+            ScopePolicy,
+            scope.id,
+            {"allowed_domains": []},
+            expected_revision=scope.revision,
+        )
     )
-    stale = client.post(
+    stale = await client.post(
         f"/api/v1/browser-actions/{action['id']}/start",
         headers=_auth(),
         json={
@@ -252,10 +265,10 @@ def test_action_requires_approval_and_rechecks_scope_revision(tmp_path):
     )
     assert stale.status_code == 422
     assert "scope changed" in stale.json()["detail"]
-    assert store.get(BrowserAction, action["id"]).status.value == "approved"
+    assert (await store.get(BrowserAction, action["id"])).status.value == "approved"
 
 
-def test_project_never_policy_auto_approves_native_browser_actions(tmp_path):
+async def test_project_never_policy_auto_approves_native_browser_actions(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -264,16 +277,20 @@ def test_project_never_policy_auto_approves_native_browser_actions(tmp_path):
             auth_token="test-token",
         )
     )
-    project, _ = _project(client, store)
-    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=project.id)
-    store.update(
-        AutomationProjectPolicy,
-        policy.id,
-        {"approval_policy": "never"},
-        expected_revision=policy.revision,
+    project, _ = await _project(client, store)
+    [policy] = await store.list_entities(
+        AutomationProjectPolicy, engagement_id=project.id
     )
-    _, session = _synced_session(client, project)
-    proposal = client.post(
+    (
+        await store.update(
+            AutomationProjectPolicy,
+            policy.id,
+            {"approval_policy": "never"},
+            expected_revision=policy.revision,
+        )
+    )
+    _, session = await _synced_session(client, project)
+    proposal = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/actions",
         headers=_auth(),
         json={
@@ -291,7 +308,7 @@ def test_project_never_policy_auto_approves_native_browser_actions(tmp_path):
     assert proposal.json()["approved_by"] == "project-policy"
 
 
-def test_mobile_handoff_is_expiring_claimed_and_single_owner(tmp_path):
+async def test_mobile_handoff_is_expiring_claimed_and_single_owner(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -300,10 +317,10 @@ def test_mobile_handoff_is_expiring_claimed_and_single_owner(tmp_path):
             auth_token="test-token",
         )
     )
-    project, _ = _project(client, store)
-    _, session = _synced_session(client, project)
+    project, _ = await _project(client, store)
+    _, session = await _synced_session(client, project)
 
-    queued = client.post(
+    queued = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/handoffs",
         headers=_auth(),
         json={
@@ -316,7 +333,7 @@ def test_mobile_handoff_is_expiring_claimed_and_single_owner(tmp_path):
     handoff = queued.json()
     assert handoff["status"] == "queued"
 
-    claimed = client.post(
+    claimed = await client.post(
         f"/api/v1/browser-handoffs/{handoff['id']}/claim",
         headers=_auth(),
         json={
@@ -326,7 +343,7 @@ def test_mobile_handoff_is_expiring_claimed_and_single_owner(tmp_path):
     )
     assert claimed.status_code == 200, claimed.text
     assert claimed.json()["status"] == "claimed"
-    second_claim = client.post(
+    second_claim = await client.post(
         f"/api/v1/browser-handoffs/{handoff['id']}/claim",
         headers=_auth(),
         json={
@@ -335,10 +352,10 @@ def test_mobile_handoff_is_expiring_claimed_and_single_owner(tmp_path):
         },
     )
     assert second_claim.status_code == 422
-    assert store.count(BrowserHandoff) == 1
+    assert (await store.count(BrowserHandoff)) == 1
 
 
-def test_replay_is_inert_until_approval_and_rejects_secret_headers(tmp_path):
+async def test_replay_is_inert_until_approval_and_rejects_secret_headers(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -347,8 +364,8 @@ def test_replay_is_inert_until_approval_and_rejects_secret_headers(tmp_path):
             auth_token="test-token",
         )
     )
-    project, _ = _project(client, store)
-    _, session = _synced_session(client, project)
+    project, _ = await _project(client, store)
+    _, session = await _synced_session(client, project)
     base = {
         "tab_id": "tab-1",
         "kind": "replay",
@@ -363,7 +380,7 @@ def test_replay_is_inert_until_approval_and_rejects_secret_headers(tmp_path):
         "proposed_by": "operator-1",
         "page_url": "https://app.example.test/",
     }
-    proposed = client.post(
+    proposed = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/actions", headers=_auth(), json=base
     )
     assert proposed.status_code == 201, proposed.text
@@ -376,7 +393,7 @@ def test_replay_is_inert_until_approval_and_rejects_secret_headers(tmp_path):
             "headers": {"Authorization": "Bearer secret"},
         },
     }
-    denied = client.post(
+    denied = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/actions",
         headers=_auth(),
         json=secret,
@@ -384,11 +401,11 @@ def test_replay_is_inert_until_approval_and_rejects_secret_headers(tmp_path):
     assert denied.status_code == 422
     assert "reusable secrets" in denied.json()["detail"]
     assert "Bearer secret" not in str(
-        store.list_entities(BrowserAction, engagement_id=project.id, limit=100)
+        (await store.list_entities(BrowserAction, engagement_id=project.id, limit=100))
     )
 
 
-def test_websocket_payload_preview_requires_body_capture_mode(tmp_path):
+async def test_websocket_payload_preview_requires_body_capture_mode(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -397,20 +414,22 @@ def test_websocket_payload_preview_requires_body_capture_mode(tmp_path):
             auth_token="test-token",
         )
     )
-    project, _ = _project(client, store)
-    _, session = _synced_session(client, project)
-    exchange = client.post(
-        f"/api/v1/browser-sessions/{session['id']}/traffic",
-        headers=_auth(),
-        json={
-            "tab_id": "tab-1",
-            "method": "GET",
-            "url": "https://app.example.test/socket",
-            "protocol": "websocket",
-            "status_code": 101,
-        },
+    project, _ = await _project(client, store)
+    _, session = await _synced_session(client, project)
+    exchange = (
+        await client.post(
+            f"/api/v1/browser-sessions/{session['id']}/traffic",
+            headers=_auth(),
+            json={
+                "tab_id": "tab-1",
+                "method": "GET",
+                "url": "https://app.example.test/socket",
+                "protocol": "websocket",
+                "status_code": 101,
+            },
+        )
     ).json()
-    frame = client.post(
+    frame = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/websocket-frames",
         headers=_auth(),
         json={
@@ -425,10 +444,10 @@ def test_websocket_payload_preview_requires_body_capture_mode(tmp_path):
     assert frame.status_code == 201, frame.text
     assert frame.json()["payload_preview"] == ""
     assert frame.json()["truncated"] is True
-    assert store.count(BrowserWebSocketFrame) == 1
+    assert (await store.count(BrowserWebSocketFrame)) == 1
 
 
-def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodies(
+async def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodies(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
@@ -439,8 +458,8 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
             auth_token="test-token",
         )
     )
-    project, _ = _project(client, store)
-    _, session = _synced_session(client, project)
+    project, _ = await _project(client, store)
+    _, session = await _synced_session(client, project)
     base = {
         "expected_revision": session["revision"],
         "capture_mode": "headers",
@@ -449,7 +468,7 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
         "upstream_proxy_enabled": False,
         "upstream_proxy_url": None,
     }
-    untrusted = client.put(
+    untrusted = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/capture-settings",
         headers=_auth(),
         json=base,
@@ -457,7 +476,7 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
     assert untrusted.status_code == 422
     assert "trust acknowledgement" in untrusted.json()["detail"]
 
-    trusted = client.put(
+    trusted = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/capture-settings",
         headers=_auth(),
         json={**base, "trust_acknowledged": True},
@@ -465,7 +484,7 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
     assert trusted.status_code == 200, trusted.text
     assert trusted.json()["proxy_trust_acknowledged"] is True
 
-    upstream = client.put(
+    upstream = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/capture-settings",
         headers=_auth(),
         json={
@@ -480,7 +499,7 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
     assert upstream.json()["upstream_proxy_enabled"] is True
     assert upstream.json()["upstream_proxy_url"] == "http://proxy.example.test:8080"
 
-    bodies = client.put(
+    bodies = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/capture-settings",
         headers=_auth(),
         json={
@@ -496,7 +515,7 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
     body = base64.b64encode(
         b'{"username":"alice","password":"do-not-store","note":"safe"}'
     ).decode()
-    artifact = client.post(
+    artifact = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/body-artifacts",
         headers=_auth(),
         json={
@@ -506,7 +525,7 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
         },
     )
     assert artifact.status_code == 201, artifact.text
-    stored = store.get(
+    stored = await store.get(
         __import__("nebula.v3.domain", fromlist=["Artifact"]).Artifact,
         artifact.json()["id"],
     )
@@ -525,16 +544,16 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
         )
     ),
 )
-def test_browser_capture_settings_matrix(
+async def test_browser_capture_settings_matrix(
     tmp_path, capture_mode, proxy_enabled, interception_enabled, upstream_enabled
 ):
     """Every stored capture combination has one coherent visible/transport state."""
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(create_app(store, auth_token="test-token"))
-    project, _ = _project(client, store)
-    _, session = _synced_session(client, project)
-    before = store.get(BrowserSession, session["id"]).model_dump()
-    response = client.put(
+    project, _ = await _project(client, store)
+    _, session = await _synced_session(client, project)
+    before = (await store.get(BrowserSession, session["id"])).model_dump()
+    response = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/capture-settings",
         headers=_auth(),
         json={
@@ -552,13 +571,13 @@ def test_browser_capture_settings_matrix(
     if interception_enabled and not proxy_enabled:
         assert response.status_code == 422, response.text
         assert "interception requires" in response.json()["detail"]
-        assert store.get(BrowserSession, session["id"]).model_dump() == before
+        assert (await store.get(BrowserSession, session["id"])).model_dump() == before
     else:
         assert response.status_code == 200, response.text
         saved = response.json()
         persisted = next(
             item
-            for item in _workspace(client, project)["sessions"]
+            for item in (await _workspace(client, project))["sessions"]
             if item["id"] == session["id"]
         )
         for snapshot in (saved, persisted):
@@ -567,3 +586,6 @@ def test_browser_capture_settings_matrix(
             assert snapshot["interception_enabled"] is interception_enabled
             assert snapshot["upstream_proxy_enabled"] is upstream_enabled
             assert snapshot["proxy_trust_acknowledged"] is proxy_enabled
+
+
+pytestmark = pytest.mark.anyio

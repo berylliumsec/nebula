@@ -52,7 +52,7 @@ class InertHarnessAdapter:
         )
 
 
-def create_fixture_app(*args: Any, **kwargs: Any):
+async def create_fixture_app(*args: Any, **kwargs: Any):
     app = _create_app(*args, **kwargs)
     store = app.state.store
     artifacts = app.state.artifact_store
@@ -60,11 +60,11 @@ def create_fixture_app(*args: Any, **kwargs: Any):
         raise RuntimeError(
             "Manual-note fixture requires Core artifacts and draft service"
         )
-    project = store.create(
+    project = await store.create(
         Engagement(name="Manual note review fixture", status="active")
     )
     source_bytes = b"# Saved synthetic explanation input; never executed.\n"
-    source = store.create(
+    source = await store.create(
         artifacts.put_bytes(
             source_bytes,
             engagement_id=project.id,
@@ -77,7 +77,7 @@ def create_fixture_app(*args: Any, **kwargs: Any):
         ("stdout", b"Synthetic explanation result.\n"),
         ("stderr", b""),
     ):
-        original = store.create(
+        original = await store.create(
             artifacts.put_bytes(
                 content,
                 engagement_id=project.id,
@@ -92,54 +92,58 @@ def create_fixture_app(*args: Any, **kwargs: Any):
             media_type="text/plain",
             parent_artifact_id=original.id,
         )
-        redacted_outputs[stream] = store.create(
+        redacted_outputs[stream] = await store.create(
             redacted.model_copy(update={"redacted": True})
         )
-    store.create(
-        OperatorExecution(
-            engagement_id=project.id,
-            operator_id="synthetic-operator",
-            origin=ExecutionOrigin(
-                kind="selection",
-                source_kind="fixture",
-                source_id="inert-note",
-                source_label="Saved inert explanation input",
-                source_sha256=hashlib.sha256(source_bytes).hexdigest(),
-            ),
-            language="python",
-            source_sha256=hashlib.sha256(source_bytes).hexdigest(),
-            source_artifact_id=source.id,
-            source_preview=source_bytes.decode(),
-            runtime=ExecutionRuntimeSnapshot(
+    (
+        await store.create(
+            OperatorExecution(
+                engagement_id=project.id,
+                operator_id="synthetic-operator",
+                origin=ExecutionOrigin(
+                    kind="selection",
+                    source_kind="fixture",
+                    source_id="inert-note",
+                    source_label="Saved inert explanation input",
+                    source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+                ),
                 language="python",
-                interpreter="/fixture/not-a-program",
-                runtime_digest="sha256:" + "a" * 64,
-                image="registry.invalid/inert@sha256:" + "a" * 64,
-                runner_profile_id="inert",
-                runner_profile_revision=1,
-                runner_runtime="podman",
-                runner_isolation="rootless",
-                runner_executable="/fixture/not-a-program",
-                runner_platform="linux/amd64",
-            ),
-            preview_fingerprint="a" * 64,
-            request_fingerprint="b" * 64,
-            client_idempotency_key="inert-note-review",
-            status="completed",
-            exit_code=0,
-            completed_at=utc_now(),
-            redacted_stdout_artifact_id=redacted_outputs["stdout"].id,
-            redacted_stderr_artifact_id=redacted_outputs["stderr"].id,
+                source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+                source_artifact_id=source.id,
+                source_preview=source_bytes.decode(),
+                runtime=ExecutionRuntimeSnapshot(
+                    language="python",
+                    interpreter="/fixture/not-a-program",
+                    runtime_digest="sha256:" + "a" * 64,
+                    image="registry.invalid/inert@sha256:" + "a" * 64,
+                    runner_profile_id="inert",
+                    runner_profile_revision=1,
+                    runner_runtime="podman",
+                    runner_isolation="rootless",
+                    runner_executable="/fixture/not-a-program",
+                    runner_platform="linux/amd64",
+                ),
+                preview_fingerprint="a" * 64,
+                request_fingerprint="b" * 64,
+                client_idempotency_key="inert-note-review",
+                status="completed",
+                exit_code=0,
+                completed_at=utc_now(),
+                redacted_stdout_artifact_id=redacted_outputs["stdout"].id,
+                redacted_stderr_artifact_id=redacted_outputs["stderr"].id,
+            )
         )
     )
-    store.create(
-        HarnessProfile(
-            name="Inert local note harness",
-            kind="codex_app_server",
-            executable="/fixture/codex",
-            default_model="fixture-note-model",
-            enabled=True,
-            privacy=ProviderPrivacy(local_only=True),
+    (
+        await store.create(
+            HarnessProfile(
+                name="Inert local note harness",
+                kind="codex_app_server",
+                executable="/fixture/codex",
+                default_model="fixture-note-model",
+                enabled=True,
+                privacy=ProviderPrivacy(local_only=True),
+            )
         )
     )
     app.state.execution_ai_service.harness_runtime = InertNoteHarness()

@@ -1,5 +1,10 @@
 """Task ownership, bounded acquisition, and cancellation of async Core storage."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 import pytest
@@ -69,7 +74,7 @@ def test_pool_timeout_must_be_finite(timeout):
         PoolSettings.from_environment({"NEBULA_V3_DB_POOL_TIMEOUT": timeout})
 
 
-def test_async_bootstrap_health_reopen_and_task_owned_sessions(tmp_path):
+async def test_async_bootstrap_health_reopen_and_task_owned_sessions(tmp_path):
     async def exercise():
         db = Database(tmp_path / "async.db")
         try:
@@ -95,10 +100,10 @@ def test_async_bootstrap_health_reopen_and_task_owned_sessions(tmp_path):
         finally:
             await reopened.dispose()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_cancellation_rolls_back_and_releases_connection(tmp_path):
+async def test_cancellation_rolls_back_and_releases_connection(tmp_path):
     async def exercise():
         db = Database(tmp_path / "cancel.db")
         entered = asyncio.Event()
@@ -132,10 +137,10 @@ def test_cancellation_rolls_back_and_releases_connection(tmp_path):
         finally:
             await db.dispose()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_full_pool_waits_asynchronously_and_timeout_does_not_leak(tmp_path):
+async def test_full_pool_waits_asynchronously_and_timeout_does_not_leak(tmp_path):
     async def exercise():
         db = Database(
             tmp_path / "pool.db", pool_settings=PoolSettings(1, 0, 1, timeout=0.05)
@@ -178,10 +183,10 @@ def test_full_pool_waits_asynchronously_and_timeout_does_not_leak(tmp_path):
             assert db.pool_snapshot()["waiters"] == 0
             await db.dispose()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_one_connection_bulk_read_admission_is_shared_and_nestable():
+async def test_one_connection_bulk_read_admission_is_shared_and_nestable():
     from nebula.v3.domain import Engagement
     from nebula.v3.read_workers import read_in_worker
     from nebula.v3.storage import NebulaStore
@@ -223,4 +228,7 @@ def test_one_connection_bulk_read_admission_is_shared_and_nestable():
             await store.event_history.close()
             await database.dispose()
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

@@ -447,5 +447,14 @@ class EventHistoryPurger:
     async def close(self, timeout: float = 10) -> None:
         """Finish the current batch before the shared engine is disposed."""
         self._stop.set()
-        if self._worker is not None:
-            await asyncio.wait_for(asyncio.shield(self._worker), timeout)
+        if self._worker is not None and not self._worker.cancelled():
+            try:
+                await asyncio.wait_for(asyncio.shield(self._worker), timeout)
+            except TimeoutError:
+                self._worker.cancel()
+                try:
+                    await self._worker
+                except asyncio.CancelledError:
+                    # diagnostic-expected: cancellation joins the timed-out worker's transaction cleanup before engine disposal.
+                    pass
+                raise

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Mapping
 
 
@@ -15,6 +15,15 @@ class PoolSettings:
     peak_processes: int
     requested_size: int | None = None
     timeout: float = 30.0
+
+    def auxiliary(self) -> PoolSettings:
+        """A serial CLI client consumes one declared non-Core connection."""
+        if self.other_connections < 1:
+            raise ValueError(
+                "NEBULA_V3_DB_OTHER_CONNECTIONS must reserve at least one "
+                "connection for this maintenance/CLI process"
+            )
+        return replace(self, requested_size=1)
 
     def __post_init__(self) -> None:
         if (

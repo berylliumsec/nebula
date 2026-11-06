@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 from datetime import timedelta
 
@@ -27,9 +31,9 @@ from nebula.v3.domain import (
 from nebula.v3.storage import ConflictError, NebulaStore
 
 
-def _device(store: NebulaStore, name: str = "Mac") -> PairedDeviceSession:
+async def _device(store: NebulaStore, name: str = "Mac") -> PairedDeviceSession:
     now = utc_now()
-    device = store.create(
+    device = await store.create(
         PairedDeviceSession(
             name=name,
             token_sha256="a" * 64,
@@ -41,9 +45,9 @@ def _device(store: NebulaStore, name: str = "Mac") -> PairedDeviceSession:
     return device
 
 
-def _source(store: NebulaStore):
-    project = store.create(Engagement(name="Broker"))
-    source = store.create(
+async def _source(store: NebulaStore):
+    project = await store.create(Engagement(name="Broker"))
+    source = await store.create(
         KnowledgeSource(
             engagement_id=project.id,
             name="Portal",
@@ -53,10 +57,10 @@ def _source(store: NebulaStore):
     return project, source
 
 
-def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
+async def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
     store = NebulaStore(tmp_path / "broker.db")
-    project, source = _source(store)
-    device = _device(store)
+    project, source = await _source(store)
+    device = await _device(store)
     broker = ActionBroker(store)
     ref = ResourceRef(
         project_id=project.id,
@@ -64,7 +68,7 @@ def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
         id=source.id,
         revision=source.revision,
     )
-    device = broker.heartbeat(
+    device = await broker.heartbeat(
         device.id,
         DeviceCapabilitySnapshot(
             platform="macos",
@@ -74,7 +78,7 @@ def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
             expected_revision=device.revision,
         ),
     )
-    intent = broker.create(
+    intent = await broker.create(
         ActionIntentCreateRequest(
             project_id=project.id,
             resources=[ref],
@@ -86,17 +90,19 @@ def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
     assert intent.selected_device_id == device.id
     assert intent.status == ActionIntentStatus.QUEUED
     with pytest.raises(ConflictError, match="prepared"):
-        broker.commit(
-            intent.id, ActionIntentCommitRequest(expected_revision=intent.revision)
+        (
+            await broker.commit(
+                intent.id, ActionIntentCommitRequest(expected_revision=intent.revision)
+            )
         )
 
-    intent = broker.claim(
+    intent = await broker.claim(
         intent.id,
         ActionIntentClaimRequest(
             device_id=device.id, expected_revision=intent.revision
         ),
     )
-    intent = broker.prepare(
+    intent = await broker.prepare(
         intent.id,
         ActionIntentPrepareRequest(
             device_id=device.id,
@@ -104,10 +110,10 @@ def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
             preflight_succeeded=True,
         ),
     )
-    intent = broker.commit(
+    intent = await broker.commit(
         intent.id, ActionIntentCommitRequest(expected_revision=intent.revision)
     )
-    intent = broker.result(
+    intent = await broker.result(
         intent.id,
         ActionIntentResultRequest(
             device_id=device.id,
@@ -118,7 +124,7 @@ def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
     )
     assert intent.status == ActionIntentStatus.SUCCEEDED
     assert intent.receipt == {"native_revision": intent.revision - 1}
-    events = store.list_operation_events(project.id, limit=100)
+    events = await store.list_operation_events(project.id, limit=100)
     assert [event.event_type for event in events] == [
         "action_intent.queued",
         "action_intent.claimed",
@@ -128,19 +134,21 @@ def test_broker_routes_to_owner_and_requires_prepare_before_commit(tmp_path):
     ]
 
 
-def test_broker_fails_without_capability_and_idempotency_is_stable(tmp_path):
+async def test_broker_fails_without_capability_and_idempotency_is_stable(tmp_path):
     store = NebulaStore(tmp_path / "broker-routing.db")
-    project, source = _source(store)
-    device = _device(store)
+    project, source = await _source(store)
+    device = await _device(store)
     broker = ActionBroker(store)
-    broker.heartbeat(
-        device.id,
-        DeviceCapabilitySnapshot(
-            platform="linux",
-            app_version="3.0.0",
-            capabilities=["clipboard.write"],
-            expected_revision=device.revision,
-        ),
+    (
+        await broker.heartbeat(
+            device.id,
+            DeviceCapabilitySnapshot(
+                platform="linux",
+                app_version="3.0.0",
+                capabilities=["clipboard.write"],
+                expected_revision=device.revision,
+            ),
+        )
     )
     request = ActionIntentCreateRequest(
         project_id=project.id,
@@ -152,31 +160,33 @@ def test_broker_fails_without_capability_and_idempotency_is_stable(tmp_path):
         idempotency_key="navigate-missing",
     )
     with pytest.raises(ConflictError, match="no healthy paired device"):
-        broker.create(request)
+        (await broker.create(request))
 
-    updated = store.get(PairedDeviceSession, device.id)
-    broker.heartbeat(
-        device.id,
-        DeviceCapabilitySnapshot(
-            platform="linux",
-            app_version="3.0.0",
-            capabilities=["browser.navigate"],
-            expected_revision=updated.revision,
-        ),
+    updated = await store.get(PairedDeviceSession, device.id)
+    (
+        await broker.heartbeat(
+            device.id,
+            DeviceCapabilitySnapshot(
+                platform="linux",
+                app_version="3.0.0",
+                capabilities=["browser.navigate"],
+                expected_revision=updated.revision,
+            ),
+        )
     )
-    first = broker.create(request)
-    assert broker.create(request).id == first.id
+    first = await broker.create(request)
+    assert (await broker.create(request)).id == first.id
     with pytest.raises(ConflictError, match="another action intent"):
-        broker.create(request.model_copy(update={"action_id": "copy"}))
+        (await broker.create(request.model_copy(update={"action_id": "copy"})))
 
 
-def test_native_failure_compensates_or_requires_reconciliation(tmp_path):
+async def test_native_failure_compensates_or_requires_reconciliation(tmp_path):
     store = NebulaStore(tmp_path / "broker-compensation.db")
-    project, source = _source(store)
-    device = _device(store)
+    project, source = await _source(store)
+    device = await _device(store)
     broker = ActionBroker(store)
     ref = ResourceRef(project_id=project.id, kind=ResourceKind.SOURCE, id=source.id)
-    device = broker.heartbeat(
+    device = await broker.heartbeat(
         device.id,
         DeviceCapabilitySnapshot(
             platform="macos",
@@ -185,7 +195,7 @@ def test_native_failure_compensates_or_requires_reconciliation(tmp_path):
             expected_revision=device.revision,
         ),
     )
-    intent = broker.create(
+    intent = await broker.create(
         ActionIntentCreateRequest(
             project_id=project.id,
             resources=[ref],
@@ -195,13 +205,13 @@ def test_native_failure_compensates_or_requires_reconciliation(tmp_path):
             idempotency_key="compensate-1",
         )
     )
-    intent = broker.claim(
+    intent = await broker.claim(
         intent.id,
         ActionIntentClaimRequest(
             device_id=device.id, expected_revision=intent.revision
         ),
     )
-    intent = broker.prepare(
+    intent = await broker.prepare(
         intent.id,
         ActionIntentPrepareRequest(
             device_id=device.id,
@@ -209,13 +219,13 @@ def test_native_failure_compensates_or_requires_reconciliation(tmp_path):
             preflight_succeeded=True,
         ),
     )
-    intent = broker.commit(
+    intent = await broker.commit(
         intent.id,
         ActionIntentCommitRequest(
             expected_revision=intent.revision, core_mutation_committed=True
         ),
     )
-    intent = broker.result(
+    intent = await broker.result(
         intent.id,
         ActionIntentResultRequest(
             device_id=device.id,
@@ -229,9 +239,9 @@ def test_native_failure_compensates_or_requires_reconciliation(tmp_path):
     assert intent.error == "native apply failed"
 
 
-def _committed_intent(store, broker, *, core_mutation_committed: bool, key: str):
-    project, source = _source(store)
-    device = _device(store, name=f"Mac {key}")
+async def _committed_intent(store, broker, *, core_mutation_committed: bool, key: str):
+    project, source = await _source(store)
+    device = await _device(store, name=f"Mac {key}")
     ref = ResourceRef(project_id=project.id, kind=ResourceKind.SOURCE, id=source.id)
     device = broker.heartbeat(
         device.id,
@@ -277,43 +287,45 @@ def _committed_intent(store, broker, *, core_mutation_committed: bool, key: str)
     return intent
 
 
-def test_committed_core_mutation_without_device_result_requires_reconciliation(
+async def test_committed_core_mutation_without_device_result_requires_reconciliation(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "broker-silent-device.db")
     broker = ActionBroker(store)
 
-    committed = _committed_intent(
+    committed = await _committed_intent(
         store, broker, core_mutation_committed=True, key="silent-committed"
     )
-    plain = _committed_intent(
+    plain = await _committed_intent(
         store, broker, core_mutation_committed=False, key="silent-plain"
     )
     # The device never reports: both the lease and the intent expiry lapse.
     later = utc_now() + timedelta(minutes=INTENT_EXPIRY_MINUTES + 1)
     monkeypatch.setattr(action_broker_module, "utc_now", lambda: later)
 
-    expired = broker.get(committed.id)
+    expired = await broker.get(committed.id)
     assert expired.status == ActionIntentStatus.RECONCILE_REQUIRED
     assert expired.lease_expires_at is None
     assert "reconcil" in str(expired.error)
-    events = store.list_operation_events(committed.engagement_id, limit=100)
+    events = await store.list_operation_events(committed.engagement_id, limit=100)
     assert events[-1].event_type == "action_intent.reconcile_required"
     # Terminal state is stable on later reads.
-    assert broker.get(committed.id).status == ActionIntentStatus.RECONCILE_REQUIRED
+    assert (
+        await broker.get(committed.id)
+    ).status == ActionIntentStatus.RECONCILE_REQUIRED
 
     # Without a committed Core mutation there is nothing to reconcile.
-    assert broker.get(plain.id).status == ActionIntentStatus.EXPIRED
+    assert (await broker.get(plain.id)).status == ActionIntentStatus.EXPIRED
 
 
-def test_actions_resolve_for_an_existing_browser_exchange(tmp_path):
+async def test_actions_resolve_for_an_existing_browser_exchange(tmp_path):
     # The endpoint map named a kind no entity declares, so every action on an
     # exchange was disabled with "no longer exists" while the row was present.
     from nebula.v3.domain import ActionResolutionRequest, BrowserTrafficExchange
 
     store = NebulaStore(tmp_path / "exchange-actions.db")
-    project = store.create(Engagement(name="Exchange actions"))
-    exchange = store.create(
+    project = await store.create(Engagement(name="Exchange actions"))
+    exchange = await store.create(
         BrowserTrafficExchange(
             engagement_id=project.id,
             session_id="session-1",
@@ -328,7 +340,7 @@ def test_actions_resolve_for_an_existing_browser_exchange(tmp_path):
     )
     broker = ActionBroker(store)
 
-    resolved = broker.registry.resolve(
+    resolved = await broker.registry.resolve(
         ActionResolutionRequest(
             resources=[
                 ResourceRef(
@@ -345,18 +357,18 @@ def test_actions_resolve_for_an_existing_browser_exchange(tmp_path):
     assert preserve.available is True, preserve.disabled_reason
 
 
-def test_heartbeat_stamps_server_time_and_keeps_the_client_clock_as_metadata(
+async def test_heartbeat_stamps_server_time_and_keeps_the_client_clock_as_metadata(
     tmp_path,
 ):
     # A phone whose clock ran slow could never be healthy, and a fast clock
     # kept an offline phone healthy: the client's timestamp was the liveness.
     store = NebulaStore(tmp_path / "heartbeat.db")
-    device = _device(store)
+    device = await _device(store)
     client_clock = utc_now() - timedelta(minutes=10)
     broker = ActionBroker(store)
 
     before = utc_now()
-    updated = broker.heartbeat(
+    updated = await broker.heartbeat(
         device.id,
         DeviceCapabilitySnapshot(
             platform="ios",
@@ -374,26 +386,30 @@ def test_heartbeat_stamps_server_time_and_keeps_the_client_clock_as_metadata(
     assert updated.metadata["client_heartbeat_at"] == client_clock.isoformat()
 
 
-def test_device_routing_sees_live_devices_past_a_thousand_revoked_pairings(tmp_path):
+async def test_device_routing_sees_live_devices_past_a_thousand_revoked_pairings(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "broker-revoked.db")
-    project, source = _source(store)
+    project, source = await _source(store)
     now = utc_now()
     expiry = now + timedelta(days=1)
-    store.create_many(
-        [
-            PairedDeviceSession(
-                name="Revoked phone",
-                token_sha256="c" * 64,
-                csrf_sha256="d" * 64,
-                idle_expires_at=expiry,
-                absolute_expires_at=expiry,
-                revoked_at=now,
-                created_at=now - timedelta(minutes=1),
-            )
-            for _ in range(1_000)
-        ]
+    (
+        await store.create_many(
+            [
+                PairedDeviceSession(
+                    name="Revoked phone",
+                    token_sha256="c" * 64,
+                    csrf_sha256="d" * 64,
+                    idle_expires_at=expiry,
+                    absolute_expires_at=expiry,
+                    revoked_at=now,
+                    created_at=now - timedelta(minutes=1),
+                )
+                for _ in range(1_000)
+            ]
+        )
     )
-    device = _device(store)
+    device = await _device(store)
     broker = ActionBroker(store)
     ref = ResourceRef(
         project_id=project.id,
@@ -401,18 +417,20 @@ def test_device_routing_sees_live_devices_past_a_thousand_revoked_pairings(tmp_p
         id=source.id,
         revision=source.revision,
     )
-    broker.heartbeat(
-        device.id,
-        DeviceCapabilitySnapshot(
-            platform="macos",
-            app_version="3.0.0",
-            capabilities=["browser.navigate"],
-            ownership_claims=[ref],
-            expected_revision=device.revision,
-        ),
+    (
+        await broker.heartbeat(
+            device.id,
+            DeviceCapabilitySnapshot(
+                platform="macos",
+                app_version="3.0.0",
+                capabilities=["browser.navigate"],
+                ownership_claims=[ref],
+                expected_revision=device.revision,
+            ),
+        )
     )
 
-    intent = broker.create(
+    intent = await broker.create(
         ActionIntentCreateRequest(
             project_id=project.id,
             resources=[ref],
@@ -425,14 +443,14 @@ def test_device_routing_sees_live_devices_past_a_thousand_revoked_pairings(tmp_p
     assert intent.eligible_device_ids == [device.id]
 
 
-def test_idempotent_create_finds_the_prior_intent_past_a_thousand_older_ones(
+async def test_idempotent_create_finds_the_prior_intent_past_a_thousand_older_ones(
     tmp_path,
 ):
     from nebula.v3.domain import ActionIntent
 
     store = NebulaStore(tmp_path / "broker-crowded.db")
-    project, source = _source(store)
-    device = _device(store)
+    project, source = await _source(store)
+    device = await _device(store)
     broker = ActionBroker(store)
     ref = ResourceRef(
         project_id=project.id,
@@ -440,31 +458,35 @@ def test_idempotent_create_finds_the_prior_intent_past_a_thousand_older_ones(
         id=source.id,
         revision=source.revision,
     )
-    broker.heartbeat(
-        device.id,
-        DeviceCapabilitySnapshot(
-            platform="macos",
-            app_version="3.0.0",
-            capabilities=["browser.navigate"],
-            ownership_claims=[ref],
-            expected_revision=device.revision,
-        ),
+    (
+        await broker.heartbeat(
+            device.id,
+            DeviceCapabilitySnapshot(
+                platform="macos",
+                app_version="3.0.0",
+                capabilities=["browser.navigate"],
+                ownership_claims=[ref],
+                expected_revision=device.revision,
+            ),
+        )
     )
     now = utc_now()
-    store.create_many(
-        [
-            ActionIntent(
-                engagement_id=project.id,
-                resources=[ref],
-                action_id="navigate",
-                requester="operator-1",
-                idempotency_key=f"older-{index}",
-                logical_lease_key=f"lease-{index}",
-                expires_at=now + timedelta(days=1),
-                created_at=now - timedelta(minutes=1),
-            )
-            for index in range(1_000)
-        ]
+    (
+        await store.create_many(
+            [
+                ActionIntent(
+                    engagement_id=project.id,
+                    resources=[ref],
+                    action_id="navigate",
+                    requester="operator-1",
+                    idempotency_key=f"older-{index}",
+                    logical_lease_key=f"lease-{index}",
+                    expires_at=now + timedelta(days=1),
+                    created_at=now - timedelta(minutes=1),
+                )
+                for index in range(1_000)
+            ]
+        )
     )
     request = ActionIntentCreateRequest(
         project_id=project.id,
@@ -474,7 +496,10 @@ def test_idempotent_create_finds_the_prior_intent_past_a_thousand_older_ones(
         idempotency_key="navigate-once",
     )
 
-    first = broker.create(request)
+    first = await broker.create(request)
 
-    assert broker.create(request).id == first.id
-    assert store.count(ActionIntent, engagement_id=project.id) == 1_001
+    assert (await broker.create(request)).id == first.id
+    assert (await store.count(ActionIntent, engagement_id=project.id)) == 1_001
+
+
+pytestmark = pytest.mark.anyio

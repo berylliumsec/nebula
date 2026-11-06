@@ -11,6 +11,11 @@ scope import ask for no reasoning too, and a route whose model must reason is
 asked again with its default instead of failing the call.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 from pathlib import Path
@@ -171,7 +176,7 @@ def _hello(model: str = "m", **update) -> ModelRequest:
 
 
 @pytest.mark.parametrize("provider_type", ["openrouter", "vllm"])
-def test_non_streamed_chat_completions_get_the_generation_timeout(
+async def test_non_streamed_chat_completions_get_the_generation_timeout(
     monkeypatch, provider_type
 ):
     def timeout_for(profile):
@@ -206,12 +211,12 @@ def test_non_streamed_chat_completions_get_the_generation_timeout(
         ),
         transport=recorder.transport,
     )
-    asyncio.run(explicit.complete(_hello()))
+    (await explicit.complete(_hello()))
     assert recorder.timeouts[0]["read"] == 45
     assert recorder.timeouts[0]["connect"] == 10
 
 
-def test_streamed_and_discovery_requests_keep_their_short_timeouts():
+async def test_streamed_and_discovery_requests_keep_their_short_timeouts():
     """Guard: only the non-streamed generation gets the long timeout.
 
     A stream's read timeout already bounds each chunk, not the answer, and
@@ -228,11 +233,11 @@ def test_streamed_and_discovery_requests_keep_their_short_timeouts():
         async for _event in _runtime(_profile("vllm"), stream).stream(_hello()):
             pass
 
-    asyncio.run(drain())
+    (await drain())
     assert stream.timeouts[0]["read"] == 120
 
     catalog = _Recorder({"data": [{"id": "m"}]})
-    health = asyncio.run(_runtime(_profile("vllm"), catalog).health())
+    health = await _runtime(_profile("vllm"), catalog).health()
     assert health.healthy
     assert catalog.timeouts[0]["read"] == 120
 
@@ -307,7 +312,7 @@ def _specialist_context() -> SpecialistContext:
 
 
 @pytest.mark.parametrize("specialist", ["analysis", "brokered"])
-def test_mission_specialists_get_the_generation_timeout(tmp_path, specialist):
+async def test_mission_specialists_get_the_generation_timeout(tmp_path, specialist):
     profile = _profile("openrouter", model=DEEPSEEK)
     if specialist == "analysis":
         recorder = _Recorder({**CHAT_OK, "model": DEEPSEEK})
@@ -336,7 +341,7 @@ def test_mission_specialists_get_the_generation_timeout(tmp_path, specialist):
             model=DEEPSEEK,
         )
 
-    asyncio.run(runner.run(_specialist_context()))
+    (await runner.run(_specialist_context()))
 
     assert recorder.timeouts[0]["read"] == 600
     assert recorder.timeouts[0]["connect"] == 10
@@ -345,8 +350,8 @@ def test_mission_specialists_get_the_generation_timeout(tmp_path, specialist):
 # --- The capability probe leaves a thinking model room ------------------------
 
 
-def _openrouter_probe_profile(store, model, parameters=None, **descriptor):
-    return store.create(
+async def _openrouter_probe_profile(store, model, parameters=None, **descriptor):
+    return await store.create(
         ProviderProfile(
             name="OpenRouter",
             provider_type="openrouter",
@@ -372,8 +377,8 @@ def _openrouter_probe_profile(store, model, parameters=None, **descriptor):
     )
 
 
-def _anthropic_probe_profile(store, model):
-    return store.create(
+async def _anthropic_probe_profile(store, model):
+    return await store.create(
         ProviderProfile(
             name="Anthropic",
             provider_type="anthropic",
@@ -506,13 +511,15 @@ def _probe(store, profile, model, handler):
         ("anthropic", "claude-opus-5"),
     ],
 )
-def test_capability_probe_verifies_a_thinking_model(tmp_path, provider_type, model):
+async def test_capability_probe_verifies_a_thinking_model(
+    tmp_path, provider_type, model
+):
     store = NebulaStore(tmp_path / "nebula.db")
     if provider_type == "openrouter":
-        profile = _openrouter_probe_profile(store, model)
+        profile = await _openrouter_probe_profile(store, model)
         handler = _thinking_openrouter
     else:
-        profile = _anthropic_probe_profile(store, model)
+        profile = await _anthropic_probe_profile(store, model)
         handler = _thinking_anthropic
 
     result, sent = _probe(store, profile, model, handler)
@@ -535,11 +542,11 @@ def test_capability_probe_verifies_a_thinking_model(tmp_path, provider_type, mod
     ],
     ids=["advertised", "not-advertised"],
 )
-def test_capability_probe_asks_a_reasoning_route_to_skip_thinking(
+async def test_capability_probe_asks_a_reasoning_route_to_skip_thinking(
     tmp_path, parameters, reasoning
 ):
     store = NebulaStore(tmp_path / "nebula.db")
-    profile = _openrouter_probe_profile(store, DEEPSEEK, parameters)
+    profile = await _openrouter_probe_profile(store, DEEPSEEK, parameters)
 
     result, sent = _probe(store, profile, DEEPSEEK, _thinking_openrouter)
 
@@ -585,16 +592,14 @@ class _RecordingProbe:
     ],
     ids=["operator-cap", "small-window", "unknown"],
 )
-def test_capability_probe_budget_is_bounded_by_the_model_limits(
+async def test_capability_probe_budget_is_bounded_by_the_model_limits(
     tmp_path, options, expected
 ):
     store = NebulaStore(tmp_path / "nebula.db")
-    profile = store.create(_profile("vllm", **options))
+    profile = await store.create(_profile("vllm", **options))
     probe = _RecordingProbe()
 
-    result = asyncio.run(
-        _verify_provider_capability(store, profile, "m", lambda _: probe)
-    )
+    result = await _verify_provider_capability(store, profile, "m", lambda _: probe)
 
     assert result.verification.status == ProviderVerificationStatus.VERIFIED
     request = probe.requests[0]
@@ -616,14 +621,14 @@ class _TimedAsyncio:
         return await asyncio.wait_for(awaitable, timeout)
 
 
-def test_capability_probe_waits_long_enough_for_its_budget(tmp_path, monkeypatch):
+async def test_capability_probe_waits_long_enough_for_its_budget(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "nebula.db")
-    profile = store.create(_profile("vllm"))
+    profile = await store.create(_profile("vllm"))
     probe = _RecordingProbe()
     timed = _TimedAsyncio()
     monkeypatch.setattr(api_module, "asyncio", timed)
 
-    asyncio.run(_verify_provider_capability(store, profile, "m", lambda _: probe))
+    (await _verify_provider_capability(store, profile, "m", lambda _: probe))
 
     budget = probe.requests[0].max_output_tokens
     assert budget is not None and budget >= 1_024
@@ -634,23 +639,25 @@ def test_capability_probe_waits_long_enough_for_its_budget(tmp_path, monkeypatch
 # --- Utility calls ask for no reasoning ---------------------------------------
 
 
-def test_naming_and_retrieval_planning_ask_for_no_reasoning(tmp_path, monkeypatch):
+async def test_naming_and_retrieval_planning_ask_for_no_reasoning(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "chat.db")
-    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
-    profile = store.create(_chat_profile(local=True))
-    store.create(_source(engagement.id, text="Relevant port is 443."))
+    engagement = await store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = await store.create(_chat_profile(local=True))
+    (await store.create(_source(engagement.id, text="Relevant port is 443.")))
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(store)
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             engagement_id=engagement.id,
             provider_id=profile.id,
             messages=[{"role": "user", "content": "What port is relevant?"}],
         )
     )
-    asyncio.run(_complete_and_name(service, prepared))
+    (await _complete_and_name(service, prepared))
 
     efforts = {
         request.metadata.get("operation") or "answer": request.reasoning_effort
@@ -664,21 +671,23 @@ def test_naming_and_retrieval_planning_ask_for_no_reasoning(tmp_path, monkeypatc
     }
 
 
-def test_context_compaction_asks_for_no_reasoning(tmp_path):
+async def test_context_compaction_asks_for_no_reasoning(tmp_path):
     store = NebulaStore(tmp_path / "context.db")
     profile = _context_profile()
-    session = _owner(store, profile)
-    _message(
-        store,
-        session,
-        message_id="message-1",
-        sequence=1,
-        content="Use port 8443 for this review.",
+    session = await _owner(store, profile)
+    (
+        await _message(
+            store,
+            session,
+            message_id="message-1",
+            sequence=1,
+            content="Use port 8443 for this review.",
+        )
     )
     provider = MemoryProvider(profile.id)
 
-    asyncio.run(
-        ContextCompactor(store).compact(
+    (
+        await ContextCompactor(store).compact(
             owner_type=ContextOwnerType.CHAT_SESSION,
             owner_id=session.id,
             engagement_id=session.engagement_id,
@@ -703,11 +712,11 @@ def test_context_compaction_asks_for_no_reasoning(tmp_path):
     assert {request.reasoning_effort for request in provider.requests} == {"none"}
 
 
-def test_scope_import_asks_for_no_reasoning(tmp_path):
+async def test_scope_import_asks_for_no_reasoning(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="Scope"))
-    profile = _structured_profile(store)
+    engagement = await store.create(Engagement(id="eng-1", name="Scope"))
+    profile = await _structured_profile(store)
     provider = StructuredProvider(profile.id)
     service = ScopeImportService(
         store=store, artifact_store=artifacts, provider_factory=lambda _: provider
@@ -777,7 +786,7 @@ class _RefusesReasoningOff(_Recorder):
     ],
     ids=["openrouter-mandatory-reasoning", "openai-no-none-level"],
 )
-def test_a_route_that_refuses_reasoning_off_answers_with_its_default(
+async def test_a_route_that_refuses_reasoning_off_answers_with_its_default(
     config, model, refusal, retried
 ):
     recorder = _RefusesReasoningOff(refusal)
@@ -793,7 +802,7 @@ def test_a_route_that_refuses_reasoning_off_answers_with_its_default(
         transport=recorder.transport,
     )
 
-    response = asyncio.run(provider.complete(_hello(model, reasoning_effort="none")))
+    response = await provider.complete(_hello(model, reasoning_effort="none"))
 
     assert response.text == "ok"
     first, second = recorder.payloads
@@ -807,7 +816,7 @@ def test_a_route_that_refuses_reasoning_off_answers_with_its_default(
     assert "reasoning_effort" not in second
 
 
-def test_other_refusals_and_chosen_levels_are_not_resent():
+async def test_other_refusals_and_chosen_levels_are_not_resent():
     """Guard: only a refused ``none`` is resent, and only once."""
 
     unrelated = _Recorder({"error": {"message": "invalid tools"}}, status=400)
@@ -823,12 +832,15 @@ def test_other_refusals_and_chosen_levels_are_not_resent():
         transport=unrelated.transport,
     )
     with pytest.raises(ProviderError):
-        asyncio.run(provider.complete(_hello(DEEPSEEK, reasoning_effort="none")))
+        (await provider.complete(_hello(DEEPSEEK, reasoning_effort="none")))
     assert len(unrelated.requests) == 1
 
     # An operator-chosen level the route refuses is reported, not dropped.
     chosen = _Recorder(MANDATORY, status=400)
     provider = build_provider(provider.config, transport=chosen.transport)
     with pytest.raises(ProviderError):
-        asyncio.run(provider.complete(_hello(DEEPSEEK, reasoning_effort="high")))
+        (await provider.complete(_hello(DEEPSEEK, reasoning_effort="high")))
     assert len(chosen.requests) == 1
+
+
+pytestmark = pytest.mark.anyio

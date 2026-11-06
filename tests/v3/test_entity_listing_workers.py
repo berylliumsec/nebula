@@ -1,5 +1,10 @@
 """Slow entity reads stay in bounded workers with thread-owned Sessions."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import threading
 from contextlib import suppress
@@ -18,36 +23,42 @@ from nebula.v3.storage import NebulaStore
 
 @pytest.mark.parametrize("worker_tokens", [2, 40])
 @pytest.mark.parametrize("resource", ["artifacts", "tool-artifacts", "chat-sessions"])
-def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
+async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
     tmp_path, resource, worker_tokens
 ):
     store = NebulaStore(tmp_path / "workers.db")
-    store.create(
-        ToolCall(
-            id="call",
-            engagement_id="project",
-            run_id="run",
-            tool_name="synthetic.noop",
-            risk_class=RiskClass.LOCAL_READ,
+    (
+        await store.create(
+            ToolCall(
+                id="call",
+                engagement_id="project",
+                run_id="run",
+                tool_name="synthetic.noop",
+                risk_class=RiskClass.LOCAL_READ,
+            )
         )
     )
-    store.create(
-        Artifact(
-            id="artifact",
-            engagement_id="project",
-            sha256="0" * 64,
-            size=1,
-            storage_path="synthetic/blob",
-            metadata={"tool_call_id": "call"},
+    (
+        await store.create(
+            Artifact(
+                id="artifact",
+                engagement_id="project",
+                sha256="0" * 64,
+                size=1,
+                storage_path="synthetic/blob",
+                metadata={"tool_call_id": "call"},
+            )
         )
     )
-    store.create(
-        ChatSession(
-            id="chat",
-            engagement_id="project",
-            title="Synthetic",
-            provider_profile_id="provider",
-            model="model",
+    (
+        await store.create(
+            ChatSession(
+                id="chat",
+                engagement_id="project",
+                title="Synthetic",
+                provider_profile_id="provider",
+                model="model",
+            )
         )
     )
     app = create_app(
@@ -176,7 +187,10 @@ def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
             limiter.total_tokens = previous
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
         event.remove(store.database.engine, "before_cursor_execute", slow_read)
-        store.database.dispose()
+        (await store.database.dispose())
+
+
+pytestmark = pytest.mark.anyio

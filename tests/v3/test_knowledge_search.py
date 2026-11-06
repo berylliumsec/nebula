@@ -1,6 +1,11 @@
 """``knowledge.search`` for provider tool turns."""
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import dataclasses
@@ -71,8 +76,8 @@ def maintenance_scorer(pairs):
     return scores
 
 
-def _tool_turns(tmp_path, monkeypatch, *, local=True, scorer=maintenance_scorer):
-    store, index, _, ids = _knowledge_project(tmp_path, FakeReranker(scorer))
+async def _tool_turns(tmp_path, monkeypatch, *, local=True, scorer=maintenance_scorer):
+    store, index, _, ids = await _knowledge_project(tmp_path, FakeReranker(scorer))
     workspace = tmp_path / "workspace"
     skill_path = workspace / ".agents" / "skills" / "review" / "SKILL.md"
     skill_path.parent.mkdir(parents=True)
@@ -91,7 +96,7 @@ def _tool_turns(tmp_path, monkeypatch, *, local=True, scorer=maintenance_scorer)
     payload["capability_verifications"] = {
         "model-a": {"model": "model-a", "status": "verified"}
     }
-    profile = store.create(ProviderProfile.model_validate(payload))
+    profile = await store.create(ProviderProfile.model_validate(payload))
     provider = FakeProvider(profile.id, local=local)
     provider.config.capabilities.tools = True
     provider.config.capabilities.strict_tools = True
@@ -100,8 +105,8 @@ def _tool_turns(tmp_path, monkeypatch, *, local=True, scorer=maintenance_scorer)
         store, knowledge_index=index, workspace_resolver=lambda _: workspace
     )
 
-    def prepare(content: str, **extra):
-        return service.prepare(
+    async def prepare(content: str, **extra):
+        return await service.prepare(
             ChatCompletionRequest(
                 provider_id=profile.id,
                 engagement_id="eng-a",
@@ -134,12 +139,12 @@ def _search(store, prepared, query: str):
     ).output
 
 
-def test_a_turn_whose_attachment_missed_recovers_the_document_by_searching(
+async def test_a_turn_whose_attachment_missed_recovers_the_document_by_searching(
     tmp_path, monkeypatch
 ):
-    store, service, prepare, ids = _tool_turns(tmp_path, monkeypatch)
+    store, service, prepare, ids = await _tool_turns(tmp_path, monkeypatch)
 
-    prepared = prepare(DOWNTIME_QUESTION)
+    prepared = await prepare(DOWNTIME_QUESTION)
 
     # The planner's searches missed the runbook's wording, so nothing was
     # attached; the turn is offered the search instead.
@@ -155,54 +160,58 @@ def test_a_turn_whose_attachment_missed_recovers_the_document_by_searching(
     # A search is ranked, not gated: nothing answers this, and it says so.
     unrelated = _search(store, prepared, RUNNER_QUESTION)
     assert {item["relevance"] for item in unrelated["matches"]} == {"weak"}
-    calls = store.list_entities(ToolCall, engagement_id="eng-a")
+    calls = await store.list_entities(ToolCall, engagement_id="eng-a")
     assert {call.status for call in calls} == {ToolCallStatus.COMPLETE}
-    assert store.list_entities(Approval, engagement_id="eng-a") == []
+    assert (await store.list_entities(Approval, engagement_id="eng-a")) == []
 
     # A resumed turn offers the model exactly the tools it already had.
-    turn = store.update(
+    turn = await store.update(
         ChatTurn,
         prepared.turn.id,
         {"status": ChatTurnStatus.WAITING_APPROVAL},
-        expected_revision=store.get(ChatTurn, prepared.turn.id).revision,
+        expected_revision=(await store.get(ChatTurn, prepared.turn.id)).revision,
     )
-    resumed = service.prepare_resume(turn.id)
+    resumed = await service.prepare_resume(turn.id)
     assert KNOWLEDGE_SEARCH_TOOL_NAME in resumed.tool_components.specs
 
 
-def test_the_tool_list_does_not_change_with_the_message(tmp_path, monkeypatch):
-    _, _, prepare, _ = _tool_turns(tmp_path, monkeypatch)
+async def test_the_tool_list_does_not_change_with_the_message(tmp_path, monkeypatch):
+    _, _, prepare, _ = await _tool_turns(tmp_path, monkeypatch)
 
-    first = prepare("Which TCP port does the harbor service listen on?")
-    second = prepare("thanks!")
-    without = prepare("Which port?", include_knowledge=False)
+    first = await prepare("Which TCP port does the harbor service listen on?")
+    second = await prepare("thanks!")
+    without = await prepare("Which port?", include_knowledge=False)
 
     assert list(first.tool_components.specs) == list(second.tool_components.specs)
     assert KNOWLEDGE_SEARCH_TOOL_NAME in first.tool_components.specs
     assert KNOWLEDGE_SEARCH_TOOL_NAME not in without.tool_components.specs
 
 
-def test_a_cloud_turn_needs_knowledge_consent_and_never_reads_local_only_sources(
+async def test_a_cloud_turn_needs_knowledge_consent_and_never_reads_local_only_sources(
     tmp_path, monkeypatch
 ):
-    store, _, prepare, ids = _tool_turns(tmp_path, monkeypatch, local=False)
-    source = store.get(KnowledgeSource, ids["harbor.md"])
-    store.update(
-        KnowledgeSource,
-        source.id,
-        {"metadata": {**source.metadata, "local_only": True}},
-        expected_revision=source.revision,
+    store, _, prepare, ids = await _tool_turns(tmp_path, monkeypatch, local=False)
+    source = await store.get(KnowledgeSource, ids["harbor.md"])
+    (
+        await store.update(
+            KnowledgeSource,
+            source.id,
+            {"metadata": {**source.metadata, "local_only": True}},
+            expected_revision=source.revision,
+        )
     )
 
-    unconfirmed = prepare("What is the access procedure?")
-    confirmed = prepare("What is the access procedure?", allow_cloud_knowledge=True)
+    unconfirmed = await prepare("What is the access procedure?")
+    confirmed = await prepare(
+        "What is the access procedure?", allow_cloud_knowledge=True
+    )
 
     assert KNOWLEDGE_SEARCH_TOOL_NAME not in unconfirmed.tool_components.specs
     assert KNOWLEDGE_SEARCH_TOOL_NAME in confirmed.tool_components.specs
     # The runbook is local-only: a cloud model's search never returns it.
     found = _search(store, confirmed, "maintenance window")["matches"]
     assert found and ids["harbor.md"] not in {item["source_id"] for item in found}
-    assert store.get(ChatSession, confirmed.turn.session_id)
+    assert await store.get(ChatSession, confirmed.turn.session_id)
 
 
 def _long_matches(count: int, relevances=None):
@@ -228,7 +237,7 @@ def _long_matches(count: int, relevances=None):
     )
 
 
-def test_a_search_returns_only_what_reaches_the_model(tmp_path):
+async def test_a_search_returns_only_what_reaches_the_model(tmp_path):
     from nebula.v3.knowledge_search import KnowledgeSearchTool
     from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
 
@@ -243,7 +252,7 @@ def test_a_search_returns_only_what_reaches_the_model(tmp_path):
         workspace=tmp_path,
     )
 
-    output = asyncio.run(tool.execute(invocation, runner=None)).output
+    output = (await tool.execute(invocation, runner=None)).output
     delivered = serialize_model_result(output)
 
     # Five full-size excerpts would exceed the delivery bound, and the model
@@ -254,7 +263,7 @@ def test_a_search_returns_only_what_reaches_the_model(tmp_path):
     assert "did not fit" in output["detail"]
 
 
-def test_conversation_search_returns_only_what_reaches_the_model(tmp_path):
+async def test_conversation_search_returns_only_what_reaches_the_model(tmp_path):
     from nebula.v3.domain import (
         ChatMessage,
         ChatRole,
@@ -271,8 +280,8 @@ def test_conversation_search_returns_only_what_reaches_the_model(tmp_path):
     from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
 
     store = NebulaStore(tmp_path / "conversation.db")
-    store.create(Engagement(id="eng-a", name="A"))
-    session = store.create(
+    (await store.create(Engagement(id="eng-a", name="A")))
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id="eng-a",
@@ -295,31 +304,33 @@ def test_conversation_search_returns_only_what_reaches_the_model(tmp_path):
         )
         for index in range(1, 13)
     ]
-    store.create_many(messages)
-    store.create(
-        ContextSnapshot(
-            engagement_id="eng-a",
-            owner_type=ContextOwnerType.CHAT_SESSION,
-            owner_id=session.id,
-            status=ContextSnapshotStatus.READY,
-            compacted_through=12,
-            memory=ContextMemory(summary="Earlier."),
-            source_references=[
-                ContextSourceReference(
-                    source_kind="chat_message",
-                    source_id=item.id,
-                    sequence=item.sequence,
-                )
-                for item in messages
-            ],
-            provider_profile_id="provider-a",
-            model="model-a",
-            prompt_version="test",
-            source_sha256="0" * 64,
+    (await store.create_many(messages))
+    (
+        await store.create(
+            ContextSnapshot(
+                engagement_id="eng-a",
+                owner_type=ContextOwnerType.CHAT_SESSION,
+                owner_id=session.id,
+                status=ContextSnapshotStatus.READY,
+                compacted_through=12,
+                memory=ContextMemory(summary="Earlier."),
+                source_references=[
+                    ContextSourceReference(
+                        source_kind="chat_message",
+                        source_id=item.id,
+                        sequence=item.sequence,
+                    )
+                    for item in messages
+                ],
+                provider_profile_id="provider-a",
+                model="model-a",
+                prompt_version="test",
+                source_sha256="0" * 64,
+            )
         )
     )
 
-    output = search_archived_conversation(
+    output = await search_archived_conversation(
         store, session.id, "deploy window", limit=10, text_of=_stored_model_text
     )
     delivered = serialize_model_result(output)
@@ -368,7 +379,9 @@ class _SearchBroker:
         )
 
 
-def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_path):
+async def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(
+    tmp_path,
+):
     from nebula.v3.chat import ChatMessage, ChatRole
     from nebula.v3.conversation_search import conversation_search_spec
     from nebula.v3.domain import ChatCitation
@@ -402,7 +415,7 @@ def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_pa
         ),
         _response(text="Answer citing [source-1:chunk-1]."),
     ]
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path,
         responses,
         _SearchBroker(tmp_path),
@@ -410,7 +423,7 @@ def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_pa
     )
     prepared.citations = [attached]
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # The attached chunk once, then the searched one the answer used; not
     # the weak match it left alone, nor anything from the conversation.
@@ -423,7 +436,7 @@ def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_pa
     assert completion.citations[1].excerpt.startswith('Line with "quotes" and newlines')
     [answer] = [
         message
-        for message in store.list_session_entities(ChatMessage, "session")
+        for message in (await store.list_session_entities(ChatMessage, "session"))
         if message.role == ChatRole.ASSISTANT
     ]
     assert answer.citations == completion.citations
@@ -432,11 +445,11 @@ def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_pa
     # searched chunk comes back from the durable step ledger.
     restarted = ChatService(store, worker_id="restarted")
     rebuilt = dataclasses.replace(
-        prepared, citations=[attached], turn=store.get(ChatTurn, "turn")
+        prepared, citations=[attached], turn=(await store.get(ChatTurn, "turn"))
     )
     assert [
         c.chunk_id
-        for c in restarted._turn_citations(rebuilt, completion.message.content)
+        for c in (await restarted._turn_citations(rebuilt, completion.message.content))
     ] == [
         "chunk-0",
         "chunk-1",
@@ -460,3 +473,6 @@ def test_a_single_excerpt_too_large_to_deliver_is_shortened_not_dropped():
     assert omitted == 1
     assert model_result_bytes(fitted) <= MAX_EXCERPT_BYTES - 100
     assert model_result_bytes(fitted) > MAX_EXCERPT_BYTES - 200
+
+
+pytestmark = pytest.mark.anyio

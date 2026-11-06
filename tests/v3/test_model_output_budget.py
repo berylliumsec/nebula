@@ -17,6 +17,11 @@ default. Only an unknown window keeps the 2,048 fallback. A profile's
 maximum and a request's maximum are explicit and not held to the share.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 from pathlib import Path
@@ -351,12 +356,12 @@ def test_explicit_operator_and_request_maxima_still_win():
     )
 
 
-def _chat_service(
+async def _chat_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, window: int, output: int
 ) -> tuple[NebulaStore, Engagement, ProviderProfile, FakeProvider, ChatService]:
     store = NebulaStore(tmp_path / "chat-output.db")
-    engagement = store.create(Engagement(id="eng-output", name="Output budget"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-output", name="Output budget"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-a",
             name="Provider A",
@@ -382,12 +387,14 @@ def _chat_service(
     return store, engagement, profile, provider, ChatService(store)
 
 
-def test_prepared_chat_request_sends_the_model_output_default(tmp_path, monkeypatch):
-    _, engagement, profile, provider, service = _chat_service(
+async def test_prepared_chat_request_sends_the_model_output_default(
+    tmp_path, monkeypatch
+):
+    _, engagement, profile, provider, service = await _chat_service(
         tmp_path, monkeypatch, window=131_072, output=32_768
     )
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -402,7 +409,7 @@ def test_prepared_chat_request_sends_the_model_output_default(tmp_path, monkeypa
     assert limits["max_output_tokens"] == 32_768
     assert limits["input_capacity"] == 131_072 - 32_768
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
     answered = [
         request
         for request in provider.requests
@@ -411,15 +418,17 @@ def test_prepared_chat_request_sends_the_model_output_default(tmp_path, monkeypa
     assert answered[-1].max_output_tokens == 32_768
 
 
-def test_chat_turn_leaves_three_quarters_of_the_window_for_input(tmp_path, monkeypatch):
+async def test_chat_turn_leaves_three_quarters_of_the_window_for_input(
+    tmp_path, monkeypatch
+):
     # 117,964 of 131,072 is what OpenRouter publishes for endpoints without a
     # separate limit. As the default it left 13,108 tokens of input, so
     # compaction started after a few turns.
-    _, engagement, profile, provider, service = _chat_service(
+    _, engagement, profile, provider, service = await _chat_service(
         tmp_path, monkeypatch, window=131_072, output=117_964
     )
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -434,7 +443,7 @@ def test_chat_turn_leaves_three_quarters_of_the_window_for_input(tmp_path, monke
     assert limits["max_output_tokens"] == 32_768
     assert limits["input_capacity"] == 98_304
     assert limits["target_input_tokens"] == 73_728
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
     answered = [
         request
         for request in provider.requests
@@ -443,18 +452,18 @@ def test_chat_turn_leaves_three_quarters_of_the_window_for_input(tmp_path, monke
     assert answered[-1].max_output_tokens == 32_768
 
 
-def test_published_output_at_the_window_still_leaves_room_to_chat(
+async def test_published_output_at_the_window_still_leaves_room_to_chat(
     tmp_path, monkeypatch
 ):
     # vLLM serves one combined max_model_len, so a descriptor can publish the
     # window as its output limit. That default once left one input token and
     # every message was refused as too large for the window. The window now
     # sizes it: a quarter, at least 8,192.
-    _, engagement, profile, provider, service = _chat_service(
+    _, engagement, profile, provider, service = await _chat_service(
         tmp_path, monkeypatch, window=32_768, output=32_768
     )
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -467,7 +476,7 @@ def test_published_output_at_the_window_still_leaves_room_to_chat(
     assert prepared.model_request.max_output_tokens == 8_192
     limits = json.loads(prepared.model_request.metadata["resolved_context_limits"])
     assert limits["input_capacity"] == 32_768 - 8_192
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
     answered = [
         request
         for request in provider.requests
@@ -510,17 +519,17 @@ def test_verified_routes_without_a_published_output_keep_input_room():
     assert limits.input_capacity == 131_072 - 32_768
 
 
-def test_history_past_the_smaller_input_capacity_compacts_instead_of_failing(
+async def test_history_past_the_smaller_input_capacity_compacts_instead_of_failing(
     tmp_path, monkeypatch
 ):
     # 32K window: the default output grows from 2,048 to the model's 8,192,
     # so input capacity drops from 30,720 to 24,576. A conversation that
     # fitted the old capacity but not the new one is compacted, not refused
     # by pre-flight.
-    store, engagement, profile, provider, service = _chat_service(
+    store, engagement, profile, provider, service = await _chat_service(
         tmp_path, monkeypatch, window=32_768, output=8_192
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session-output",
             engagement_id=engagement.id,
@@ -529,27 +538,29 @@ def test_history_past_the_smaller_input_capacity_compacts_instead_of_failing(
             model="model-a",
         )
     )
-    store.create_many(
-        [
-            ChatMessage(
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=index + 1,
-                role=ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT,
-                content=f"history-{index} " + "evidence " * 220,
-            )
-            for index in range(40)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=index + 1,
+                    role=ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT,
+                    content=f"history-{index} " + "evidence " * 220,
+                )
+                for index in range(40)
+            ]
+        )
     )
     history_tokens = estimate_messages(
         [
             ModelMessage(role=message.role.value, content=message.content)
-            for message in store.list_entities(ChatMessage, limit=100)
+            for message in (await store.list_entities(ChatMessage, limit=100))
         ]
     )
     assert 24_576 < history_tokens < 30_720
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -565,7 +576,7 @@ def test_history_past_the_smaller_input_capacity_compacts_instead_of_failing(
     limits = json.loads(prepared.model_request.metadata["resolved_context_limits"])
     assert limits["input_capacity"] == 24_576
     assert estimate_model_request(prepared.model_request) <= limits["input_capacity"]
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
 
 class _MissionProvider(ModelProvider):
@@ -589,23 +600,25 @@ class _MissionProvider(ModelProvider):
         return ProviderHealth(provider_id=self.config.id, healthy=True)
 
 
-def _mission_setup(tmp_path: Path) -> tuple[NebulaStore, Engagement, ProviderProfile]:
+async def _mission_setup(
+    tmp_path: Path,
+) -> tuple[NebulaStore, Engagement, ProviderProfile]:
     store = NebulaStore(tmp_path / "missions.db")
-    engagement = store.create(Engagement(id="eng-mission", name="Mission"))
-    scope = store.create(
+    engagement = await store.create(Engagement(id="eng-mission", name="Mission"))
+    scope = await store.create(
         ScopePolicy(
             id="scope-mission",
             engagement_id=engagement.id,
             allowed_domains=["example.test"],
         )
     )
-    engagement = store.update(
+    engagement = await store.update(
         Engagement,
         engagement.id,
         {"scope_policy_id": scope.id, "workspace_path": str(tmp_path)},
         expected_revision=engagement.revision,
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="mission-provider",
             name="Lab model",
@@ -644,28 +657,28 @@ def _run(
     )
 
 
-def test_analysis_mission_specialist_uses_the_model_output_default(tmp_path):
-    store, engagement, profile = _mission_setup(tmp_path)
+async def test_analysis_mission_specialist_uses_the_model_output_default(tmp_path):
+    store, engagement, profile = await _mission_setup(tmp_path)
     provider = _MissionProvider(profile.id)
     service = MissionService(store, provider_factory=lambda _: provider)
 
-    unbounded = service._components(_run(engagement, profile), provider)
+    unbounded = await service._components(_run(engagement, profile), provider)
     specialist = unbounded.specialists[SpecialistRole.SCOPE_PLANNING]
     assert isinstance(specialist, ModelSpecialist)
     assert specialist.max_output_tokens == 32_768
 
     # A mission token budget smaller than the allowance still bounds it.
-    bounded = service._components(
+    bounded = await service._components(
         _run(engagement, profile, budget=RunBudget(max_tokens=5_000)), provider
     )
     assert bounded.specialists[SpecialistRole.SCOPE_PLANNING].max_output_tokens == 5_000
 
 
-def test_browser_mission_specialist_uses_the_model_output_default(tmp_path):
-    store, engagement, profile = _mission_setup(tmp_path)
+async def test_browser_mission_specialist_uses_the_model_output_default(tmp_path):
+    store, engagement, profile = await _mission_setup(tmp_path)
     platform = BrowserAutomationToolPlatform(store, automation=object())  # type: ignore[arg-type]
 
-    components = platform.mission_components(
+    components = await platform.mission_components(
         _run(engagement, profile, metadata={"tool_names": ["browser.observe"]}),
         _MissionProvider(profile.id),
     )
@@ -675,8 +688,8 @@ def test_browser_mission_specialist_uses_the_model_output_default(tmp_path):
     assert specialist.max_output_tokens == 32_768
 
 
-def test_automation_mission_specialist_uses_the_model_output_default(tmp_path):
-    store, engagement, profile = _mission_setup(tmp_path)
+async def test_automation_mission_specialist_uses_the_model_output_default(tmp_path):
+    store, engagement, profile = await _mission_setup(tmp_path)
     platform = AutomationToolPlatform(
         manager=None,  # type: ignore[arg-type]
         store=store,
@@ -685,7 +698,7 @@ def test_automation_mission_specialist_uses_the_model_output_default(tmp_path):
         browser_automation=object(),  # type: ignore[arg-type]
     )
 
-    components = platform.mission_components(
+    components = await platform.mission_components(
         _run(
             engagement,
             profile,
@@ -700,28 +713,33 @@ def test_automation_mission_specialist_uses_the_model_output_default(tmp_path):
     assert specialist.max_output_tokens == 20_000
 
 
-def test_mission_output_default_falls_back_without_profile_limits(tmp_path):
+async def test_mission_output_default_falls_back_without_profile_limits(tmp_path):
     from nebula.v3.context import default_output_tokens
 
-    store, engagement, profile = _mission_setup(tmp_path)
+    store, engagement, profile = await _mission_setup(tmp_path)
 
-    assert default_output_tokens(store, profile.id, "security-model") == 32_768
+    assert (await default_output_tokens(store, profile.id, "security-model")) == 32_768
     assert (
-        default_output_tokens(store, profile.id, "security-model", token_budget=900)
-        == 900
-    )
+        await default_output_tokens(
+            store, profile.id, "security-model", token_budget=900
+        )
+    ) == 900
     # A provider without a stored profile, or a model without published
     # limits, keeps the 2,048-token fallback.
-    assert default_output_tokens(store, "missing-profile", "security-model") == 2_048
-    assert default_output_tokens(store, None, "security-model") == 2_048
-    assert default_output_tokens(store, profile.id, "other-model") == 2_048
+    assert (
+        await default_output_tokens(store, "missing-profile", "security-model")
+    ) == 2_048
+    assert (await default_output_tokens(store, None, "security-model")) == 2_048
+    assert (await default_output_tokens(store, profile.id, "other-model")) == 2_048
 
 
-def test_cli_analysis_mission_sends_the_model_output_default(tmp_path, monkeypatch):
+async def test_cli_analysis_mission_sends_the_model_output_default(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "v3-data"
     store = NebulaStore(data_dir / "nebula.db")
-    engagement = store.create(Engagement(name="vLLM mission"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="vLLM mission"))
+    profile = await store.create(
         ProviderProfile(
             name="Lab vLLM",
             provider_type="vllm",
@@ -774,7 +792,8 @@ def test_cli_analysis_mission_sends_the_model_output_default(tmp_path, monkeypat
     )
     monkeypatch.setattr("nebula.v3.cli.provider_from_profile", lambda _: provider)
 
-    result = CliRunner().invoke(
+    result = await asyncio.to_thread(
+        CliRunner().invoke,
         app,
         [
             "run",
@@ -791,3 +810,6 @@ def test_cli_analysis_mission_sends_the_model_output_default(tmp_path, monkeypat
 
     assert result.exit_code == 0, result.stdout
     assert sent == [32_768]
+
+
+pytestmark = pytest.mark.anyio

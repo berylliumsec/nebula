@@ -1,10 +1,15 @@
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import json
 import time
 from datetime import timedelta
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from sqlalchemy import select
 
 from nebula.v3.api import create_app
@@ -26,10 +31,10 @@ from nebula.v3.handoffs import (
 from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
 
 
-def _fixture(tmp_path):
+async def _fixture(tmp_path):
     store = NebulaStore(tmp_path / "handoffs.db")
-    project = store.create(Engagement(name="Handoffs"))
-    evidence = store.create(
+    project = await store.create(Engagement(name="Handoffs"))
+    evidence = await store.create(
         Evidence(
             engagement_id=project.id,
             evidence_type="capture",
@@ -46,10 +51,12 @@ def _fixture(tmp_path):
     return store, project, evidence, ref
 
 
-def test_reference_only_handoff_survives_refresh_and_consumes_idempotently(tmp_path):
-    store, project, _, ref = _fixture(tmp_path)
+async def test_reference_only_handoff_survives_refresh_and_consumes_idempotently(
+    tmp_path,
+):
+    store, project, _, ref = await _fixture(tmp_path)
     service = HandoffService(store)
-    envelope = service.create(
+    envelope = await service.create(
         HandoffCreateRequest(
             project_id=project.id,
             source_refs=[ref],
@@ -61,12 +68,12 @@ def test_reference_only_handoff_survives_refresh_and_consumes_idempotently(tmp_p
         actor_id="operator",
     )
 
-    refreshed = HandoffService(NebulaStore(store.database)).resolve(
+    refreshed = await HandoffService(NebulaStore(store.database)).resolve(
         envelope.id, current_device_id="linux"
     )
     assert refreshed.recovery == "ready"
     assert refreshed.sources[0].state == "available"
-    consumed = service.consume(
+    consumed = await service.consume(
         envelope.id,
         HandoffConsumeRequest(
             expected_revision=envelope.revision,
@@ -76,21 +83,22 @@ def test_reference_only_handoff_survives_refresh_and_consumes_idempotently(tmp_p
     )
     assert consumed.status == HandoffStatus.CONSUMED
     assert (
-        service.consume(
+        await service.consume(
             envelope.id,
             HandoffConsumeRequest(
                 expected_revision=envelope.revision,
                 device_id="linux",
                 idempotency_key="consume-once",
             ),
-        ).revision
-        == consumed.revision
-    )
-    with store.database.session() as session:
+        )
+    ).revision == consumed.revision
+    async with store.database.session() as session:
         events = list(
-            session.scalars(
-                select(OperationEventRow).where(
-                    OperationEventRow.operation_id == envelope.id
+            (
+                await session.scalars(
+                    select(OperationEventRow).where(
+                        OperationEventRow.operation_id == envelope.id
+                    )
                 )
             )
         )
@@ -100,13 +108,13 @@ def test_reference_only_handoff_survives_refresh_and_consumes_idempotently(tmp_p
     ]
 
 
-def test_transient_handoff_requires_origin_or_recapture_and_never_stores_bytes(
+async def test_transient_handoff_requires_origin_or_recapture_and_never_stores_bytes(
     tmp_path,
 ):
-    store, project, _, ref = _fixture(tmp_path)
+    store, project, _, ref = await _fixture(tmp_path)
     secret_selection = "UNSENT_SELECTED_BYTES_MUST_STAY_IN_MEMORY"
     service = HandoffService(store)
-    envelope = service.create(
+    envelope = await service.create(
         HandoffCreateRequest(
             project_id=project.id,
             source_refs=[ref],
@@ -119,16 +127,15 @@ def test_transient_handoff_requires_origin_or_recapture_and_never_stores_bytes(
         actor_id="operator",
     )
     assert (
-        service.resolve(envelope.id, current_device_id="linux").recovery
-        == "resume_origin"
-    )
+        await service.resolve(envelope.id, current_device_id="linux")
+    ).recovery == "resume_origin"
     assert (
-        service.resolve(envelope.id, current_device_id="mac").recovery
-        == "preserve_or_recapture"
-    )
-    with store.database.session() as session:
+        await service.resolve(envelope.id, current_device_id="mac")
+    ).recovery == "preserve_or_recapture"
+    async with store.database.session() as session:
         serialized = json.dumps(
-            [row.payload for row in session.scalars(select(EntityRow))], sort_keys=True
+            [row.payload for row in (await session.scalars(select(EntityRow)))],
+            sort_keys=True,
         )
     assert secret_selection not in serialized
     assert (
@@ -137,19 +144,25 @@ def test_transient_handoff_requires_origin_or_recapture_and_never_stores_bytes(
     )
 
 
-def test_handoff_revision_guards_and_cancel_are_fail_closed(tmp_path):
-    store, project, evidence, ref = _fixture(tmp_path)
+async def test_handoff_revision_guards_and_cancel_are_fail_closed(tmp_path):
+    store, project, evidence, ref = await _fixture(tmp_path)
     service = HandoffService(store)
-    store.update(Evidence, evidence.id, {"description": "changed"}, expected_revision=1)
+    (
+        await store.update(
+            Evidence, evidence.id, {"description": "changed"}, expected_revision=1
+        )
+    )
     try:
-        service.create(
-            HandoffCreateRequest(
-                project_id=project.id,
-                source_refs=[ref],
-                action_id="add_to_report",
-                origin_device_id="mac",
-            ),
-            actor_id="operator",
+        (
+            await service.create(
+                HandoffCreateRequest(
+                    project_id=project.id,
+                    source_refs=[ref],
+                    action_id="add_to_report",
+                    origin_device_id="mac",
+                ),
+                actor_id="operator",
+            )
         )
     except ConflictError as exc:
         assert "revision conflict" in str(exc)
@@ -157,7 +170,7 @@ def test_handoff_revision_guards_and_cancel_are_fail_closed(tmp_path):
         raise AssertionError("stale handoff source was accepted")
 
     current_ref = ref.model_copy(update={"revision": 2})
-    envelope = service.create(
+    envelope = await service.create(
         HandoffCreateRequest(
             project_id=project.id,
             source_refs=[current_ref],
@@ -166,7 +179,7 @@ def test_handoff_revision_guards_and_cancel_are_fail_closed(tmp_path):
         ),
         actor_id="operator",
     )
-    cancelled = service.cancel(
+    cancelled = await service.cancel(
         envelope.id,
         HandoffCancelRequest(expected_revision=envelope.revision),
         actor_id="operator",
@@ -174,10 +187,10 @@ def test_handoff_revision_guards_and_cancel_are_fail_closed(tmp_path):
     assert cancelled.status == HandoffStatus.CANCELLED
 
 
-def test_handoff_api_rejects_raw_selected_text(tmp_path):
-    store, project, _, ref = _fixture(tmp_path)
+async def test_handoff_api_rejects_raw_selected_text(tmp_path):
+    store, project, _, ref = await _fixture(tmp_path)
     client = TestClient(create_app(store, auth_token="test-token"))
-    response = client.post(
+    response = await client.post(
         "/api/v1/handoffs",
         headers={"Authorization": "Bearer test-token"},
         json={
@@ -192,19 +205,21 @@ def test_handoff_api_rejects_raw_selected_text(tmp_path):
     assert response.status_code == 422
 
 
-def test_handoff_rejects_missing_project_and_unbounded_labels(tmp_path):
-    store, project, _, ref = _fixture(tmp_path)
+async def test_handoff_rejects_missing_project_and_unbounded_labels(tmp_path):
+    store, project, _, ref = await _fixture(tmp_path)
     service = HandoffService(store)
     invalid_project = ref.model_copy(update={"project_id": "missing"})
     try:
-        service.create(
-            HandoffCreateRequest(
-                project_id="missing",
-                source_refs=[invalid_project],
-                action_id="ask_nebula",
-                origin_device_id="mac",
-            ),
-            actor_id="operator",
+        (
+            await service.create(
+                HandoffCreateRequest(
+                    project_id="missing",
+                    source_refs=[invalid_project],
+                    action_id="ask_nebula",
+                    origin_device_id="mac",
+                ),
+                actor_id="operator",
+            )
         )
     except NotFoundError as exc:
         assert "not found" in str(exc).lower()
@@ -212,15 +227,17 @@ def test_handoff_rejects_missing_project_and_unbounded_labels(tmp_path):
         raise AssertionError("handoff accepted a missing project")
 
     try:
-        service.create(
-            HandoffCreateRequest(
-                project_id=project.id,
-                source_refs=[ref],
-                action_id="ask_nebula",
-                origin_device_id="mac",
-                source_labels={f"evidence:{ref.id}": "x" * 301},
-            ),
-            actor_id="operator",
+        (
+            await service.create(
+                HandoffCreateRequest(
+                    project_id=project.id,
+                    source_refs=[ref],
+                    action_id="ask_nebula",
+                    origin_device_id="mac",
+                    source_labels={f"evidence:{ref.id}": "x" * 301},
+                ),
+                actor_id="operator",
+            )
         )
     except ValueError as exc:
         assert "300 characters" in str(exc)
@@ -228,31 +245,35 @@ def test_handoff_rejects_missing_project_and_unbounded_labels(tmp_path):
         raise AssertionError("handoff accepted an unbounded label")
 
 
-def test_handoff_list_pages_newest_first(tmp_path):
-    store, project, _, ref = _fixture(tmp_path)
+async def test_handoff_list_pages_newest_first(tmp_path):
+    store, project, _, ref = await _fixture(tmp_path)
     service = HandoffService(store)
     created = []
     for index in range(3):
         created.append(
-            service.create(
-                HandoffCreateRequest(
-                    project_id=project.id,
-                    source_refs=[ref],
-                    action_id=f"action-{index}",
-                    origin_device_id="mac",
-                ),
-                actor_id="operator",
+            (
+                await service.create(
+                    HandoffCreateRequest(
+                        project_id=project.id,
+                        source_refs=[ref],
+                        action_id=f"action-{index}",
+                        origin_device_id="mac",
+                    ),
+                    actor_id="operator",
+                )
             )
         )
         time.sleep(0.002)
     newest_first = [item.id for item in reversed(created)]
-    assert [item.id for item in service.list(project.id)] == newest_first
-    assert [item.id for item in service.list(project.id, limit=2)] == newest_first[:2]
+    assert [item.id for item in (await service.list(project.id))] == newest_first
     assert [
-        item.id for item in service.list(project.id, offset=2, limit=2)
+        item.id for item in (await service.list(project.id, limit=2))
+    ] == newest_first[:2]
+    assert [
+        item.id for item in (await service.list(project.id, offset=2, limit=2))
     ] == newest_first[2:]
     client = TestClient(create_app(store, auth_token="test-token"))
-    response = client.get(
+    response = await client.get(
         "/api/v1/handoffs",
         params={"project_id": project.id, "offset": 1, "limit": 1},
         headers={"Authorization": "Bearer test-token"},
@@ -261,10 +282,10 @@ def test_handoff_list_pages_newest_first(tmp_path):
     assert [item["id"] for item in response.json()] == newest_first[1:2]
 
 
-def test_expire_on_read_survives_a_concurrent_expiry(tmp_path):
-    store, project, _, ref = _fixture(tmp_path)
+async def test_expire_on_read_survives_a_concurrent_expiry(tmp_path):
+    store, project, _, ref = await _fixture(tmp_path)
     service = HandoffService(store)
-    envelope = service.create(
+    envelope = await service.create(
         HandoffCreateRequest(
             project_id=project.id,
             source_refs=[ref],
@@ -273,29 +294,33 @@ def test_expire_on_read_survives_a_concurrent_expiry(tmp_path):
         ),
         actor_id="operator",
     )
-    store.update(
-        HandoffEnvelope,
-        envelope.id,
-        {"expires_at": envelope.created_at + timedelta(microseconds=1)},
-        expected_revision=envelope.revision,
+    (
+        await store.update(
+            HandoffEnvelope,
+            envelope.id,
+            {"expires_at": envelope.created_at + timedelta(microseconds=1)},
+            expected_revision=envelope.revision,
+        )
     )
     rival = HandoffService(NebulaStore(store.database))
     real_update = store.update_with_operation_event
 
-    def update_after_rival_expires(*args, **kwargs):
+    async def update_after_rival_expires(*args, **kwargs):
         store.update_with_operation_event = real_update
-        assert rival.get(envelope.id).status == HandoffStatus.EXPIRED
-        return real_update(*args, **kwargs)
+        assert (await rival.get(envelope.id)).status == HandoffStatus.EXPIRED
+        return await real_update(*args, **kwargs)
 
     store.update_with_operation_event = update_after_rival_expires
-    resolved = service.resolve(envelope.id, current_device_id="linux")
+    resolved = await service.resolve(envelope.id, current_device_id="linux")
     assert resolved.envelope.status == HandoffStatus.EXPIRED
     assert resolved.envelope.revision == 3
-    with store.database.session() as session:
+    async with store.database.session() as session:
         events = list(
-            session.scalars(
-                select(OperationEventRow).where(
-                    OperationEventRow.operation_id == envelope.id
+            (
+                await session.scalars(
+                    select(OperationEventRow).where(
+                        OperationEventRow.operation_id == envelope.id
+                    )
                 )
             )
         )
@@ -303,3 +328,6 @@ def test_expire_on_read_survives_a_concurrent_expiry(tmp_path):
         "handoff.created",
         "handoff.expired",
     ]
+
+
+pytestmark = pytest.mark.anyio

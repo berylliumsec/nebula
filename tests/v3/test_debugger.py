@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import hashlib
@@ -8,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import ValidationError
 
 from nebula.v3.api import create_app
@@ -82,7 +86,7 @@ def test_debug_request_rejects_non_python_and_escaping_paths() -> None:
             DebugStartRequest(path=path, expected_sha256=digest)
 
 
-def test_debug_service_freezes_source_and_read_only_runtime(monkeypatch) -> None:
+async def test_debug_service_freezes_source_and_read_only_runtime(monkeypatch) -> None:
     async def exercise() -> None:
         source = b"print('debug me')\n"
         backend = _Backend()
@@ -162,10 +166,10 @@ def test_debug_service_freezes_source_and_read_only_runtime(monkeypatch) -> None
         assert backend.process.terminated
         assert backend.closed
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_debug_service_rejects_changed_source_before_runtime_resolution() -> None:
+async def test_debug_service_rejects_changed_source_before_runtime_resolution() -> None:
     async def exercise() -> None:
         resolved = False
 
@@ -184,10 +188,12 @@ def test_debug_service_rejects_changed_source_before_runtime_resolution() -> Non
             await service.start("engagement-1", request)
         assert not resolved
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_debug_start_api_requires_auth_and_returns_security_boundary(tmp_path) -> None:
+async def test_debug_start_api_requires_auth_and_returns_security_boundary(
+    tmp_path,
+) -> None:
     class FakeDebugger:
         async def startup(self) -> None:
             return None
@@ -218,14 +224,13 @@ def test_debug_start_api_requires_auth_and_returns_security_boundary(tmp_path) -
         "expected_sha256": "0" * 64,
         "arguments": [],
     }
-    with TestClient(app) as client:
+    async with TestClient(app) as client:
         assert (
-            client.post(
+            await client.post(
                 "/api/v1/engagements/engagement-1/debug-sessions", json=body
-            ).status_code
-            == 401
-        )
-        response = client.post(
+            )
+        ).status_code == 401
+        response = await client.post(
             "/api/v1/engagements/engagement-1/debug-sessions",
             json=body,
             headers={"Authorization": "Bearer test-token"},
@@ -250,7 +255,7 @@ def _resolver():
     return resolve
 
 
-def test_debug_session_unattached_past_deadline_is_closed_and_frees_project(
+async def test_debug_session_unattached_past_deadline_is_closed_and_frees_project(
     monkeypatch,
 ) -> None:
     async def exercise() -> None:
@@ -284,10 +289,10 @@ def test_debug_session_unattached_past_deadline_is_closed_and_frees_project(
         await service.close(started.session_id)
         assert backends[1].closed
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_debug_session_stop_requires_the_ticket(monkeypatch) -> None:
+async def test_debug_session_stop_requires_the_ticket(monkeypatch) -> None:
     async def exercise() -> None:
         source = b"print('debug me')\n"
         backend = _Backend()
@@ -317,10 +322,10 @@ def test_debug_session_stop_requires_the_ticket(monkeypatch) -> None:
         again = await service.start("engagement-1", _request(source))
         await service.close(again.session_id)
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_debug_stop_api_requires_auth_and_forwards_the_ticket(tmp_path) -> None:
+async def test_debug_stop_api_requires_auth_and_forwards_the_ticket(tmp_path) -> None:
     stops: list[tuple[str, str]] = []
 
     class FakeDebugger:
@@ -342,15 +347,14 @@ def test_debug_stop_api_requires_auth_and_forwards_the_ticket(tmp_path) -> None:
         auth_token="test-token",
         debug_service=FakeDebugger(),  # type: ignore[arg-type]
     )
-    with TestClient(app) as client:
+    async with TestClient(app) as client:
         assert (
-            client.delete(
+            await client.delete(
                 "/api/v1/debug-sessions/debug-1",
                 headers={"X-Nebula-Debug-Ticket": "ticket-1"},
-            ).status_code
-            == 401
-        )
-        stopped = client.delete(
+            )
+        ).status_code == 401
+        stopped = await client.delete(
             "/api/v1/debug-sessions/debug-1",
             headers={
                 "Authorization": "Bearer test-token",
@@ -358,7 +362,7 @@ def test_debug_stop_api_requires_auth_and_forwards_the_ticket(tmp_path) -> None:
             },
         )
         assert stopped.status_code == 204, stopped.text
-        missing = client.delete(
+        missing = await client.delete(
             "/api/v1/debug-sessions/debug-2",
             headers={
                 "Authorization": "Bearer test-token",
@@ -368,3 +372,6 @@ def test_debug_stop_api_requires_auth_and_forwards_the_ticket(tmp_path) -> None:
         assert missing.status_code == 404
         assert missing.json()["code"] == "session_not_found"
     assert stops == [("debug-1", "ticket-1"), ("debug-2", "ticket-2")]
+
+
+pytestmark = pytest.mark.anyio

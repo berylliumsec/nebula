@@ -1,6 +1,12 @@
 """The conversation snapshot can find Work saved in a child project."""
 
-from fastapi.testclient import TestClient
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.domain import ChatSession, Engagement
@@ -8,13 +14,13 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.work import WorkCheckIn, WorkCreate, WorkService
 
 
-def test_recent_work_updates_filter_finds_parent_chat_in_child_project(tmp_path):
+async def test_recent_work_updates_filter_finds_parent_chat_in_child_project(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    parent = store.create(Engagement(name="Portfolio"))
-    child = store.create(
+    parent = await store.create(Engagement(name="Portfolio"))
+    child = await store.create(
         Engagement(name="Child project", parent_engagement_id=parent.id)
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=parent.id,
             title="Progress review",
@@ -22,7 +28,7 @@ def test_recent_work_updates_filter_finds_parent_chat_in_child_project(tmp_path)
             provider_profile_id="fixture-provider",
         )
     )
-    unrelated = store.create(
+    unrelated = await store.create(
         ChatSession(
             engagement_id=parent.id,
             title="Other",
@@ -31,12 +37,12 @@ def test_recent_work_updates_filter_finds_parent_chat_in_child_project(tmp_path)
         )
     )
     work = WorkService(store)
-    item = work.create(
+    item = await work.create(
         child.id,
         WorkCreate(title="Complete project task", source_kind="import"),
         actor_id="fixture",
     )
-    update = work.check_in(
+    update = await work.check_in(
         child.id,
         item.id,
         WorkCheckIn(summary="The current step is complete."),
@@ -48,7 +54,7 @@ def test_recent_work_updates_filter_finds_parent_chat_in_child_project(tmp_path)
     client = TestClient(create_app(store, auth_token="test-token"))
     auth = {"Authorization": "Bearer test-token"}
 
-    response = client.get(
+    response = await client.get(
         "/api/v1/work/updates",
         params={"source_session_id": chat.id, "limit": 1},
         headers=auth,
@@ -58,10 +64,12 @@ def test_recent_work_updates_filter_finds_parent_chat_in_child_project(tmp_path)
     assert response.json()[0]["engagement_id"] == child.id
     assert response.json()[0]["source_engagement_id"] == parent.id
     assert (
-        client.get(
+        await client.get(
             "/api/v1/work/updates",
             params={"source_session_id": unrelated.id},
             headers=auth,
-        ).json()
-        == []
-    )
+        )
+    ).json() == []
+
+
+pytestmark = pytest.mark.anyio

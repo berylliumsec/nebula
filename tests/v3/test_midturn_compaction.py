@@ -8,7 +8,11 @@ again. The answer always gets the room it needs: only a request whose current
 message, instructions and checkpoint cannot fit fails, and it says so.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 from pathlib import Path
 
@@ -146,7 +150,7 @@ def _history(count: int) -> list[str]:
     ]
 
 
-def _turn(
+async def _turn(
     tmp_path: Path,
     provider: TurnProvider,
     broker: ProbeBroker,
@@ -159,8 +163,8 @@ def _turn(
     """A tool turn whose conversation was sent whole when it started."""
 
     store = NebulaStore(tmp_path / "midturn.db")
-    project = store.create(Engagement(id="project", name="Mid-turn"))
-    profile = store.create(
+    project = await store.create(Engagement(id="project", name="Mid-turn"))
+    profile = await store.create(
         ProviderProfile(
             id="provider",
             name="Provider",
@@ -172,7 +176,7 @@ def _turn(
         )
     )
     contents = [*_history(history), "Check every host."]
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id=project.id,
@@ -186,7 +190,7 @@ def _turn(
             },
         )
     )
-    stored = store.create_many(
+    stored = await store.create_many(
         [
             ChatMessage(
                 id=f"message-{sequence:02d}",
@@ -200,18 +204,20 @@ def _turn(
         ]
     )
     if goal:
-        store.create(
-            ChatGoal(
-                id="goal",
-                engagement_id=project.id,
-                session_id=session.id,
-                objective="Check every host.",
-                completion_criteria=["Every host is checked."],
-                status=ChatGoalStatus.RUNNING,
-                token_budget=1_000_000,
+        (
+            await store.create(
+                ChatGoal(
+                    id="goal",
+                    engagement_id=project.id,
+                    session_id=session.id,
+                    objective="Check every host.",
+                    completion_criteria=["Every host is checked."],
+                    status=ChatGoalStatus.RUNNING,
+                    token_budget=1_000_000,
+                )
             )
         )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id=project.id,
@@ -275,7 +281,7 @@ def _compacted(request: ModelRequest) -> bool:
     return MEMORY in str(request.messages[0].content)
 
 
-def test_a_turn_that_outgrows_the_window_compacts_its_conversation_and_goes_on(
+async def test_a_turn_that_outgrows_the_window_compacts_its_conversation_and_goes_on(
     tmp_path,
 ):
     """F12: routing stopped after two calls once the history filled the window.
@@ -288,14 +294,14 @@ def test_a_turn_that_outgrows_the_window_compacts_its_conversation_and_goes_on(
 
     broker = ProbeBroker()
     provider = TurnProvider(calls=30)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=10)
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=10)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     # Every probe ran, once, in order.
     assert broker.calls == [str(step) for step in range(1, 31)]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     requests = _turn_requests(provider)
     for request in requests:
@@ -313,7 +319,7 @@ def test_a_turn_that_outgrows_the_window_compacts_its_conversation_and_goes_on(
     ]
     # No message is left out: the snapshot covers exactly the messages the
     # request no longer carries verbatim.
-    (snapshot,) = store.find_entities(
+    (snapshot,) = await store.find_entities(
         ContextSnapshot,
         {"owner_type": ContextOwnerType.CHAT_SESSION.value, "owner_id": "session"},
     )
@@ -336,7 +342,7 @@ def test_a_turn_that_outgrows_the_window_compacts_its_conversation_and_goes_on(
         CONVERSATION_SEARCH_TOOL_NAME in {tool.name for tool in r.tools}
         for r in routing[first:]
     )
-    snapshot_values = resolve_request_snapshot(
+    snapshot_values = await resolve_request_snapshot(
         store, turn.request_snapshot, session_id="session"
     )
     assert snapshot_values["conversation_search"] is True
@@ -377,7 +383,7 @@ def _recovered(provider: TurnProvider, kind: str) -> ModelRequest:
     )
 
 
-def test_a_rejection_clearing_cannot_fix_compacts_the_conversation(tmp_path):
+async def test_a_rejection_clearing_cannot_fix_compacts_the_conversation(tmp_path):
     """F12: after a tool ran, a rejection clearing could not fix failed the turn.
 
     The one result is already smaller than its receipt, so clearing cannot
@@ -389,13 +395,13 @@ def test_a_rejection_clearing_cannot_fix_compacts_the_conversation(tmp_path):
     # The request stays below its target, so no crossing compacts it first;
     # the server counts more than Core does.
     provider = RejectingProvider(calls=4, limit=4_800)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=6)
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=6)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert broker.calls == ["1", "2", "3", "4"]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     (rejected,) = provider.rejected
     retry = _recovered(provider, "compacted_conversation")
     assert _compacted(retry) and not _compacted(rejected)
@@ -405,7 +411,7 @@ def test_a_rejection_clearing_cannot_fix_compacts_the_conversation(tmp_path):
     assert provider.compactions
 
 
-def test_a_rejection_after_clearing_compacts_the_conversation_once_more(tmp_path):
+async def test_a_rejection_after_clearing_compacts_the_conversation_once_more(tmp_path):
     """The retry with older results cleared was refused too: the conversation
     is compacted for one more retry; a third refusal would fail the turn."""
 
@@ -413,9 +419,9 @@ def test_a_rejection_after_clearing_compacts_the_conversation_once_more(tmp_path
     # is still whole when the provider refuses.
     broker = ProbeBroker()
     provider = RejectingProvider(calls=3, limit=10**9, refuse_first=2)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=6)
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=6)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert broker.calls == ["1", "2", "3"]
@@ -430,7 +436,9 @@ def test_a_rejection_after_clearing_compacts_the_conversation_once_more(tmp_path
     ]
 
 
-def test_the_answer_gets_room_when_the_synthesis_no_longer_fits(tmp_path, monkeypatch):
+async def test_the_answer_gets_room_when_the_synthesis_no_longer_fits(
+    tmp_path, monkeypatch
+):
     """Stream R saw routing stop, then the answer request exceed capacity.
 
     Here the synthesis request is larger than routing's (its instructions are
@@ -441,14 +449,14 @@ def test_the_answer_gets_room_when_the_synthesis_no_longer_fits(tmp_path, monkey
     broker = ProbeBroker()
     provider = TurnProvider(calls=1)
     # Routing stays below its target; only the answer outgrows the window.
-    store, service, prepared = _turn(tmp_path, provider, broker, history=6)
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=6)
     monkeypatch.setattr(
         chat_module,
         "_CHAT_TOOL_RESULT_INSTRUCTIONS",
         chat_module._CHAT_TOOL_RESULT_INSTRUCTIONS + " Summarise." * 1_000,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert broker.calls == ["1"]
@@ -460,10 +468,12 @@ def test_the_answer_gets_room_when_the_synthesis_no_longer_fits(tmp_path, monkey
     assert not any(_compacted(r) for r in requests if r.tool_choice == ToolChoice.AUTO)
 
 
-def test_an_answer_that_cannot_fit_fails_saying_what_does_not(tmp_path, monkeypatch):
+async def test_an_answer_that_cannot_fit_fails_saying_what_does_not(
+    tmp_path, monkeypatch
+):
     broker = ProbeBroker()
     provider = TurnProvider(calls=1)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=4)
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=4)
     capacity = resolve_context_limits(
         prepared.provider_profile, model="model-a", required_parameters={"tools"}
     ).input_capacity
@@ -474,31 +484,33 @@ def test_an_answer_that_cannot_fit_fails_saying_what_does_not(tmp_path, monkeypa
     )
 
     with pytest.raises(ChatConfigurationError, match="cannot fit the model's input"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     # The tool ran once and was not repeated by any fallback.
     assert broker.calls == ["1"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.FAILED
     assert "tool results are saved" in (turn.error or "")
 
 
-def test_a_goal_pays_for_the_compaction_its_turn_needed(tmp_path):
+async def test_a_goal_pays_for_the_compaction_its_turn_needed(tmp_path):
     broker = ProbeBroker()
     provider = TurnProvider(calls=4)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=10, goal=True)
+    store, service, prepared = await _turn(
+        tmp_path, provider, broker, history=10, goal=True
+    )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert provider.compactions
-    goal = store.get(ChatGoal, "goal")
+    goal = await store.get(ChatGoal, "goal")
     # Each compactor call reports 50 tokens; every turn request reports 3.
     turn_tokens = 3 * len(_turn_requests(provider))
     assert goal.usage.total_tokens == turn_tokens + 50 * len(provider.compactions)
 
 
-def test_the_headroom_left_for_later_steps_never_blocks_the_compaction(tmp_path):
+async def test_the_headroom_left_for_later_steps_never_blocks_the_compaction(tmp_path):
     """A request whose other parts nearly fill the window still compacts.
 
     The headroom a compaction leaves below the target for the next steps
@@ -508,8 +520,8 @@ def test_the_headroom_left_for_later_steps_never_blocks_the_compaction(tmp_path)
 
     broker = ProbeBroker()
     provider = TurnProvider(calls=0)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=10)
-    turn = store.get(ChatTurn, "turn")
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=10)
+    turn = await store.get(ChatTurn, "turn")
     capacity = _capacity(prepared, prepared.model_request)
     base = estimate_model_request(prepared.model_request)
     # Everything beside the conversation takes all but ~1,000 tokens.
@@ -519,8 +531,8 @@ def test_the_headroom_left_for_later_steps_never_blocks_the_compaction(tmp_path)
     )
     assert estimate_model_request(request) > capacity > base
 
-    updated = asyncio.run(
-        service._compact_mid_turn(prepared, turn, request, cause="context_full")
+    updated = await service._compact_mid_turn(
+        prepared, turn, request, cause="context_full"
     )
 
     assert updated is not None
@@ -549,7 +561,7 @@ class ThinkingProvider(TurnProvider):
         )
 
 
-def test_replayed_reasoning_that_fills_the_window_folds_into_the_checkpoint(
+async def test_replayed_reasoning_that_fills_the_window_folds_into_the_checkpoint(
     tmp_path,
 ):
     """F12: a route replaying each step's reasoning outgrew any clearing.
@@ -562,9 +574,9 @@ def test_replayed_reasoning_that_fills_the_window_folds_into_the_checkpoint(
 
     broker = ProbeBroker()
     provider = ThinkingProvider(calls=12)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=2)
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=2)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert broker.calls == [str(step) for step in range(1, 13)]
@@ -611,7 +623,7 @@ class AlternatingProvider(TurnProvider):
         )
 
 
-def test_older_lookups_are_cleared_after_other_older_results(tmp_path):
+async def test_older_lookups_are_cleared_after_other_older_results(tmp_path):
     """What the model looked up to answer from is cleared last.
 
     Stream F saw conversation.search find the right passages, then the answer
@@ -621,7 +633,7 @@ def test_older_lookups_are_cleared_after_other_older_results(tmp_path):
 
     broker = ScanBroker()
     provider = AlternatingProvider(calls=12)
-    store, service, prepared = _turn(
+    store, service, prepared = await _turn(
         tmp_path,
         provider,
         broker,
@@ -630,7 +642,7 @@ def test_older_lookups_are_cleared_after_other_older_results(tmp_path):
         specs=[SPEC, READ_SPEC],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     lookups_kept = False
@@ -674,16 +686,16 @@ class SynthesisRejectingProvider(TurnProvider):
         return _response(text=ANSWER)
 
 
-def test_a_second_synthesis_asks_with_the_compacted_conversation(tmp_path):
+async def test_a_second_synthesis_asks_with_the_compacted_conversation(tmp_path):
     """After a rejection compacted the conversation, an answer that came back
     empty is asked for again with that conversation, not the refused one."""
 
     broker = TinyBroker()
     # Routing stays below its target; the server refuses the answer.
     provider = SynthesisRejectingProvider(limit=4_700)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=6)
+    store, service, prepared = await _turn(tmp_path, provider, broker, history=6)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert broker.calls == ["1"]
@@ -722,7 +734,7 @@ def _lookup_entry(step: int) -> dict:
     }
 
 
-def test_a_cleared_or_folded_lookup_keeps_what_it_found(tmp_path):
+async def test_a_cleared_or_folded_lookup_keeps_what_it_found(tmp_path):
     """A folded or cleared read says which codes and paths it read.
 
     Stream F's long file chain lost every key once its reads folded: a
@@ -733,8 +745,8 @@ def test_a_cleared_or_folded_lookup_keeps_what_it_found(tmp_path):
     from nebula.v3.chat import _cleared_tool_result
     from tests.v3.test_turn_prompt_cache import _ledger_turn
 
-    _, turn, ledger = _ledger_turn(tmp_path)
-    checkpoint = ledger._write_checkpoint(
+    _, turn, ledger = await _ledger_turn(tmp_path)
+    checkpoint = await ledger._write_checkpoint(
         turn.id, [_lookup_entry(step) for step in range(3)]
     )
     summaries = [receipt[4] for receipt in checkpoint.summary["steps"]]
@@ -750,3 +762,6 @@ def test_a_cleared_or_folded_lookup_keeps_what_it_found(tmp_path):
     assert "found" not in _cleared_tool_result(
         command, json.loads(entry["provider_result"])
     )
+
+
+pytestmark = pytest.mark.anyio

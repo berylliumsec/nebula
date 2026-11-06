@@ -24,26 +24,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tests.v3.cpu_worker_fixtures import hold
 
 
-def main():
+async def main():
     with tempfile.TemporaryDirectory(prefix="nebula-host-cpu-ui-") as directory:
         root = Path(directory)
         store = NebulaStore(root / "core.db")
-        store.create(Engagement(id="cpu-project", name="Synthetic host CPU settings"))
-        store.create(
-            Observation(
-                id="note",
-                engagement_id="cpu-project",
-                observation_type="note",
-                title="Saved source",
-                body="Synthetic PDF content. " * 200,
+        (
+            await store.create(
+                Engagement(id="cpu-project", name="Synthetic host CPU settings")
             )
         )
-        store.create(
-            Report(
-                id="report",
-                engagement_id="cpu-project",
-                title="Synthetic worker PDF",
-                observation_ids=["note"],
+        (
+            await store.create(
+                Observation(
+                    id="note",
+                    engagement_id="cpu-project",
+                    observation_type="note",
+                    title="Saved source",
+                    body="Synthetic PDF content. " * 200,
+                )
+            )
+        )
+        (
+            await store.create(
+                Report(
+                    id="report",
+                    engagement_id="cpu-project",
+                    title="Synthetic worker PDF",
+                    observation_ids=["note"],
+                )
             )
         )
         bundle = Path(__file__).resolve().parents[2] / "ui/dist"
@@ -135,31 +143,37 @@ def main():
                     "Synthetic saved report paragraph: measured worker computation with no external tools or network access."
                     for _ in range(paragraphs)
                 )
-                store.create(
-                    Observation(
-                        id="load-note",
-                        engagement_id="cpu-project",
-                        observation_type="note",
-                        title="Synthetic load source",
-                        body=text,
+                (
+                    await store.create(
+                        Observation(
+                            id="load-note",
+                            engagement_id="cpu-project",
+                            observation_type="note",
+                            title="Synthetic load source",
+                            body=text,
+                        )
                     )
                 )
                 for index in range(count):
-                    store.create(
-                        Report(
-                            id=f"load-{index}",
-                            engagement_id="cpu-project",
-                            title=f"Synthetic load PDF {index}",
-                            observation_ids=["load-note"],
+                    (
+                        await store.create(
+                            Report(
+                                id=f"load-{index}",
+                                engagement_id="cpu-project",
+                                title=f"Synthetic load PDF {index}",
+                                observation_ids=["load-note"],
+                            )
                         )
                     )
-                    store.create(
-                        ChatSession(
-                            id=f"load-chat-{index}",
-                            engagement_id="cpu-project",
-                            title=f"Saved synthetic chat {index}",
-                            model="synthetic-offline",
-                            provider_profile_id="synthetic-offline-profile",
+                    (
+                        await store.create(
+                            ChatSession(
+                                id=f"load-chat-{index}",
+                                engagement_id="cpu-project",
+                                title=f"Saved synthetic chat {index}",
+                                model="synthetic-offline",
+                                provider_profile_id="synthetic-offline-profile",
+                            )
                         )
                     )
             return {
@@ -188,7 +202,7 @@ def main():
                 log_level="warning",
             )
         finally:
-            store.database.dispose()
+            (await store.database.dispose())
 
 
 if __name__ == "__main__":

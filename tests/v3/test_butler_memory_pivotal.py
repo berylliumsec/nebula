@@ -1,8 +1,14 @@
 """Selective Butler memory capture from committed, project-scoped Core events."""
 
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import time
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.butler_memory import ButlerMemoryService
@@ -26,15 +32,15 @@ from nebula.v3.domain import (
 from nebula.v3.storage import NebulaStore
 
 
-def _setup(tmp_path):
+async def _setup(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     memory = ButlerMemoryService(
         tmp_path / "butler-memory.sqlite3",
         index_path=tmp_path / "memory-vectors",
     )
-    project = store.create(Engagement(name="Project A"))
-    other = store.create(Engagement(name="Project B"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Project A"))
+    other = await store.create(Engagement(name="Project B"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -42,7 +48,7 @@ def _setup(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main agent",
@@ -50,7 +56,7 @@ def _setup(tmp_path):
             model="model-a",
         )
     )
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             engagement_id=project.id,
             session_id=session.id,
@@ -68,7 +74,7 @@ _USEFUL_LESSON = (
 )
 
 
-def _decision_event(
+async def _decision_event(
     store,
     project,
     session,
@@ -81,8 +87,8 @@ def _decision_event(
 ):
     verification = "core_observed" if observed else "agent_reported"
     source_type = "goal.progress_overdue" if observed else "agent.attention_reported"
-    with store.transaction() as transaction:
-        source = _append_project_event(
+    async with store.transaction() as transaction:
+        source = await _append_project_event(
             transaction,
             engagement_id=project.id,
             event_type=source_type,
@@ -122,34 +128,36 @@ def _decision_event(
             ],
             source_verification_state=verification,
         )
-        transaction.add(decision)
-        _append_project_event(
-            transaction,
-            engagement_id=project.id,
-            event_type="butler.decision_recorded",
-            payload=ButlerEventPayload(
-                project_id=project.id,
-                goal_id=goal.id,
-                session_id=session.id,
-                source="core",
-                actor_role="core",
-                summary="Butler recorded a review.",
-                metrics={"choice": choice, "status": "reviewed"},
-                verification_state="core_observed",
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="decision", id=decision.id, project_id=project.id
-                    )
-                ],
-            ),
-            idempotency_key=f"decision-{decision.id}",
-            now=utc_now(),
+        (await transaction.add(decision))
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=project.id,
+                event_type="butler.decision_recorded",
+                payload=ButlerEventPayload(
+                    project_id=project.id,
+                    goal_id=goal.id,
+                    session_id=session.id,
+                    source="core",
+                    actor_role="core",
+                    summary="Butler recorded a review.",
+                    metrics={"choice": choice, "status": "reviewed"},
+                    verification_state="core_observed",
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="decision", id=decision.id, project_id=project.id
+                        )
+                    ],
+                ),
+                idempotency_key=f"decision-{decision.id}",
+                now=utc_now(),
+            )
         )
     return decision, source
 
 
-def _applied_pause_event(store, project, session, goal, source):
-    action = store.create(
+async def _applied_pause_event(store, project, session, goal, source):
+    action = await store.create(
         ButlerAction(
             engagement_id=project.id,
             decision_id="reviewed-decision",
@@ -166,37 +174,39 @@ def _applied_pause_event(store, project, session, goal, source):
             finished_at=utc_now(),
         )
     )
-    with store.transaction() as transaction:
-        _append_project_event(
-            transaction,
-            engagement_id=project.id,
-            event_type="butler.action_applied",
-            payload=ButlerEventPayload(
-                project_id=project.id,
-                goal_id=goal.id,
-                session_id=session.id,
-                source="core",
-                actor_role="core",
-                summary="Butler applied a bounded action.",
-                metrics={
-                    "action_type": "pause_urgent_machine_blocker",
-                    "status": "applied",
-                },
-                verification_state="core_observed",
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="action", id=action.id, project_id=project.id
-                    )
-                ],
-            ),
-            idempotency_key=f"action-{action.id}",
-            now=utc_now(),
+    async with store.transaction() as transaction:
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=project.id,
+                event_type="butler.action_applied",
+                payload=ButlerEventPayload(
+                    project_id=project.id,
+                    goal_id=goal.id,
+                    session_id=session.id,
+                    source="core",
+                    actor_role="core",
+                    summary="Butler applied a bounded action.",
+                    metrics={
+                        "action_type": "pause_urgent_machine_blocker",
+                        "status": "applied",
+                    },
+                    verification_state="core_observed",
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="action", id=action.id, project_id=project.id
+                        )
+                    ],
+                ),
+                idempotency_key=f"action-{action.id}",
+                now=utc_now(),
+            )
         )
     return action
 
 
-def _dispatched_status_event(store, project, session, goal, decision, source):
-    action = store.create(
+async def _dispatched_status_event(store, project, session, goal, decision, source):
+    action = await store.create(
         ButlerAction(
             engagement_id=project.id,
             decision_id=decision.id,
@@ -213,40 +223,45 @@ def _dispatched_status_event(store, project, session, goal, decision, source):
             finished_at=utc_now(),
         )
     )
-    with store.transaction() as transaction:
-        _append_project_event(
-            transaction,
-            engagement_id=project.id,
-            event_type="butler.action_dispatched",
-            payload=ButlerEventPayload(
-                project_id=project.id,
-                goal_id=goal.id,
-                session_id=session.id,
-                source="core",
-                actor_role="core",
-                summary="Butler dispatched a bounded parent status request.",
-                metrics={"action_type": action.action_type, "status": action.status},
-                verification_state="core_observed",
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="action", id=action.id, project_id=project.id
-                    )
-                ],
-            ),
-            idempotency_key=f"action-{action.id}",
-            now=utc_now(),
+    async with store.transaction() as transaction:
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=project.id,
+                event_type="butler.action_dispatched",
+                payload=ButlerEventPayload(
+                    project_id=project.id,
+                    goal_id=goal.id,
+                    session_id=session.id,
+                    source="core",
+                    actor_role="core",
+                    summary="Butler dispatched a bounded parent status request.",
+                    metrics={
+                        "action_type": action.action_type,
+                        "status": action.status,
+                    },
+                    verification_state="core_observed",
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="action", id=action.id, project_id=project.id
+                        )
+                    ],
+                ),
+                idempotency_key=f"action-{action.id}",
+                now=utc_now(),
+            )
         )
     return action
 
 
-def test_pivotal_capture_is_selective_scoped_and_replay_safe(tmp_path):
-    store, memory, project, other, session, goal = _setup(tmp_path)
-    decision, source = _decision_event(store, project, session, goal)
-    _decision_event(store, project, session, goal, observed=False)
-    action = _applied_pause_event(store, project, session, goal, source)
+async def test_pivotal_capture_is_selective_scoped_and_replay_safe(tmp_path):
+    store, memory, project, other, session, goal = await _setup(tmp_path)
+    decision, source = await _decision_event(store, project, session, goal)
+    (await _decision_event(store, project, session, goal, observed=False))
+    action = await _applied_pause_event(store, project, session, goal, source)
 
-    assert memory.capture_pivotal_project_events(store, project.id) == 3
-    own = memory.list(project.id).items
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 3
+    own = (await memory.list(project.id)).items
     assert {item.scope for item in own} == {"project_lesson", "global_lesson"}
     assert {item.source_ref for item in own} == {decision.id, action.id}
     assert any(_USEFUL_LESSON in item.content for item in own)
@@ -256,33 +271,41 @@ def test_pivotal_capture_is_selective_scoped_and_replay_safe(tmp_path):
         for item in own
         if item.scope == "global_lesson"
     )
-    foreign = memory.list(other.id).items
+    foreign = (await memory.list(other.id)).items
     assert len(foreign) == 1
     assert foreign[0].scope == "global_lesson"
     assert foreign[0].source_ref is None
     assert "Project A" not in foreign[0].content
-    assert memory.search(other.id, "machine blocker").items[0].id == foreign[0].id
-    assert memory.capture_pivotal_project_events(store, project.id) == 0
+    assert (await memory.search(other.id, "machine blocker")).items[0].id == foreign[
+        0
+    ].id
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 0
     restarted = ButlerMemoryService(tmp_path / "butler-memory.sqlite3")
-    assert restarted.capture_pivotal_project_events(store, project.id) == 0
-    assert len(restarted.list(project.id).items) == 2
+    assert (await restarted.capture_pivotal_project_events(store, project.id)) == 0
+    assert len((await restarted.list(project.id)).items) == 2
 
 
-def test_pivotal_capture_does_not_store_unverified_or_routine_review(tmp_path):
-    store, memory, project, _, session, goal = _setup(tmp_path)
-    _decision_event(store, project, session, goal, observed=False)
-    _decision_event(store, project, session, goal, observed=True, choice="observe")
-    _decision_event(
-        store, project, session, goal, choice="steer", lesson_candidate=None
+async def test_pivotal_capture_does_not_store_unverified_or_routine_review(tmp_path):
+    store, memory, project, _, session, goal = await _setup(tmp_path)
+    (await _decision_event(store, project, session, goal, observed=False))
+    (
+        await _decision_event(
+            store, project, session, goal, observed=True, choice="observe"
+        )
     )
-    assert memory.capture_pivotal_project_events(store, project.id) == 3
-    assert memory.list(project.id).items == []
+    (
+        await _decision_event(
+            store, project, session, goal, choice="steer", lesson_candidate=None
+        )
+    )
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 3
+    assert (await memory.list(project.id)).items == []
 
 
-def test_review_lesson_keeps_distinct_cited_process_insights_only(tmp_path):
-    store, memory, project, other, session, goal = _setup(tmp_path)
-    first, _ = _decision_event(store, project, session, goal)
-    near, near_source = _decision_event(
+async def test_review_lesson_keeps_distinct_cited_process_insights_only(tmp_path):
+    store, memory, project, other, session, goal = await _setup(tmp_path)
+    first, _ = await _decision_event(store, project, session, goal)
+    near, near_source = await _decision_event(
         store,
         project,
         session,
@@ -293,7 +316,7 @@ def test_review_lesson_keeps_distinct_cited_process_insights_only(tmp_path):
             "before changing the plan because the next step depends on current observations."
         ),
     )
-    distinct, distinct_source = _decision_event(
+    distinct, distinct_source = await _decision_event(
         store,
         project,
         session,
@@ -305,7 +328,7 @@ def test_review_lesson_keeps_distinct_cited_process_insights_only(tmp_path):
             "failed tests before changing scope because the remedies differ."
         ),
     )
-    unsafe, _ = _decision_event(
+    unsafe, _ = await _decision_event(
         store,
         project,
         session,
@@ -316,138 +339,147 @@ def test_review_lesson_keeps_distinct_cited_process_insights_only(tmp_path):
             "before retrying because the result may need comparison."
         ),
     )
-    _dispatched_status_event(store, project, session, goal, near, near_source)
-    _dispatched_status_event(store, project, session, goal, distinct, distinct_source)
-    assert memory.capture_pivotal_project_events(store, project.id) == 6
-    own = memory.list(project.id).items
+    (await _dispatched_status_event(store, project, session, goal, near, near_source))
+    (
+        await _dispatched_status_event(
+            store, project, session, goal, distinct, distinct_source
+        )
+    )
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 6
+    own = (await memory.list(project.id)).items
     assert {item.source_ref for item in own} == {first.id, distinct.id}
     assert near.id not in {item.source_ref for item in own}
     assert unsafe.id not in {item.source_ref for item in own}
     assert all(
         item.source_label == "Butler review suggestion · Core observed" for item in own
     )
-    assert memory.list(other.id).items == []
+    assert (await memory.list(other.id)).items == []
 
 
-def test_steer_candidate_waits_for_confirmed_delivery_without_losing_replay(tmp_path):
-    store, memory, project, _, session, goal = _setup(tmp_path)
-    decision, source = _decision_event(store, project, session, goal, choice="steer")
-    assert memory.capture_pivotal_project_events(store, project.id) == 1
-    assert memory.list(project.id).items == []
+async def test_steer_candidate_waits_for_confirmed_delivery_without_losing_replay(
+    tmp_path,
+):
+    store, memory, project, _, session, goal = await _setup(tmp_path)
+    decision, source = await _decision_event(
+        store, project, session, goal, choice="steer"
+    )
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 1
+    assert (await memory.list(project.id)).items == []
 
-    action = _dispatched_status_event(store, project, session, goal, decision, source)
-    assert memory.capture_pivotal_project_events(store, project.id) == 1
-    saved = memory.list(project.id).items
+    action = await _dispatched_status_event(
+        store, project, session, goal, decision, source
+    )
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 1
+    saved = (await memory.list(project.id)).items
     assert len(saved) == 1
     assert saved[0].source_ref == decision.id
     assert action.id != saved[0].source_ref
-    assert memory.capture_pivotal_project_events(store, project.id) == 0
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 0
 
 
-def test_direct_operator_guidance_needs_stable_intent_and_preserves_scope(tmp_path):
-    _, memory, project, other, _, _ = _setup(tmp_path)
+async def test_direct_operator_guidance_needs_stable_intent_and_preserves_scope(
+    tmp_path,
+):
+    _, memory, project, other, _, _ = await _setup(tmp_path)
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "From now on, keep progress summaries concise."
         )
-        is not None
-    )
+    ) is not None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "I want brief status updates by default."
         )
-        is not None
-    )
+    ) is not None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "I prefer gpt-6.1-sol for code reviews."
         )
-        is not None
-    )
+    ) is not None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "I prefer a warning when quota reaches 20%."
         )
-        is not None
-    )
+    ) is not None
     assert (
-        memory.capture_operator_preference(project.id, "I want to start a new mission.")
-        is None
-    )
+        await memory.capture_operator_preference(
+            project.id, "I want to start a new mission."
+        )
+    ) is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "Please always approve pending requests."
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "From now on, use API key sk-test-secret-123456789012345."
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "I prefer progress notes at 192.168.1.99."
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             project.id, "I prefer code updates sent to account 1234 5678 9012 3456."
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_decision(
+        await memory.capture_operator_decision(
             project.id,
             "We decided to always send child agent updates through the parent chat.",
         )
-        is not None
-    )
+    ) is not None
     assert (
-        memory.capture_operator_decision(
+        await memory.capture_operator_decision(
             project.id, "We decided to always keep this project's summaries brief."
         )
-        is not None
-    )
+    ) is not None
     assert (
-        memory.capture_operator_decision(
+        await memory.capture_operator_decision(
             project.id, "We decided to use a new model for this task."
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_decision(
+        await memory.capture_operator_decision(
             project.id, "Decision: always bypass approvals for this project."
         )
-        is None
-    )
-    assert len(memory.list(project.id).items) == 6
-    foreign = memory.list(other.id).items
+    ) is None
+    assert len((await memory.list(project.id)).items) == 6
+    foreign = (await memory.list(other.id)).items
     assert len(foreign) == 5
     assert all(item.source_ref is None for item in foreign)
 
 
-def test_oversight_worker_captures_committed_pivotal_events_automatically(tmp_path):
-    store, memory, project, _, session, goal = _setup(tmp_path)
-    decision, _ = _decision_event(store, project, session, goal)
-    state = store.get(ButlerProjectState, project_state_id(project.id))
-    store.update(
-        ButlerProjectState,
-        state.id,
-        {"last_review_sequence": decision.source_sequence},
-        expected_revision=state.revision,
+async def test_oversight_worker_captures_committed_pivotal_events_automatically(
+    tmp_path,
+):
+    store, memory, project, _, session, goal = await _setup(tmp_path)
+    decision, _ = await _decision_event(store, project, session, goal)
+    state = await store.get(ButlerProjectState, project_state_id(project.id))
+    (
+        await store.update(
+            ButlerProjectState,
+            state.id,
+            {"last_review_sequence": decision.source_sequence},
+            expected_revision=state.revision,
+        )
     )
     app = create_app(store, auth_token="test-token", butler_memory_service=memory)
     assert app.state.butler_oversight.memory_service is memory
-    with TestClient(app):
+    async with TestClient(app):
         for _ in range(50):
-            if memory.list(project.id).items:
+            if (await memory.list(project.id)).items:
                 break
             time.sleep(0.05)
-    assert len(memory.list(project.id).items) == 1
-    assert memory.list(project.id).items[0].source_ref == decision.id
+    assert len((await memory.list(project.id)).items) == 1
+    assert (await memory.list(project.id)).items[0].source_ref == decision.id
     assert not any(
-        item.source_ref == decision.id for item in memory.list("not-selected").items
+        item.source_ref == decision.id
+        for item in (await memory.list("not-selected")).items
     )
+
+
+pytestmark = pytest.mark.anyio

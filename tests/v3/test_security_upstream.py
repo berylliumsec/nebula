@@ -1,5 +1,10 @@
 """Real local HTTP and SOCKS5 handshakes for the headless egress connector."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 import pytest
@@ -27,12 +32,12 @@ def test_upstream_requires_a_bounded_explicit_endpoint_and_credential():
         parse_upstream_settings("socks5://proxy.test:1080", "malformed")
 
 
-def test_headless_connector_uses_current_http_and_authenticated_socks5_settings(
+async def test_headless_connector_uses_current_http_and_authenticated_socks5_settings(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
-    project = store.create(Engagement(name="Upstream test"))
-    session = store.create(
+    project = await store.create(Engagement(name="Upstream test"))
+    session = await store.create(
         BrowserSession(
             engagement_id=project.id,
             identity_id="agent-upstream-test",
@@ -94,16 +99,18 @@ def test_headless_connector_uses_current_http_and_authenticated_socks5_settings(
                 ("http", http_server.sockets[0].getsockname()[1], None),
                 ("socks5", socks_server.sockets[0].getsockname()[1], reference),
             ):
-                latest = store.get(BrowserSession, session.id)
-                store.update(
-                    BrowserSession,
-                    session.id,
-                    {
-                        "upstream_proxy_enabled": True,
-                        "upstream_proxy_url": f"{scheme}://127.0.0.1:{port}",
-                        "upstream_proxy_credential_ref": credential_ref,
-                    },
-                    expected_revision=latest.revision,
+                latest = await store.get(BrowserSession, session.id)
+                (
+                    await store.update(
+                        BrowserSession,
+                        session.id,
+                        {
+                            "upstream_proxy_enabled": True,
+                            "upstream_proxy_url": f"{scheme}://127.0.0.1:{port}",
+                            "upstream_proxy_credential_ref": credential_ref,
+                        },
+                        expected_revision=latest.revision,
+                    )
                 )
                 reader, writer = await connector.connect("example.test", 443)
                 writer.write(b"ping")
@@ -117,5 +124,8 @@ def test_headless_connector_uses_current_http_and_authenticated_socks5_settings(
             await http_server.wait_closed()
             await socks_server.wait_closed()
 
-    asyncio.run(run())
+    (await run())
     assert seen == ["http", "socks5"]
+
+
+pytestmark = pytest.mark.anyio

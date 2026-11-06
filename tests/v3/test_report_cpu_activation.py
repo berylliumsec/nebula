@@ -1,11 +1,16 @@
 """Real Core activation, owned affinity and draining PDF worker transitions."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import os
 import threading
 import time
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 import pytest
 
 from nebula.v3.api import create_app
@@ -20,25 +25,29 @@ from tests.v3.test_cpu_workers import until
 HEADERS = {"Authorization": "Bearer synthetic-cpu-activation"}
 
 
-def fixture(root):
+async def fixture(root):
     store = NebulaStore(root / "core.db")
     artifacts = ArtifactStore(root / "artifacts")
-    store.create(Engagement(id="project", name="Synthetic worker activation"))
-    store.create(
-        Observation(
-            id="note",
-            engagement_id="project",
-            observation_type="note",
-            title="Saved source",
-            body="Synthetic report content. " * 200,
+    (await store.create(Engagement(id="project", name="Synthetic worker activation")))
+    (
+        await store.create(
+            Observation(
+                id="note",
+                engagement_id="project",
+                observation_type="note",
+                title="Saved source",
+                body="Synthetic report content. " * 200,
+            )
         )
     )
-    store.create(
-        Report(
-            id="report",
-            engagement_id="project",
-            title="Worker activation PDF",
-            observation_ids=["note"],
+    (
+        await store.create(
+            Report(
+                id="report",
+                engagement_id="project",
+                title="Worker activation PDF",
+                observation_ids=["note"],
+            )
         )
     )
     return store, artifacts, make_app(root, store, artifacts)
@@ -89,10 +98,10 @@ def assert_stopped(pids):
             os.kill(pid, 0)
 
 
-def test_normal_core_enables_real_workers_renders_and_disables(tmp_path):
-    store, artifacts, app = fixture(tmp_path)
+async def test_normal_core_enables_real_workers_renders_and_disables(tmp_path):
+    store, artifacts, app = await fixture(tmp_path)
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             initial = observed(client, "disabled")
             assert initial["enabled"] is False and initial["worker_count"] == 0
             assert (
@@ -110,7 +119,7 @@ def test_normal_core_enables_real_workers_renders_and_disables(tmp_path):
             ]
             assert len(running["worker_affinities"][0]) == 1
             assert os.getpriority(os.PRIO_PROCESS, running["worker_pids"][0]) >= 10
-            response = client.post(
+            response = await client.post(
                 "/api/v1/reports/report/renders",
                 headers=HEADERS,
                 json={"report_revision": 1},
@@ -119,7 +128,7 @@ def test_normal_core_enables_real_workers_renders_and_disables(tmp_path):
             render_id = response.json()["id"]
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                render = store.get(ReportRender, render_id)
+                render = await store.get(ReportRender, render_id)
                 if render.status.value not in {"queued", "rendering"}:
                     break
                 time.sleep(0.02)
@@ -137,23 +146,25 @@ def test_normal_core_enables_real_workers_renders_and_disables(tmp_path):
             assert disabled["enabled"] is False and disabled["worker_count"] == 0
             assert_stopped(running["worker_pids"])
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_restart_restores_enabled_policy_and_omitted_enabled_preserves_it(tmp_path):
-    store, artifacts, app = fixture(tmp_path)
+async def test_restart_restores_enabled_policy_and_omitted_enabled_preserves_it(
+    tmp_path,
+):
+    store, artifacts, app = await fixture(tmp_path)
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             initial = observed(client, "disabled")
             assert save(client, initial, True).status_code == 200
             first = observed(client, "running")
         assert_stopped(first["worker_pids"])
         restarted = make_app(tmp_path, store, artifacts)
-        with TestClient(restarted) as client:
+        async with TestClient(restarted) as client:
             current = observed(client, "running")
             assert current["enabled"] and current["host_id"] == first["host_id"]
             assert not set(current["worker_pids"]) & set(first["worker_pids"])
-            response = client.put(
+            response = await client.put(
                 "/api/v1/host-cpu-budget",
                 headers=HEADERS,
                 json={
@@ -167,17 +178,17 @@ def test_restart_restores_enabled_policy_and_omitted_enabled_preserves_it(tmp_pa
             assert status(client)["enabled"] is True
         assert_stopped(current["worker_pids"])
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery(
+async def test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery(
     tmp_path, monkeypatch
 ):
-    store, _, app = fixture(tmp_path)
+    store, _, app = await fixture(tmp_path)
     release, started = tmp_path / "release", tmp_path / "started"
     work = []
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             assert save(client, status(client), True).status_code == 200
             running = observed(client, "running")
             executor = app.state.report_cpu_executor
@@ -232,10 +243,10 @@ def test_affinity_read_failure_keeps_worker_counts_unknown_until_recovery(
             assert_stopped(running["worker_pids"])
     finally:
         release.touch()
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_reduction_repins_and_drains_before_replacement(tmp_path):
+async def test_reduction_repins_and_drains_before_replacement(tmp_path):
     async def scenario():
         executor = ReportCpuExecutor()
         release = tmp_path / "release"
@@ -289,10 +300,10 @@ def test_reduction_repins_and_drains_before_replacement(tmp_path):
             release.touch()
             await executor.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_disable_drains_cancelled_running_work_and_accepted_queue(tmp_path):
+async def test_disable_drains_cancelled_running_work_and_accepted_queue(tmp_path):
     async def scenario():
         executor = ReportCpuExecutor()
         release, started = tmp_path / "release", tmp_path / "started"
@@ -322,10 +333,10 @@ def test_disable_drains_cancelled_running_work_and_accepted_queue(tmp_path):
             release.touch()
             await executor.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_enable_waits_for_uncancellable_legacy_thread_after_caller_cancellation(
+async def test_enable_waits_for_uncancellable_legacy_thread_after_caller_cancellation(
     tmp_path,
 ):
     async def scenario():
@@ -347,11 +358,13 @@ def test_enable_waits_for_uncancellable_legacy_thread_after_caller_cancellation(
             release.touch()
             await executor.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_failed_start_keeps_saved_enabled_state_and_retry_starts_workers(tmp_path):
-    store, _, app = fixture(tmp_path)
+async def test_failed_start_keeps_saved_enabled_state_and_retry_starts_workers(
+    tmp_path,
+):
+    store, _, app = await fixture(tmp_path)
     executor = app.state.report_cpu_executor
 
     def fail(**kwargs):
@@ -359,7 +372,7 @@ def test_failed_start_keeps_saved_enabled_state_and_retry_starts_workers(tmp_pat
 
     executor.pool_factory = fail
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             initial = observed(client, "disabled")
             assert save(client, initial, True).status_code == 200
             deadline = time.monotonic() + 5
@@ -377,15 +390,15 @@ def test_failed_start_keeps_saved_enabled_state_and_retry_starts_workers(tmp_pat
             assert save(client, failed, True).status_code == 200
             assert observed(client, "running")["applied_cpu_limit"] == 1
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_unsupported_activation_and_sub_cpu_limits_do_not_change_policy(
+async def test_unsupported_activation_and_sub_cpu_limits_do_not_change_policy(
     tmp_path, monkeypatch
 ):
-    store, _, app = fixture(tmp_path)
+    store, _, app = await fixture(tmp_path)
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             initial = observed(client, "disabled")
             assert save(client, initial, True, 0.5).status_code == 422
             assert status(client)["revision"] == initial["revision"]
@@ -399,13 +412,13 @@ def test_unsupported_activation_and_sub_cpu_limits_do_not_change_policy(
             assert save(client, unsupported, True).status_code == 422
             assert status(client)["revision"] == initial["revision"]
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_legacy_policy_migrates_to_disabled_without_starting_workers(tmp_path):
-    store, artifacts, app = fixture(tmp_path)
+async def test_legacy_policy_migrates_to_disabled_without_starting_workers(tmp_path):
+    store, artifacts, app = await fixture(tmp_path)
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             initial = observed(client, "disabled")
         path = tmp_path / "host" / "host-cpu-budget.json"
         import json
@@ -413,17 +426,17 @@ def test_legacy_policy_migrates_to_disabled_without_starting_workers(tmp_path):
         policy = json.loads(path.read_text())
         policy.pop("enabled")
         path.write_text(json.dumps(policy))
-        with TestClient(make_app(tmp_path, store, artifacts)) as client:
+        async with TestClient(make_app(tmp_path, store, artifacts)) as client:
             value = observed(client, "disabled")
             assert (
                 value["enabled"] is False and value["revision"] == initial["revision"]
             )
             assert not value["worker_pids"]
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_shutdown_during_startup_removes_partially_started_pool():
+async def test_shutdown_during_startup_removes_partially_started_pool():
     async def scenario():
         executor = ReportCpuExecutor()
         await executor.request(True, 2)
@@ -433,14 +446,16 @@ def test_shutdown_during_startup_removes_partially_started_pool():
         assert executor.state == "disabled"
         assert not any(worker["alive"] for worker in pool.snapshot()["workers"])
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_activates_and_reads_actual_running_then_disabled_workers(tmp_path):
+async def test_butler_activates_and_reads_actual_running_then_disabled_workers(
+    tmp_path,
+):
     from nebula.v3.butler_capabilities import ButlerCapabilities
     from nebula.v3.settings_assistant_api import SettingsAssistantApi
 
-    store, artifacts, app = fixture(tmp_path)
+    store, artifacts, app = await fixture(tmp_path)
     butler = ButlerCapabilities(
         store, artifacts, "project", work=app.state.control_assistant_work
     )
@@ -496,12 +511,12 @@ def test_butler_activates_and_reads_actual_running_then_disabled_workers(tmp_pat
             assert_stopped(running["worker_pids"])
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_cancelled_legacy_caller_still_records_late_thread_failure(monkeypatch):
+async def test_cancelled_legacy_caller_still_records_late_thread_failure(monkeypatch):
     events = []
 
     def record(*args, **kwargs):
@@ -537,10 +552,10 @@ def test_cancelled_legacy_caller_still_records_late_thread_failure(monkeypatch):
             release.set()
             await executor.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_shutdown_cancels_transition_but_waits_for_actual_legacy_thread():
+async def test_shutdown_cancels_transition_but_waits_for_actual_legacy_thread():
     async def scenario():
         executor = ReportCpuExecutor()
         entered, release, finished = (
@@ -579,15 +594,15 @@ def test_shutdown_cancels_transition_but_waits_for_actual_legacy_thread():
             else:
                 await executor.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_later_core_startup_failure_stops_restored_workers(tmp_path, monkeypatch):
+async def test_later_core_startup_failure_stops_restored_workers(tmp_path, monkeypatch):
     from nebula.v3.host_cpu_budget import HostCpuPolicy
 
-    store, _, app = fixture(tmp_path)
+    store, _, app = await fixture(tmp_path)
     service = app.state.host_cpu_budget
-    value = asyncio.run(service.status())
+    value = await service.status()
     service._write(
         HostCpuPolicy(host_id=value.host_id, revision=2, enabled=True, cpu_limit=1)
     )
@@ -602,9 +617,12 @@ def test_later_core_startup_failure_stops_restored_workers(tmp_path, monkeypatch
     monkeypatch.setattr(app.state.scope_import_service, "startup", fail_later)
     try:
         with pytest.raises(RuntimeError, match="Synthetic later Core startup failure"):
-            with TestClient(app):
+            async with TestClient(app):
                 pytest.fail("Core must not complete the failed startup")
         assert pids and executor.state == "disabled" and executor.pool is None
         assert_stopped(pids)
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
+
+
+pytestmark = pytest.mark.anyio

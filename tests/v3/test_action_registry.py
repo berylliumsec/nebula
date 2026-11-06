@@ -1,4 +1,9 @@
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 from nebula.v3.action_registry import ActionRegistry
 from nebula.v3.domain import (
@@ -13,10 +18,10 @@ from nebula.v3.domain import (
 from nebula.v3.storage import NebulaStore
 
 
-def test_registry_resolves_shared_verbs_and_device_capabilities(tmp_path):
+async def test_registry_resolves_shared_verbs_and_device_capabilities(tmp_path):
     store = NebulaStore(tmp_path / "actions.db")
-    project = store.create(Engagement(name="Actions"))
-    evidence = store.create(
+    project = await store.create(Engagement(name="Actions"))
+    evidence = await store.create(
         Evidence(
             engagement_id=project.id,
             evidence_type="test",
@@ -34,7 +39,7 @@ def test_registry_resolves_shared_verbs_and_device_capabilities(tmp_path):
         ]
     )
 
-    actions = {item.id: item for item in ActionRegistry(store).resolve(request)}
+    actions = {item.id: item for item in (await ActionRegistry(store).resolve(request))}
     assert actions["open"].available is True
     assert actions["ask_nebula"].authority == ActionAuthority.UI
     assert actions["draft_finding"].available is True
@@ -49,19 +54,19 @@ def test_registry_resolves_shared_verbs_and_device_capabilities(tmp_path):
             "device_capabilities": ["clipboard.write"],
         }
     )
-    actions = {item.id: item for item in ActionRegistry(store).resolve(capable)}
+    actions = {item.id: item for item in (await ActionRegistry(store).resolve(capable))}
     assert actions["copy"].available is True
     assert actions["copy"].disabled_reason is None
 
 
-def test_registry_fails_closed_for_stale_deleted_and_cross_project_refs(tmp_path):
+async def test_registry_fails_closed_for_stale_deleted_and_cross_project_refs(tmp_path):
     store = NebulaStore(tmp_path / "action-guards.db")
-    first = store.create(Engagement(name="First"))
-    second = store.create(Engagement(name="Second"))
-    asset = store.create(Asset(engagement_id=first.id, name="Gateway"))
+    first = await store.create(Engagement(name="First"))
+    second = await store.create(Engagement(name="Second"))
+    asset = await store.create(Asset(engagement_id=first.id, name="Gateway"))
     registry = ActionRegistry(store)
 
-    stale = registry.resolve(
+    stale = await registry.resolve(
         ActionResolutionRequest(
             resources=[
                 ResourceRef(
@@ -76,7 +81,7 @@ def test_registry_fails_closed_for_stale_deleted_and_cross_project_refs(tmp_path
     assert stale and all(not item.available for item in stale)
     assert all("changed" in (item.disabled_reason or "") for item in stale)
 
-    wrong_project = registry.resolve(
+    wrong_project = await registry.resolve(
         ActionResolutionRequest(
             resources=[
                 ResourceRef(project_id=second.id, kind=ResourceKind.ASSET, id=asset.id)
@@ -88,7 +93,7 @@ def test_registry_fails_closed_for_stale_deleted_and_cross_project_refs(tmp_path
         "different project" in (item.disabled_reason or "") for item in wrong_project
     )
 
-    deleted = registry.resolve(
+    deleted = await registry.resolve(
         ActionResolutionRequest(
             resources=[
                 ResourceRef(project_id=first.id, kind=ResourceKind.ASSET, id="missing")
@@ -99,11 +104,13 @@ def test_registry_fails_closed_for_stale_deleted_and_cross_project_refs(tmp_path
     assert all("no longer exists" in (item.disabled_reason or "") for item in deleted)
 
 
-def test_batched_resource_actions_keep_independent_guards_and_fresh_revisions(tmp_path):
+async def test_batched_resource_actions_keep_independent_guards_and_fresh_revisions(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "batched-actions.db")
-    project = store.create(Engagement(name="Actions"))
-    other = store.create(Engagement(name="Other"))
-    asset = store.create(Asset(engagement_id=project.id, name="Gateway"))
+    project = await store.create(Engagement(name="Actions"))
+    other = await store.create(Engagement(name="Other"))
+    asset = await store.create(Asset(engagement_id=project.id, name="Gateway"))
     ref = ResourceRef(
         project_id=project.id, kind=ResourceKind.ASSET, id=asset.id, revision=1
     )
@@ -124,7 +131,7 @@ def test_batched_resource_actions_keep_independent_guards_and_fresh_revisions(tm
         ),
     ]
     registry = ActionRegistry(store)
-    results = registry.resolve_many(requests)
+    results = await registry.resolve_many(requests)
     assert all(action.available for action in results[0])
     for actions, reason in zip(
         results[1:],
@@ -139,8 +146,10 @@ def test_batched_resource_actions_keep_independent_guards_and_fresh_revisions(tm
     ):
         assert actions and all(not action.available for action in actions)
         assert all(reason in action.disabled_reason for action in actions)
-    saved = store.update(Asset, asset.id, {"name": "Updated"}, expected_revision=1)
-    refreshed = registry.resolve_many(
+    saved = await store.update(
+        Asset, asset.id, {"name": "Updated"}, expected_revision=1
+    )
+    refreshed = await registry.resolve_many(
         [
             requests[0],
             requests[0].model_copy(
@@ -152,4 +161,7 @@ def test_batched_resource_actions_keep_independent_guards_and_fresh_revisions(tm
     )
     assert all(not action.available for action in refreshed[0])
     assert all(action.available for action in refreshed[1])
-    assert registry.resolve_many([]) == []
+    assert (await registry.resolve_many([])) == []
+
+
+pytestmark = pytest.mark.anyio

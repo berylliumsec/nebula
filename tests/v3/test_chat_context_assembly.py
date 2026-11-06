@@ -7,6 +7,11 @@ what the request adds beside the conversation; and the estimate is calibrated
 by what the provider reported for the conversation's earlier requests.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -98,11 +103,11 @@ class ReportingProvider(FakeProvider):
         )
 
 
-def _chat(tmp_path, provider_factory, *, history: list[str], profile=None):
+async def _chat(tmp_path, provider_factory, *, history: list[str], profile=None):
     store = NebulaStore(tmp_path / "assembly.db")
-    engagement = store.create(Engagement(id="eng-assembly", name="Assembly"))
-    profile = store.create(profile or _profile(local=True))
-    session = store.create(
+    engagement = await store.create(Engagement(id="eng-assembly", name="Assembly"))
+    profile = await store.create(profile or _profile(local=True))
+    session = await store.create(
         ChatSession(
             id="session-assembly",
             engagement_id=engagement.id,
@@ -111,18 +116,20 @@ def _chat(tmp_path, provider_factory, *, history: list[str], profile=None):
             model="model-a",
         )
     )
-    store.create_many(
-        [
-            ChatMessage(
-                id=f"history-{sequence:02d}",
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=content,
-            )
-            for sequence, content in enumerate(history, start=1)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    id=f"history-{sequence:02d}",
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                    content=content,
+                )
+                for sequence, content in enumerate(history, start=1)
+            ]
+        )
     )
     provider = provider_factory(profile.id)
     service = ChatService(store, provider_factory=lambda _: provider)
@@ -168,10 +175,10 @@ def _compactions(provider) -> list[ModelRequest]:
 
 
 @pytest.mark.parametrize("durable_session", [False, True])
-def test_first_turn_keeps_capacity_reserved_for_unused_archive_tools(
+async def test_first_turn_keeps_capacity_reserved_for_unused_archive_tools(
     tmp_path, durable_session
 ):
-    _, service, session, profile, provider = _chat(
+    _, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id),
         history=[],
@@ -217,8 +224,8 @@ def test_first_turn_keeps_capacity_reserved_for_unused_archive_tools(
         assemble(oversized)
 
 
-def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path):
-    store, service, session, profile, provider = _chat(
+async def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path):
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id),
         history=_history(40, repeat=40),
@@ -231,7 +238,7 @@ def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path):
 
     assert len(_compactions(provider)) > 0
     first, second, third = _turn_requests(provider)
-    snapshots = store.list_entities(ContextSnapshot, limit=10)
+    snapshots = await store.list_entities(ContextSnapshot, limit=10)
     assert len(snapshots) == 1
     for earlier, later in ((first, second), (second, third)):
         # The instructions are the system's own and do not carry the memory.
@@ -256,13 +263,15 @@ def test_post_compaction_turns_keep_a_byte_stable_request_prefix(tmp_path):
         assert codename in excerpts[0]["content"]
 
 
-def test_butler_reuses_saved_provider_history_and_compaction_after_restart(tmp_path):
-    store, service, session, profile, provider = _chat(
+async def test_butler_reuses_saved_provider_history_and_compaction_after_restart(
+    tmp_path,
+):
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id),
         history=_history(40, repeat=40),
     )
-    session = store.update(
+    session = await store.update(
         ChatSession,
         session.id,
         {"metadata": {"control_assistant": True}},
@@ -277,17 +286,19 @@ def test_butler_reuses_saved_provider_history_and_compaction_after_restart(tmp_p
         control_assistant=True,
     )
     assert _compactions(provider)
-    assert store.list_entities(ContextSnapshot, engagement_id=session.engagement_id)
+    assert await store.list_entities(
+        ContextSnapshot, engagement_id=session.engagement_id
+    )
 
     restarted = ChatService(store, provider_factory=lambda _: provider)
     _send(
         restarted,
-        store.get(ChatSession, session.id),
+        (await store.get(ChatSession, session.id)),
         profile,
         "Continue with the copperwolf result.",
         control_assistant=True,
     )
-    saved = restarted.session_messages(session.id)
+    saved = await restarted.session_messages(session.id)
     assert [message.content for message in saved[-4:]] == [
         "What did we find about copperwolf?",
         "Evidence-backed answer [source-a:chunk-a].",
@@ -302,7 +313,7 @@ def test_butler_reuses_saved_provider_history_and_compaction_after_restart(tmp_p
     )
 
 
-def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
+async def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
     tmp_path,
 ):
     # Long saved operator context and a large memory leave the first recent
@@ -311,7 +322,7 @@ def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
     # The memory is as large as a compactor can write within its 1,024-token
     # allowance on this 8,192-token window; a larger one no longer survives
     # the roll-up, which bounds derived memory to that allowance.
-    store, service, session, profile, provider = _chat(
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(
             provider_id, summary="Long derived summary. " * 170
@@ -319,18 +330,20 @@ def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
         history=_history(20, repeat=45),
     )
     for index in range(2):
-        store.create(
-            ChatDecision(
-                id=f"decision-{index}",
-                engagement_id=session.engagement_id,
-                session_id=session.id,
-                kind="question",
-                text=f"Open question {index}: " + ("which scope applies? " * 189),
+        (
+            await store.create(
+                ChatDecision(
+                    id=f"decision-{index}",
+                    engagement_id=session.engagement_id,
+                    session_id=session.id,
+                    kind="question",
+                    text=f"Open question {index}: " + ("which scope applies? " * 189),
+                )
             )
         )
-    canonical = service.session_messages(session.id)
+    canonical = await service.session_messages(session.id)
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
@@ -354,7 +367,8 @@ def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
     # The boundary moved past the first compaction's, which was compacted
     # again rather than cut.
     snapshots = sorted(
-        store.list_entities(ContextSnapshot, limit=10), key=lambda item: item.version
+        (await store.list_entities(ContextSnapshot, limit=10)),
+        key=lambda item: item.version,
     )
     assert len(snapshots) >= 2
     assert snapshots[-1].id == snapshot.id
@@ -369,8 +383,8 @@ def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
     )
 
 
-def test_a_covered_message_edited_in_place_is_compacted_again(tmp_path):
-    store, service, session, profile, provider = _chat(
+async def test_a_covered_message_edited_in_place_is_compacted_again(tmp_path):
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id),
         history=_history(12),
@@ -382,12 +396,14 @@ def test_a_covered_message_edited_in_place_is_compacted_again(tmp_path):
     assert len(_compactions(provider)) == compactions
     assert second.context_snapshot.id == first.context_snapshot.id
 
-    covered = store.get(ChatMessage, "history-03")
-    store.update(
-        ChatMessage,
-        covered.id,
-        {"content": "Historical evidence 3 was wrong; the host is 10.0.0.9."},
-        expected_revision=covered.revision,
+    covered = await store.get(ChatMessage, "history-03")
+    (
+        await store.update(
+            ChatMessage,
+            covered.id,
+            {"content": "Historical evidence 3 was wrong; the host is 10.0.0.9."},
+            expected_revision=covered.revision,
+        )
     )
     third = _send(service, session, profile, "Which host again?")
 
@@ -416,14 +432,16 @@ def _tool_profile() -> ProviderProfile:
     return ProviderProfile.model_validate(payload)
 
 
-def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(tmp_path):
+async def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(
+    tmp_path,
+):
     def tool_provider(provider_id):
         provider = ReportingProvider(provider_id)
         provider.config.capabilities.tools = True
         return provider
 
-    def conversation(name, history):
-        return _chat(
+    async def conversation(name, history):
+        return await _chat(
             tmp_path / name, tool_provider, history=history, profile=_tool_profile()
         )
 
@@ -439,14 +457,16 @@ def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(tmp_
     # Each measurement gets its own transcript: prepare() persists its input.
     probes = {}
     for messaging in (False, True):
-        _, service, session, profile, _ = conversation(f"probe-{messaging}", [])
-        probe = service.prepare(request(session, profile, messaging))
+        _, service, session, profile, _ = await conversation(f"probe-{messaging}", [])
+        probe = await service.prepare(request(session, profile, messaging))
         assert probe.context_reserved_tokens is not None
         probes[messaging] = probe
-        service._fail_closed_turn(
-            probe,
-            status=chat_module.ChatTurnStatus.CANCELLED,
-            error="measurement complete",
+        (
+            await service._fail_closed_turn(
+                probe,
+                status=chat_module.ChatTurnStatus.CANCELLED,
+                error="measurement complete",
+            )
         )
     limits = resolve_context_limits(profile)
     base_history = _history(12, repeat=1)
@@ -485,23 +505,27 @@ def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(tmp_
     assert off_estimate <= limits.target_input_tokens < on_estimate
 
     # The compared turns also have independent identical durable transcripts.
-    off_store, off_service, off_session, off_profile, _ = conversation(
+    off_store, off_service, off_session, off_profile, _ = await conversation(
         "without-peers", history
     )
-    without_tools = off_service.prepare(request(off_session, off_profile, False))
+    without_tools = await off_service.prepare(request(off_session, off_profile, False))
     assert without_tools.context_snapshot is None
-    assert len(off_service.session_messages(off_session.id)) == len(history) + 1
-    off_service._fail_closed_turn(
-        without_tools,
-        status=chat_module.ChatTurnStatus.CANCELLED,
-        error="comparison complete",
+    assert len((await off_service.session_messages(off_session.id))) == len(history) + 1
+    (
+        await off_service._fail_closed_turn(
+            without_tools,
+            status=chat_module.ChatTurnStatus.CANCELLED,
+            error="comparison complete",
+        )
     )
 
-    store, service, session, profile, provider = conversation("with-peers", history)
-    prepared = service.prepare(request(session, profile, True))
+    store, service, session, profile, provider = await conversation(
+        "with-peers", history
+    )
+    prepared = await service.prepare(request(session, profile, True))
     assert prepared.context_snapshot is not None
-    assert len(service.session_messages(session.id)) == len(history) + 1
-    asyncio.run(service.complete(prepared))
+    assert len((await service.session_messages(session.id))) == len(history) + 1
+    (await service.complete(prepared))
     routing = next(item for item in _turn_requests(provider) if item.tools)
     assert estimate_model_request(routing) <= limits.target_input_tokens
     assert prepared.context_reserved_tokens is not None
@@ -510,22 +534,22 @@ def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(tmp_
         estimate_model_request(routing)
         - estimate_messages(routing.messages, prepared.model_request.instructions or "")
     )
-    status = service.context_status(session.id)
+    status = await service.context_status(session.id)
     assert status.reserved_input_tokens == prepared.context_reserved_tokens
     assert status.estimated_input_tokens > estimate_messages(
         routing.messages, prepared.model_request.instructions or ""
     )
 
 
-def test_calibration_is_learned_once_per_turn_from_reported_usage(tmp_path):
-    store, service, session, profile, provider = _chat(
+async def test_calibration_is_learned_once_per_turn_from_reported_usage(tmp_path):
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id, ratio=0.75),
         history=_history(4),
     )
 
     prepared = _send(service, session, profile, "First question")
-    after = store.get(ChatSession, session.id)
+    after = await store.get(ChatSession, session.id)
     record = after.metadata["context_calibration"]
     assert record["runtimes"] == [
         {
@@ -536,7 +560,7 @@ def test_calibration_is_learned_once_per_turn_from_reported_usage(tmp_path):
         }
     ]
     assert record["reserved_input_tokens"] == prepared.context_reserved_tokens
-    message = service.session_messages(session.id)[-1]
+    message = (await service.session_messages(session.id))[-1]
     request = message.metadata["last_provider_request"]
     assert request["reported_input_tokens"] >= 1_000
     assert request["reported_cached_input_tokens"] == (
@@ -545,7 +569,7 @@ def test_calibration_is_learned_once_per_turn_from_reported_usage(tmp_path):
 
     provider.ratio = 0.4
     second = _send(service, session, profile, "Second question")
-    latest = store.get(ChatSession, session.id)
+    latest = await store.get(ChatSession, session.id)
     # The accounting rides the turn's own session write: none of its own.
     assert latest.revision == after.revision + 1
     runtimes = latest.metadata["context_calibration"]["runtimes"]
@@ -554,7 +578,7 @@ def test_calibration_is_learned_once_per_turn_from_reported_usage(tmp_path):
     assert runtimes[0]["samples"] == 2
     assert second.estimate_calibration == pytest.approx(0.75, abs=0.001)
 
-    status = service.context_status(session.id)
+    status = await service.context_status(session.id)
     assert status.estimate_calibration == pytest.approx(0.675, abs=0.001)
 
 
@@ -565,10 +589,10 @@ def test_small_reports_do_not_calibrate():
     assert updated_calibration(1.2, estimated=2_000, reported=1_000) == 0.9
 
 
-def test_calibration_moves_the_trigger_and_the_meter_but_not_below_the_hard_floor(
+async def test_calibration_moves_the_trigger_and_the_meter_but_not_below_the_hard_floor(
     tmp_path,
 ):
-    store, service, session, profile, provider = _chat(
+    store, service, session, profile, provider = await _chat(
         tmp_path, lambda provider_id: ReportingProvider(provider_id), history=[]
     )
     limits = resolve_context_limits(profile)
@@ -577,54 +601,58 @@ def test_calibration_moves_the_trigger_and_the_meter_but_not_below_the_hard_floo
     history = _history(8, repeat=1)
     size = (limits.target_input_tokens * 5 // 4) // len(history)
     history = [text + " x" * max(0, (size * 3 - len(text)) // 2) for text in history]
-    store.create_many(
-        [
-            ChatMessage(
-                id=f"calibrated-{sequence:02d}",
-                engagement_id=session.engagement_id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=content,
-            )
-            for sequence, content in enumerate(history, start=1)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    id=f"calibrated-{sequence:02d}",
+                    engagement_id=session.engagement_id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                    content=content,
+                )
+                for sequence, content in enumerate(history, start=1)
+            ]
+        )
     )
-    uncalibrated = service.context_status(session.id)
+    uncalibrated = await service.context_status(session.id)
     assert uncalibrated.estimate_calibration is None
     assert uncalibrated.estimated_input_tokens > limits.target_input_tokens
     assert uncalibrated.status == "stale"
 
-    latest = store.get(ChatSession, session.id)
-    store.update(
-        ChatSession,
-        session.id,
-        {
-            "metadata": {
-                **latest.metadata,
-                "context_calibration": {
-                    "runtimes": [
-                        {
-                            "provider_profile_id": profile.id,
-                            "model": "model-a",
-                            "factor": 0.6,
-                            "samples": 3,
-                        }
-                    ],
-                    "reserved_input_tokens": 0,
-                },
-            }
-        },
-        expected_revision=latest.revision,
+    latest = await store.get(ChatSession, session.id)
+    (
+        await store.update(
+            ChatSession,
+            session.id,
+            {
+                "metadata": {
+                    **latest.metadata,
+                    "context_calibration": {
+                        "runtimes": [
+                            {
+                                "provider_profile_id": profile.id,
+                                "model": "model-a",
+                                "factor": 0.6,
+                                "samples": 3,
+                            }
+                        ],
+                        "reserved_input_tokens": 0,
+                    },
+                }
+            },
+            expected_revision=latest.revision,
+        )
     )
-    calibrated = service.context_status(session.id)
+    calibrated = await service.context_status(session.id)
     assert calibrated.estimate_calibration == 0.6
     assert calibrated.estimated_input_tokens == calibrated_estimate(
         uncalibrated.estimated_input_tokens, 0.6
     )
     assert calibrated.status == "not_needed"
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
@@ -668,8 +696,8 @@ def test_calibration_moves_the_trigger_and_the_meter_but_not_below_the_hard_floo
     )
 
 
-def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path):
-    store, service, session, profile, provider = _chat(
+async def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path):
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id),
         history=_history(12),
@@ -679,7 +707,7 @@ def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path):
     # No goal: no objective is sent at all.
     assert "objective" not in json.loads(_compactions(provider)[0].messages[0].content)
 
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             id="goal-assembly",
             engagement_id=session.engagement_id,
@@ -691,12 +719,14 @@ def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path):
     )
     # Edited archived messages make the next turn compact afresh, now for
     # the goal.
-    for message in service.session_messages(session.id)[:4]:
-        store.update(
-            ChatMessage,
-            message.id,
-            {"content": message.content + " (revised)"},
-            expected_revision=message.revision,
+    for message in (await service.session_messages(session.id))[:4]:
+        (
+            await store.update(
+                ChatMessage,
+                message.id,
+                {"content": message.content + " (revised)"},
+                expected_revision=message.revision,
+            )
         )
     before = len(_compactions(provider))
     _send(service, session, profile, "ok", goal_id=goal.id, stream=True)
@@ -768,7 +798,7 @@ def test_the_reserve_covers_the_largest_catalog_picks_routing_can_send(tmp_path)
         assert tools + prefix + chat_module.estimate_tokens(added) <= reserve
 
 
-def test_context_status_reports_the_working_ceiling_on_a_large_window(tmp_path):
+async def test_context_status_reports_the_working_ceiling_on_a_large_window(tmp_path):
     """Stream X: a 1M-token model is sized by the 200,000-token working ceiling.
 
     The meter, compaction and preflight all read the same limits, so the
@@ -780,17 +810,20 @@ def test_context_status_reports_the_working_ceiling_on_a_large_window(tmp_path):
     profile.metadata["model_descriptors"] = [
         {"id": "model-a", "context_window": 1_000_000, "max_output_tokens": 32_000}
     ]
-    store, service, session, profile, provider = _chat(
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: FakeProvider(provider_id, local=False),
         history=_history(2),
         profile=profile,
     )
 
-    status = service.context_status(session.id)
+    status = await service.context_status(session.id)
 
     assert status.context_window == 1_000_000
     assert status.target_input_tokens == 200_000
     assert status.compacted_input_target == 160_000
     assert status.input_capacity is not None and status.input_capacity > 900_000
     assert (status.binding_limit, status.window_limit) == ("ceiling", "model")
+
+
+pytestmark = pytest.mark.anyio

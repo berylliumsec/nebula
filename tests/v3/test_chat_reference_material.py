@@ -9,6 +9,12 @@ never in the stored message, identical on every call of the turn and on
 resume, and counted when the conversation is sized for compaction.
 """
 
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -54,11 +60,11 @@ def _turn_requests(provider) -> list[ModelRequest]:
     ]
 
 
-def _knowledge_chat(tmp_path, provider: FakeProvider | None = None):
+async def _knowledge_chat(tmp_path, provider: FakeProvider | None = None):
     store = NebulaStore(tmp_path / "reference.db")
-    engagement = store.create(Engagement(id="eng-reference", name="Reference"))
-    profile = store.create(_profile(local=True))
-    store.create(_source(engagement.id, text=PORT_DOCUMENT))
+    engagement = await store.create(Engagement(id="eng-reference", name="Reference"))
+    profile = await store.create(_profile(local=True))
+    (await store.create(_source(engagement.id, text=PORT_DOCUMENT)))
     provider = provider or FakeProvider(profile.id, local=True)
     service = ChatService(store, provider_factory=lambda _: provider)
     return store, service, engagement, profile, provider
@@ -77,10 +83,10 @@ def _ask(service, profile, content, *, engagement_id=None, session_id=None, **fi
     return prepared, asyncio.run(service.complete(prepared))
 
 
-def test_reference_material_leaves_the_instructions_byte_identical_across_turns(
+async def test_reference_material_leaves_the_instructions_byte_identical_across_turns(
     tmp_path,
 ):
-    store, service, engagement, profile, provider = _knowledge_chat(tmp_path)
+    store, service, engagement, profile, provider = await _knowledge_chat(tmp_path)
 
     # The first message matches Nebula's operator help and the project
     # document; the second matches only the document.
@@ -132,7 +138,7 @@ def test_reference_material_leaves_the_instructions_byte_identical_across_turns(
     assert "OPERATOR HELP" not in latest
 
     # The transcript keeps the operator's words; citations are unchanged.
-    persisted = service.session_messages(first.session_id)
+    persisted = await service.session_messages(first.session_id)
     assert [(item.role, item.content) for item in persisted[::2]] == [
         (ChatRole.USER, HELP_QUESTION),
         (ChatRole.USER, PORT_QUESTION),
@@ -146,7 +152,7 @@ def test_reference_material_leaves_the_instructions_byte_identical_across_turns(
     assert second_prepared.citations == second.citations
 
 
-def test_every_call_of_a_tool_turn_carries_the_same_reference_bytes(tmp_path):
+async def test_every_call_of_a_tool_turn_carries_the_same_reference_bytes(tmp_path):
     class ScriptedTurnProvider(FakeProvider):
         def __init__(self, provider_id: str) -> None:
             super().__init__(provider_id, local=True)
@@ -167,8 +173,8 @@ def test_every_call_of_a_tool_turn_carries_the_same_reference_bytes(tmp_path):
             return self.script.pop(0)
 
     store = NebulaStore(tmp_path / "reference-tools.db")
-    engagement = store.create(Engagement(id="eng-tools", name="Reference tools"))
-    profile = store.create(_tool_profile())
+    engagement = await store.create(Engagement(id="eng-tools", name="Reference tools"))
+    profile = await store.create(_tool_profile())
     provider = ScriptedTurnProvider(profile.id)
     service = ChatService(store, provider_factory=lambda _: provider)
 
@@ -196,11 +202,11 @@ def test_every_call_of_a_tool_turn_carries_the_same_reference_bytes(tmp_path):
     assert completion.citations[0].source_id == "nebula-help:runner-setup"
 
 
-def test_a_resumed_turn_sends_the_reference_material_it_was_assembled_with(
+async def test_a_resumed_turn_sends_the_reference_material_it_was_assembled_with(
     tmp_path,
 ):
-    store, service, engagement, profile, provider = _knowledge_chat(tmp_path)
-    prepared = service.prepare(
+    store, service, engagement, profile, provider = await _knowledge_chat(tmp_path)
+    prepared = await service.prepare(
         ChatCompletionRequest(
             engagement_id=engagement.id,
             provider_id=profile.id,
@@ -212,10 +218,10 @@ def test_a_resumed_turn_sends_the_reference_material_it_was_assembled_with(
     assembled = prepared.model_request.messages[-1].content
     assert isinstance(assembled, str) and HEADING in assembled
     # A restarted Core must not search again: the document is gone by now.
-    store.delete(KnowledgeSource, "source-a")
+    (await store.delete(KnowledgeSource, "source-a"))
 
     restarted = ChatService(store, provider_factory=lambda _: provider)
-    resumed = restarted.prepare_resume(prepared.turn.id)
+    resumed = await restarted.prepare_resume(prepared.turn.id)
 
     assert resumed.model_request == prepared.model_request
     assert resumed.citations == prepared.citations
@@ -223,32 +229,34 @@ def test_a_resumed_turn_sends_the_reference_material_it_was_assembled_with(
     async def collect():
         return [item async for item in _admitted_stream(restarted, resumed)]
 
-    events = asyncio.run(collect())
+    events = await collect()
     assert events[-1][0] == "done"
     sent = _turn_requests(provider)[-1]
     assert sent.messages[-1].content == assembled
     assert (sent.instructions or "").endswith(prepared.model_request.instructions or "")
     assert "OPERATOR HELP" not in (sent.instructions or "")
     session_id = prepared.turn.session_id
-    persisted = restarted.session_messages(session_id)
+    persisted = await restarted.session_messages(session_id)
     assert persisted[0].content == HELP_QUESTION
     assert persisted[-1].citations == prepared.citations
     assert prepared.citations[-1].source_id == "source-a"
 
 
-def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
-    store, service, engagement, profile, provider = _knowledge_chat(tmp_path)
-    store.update(
-        KnowledgeSource,
-        "source-a",
-        {
-            "metadata": _source(
-                engagement.id, text="Relevant port is 443. " + "listener " * 200
-            ).metadata
-        },
-        expected_revision=store.get(KnowledgeSource, "source-a").revision,
+async def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
+    store, service, engagement, profile, provider = await _knowledge_chat(tmp_path)
+    (
+        await store.update(
+            KnowledgeSource,
+            "source-a",
+            {
+                "metadata": _source(
+                    engagement.id, text="Relevant port is 443. " + "listener " * 200
+                ).metadata
+            },
+            expected_revision=(await store.get(KnowledgeSource, "source-a")).revision,
+        )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session-reference",
             engagement_id=engagement.id,
@@ -258,8 +266,8 @@ def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
         )
     )
 
-    def ask(include_knowledge: bool):
-        return service.prepare(
+    async def ask(include_knowledge: bool):
+        return await service.prepare(
             ChatCompletionRequest(
                 session_id=session.id,
                 provider_id=profile.id,
@@ -268,7 +276,7 @@ def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
             )
         )
 
-    probe = ask(True)
+    probe = await ask(True)
     reference = probe.reference_material
     assert "listener" in reference
     reference_tokens = chat_module.estimate_tokens(reference)
@@ -286,21 +294,23 @@ def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
         text + " padding" * max(0, (room * 3 // len(history) - len(text) - 24) // 8)
         for text in history
     ]
-    store.create_many(
-        [
-            ChatMessage(
-                id=f"history-{sequence:02d}",
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=content,
-            )
-            for sequence, content in enumerate(history, start=1)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    id=f"history-{sequence:02d}",
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                    content=content,
+                )
+                for sequence, content in enumerate(history, start=1)
+            ]
+        )
     )
 
-    without = ask(False)
+    without = await ask(False)
     assert without.reference_material == ""
     assert without.context_snapshot is None
     assert (
@@ -308,7 +318,7 @@ def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
         <= limits.target_input_tokens
     )
 
-    prepared = ask(True)
+    prepared = await ask(True)
     assert prepared.reference_material == reference
     assert prepared.context_snapshot is not None
     sent = prepared.model_request
@@ -317,13 +327,13 @@ def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
     assert [item.source_id for item in prepared.citations] == ["source-a"]
 
 
-def test_a_context_rejection_reassembles_the_request_with_the_same_material(
+async def test_a_context_rejection_reassembles_the_request_with_the_same_material(
     tmp_path,
 ):
     from tests.v3.test_chat import ContextRejectingProvider
 
     store = NebulaStore(tmp_path / "reference-recovery.db")
-    engagement = store.create(Engagement(id="eng-recovery", name="Recovery"))
+    engagement = await store.create(Engagement(id="eng-recovery", name="Recovery"))
     payload = _profile(local=False, permits_sensitive_data=True).model_dump(
         mode="python"
     )
@@ -339,12 +349,12 @@ def test_a_context_rejection_reassembles_the_request_with_the_same_material(
             }
         ],
     }
-    profile = store.create(ProviderProfile.model_validate(payload))
+    profile = await store.create(ProviderProfile.model_validate(payload))
     provider = ContextRejectingProvider(profile.id)
     provider.config.default_model = "author/model-a"
     provider.config.model_allowlist = ["author/model-a"]
     service = ChatService(store, provider_factory=lambda _: provider)
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             engagement_id=engagement.id,
             provider_id=profile.id,
@@ -358,7 +368,7 @@ def test_a_context_rejection_reassembles_the_request_with_the_same_material(
     async def collect():
         return [item async for item in _admitted_stream(service, prepared)]
 
-    events = asyncio.run(collect())
+    events = await collect()
 
     assert events[-1][0] == "done"
     rejected, *later = _turn_requests(provider)
@@ -375,7 +385,7 @@ def test_a_context_rejection_reassembles_the_request_with_the_same_material(
     assert "OPERATOR HELP" not in (retried.instructions or "")
 
 
-def test_excerpts_follow_the_reference_material_and_match_only_the_operator(
+async def test_excerpts_follow_the_reference_material_and_match_only_the_operator(
     tmp_path,
 ):
     from tests.v3.test_chat_context_assembly import (
@@ -386,27 +396,31 @@ def test_excerpts_follow_the_reference_material_and_match_only_the_operator(
         _history,
     )
 
-    store, service, session, profile, provider = _chat(
+    store, service, session, profile, provider = await _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(provider_id),
         history=_history(40, repeat=40),
     )
     # The project document names a codename the operator did not ask about.
-    store.create(
-        _source(
-            session.engagement_id,
-            text="The frostelk TLS listener answers on port 443.",
+    (
+        await store.create(
+            _source(
+                session.engagement_id,
+                text="The frostelk TLS listener answers on port 443.",
+            )
         )
     )
-    write_working_notes(
-        store,
-        engagement_id=session.engagement_id,
-        session_id=session.id,
-        content="- todo: confirm the copperwolf finding",
-        turn_id=None,
+    (
+        await write_working_notes(
+            store,
+            engagement_id=session.engagement_id,
+            session_id=session.id,
+            content="- todo: confirm the copperwolf finding",
+            turn_id=None,
+        )
     )
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             session_id=session.id,
             provider_id=profile.id,
@@ -440,3 +454,6 @@ def test_excerpts_follow_the_reference_material_and_match_only_the_operator(
         assert "frostelk" not in excerpt["content"]
     assert "OPERATOR HELP" not in (prepared.model_request.instructions or "")
     assert "REFERENCE DATA" not in (prepared.model_request.instructions or "")
+
+
+pytestmark = pytest.mark.anyio

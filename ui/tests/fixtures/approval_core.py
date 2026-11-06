@@ -84,7 +84,7 @@ async def wait_for_committed_progress(
     """Read the real ledger barrier; never manufacture progress for the fixture."""
     async with asyncio.timeout(timeout):
         while True:
-            events = store.replay_operation_events(
+            events = await store.replay_operation_events(
                 turn_id,
                 after_sequence=after_sequence,
                 event_types=["harness.message_delta"],
@@ -105,7 +105,7 @@ class InertConnection(HarnessConnection):
     async def request_decision(self, ordinal):
         turn = self.runtime._active_gateway_turn(self.request.session.id)
         store = self.runtime.store
-        call = store.create(
+        call = await store.create(
             ToolCall(
                 engagement_id=turn.engagement_id,
                 run_id=turn.chat_turn_id,
@@ -118,7 +118,7 @@ class InertConnection(HarnessConnection):
                 metadata={"harness_turn_id": turn.id},
             )
         )
-        approval = store.create(
+        approval = await store.create(
             Approval(
                 engagement_id=turn.engagement_id,
                 run_id=turn.chat_turn_id,
@@ -394,7 +394,7 @@ class InertConnection(HarnessConnection):
             turn = self.runtime._active_gateway_turn(self.request.session.id)
             continuations = [
                 approval.continuation
-                for approval in self.runtime.store.list_entities(Approval)
+                for approval in (await self.runtime.store.list_entities(Approval))
                 if approval.continuation
                 and approval.continuation.harness_turn_id == turn.id
                 and approval.continuation.status == "delivered"
@@ -417,8 +417,10 @@ class InertConnection(HarnessConnection):
                 "event_type": progress.event_type,
                 "delta": progress.payload["delta"],
                 "completed_events": len(
-                    self.runtime.store.replay_operation_events(
-                        turn.id, event_types=["harness.completed"]
+                    (
+                        await self.runtime.store.replay_operation_events(
+                            turn.id, event_types=["harness.completed"]
+                        )
                     )
                 ),
             }
@@ -508,15 +510,17 @@ class FailureInjectionRuntime(HarnessRuntimeService):
 
     async def _ensure_harness_plan(self, turn, session):
         if self.scenario == "planning_legacy" and turn.chat_turn_id:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
                 snapshot = dict(chat_turn.request_snapshot)
                 snapshot.pop("plan_behavior")
-                self.store.update(
-                    ChatTurn,
-                    chat_turn.id,
-                    {"request_snapshot": snapshot},
-                    expected_revision=chat_turn.revision,
+                (
+                    await self.store.update(
+                        ChatTurn,
+                        chat_turn.id,
+                        {"request_snapshot": snapshot},
+                        expected_revision=chat_turn.revision,
+                    )
                 )
         return await super()._ensure_harness_plan(turn, session)
 
@@ -525,8 +529,8 @@ class FailureInjectionRuntime(HarnessRuntimeService):
             os._exit(81)
         await super().resolve_approval(approval)
 
-    def _deliver_approval(self, approval, related_turn, future):
-        super()._deliver_approval(approval, related_turn, future)
+    async def _deliver_approval(self, approval, related_turn, future):
+        (await super()._deliver_approval(approval, related_turn, future))
         if self.scenario == "crash_after_delivery":
             os._exit(82)
 
@@ -576,7 +580,7 @@ def environments_fixture(store: NebulaStore, root: Path) -> SshEnvironmentServic
     return SshEnvironmentService(store, config_path=config, probe=probe)
 
 
-if __name__ == "__main__":
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--static-dir", type=Path, required=True)
@@ -610,46 +614,53 @@ if __name__ == "__main__":
     if args.scenario == "planning_managed":
         (args.root / "plan-target.txt").write_text("Synthetic planner evidence\n")
     store = NebulaStore(args.root / "nebula.db")
-    scratch_id = bootstrap_scratch_project(store)
+    scratch_id = await bootstrap_scratch_project(store)
     if args.scenario == "planning_legacy" and not any(
         profile.id == "handoff-provider"
-        for profile in store.list_entities(ProviderProfile)
+        for profile in (await store.list_entities(ProviderProfile))
     ):
-        store.create(
-            ProviderProfile(
-                id="handoff-provider",
-                name="Inert handoff provider",
-                provider_type="ollama",
-                is_local=True,
-                model_allowlist=["handoff-fixture"],
-                capability_verifications={
-                    "handoff-fixture": ProviderCapabilityVerification(
-                        model="handoff-fixture",
-                        status=ProviderVerificationStatus.VERIFIED,
-                    )
-                },
-                metadata={
-                    "options": {"context_window": 32_000, "max_output_tokens": 4_096}
-                },
+        (
+            await store.create(
+                ProviderProfile(
+                    id="handoff-provider",
+                    name="Inert handoff provider",
+                    provider_type="ollama",
+                    is_local=True,
+                    model_allowlist=["handoff-fixture"],
+                    capability_verifications={
+                        "handoff-fixture": ProviderCapabilityVerification(
+                            model="handoff-fixture",
+                            status=ProviderVerificationStatus.VERIFIED,
+                        )
+                    },
+                    metadata={
+                        "options": {
+                            "context_window": 32_000,
+                            "max_output_tokens": 4_096,
+                        }
+                    },
+                )
             )
         )
     if args.scenario == "sidebar" and scratch_id:
         if not any(
             profile.id == "sidebar-provider"
-            for profile in store.list_entities(ProviderProfile)
+            for profile in (await store.list_entities(ProviderProfile))
         ):
-            store.create(
-                ProviderProfile(
-                    id="sidebar-provider",
-                    name="Sidebar fixture",
-                    provider_type="vllm",
-                    is_local=True,
-                    model_allowlist=["fixture"],
+            (
+                await store.create(
+                    ProviderProfile(
+                        id="sidebar-provider",
+                        name="Sidebar fixture",
+                        provider_type="vllm",
+                        is_local=True,
+                        model_allowlist=["fixture"],
+                    )
                 )
             )
         if not any(
             session.id == "sidebar-parent"
-            for session in store.list_entities(ChatSession)
+            for session in (await store.list_entities(ChatSession))
         ):
             for session_id, title, parent_id, metadata in (
                 ("sidebar-parent", "Main investigation", None, {}),
@@ -670,49 +681,57 @@ if __name__ == "__main__":
                 ),
                 ("sidebar-ordinary-recovery", "Recover ordinary goal", None, {}),
             ):
-                store.create(
-                    ChatSession(
-                        id=session_id,
-                        engagement_id=scratch_id,
-                        title=title,
-                        provider_profile_id="sidebar-provider",
-                        parent_session_id=parent_id,
-                        model="fixture",
-                        metadata=metadata,
+                (
+                    await store.create(
+                        ChatSession(
+                            id=session_id,
+                            engagement_id=scratch_id,
+                            title=title,
+                            provider_profile_id="sidebar-provider",
+                            parent_session_id=parent_id,
+                            model="fixture",
+                            metadata=metadata,
+                        )
                     )
                 )
-            store.create(
-                ChatGoal(
-                    engagement_id=scratch_id,
-                    session_id="sidebar-recovery",
-                    objective="Recover paused goal",
-                    completion_criteria=["Report result"],
-                    metadata={"butler_recovery_case_id": "fixture-case"},
+            (
+                await store.create(
+                    ChatGoal(
+                        engagement_id=scratch_id,
+                        session_id="sidebar-recovery",
+                        objective="Recover paused goal",
+                        completion_criteria=["Report result"],
+                        metadata={"butler_recovery_case_id": "fixture-case"},
+                    )
                 )
             )
     if args.scenario == "navigation" and scratch_id:
-        store.create(
-            ProviderProfile(
-                id="navigation-provider",
-                name="Navigation fixture",
-                provider_type="vllm",
-                is_local=True,
-                model_allowlist=["fixture"],
-                enabled=False,
+        (
+            await store.create(
+                ProviderProfile(
+                    id="navigation-provider",
+                    name="Navigation fixture",
+                    provider_type="vllm",
+                    is_local=True,
+                    model_allowlist=["fixture"],
+                    enabled=False,
+                )
             )
         )
         for index in range(101):
-            store.create(
-                ChatSession(
-                    id="navigation-older"
-                    if index == 0
-                    else f"navigation-recent-{index}",
-                    engagement_id=scratch_id,
-                    title="Older pinned context"
-                    if index == 0
-                    else f"Recent context {index}",
-                    provider_profile_id="navigation-provider",
-                    model="fixture",
+            (
+                await store.create(
+                    ChatSession(
+                        id="navigation-older"
+                        if index == 0
+                        else f"navigation-recent-{index}",
+                        engagement_id=scratch_id,
+                        title="Older pinned context"
+                        if index == 0
+                        else f"Recent context {index}",
+                        provider_profile_id="navigation-provider",
+                        model="fixture",
+                    )
                 )
             )
     artifacts = ArtifactStore(args.root / "artifacts")
@@ -732,87 +751,99 @@ if __name__ == "__main__":
     runtime.scenario = args.scenario
     adapter.runtime = runtime
     if not any(
-        profile.id == "inert-fixture" for profile in store.list_entities(HarnessProfile)
+        profile.id == "inert-fixture"
+        for profile in (await store.list_entities(HarnessProfile))
     ):
-        store.create(
-            HarnessProfile(
-                id="inert-fixture",
-                name="Codex Daybreak fixture"
-                if args.scenario == "daybreak"
-                else "Approval fixture",
-                kind=(
-                    "codex_app_server"
+        (
+            await store.create(
+                HarnessProfile(
+                    id="inert-fixture",
+                    name="Codex Daybreak fixture"
                     if args.scenario == "daybreak"
-                    else "claude_agent_sdk"
-                    if args.scenario == "planning_managed"
-                    else "grok_acp"
-                ),
-                executable="/bin/true",
-                default_model="fixture",
-                privacy={"local_only": True, "permits_sensitive_data": True},
-                capabilities=HarnessCapabilities(
-                    detailed_usage=args.scenario in {"goal", "goal_capacity"},
-                    mcp=args.scenario not in {"planning", "planning_legacy"},
-                ),
-                native_capabilities=HarnessNativeCapabilities(
-                    shell=args.scenario
-                    in {"planning", "planning_legacy", "planning_managed"}
-                ),
+                    else "Approval fixture",
+                    kind=(
+                        "codex_app_server"
+                        if args.scenario == "daybreak"
+                        else "claude_agent_sdk"
+                        if args.scenario == "planning_managed"
+                        else "grok_acp"
+                    ),
+                    executable="/bin/true",
+                    default_model="fixture",
+                    privacy={"local_only": True, "permits_sensitive_data": True},
+                    capabilities=HarnessCapabilities(
+                        detailed_usage=args.scenario in {"goal", "goal_capacity"},
+                        mcp=args.scenario not in {"planning", "planning_legacy"},
+                    ),
+                    native_capabilities=HarnessNativeCapabilities(
+                        shell=args.scenario
+                        in {"planning", "planning_legacy", "planning_managed"}
+                    ),
+                )
             )
         )
     if args.scenario == "planning_managed":
-        store.create(
-            HarnessProfile(
-                id="inert-unsupported",
-                name="Unsupported planning fixture",
-                kind=HarnessKind.GROK_ACP,
-                executable="/bin/true",
-                default_model="fixture",
-                privacy={"local_only": True, "permits_sensitive_data": True},
-                capabilities=HarnessCapabilities(models=["fixture"], mcp=False),
-                native_capabilities=HarnessNativeCapabilities(shell=True),
+        (
+            await store.create(
+                HarnessProfile(
+                    id="inert-unsupported",
+                    name="Unsupported planning fixture",
+                    kind=HarnessKind.GROK_ACP,
+                    executable="/bin/true",
+                    default_model="fixture",
+                    privacy={"local_only": True, "permits_sensitive_data": True},
+                    capabilities=HarnessCapabilities(models=["fixture"], mcp=False),
+                    native_capabilities=HarnessNativeCapabilities(shell=True),
+                )
             )
         )
-        store.create(
-            HarnessProfile(
-                id="inert-codex",
-                name="Unrestricted Codex planning fixture",
-                kind=HarnessKind.CODEX_APP_SERVER,
-                executable="/bin/true",
-                default_model="fixture",
-                permission_mode="unrestricted",
-                privacy={"local_only": True, "permits_sensitive_data": True},
-                capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
-                native_capabilities=HarnessNativeCapabilities(shell=True),
+        (
+            await store.create(
+                HarnessProfile(
+                    id="inert-codex",
+                    name="Unrestricted Codex planning fixture",
+                    kind=HarnessKind.CODEX_APP_SERVER,
+                    executable="/bin/true",
+                    default_model="fixture",
+                    permission_mode="unrestricted",
+                    privacy={"local_only": True, "permits_sensitive_data": True},
+                    capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
+                    native_capabilities=HarnessNativeCapabilities(shell=True),
+                )
             )
         )
-        store.create(
-            HarnessProfile(
-                id="inert-grok",
-                name="Unrestricted Grok planning fixture",
-                kind=HarnessKind.GROK_ACP,
-                executable="/bin/true",
-                default_model="fixture",
-                permission_mode="unrestricted",
-                privacy={"local_only": True, "permits_sensitive_data": True},
-                capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
-                native_capabilities=HarnessNativeCapabilities(shell=True),
+        (
+            await store.create(
+                HarnessProfile(
+                    id="inert-grok",
+                    name="Unrestricted Grok planning fixture",
+                    kind=HarnessKind.GROK_ACP,
+                    executable="/bin/true",
+                    default_model="fixture",
+                    permission_mode="unrestricted",
+                    privacy={"local_only": True, "permits_sensitive_data": True},
+                    capabilities=HarnessCapabilities(models=["fixture"], mcp=True),
+                    native_capabilities=HarnessNativeCapabilities(shell=True),
+                )
             )
         )
     if args.scenario in {"goal", "goal_capacity"} and not any(
-        profile.id == "inert-codex" for profile in store.list_entities(HarnessProfile)
+        profile.id == "inert-codex"
+        for profile in (await store.list_entities(HarnessProfile))
     ):
-        store.create(
-            HarnessProfile(
-                id="inert-codex",
-                name="Codex goal fixture",
-                kind=HarnessKind.CODEX_APP_SERVER,
-                executable="/bin/true",
-                default_model="fixture",
-                privacy={"local_only": True, "permits_sensitive_data": True},
-                capabilities=HarnessCapabilities(
-                    models=["fixture", "fixture-next"], mcp=True
-                ),
+        (
+            await store.create(
+                HarnessProfile(
+                    id="inert-codex",
+                    name="Codex goal fixture",
+                    kind=HarnessKind.CODEX_APP_SERVER,
+                    executable="/bin/true",
+                    default_model="fixture",
+                    privacy={"local_only": True, "permits_sensitive_data": True},
+                    capabilities=HarnessCapabilities(
+                        models=["fixture", "fixture-next"], mcp=True
+                    ),
+                )
             )
         )
     ssh_service = None
@@ -829,4 +860,12 @@ if __name__ == "__main__":
         allow_insecure_device_pairing=True,
         host_load_gate=HostLoadGate(InertHostLoadMonitor()),
     )
-    uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="error")
+    (
+        await uvicorn.Server(
+            uvicorn.Config(app, host="0.0.0.0", port=args.port, log_level="error")
+        ).serve()
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

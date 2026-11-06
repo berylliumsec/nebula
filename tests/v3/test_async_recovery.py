@@ -1,5 +1,11 @@
 """Crash boundaries preserve turn ownership and already committed tool effects."""
 
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 from nebula.v3.artifacts import ArtifactStore
@@ -47,7 +53,7 @@ async def _close(store):
     await store.database.dispose()
 
 
-def test_async_shutdown_restarts_same_turn_without_duplicate_assistant_effects(
+async def test_async_shutdown_restarts_same_turn_without_duplicate_assistant_effects(
     tmp_path,
 ):
     class BlockingProvider(FakeProvider):
@@ -126,10 +132,10 @@ def test_async_shutdown_restarts_same_turn_without_duplicate_assistant_effects(
             await recovered.shutdown()
             await _close(reopened)
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_async_real_tool_loop_and_restart_replay_committed_result_once(tmp_path):
+async def test_async_real_tool_loop_and_restart_replay_committed_result_once(tmp_path):
     async def exercise():
         path = tmp_path / "tools.db"
         store = NebulaStore(path)
@@ -292,4 +298,7 @@ def test_async_real_tool_loop_and_restart_replay_committed_result_once(tmp_path)
         finally:
             await _close(reopened)
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

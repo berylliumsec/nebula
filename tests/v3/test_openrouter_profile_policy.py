@@ -1,6 +1,10 @@
 """Opt-in OpenRouter profile routing stays scoped to the saved profile."""
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 
 import httpx
 import pytest
@@ -63,7 +67,7 @@ def test_zdr_and_upstream_allowlist_are_independent_per_profile():
     )["provider"] == {"only": ["relace"], "zdr": True}
 
 
-def test_zdr_catalog_intersects_account_models_with_exact_allowed_endpoints():
+async def test_zdr_catalog_intersects_account_models_with_exact_allowed_endpoints():
     seen = []
 
     def handler(request):
@@ -103,16 +107,14 @@ def test_zdr_catalog_intersects_account_models_with_exact_allowed_endpoints():
             )
         raise AssertionError(path)
 
-    health = asyncio.run(
-        _provider(zdr=True, allowed=("relace",), handler=handler).health()
-    )
+    health = await _provider(zdr=True, allowed=("relace",), handler=handler).health()
 
     assert health.healthy is True
     assert health.models == ["author/other"]
     assert "/api/v1/models" not in seen
 
 
-def test_zdr_catalog_fails_closed_when_endpoint_directory_fails():
+async def test_zdr_catalog_fails_closed_when_endpoint_directory_fails():
     def handler(request):
         path = request.url.path
         if path == "/api/v1/key":
@@ -125,14 +127,14 @@ def test_zdr_catalog_fails_closed_when_endpoint_directory_fails():
             return httpx.Response(503, json={})
         raise AssertionError(path)
 
-    health = asyncio.run(_provider(zdr=True, handler=handler).health())
+    health = await _provider(zdr=True, handler=handler).health()
 
     assert health.healthy is False
     assert health.models == []
     assert "ZDR endpoint discovery failed" in health.detail
 
 
-def test_route_limits_intersect_exact_zdr_tags_and_allowed_upstreams():
+async def test_route_limits_intersect_exact_zdr_tags_and_allowed_upstreams():
     def handler(request):
         if request.url.path == "/api/v1/endpoints/zdr":
             return httpx.Response(
@@ -158,18 +160,16 @@ def test_route_limits_intersect_exact_zdr_tags_and_allowed_upstreams():
             },
         )
 
-    routes = asyncio.run(
-        _provider(
-            zdr=True, allowed=("relace",), handler=handler
-        ).openrouter_route_limits("author/model")
-    )
+    routes = await _provider(
+        zdr=True, allowed=("relace",), handler=handler
+    ).openrouter_route_limits("author/model")
 
     assert [(route.provider_slug, route.context_window) for route in routes] == [
         ("relace", 128_000)
     ]
 
 
-def test_route_limits_reject_when_allowed_upstream_has_no_zdr_endpoint():
+async def test_route_limits_reject_when_allowed_upstream_has_no_zdr_endpoint():
     def handler(request):
         if request.url.path == "/api/v1/endpoints/zdr":
             return httpx.Response(200, json=_zdr_rows(("author/model", "wafer/zdr")))
@@ -184,8 +184,8 @@ def test_route_limits_reject_when_allowed_upstream_has_no_zdr_endpoint():
         )
 
     with pytest.raises(ProviderError, match="No ZDR OpenRouter endpoints"):
-        asyncio.run(
-            _provider(
+        (
+            await _provider(
                 zdr=True, allowed=("relace",), handler=handler
             ).openrouter_route_limits("author/model")
         )
@@ -233,3 +233,6 @@ def test_zdr_option_requires_a_boolean():
                 "options": {"openrouter_zdr": "true"},
             },
         )
+
+
+pytestmark = pytest.mark.anyio

@@ -8,7 +8,12 @@ step, keeping the facts the model needs, and a routing response's reasoning is
 stored once rather than copied into each ToolCall and ``tool.proposed`` event.
 """
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import hashlib
 import json
 from pathlib import Path
@@ -180,10 +185,10 @@ def _routing(index: int) -> ModelResponse:
     )
 
 
-def _long_turn(tmp_path: Path):
+async def _long_turn(tmp_path: Path):
     store = NebulaStore(tmp_path / "prompt-cache.db")
-    project = store.create(Engagement(id="project", name="Prompt cache"))
-    profile = store.create(
+    project = await store.create(Engagement(id="project", name="Prompt cache"))
+    profile = await store.create(
         ProviderProfile(
             id="provider",
             name="Provider",
@@ -202,7 +207,7 @@ def _long_turn(tmp_path: Path):
             },
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id=project.id,
@@ -216,7 +221,7 @@ def _long_turn(tmp_path: Path):
             },
         )
     )
-    user = store.create(
+    user = await store.create(
         ChatMessage(
             id="user-message",
             engagement_id=project.id,
@@ -226,7 +231,7 @@ def _long_turn(tmp_path: Path):
             content="Read every value.",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id=project.id,
@@ -282,7 +287,7 @@ def _shared_messages(earlier: list[dict], later: list[dict]) -> int:
     return shared
 
 
-def test_routing_requests_extend_each_other_between_checkpoint_advances(tmp_path):
+async def test_routing_requests_extend_each_other_between_checkpoint_advances(tmp_path):
     """TURN-3: the checkpoint rewrote the system prompt on every step.
 
     It was appended to the instructions and advanced whenever one response
@@ -290,24 +295,26 @@ def test_routing_requests_extend_each_other_between_checkpoint_advances(tmp_path
     request shared a prefix with the one before it.
     """
 
-    store, service, prepared, provider, broker = _long_turn(tmp_path)
+    store, service, prepared, provider, broker = await _long_turn(tmp_path)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Done."
     assert broker.calls == STEPS
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     routing = provider.routing[:STEPS]
     wires = provider.wires[:STEPS]
     # The instructions and tools are the same bytes on every routing step.
     assert len({request.instructions for request in routing}) == 1
     assert len({json.dumps(wire["tools"], sort_keys=True) for wire in wires}) == 1
-    with store.database.session() as session:
+    async with store.database.session() as session:
         checkpoints = list(
-            session.scalars(
-                select(ChatTurnCheckpointRow).order_by(
-                    ChatTurnCheckpointRow.through_step
+            (
+                await session.scalars(
+                    select(ChatTurnCheckpointRow).order_by(
+                        ChatTurnCheckpointRow.through_step
+                    )
                 )
             )
         )
@@ -353,7 +360,7 @@ def test_routing_requests_extend_each_other_between_checkpoint_advances(tmp_path
     assert turn.usage.cache_creation_input_tokens == 6 * STEPS
 
 
-def test_failed_steps_fold_outside_the_recent_window(tmp_path):
+async def test_failed_steps_fold_outside_the_recent_window(tmp_path):
     """TURN-4: every failed or denied step was replayed whole on every request.
 
     One in three calls fails. Once outside the recent window the failures are
@@ -361,9 +368,9 @@ def test_failed_steps_fold_outside_the_recent_window(tmp_path):
     bounded, and the checkpoint keeps what the model needs of each.
     """
 
-    store, service, prepared, provider, _ = _long_turn(tmp_path)
+    store, service, prepared, provider, _ = await _long_turn(tmp_path)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     last = provider.routing[STEPS - 1]
     # The recent window plus at most one block not yet folded.
@@ -407,14 +414,16 @@ def test_failed_steps_fold_outside_the_recent_window(tmp_path):
         assert failure["retry_safe"] is False
 
 
-def test_tool_calls_name_their_ledger_intent_instead_of_copying_reasoning(tmp_path):
+async def test_tool_calls_name_their_ledger_intent_instead_of_copying_reasoning(
+    tmp_path,
+):
     """TURN-4: each ToolCall and tool.proposed event carried the reasoning again."""
 
-    store, service, prepared, _, _ = _long_turn(tmp_path)
+    store, service, prepared, _, _ = await _long_turn(tmp_path)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
-    calls = store.list_entities(PersistedToolCall, limit=100)
+    calls = await store.list_entities(PersistedToolCall, limit=100)
     assert len(calls) == STEPS
     for call in calls:
         intent = call.metadata["provider_history_intent"]
@@ -424,18 +433,20 @@ def test_tool_calls_name_their_ledger_intent_instead_of_copying_reasoning(tmp_pa
         assert "provider_metadata" not in intent
         assert intent["ledger_event"] == f"intent:{step}:call-{step}"
         # Recovery reads the replay state back from the ledger intent row.
-        restored = service._replayable_intent("turn", intent)
+        restored = await service._replayable_intent("turn", intent)
         assert "ledger_event" not in restored
         assert restored["reasoning_state"] == _state(step)
         assert restored["provider_metadata"] == _signature(step)
         assert restored["response_group"] == intent["response_group"]
-    with store.database.session() as session:
+    async with store.database.session() as session:
         proposed = list(
-            session.scalars(
-                select(RunEventRow).where(RunEventRow.event_type == "tool.proposed")
+            (
+                await session.scalars(
+                    select(RunEventRow).where(RunEventRow.event_type == "tool.proposed")
+                )
             )
         )
-        rows = list(session.scalars(select(ChatTurnStepEventRow)))
+        rows = list((await session.scalars(select(ChatTurnStepEventRow))))
     assert len(proposed) == STEPS
     assert all("thinking about step" not in json.dumps(row.payload) for row in proposed)
     assert all("call-sig-" not in json.dumps(row.payload) for row in proposed)
@@ -445,7 +456,7 @@ def test_tool_calls_name_their_ledger_intent_instead_of_copying_reasoning(tmp_pa
     assert all(row.event_type == "started" for row in holders)
     # A ToolCall recorded before the change keeps the copy it carries.
     legacy = {"step": 3, "model_call_id": "old", "reasoning_state": {"old": True}}
-    assert service._replayable_intent("turn", legacy) == legacy
+    assert (await service._replayable_intent("turn", legacy)) == legacy
 
 
 def _entry(step: int, status: str = "complete", **fields) -> dict:
@@ -463,16 +474,16 @@ def _entry(step: int, status: str = "complete", **fields) -> dict:
     }
 
 
-def _ledger_turn(tmp_path: Path) -> tuple[NebulaStore, ChatTurn, ChatTurnLedger]:
-    store, _, prepared, _, _ = _long_turn(tmp_path)
+async def _ledger_turn(tmp_path: Path) -> tuple[NebulaStore, ChatTurn, ChatTurnLedger]:
+    store, _, prepared, _, _ = await _long_turn(tmp_path)
     assert prepared.turn is not None
     return store, prepared.turn, ChatTurnLedger(store.database)
 
 
-def test_replay_stays_bounded_with_fifty_failed_steps(tmp_path):
+async def test_replay_stays_bounded_with_fifty_failed_steps(tmp_path):
     """TURN-4: 50 failures used to be replayed on every later request."""
 
-    _, turn, ledger = _ledger_turn(tmp_path)
+    _, turn, ledger = await _ledger_turn(tmp_path)
     denied = tool_failure(
         SPEC,
         {"value": "x"},
@@ -500,8 +511,8 @@ def test_replay_stays_bounded_with_fifty_failed_steps(tmp_path):
             )
         else:
             entry = _entry(step)
-        ledger.append(turn.id, entry)
-        checkpoint, replay = ledger.compacted_history(turn)
+        (await ledger.append(turn.id, entry))
+        checkpoint, replay = await ledger.compacted_history(turn)
         sizes.append(len(json.dumps(replay)))
     assert len(replay) < RECENT_RESPONSE_GROUPS + CHECKPOINT_STEP_INTERVAL
     assert max(sizes) < 24 * 1_000
@@ -522,13 +533,13 @@ def test_replay_stays_bounded_with_fifty_failed_steps(tmp_path):
     }
 
 
-def test_checkpoint_advances_in_blocks_and_replay_only_grows_between(tmp_path):
-    _, turn, ledger = _ledger_turn(tmp_path)
+async def test_checkpoint_advances_in_blocks_and_replay_only_grows_between(tmp_path):
+    _, turn, ledger = await _ledger_turn(tmp_path)
     previous = None
     advances = 0
     for step in range(80):
-        ledger.append(turn.id, _entry(step))
-        checkpoint, replay = ledger.compacted_history(turn)
+        (await ledger.append(turn.id, _entry(step)))
+        checkpoint, replay = await ledger.compacted_history(turn)
         if previous is not None:
             earlier_checkpoint, earlier_replay = previous
             if checkpoint == earlier_checkpoint:
@@ -543,34 +554,42 @@ def test_checkpoint_advances_in_blocks_and_replay_only_grows_between(tmp_path):
     assert advances == (80 - RECENT_RESPONSE_GROUPS) // CHECKPOINT_STEP_INTERVAL
 
 
-def test_a_waiting_step_stays_whole_until_it_is_settled_and_folded(tmp_path):
-    _, turn, ledger = _ledger_turn(tmp_path)
-    ledger.append(turn.id, _entry(0, "waiting_approval", approval_id="approval-1"))
+async def test_a_waiting_step_stays_whole_until_it_is_settled_and_folded(tmp_path):
+    _, turn, ledger = await _ledger_turn(tmp_path)
+    (
+        await ledger.append(
+            turn.id, _entry(0, "waiting_approval", approval_id="approval-1")
+        )
+    )
     for step in range(1, 30):
-        ledger.append(turn.id, _entry(step))
-    checkpoint, replay = ledger.compacted_history(turn)
+        (await ledger.append(turn.id, _entry(step)))
+    checkpoint, replay = await ledger.compacted_history(turn)
     assert checkpoint is not None
     assert not checkpoint.covers(_entry(0, "waiting_approval"))
     assert replay[0]["step"] == 0
     # Settled, it stays whole until the next advance folds it too.
-    ledger.append(turn.id, _entry(0, "complete"))
-    settled, replay = ledger.compacted_history(turn)
+    (await ledger.append(turn.id, _entry(0, "complete")))
+    settled, replay = await ledger.compacted_history(turn)
     assert settled == checkpoint
     assert 0 in [entry["step"] for entry in replay]
     for step in range(30, 30 + CHECKPOINT_STEP_INTERVAL):
-        ledger.append(turn.id, _entry(step))
-    folded, replay = ledger.compacted_history(turn)
+        (await ledger.append(turn.id, _entry(step)))
+    folded, replay = await ledger.compacted_history(turn)
     assert folded is not None and folded.covers(_entry(0))
     assert 0 not in [entry["step"] for entry in replay]
 
 
-def test_a_v1_checkpoint_still_replays_the_failures_it_left_out(tmp_path):
+async def test_a_v1_checkpoint_still_replays_the_failures_it_left_out(tmp_path):
     """Turns running across the upgrade keep their failures visible."""
 
-    store, turn, ledger = _ledger_turn(tmp_path)
+    store, turn, ledger = await _ledger_turn(tmp_path)
     for step in range(30):
-        ledger.append(turn.id, _entry(step, "failed" if step in {3, 7} else "complete"))
-    with store.database.session() as session:
+        (
+            await ledger.append(
+                turn.id, _entry(step, "failed" if step in {3, 7} else "complete")
+            )
+        )
+    async with store.database.session() as session:
         session.add(
             ChatTurnCheckpointRow(
                 id="v1",
@@ -586,59 +605,64 @@ def test_a_v1_checkpoint_still_replays_the_failures_it_left_out(tmp_path):
                 created_at=utc_now(),
             )
         )
-    checkpoint, replay = ledger.compacted_history(turn)
+    checkpoint, replay = await ledger.compacted_history(turn)
     assert checkpoint is not None and checkpoint.through_step == 21
     assert [entry["step"] for entry in replay] == [3, 7, *range(22, 30)]
     # The first v2 checkpoint folds them.
     for step in range(30, 30 + CHECKPOINT_STEP_INTERVAL):
-        ledger.append(turn.id, _entry(step))
-    checkpoint, replay = ledger.compacted_history(turn)
+        (await ledger.append(turn.id, _entry(step)))
+    checkpoint, replay = await ledger.compacted_history(turn)
     assert checkpoint is not None
     assert checkpoint.summary["schema"] == "nebula.chat-turn-checkpoint/v3"
     assert [entry["step"] for entry in replay][:1] != [3]
     assert {3, 7} <= {receipt[0] for receipt in checkpoint.summary["steps"]}
 
 
-def test_a_step_stores_its_reasoning_once_across_its_rows(tmp_path):
-    store, turn, ledger = _ledger_turn(tmp_path)
+async def test_a_step_stores_its_reasoning_once_across_its_rows(tmp_path):
+    store, turn, ledger = await _ledger_turn(tmp_path)
     shared = {
         "reasoning_state": {"provider_id": "p", "model": "m", "reasoning": "r" * 500},
         "response_text": "Reading the file.",
     }
     intent = {**_entry(0, "running"), **shared}
-    first = ledger.append(turn.id, intent, idempotency_key="intent:0:call-0")
-    second = ledger.append(turn.id, {**intent, "status": "complete"})
-    third = ledger.append(
+    first = await ledger.append(turn.id, intent, idempotency_key="intent:0:call-0")
+    second = await ledger.append(turn.id, {**intent, "status": "complete"})
+    third = await ledger.append(
         turn.id,
         {**intent, "status": "failed", "result_summary": "reconciled"},
         idempotency_key="recorded-result:tool-0",
     )
     # A different response's reasoning is not a repeat.
-    ledger.append(
-        turn.id,
-        {**_entry(1), "reasoning_state": {"provider_id": "p", "reasoning": "other"}},
+    (
+        await ledger.append(
+            turn.id,
+            {
+                **_entry(1),
+                "reasoning_state": {"provider_id": "p", "reasoning": "other"},
+            },
+        )
     )
-    with store.database.session() as session:
+    async with store.database.session() as session:
         rows = {
             row.sequence: row.payload
-            for row in session.scalars(select(ChatTurnStepEventRow))
+            for row in (await session.scalars(select(ChatTurnStepEventRow)))
         }
     assert rows[first]["reasoning_state"] == shared["reasoning_state"]
     for sequence in (second, third):
         assert "reasoning_state" not in rows[sequence]
         assert "response_text" not in rows[sequence]
         assert rows[sequence]["replay_from"] == first
-    history = ledger.history(turn)
+    history = await ledger.history(turn)
     assert history[0] == {
         **intent,
         "status": "failed",
         "result_summary": "reconciled",
     }
     assert history[1]["reasoning_state"] == {"provider_id": "p", "reasoning": "other"}
-    assert ledger.event(turn.id, "recorded-result:tool-0") == history[0]
-    assert ledger.event(turn.id, "missing") is None
+    assert (await ledger.event(turn.id, "recorded-result:tool-0")) == history[0]
+    assert (await ledger.event(turn.id, "missing")) is None
     # The same transition appended again is still recognised as a duplicate.
-    assert ledger.append(turn.id, {**intent, "status": "complete"}) == second
+    assert (await ledger.append(turn.id, {**intent, "status": "complete"})) == second
 
 
 def test_chat_completions_usage_reports_prompt_cache_hits():
@@ -669,3 +693,6 @@ def test_chat_completions_usage_reports_prompt_cache_hits():
         ).cached_input_tokens
         == 0
     )
+
+
+pytestmark = pytest.mark.anyio

@@ -7,6 +7,11 @@ of them may end a turn with a raw Python error, and a transient one is retried
 like the equivalent HTTP status.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 from typing import Any
@@ -179,7 +184,7 @@ class _FailsFirst(httpx.AsyncBaseTransport):
 
 
 @pytest.mark.parametrize("kind", sorted(_TRANSPORT_FAILURES))
-def test_interrupted_transport_is_retried_for_completions(kind):
+async def test_interrupted_transport_is_retried_for_completions(kind):
     transport = _FailsFirst(
         _TRANSPORT_FAILURES[kind],
         json.dumps(_completion({"content": "answer"})),
@@ -187,13 +192,13 @@ def test_interrupted_transport_is_retried_for_completions(kind):
     )
     provider = OpenAICompatibleProvider(_config(), transport=transport)
 
-    result = asyncio.run(provider.complete(_plain()))
+    result = await provider.complete(_plain())
 
     assert transport.attempts == 2
     assert result.text == "answer"
 
 
-def test_exhausted_transport_retries_are_labelled_retryable():
+async def test_exhausted_transport_retries_are_labelled_retryable():
     attempts: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -201,7 +206,7 @@ def test_exhausted_transport_retries_are_labelled_retryable():
         raise httpx.ReadTimeout("")
 
     with pytest.raises(ProviderOverloadedError) as failure:
-        asyncio.run(_provider(handler).complete(_plain()))
+        (await _provider(handler).complete(_plain()))
 
     assert len(attempts) == 3
     assert (
@@ -217,20 +222,20 @@ def test_exhausted_transport_retries_are_labelled_retryable():
         raise httpx.ReadTimeout("")
 
     with pytest.raises(ProviderOverloadedError) as failure:
-        asyncio.run(_provider(once, _config(retry_attempts=1)).complete(_plain()))
+        (await _provider(once, _config(retry_attempts=1)).complete(_plain()))
 
     assert len(single) == 1
     assert str(failure.value) == "provider request timed out (ReadTimeout)"
 
 
-def test_non_inference_requests_do_not_resend_after_a_read_timeout():
+async def test_non_inference_requests_do_not_resend_after_a_read_timeout():
     attempts: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
         attempts.append(1)
         raise httpx.ReadTimeout("")
 
-    health = asyncio.run(_provider(handler).health())
+    health = await _provider(handler).health()
 
     assert attempts == [1]
     assert health.healthy is False
@@ -347,7 +352,7 @@ def test_a_tool_call_with_a_null_function_is_returned_for_the_model():
     assert call.invalid_reason == "the call did not name a tool"
 
 
-def test_a_non_json_200_body_is_a_provider_response_error():
+async def test_a_non_json_200_body_is_a_provider_response_error():
     def html(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -356,7 +361,7 @@ def test_a_non_json_200_body_is_a_provider_response_error():
         )
 
     with pytest.raises(ProviderResponseError) as failure:
-        asyncio.run(_provider(html).complete(_plain()))
+        (await _provider(html).complete(_plain()))
 
     assert "not JSON" in str(failure.value)
     assert "text/html" in str(failure.value)
@@ -365,7 +370,7 @@ def test_a_non_json_200_body_is_a_provider_response_error():
         return httpx.Response(200, json=["not", "a", "completion"])
 
     with pytest.raises(ProviderResponseError):
-        asyncio.run(_provider(listing).complete(_plain()))
+        (await _provider(listing).complete(_plain()))
 
 
 def test_a_null_stream_choice_is_skipped():
@@ -387,7 +392,7 @@ OPENROUTER_BODY_ERROR = {
 }
 
 
-def test_a_transient_error_in_a_200_body_is_retried_like_its_status():
+async def test_a_transient_error_in_a_200_body_is_retried_like_its_status():
     calls: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -396,7 +401,7 @@ def test_a_transient_error_in_a_200_body_is_retried_like_its_status():
             return httpx.Response(200, json=OPENROUTER_BODY_ERROR)
         return httpx.Response(200, json=_completion({"content": "answer"}))
 
-    result = asyncio.run(_provider(handler).complete(_plain()))
+    result = await _provider(handler).complete(_plain())
 
     assert len(calls) == 2
     assert result.text == "answer"
@@ -734,7 +739,7 @@ def test_context_overflow_is_read_from_the_error_type_too():
     assert isinstance(providers._safe_error(response), ProviderContextLengthError)
 
 
-def test_a_5xx_overflow_is_not_retried_as_an_overload():
+async def test_a_5xx_overflow_is_not_retried_as_an_overload():
     calls: list[int] = []
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -749,7 +754,7 @@ def test_a_5xx_overflow_is_not_retried_as_an_overload():
         )
 
     with pytest.raises(ProviderContextLengthError):
-        asyncio.run(_provider(handler).complete(_plain()))
+        (await _provider(handler).complete(_plain()))
 
     assert calls == [1]
 
@@ -1039,3 +1044,6 @@ def test_double_encoded_arguments_that_decode_to_an_object_are_accepted():
     [call] = refused.tool_calls
     assert call.arguments == {}
     assert call.invalid_reason == "arguments were not a JSON object"
+
+
+pytestmark = pytest.mark.anyio

@@ -1,7 +1,12 @@
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import base64
 from datetime import timedelta
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -29,7 +34,7 @@ def _auth() -> dict[str, str]:
     return {"Authorization": "Bearer test-token"}
 
 
-def _setup(tmp_path):
+async def _setup(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -38,27 +43,31 @@ def _setup(tmp_path):
             auth_token="test-token",
         )
     )
-    created = client.post(
+    created = await client.post(
         "/api/v1/engagements", headers=_auth(), json={"name": "Burp parity lab"}
     )
     assert created.status_code == 201, created.text
-    project = store.get(Engagement, created.json()["id"])
-    scope = store.get(ScopePolicy, project.scope_policy_id)
-    store.update(
-        ScopePolicy,
-        scope.id,
-        {
-            "allowed_domains": ["app.example.test"],
-            "allowed_ports": [443],
-        },
-        expected_revision=scope.revision,
+    project = await store.get(Engagement, created.json()["id"])
+    scope = await store.get(ScopePolicy, project.scope_policy_id)
+    (
+        await store.update(
+            ScopePolicy,
+            scope.id,
+            {
+                "allowed_domains": ["app.example.test"],
+                "allowed_ports": [443],
+            },
+            expected_revision=scope.revision,
+        )
     )
-    workspace = client.get(
-        f"/api/v1/engagements/{project.id}/browser-workspace", headers=_auth()
+    workspace = (
+        await client.get(
+            f"/api/v1/engagements/{project.id}/browser-workspace", headers=_auth()
+        )
     ).json()
     identity = workspace["identities"][0]
     session = workspace["sessions"][0]
-    synced = client.put(
+    synced = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/tabs",
         headers=_auth(),
         json={
@@ -81,9 +90,9 @@ def _setup(tmp_path):
     return store, client, project, identity, synced.json()
 
 
-def test_proxy_capture_populates_durable_target_map_without_secrets(tmp_path):
-    store, client, project, _, session = _setup(tmp_path)
-    capture = client.post(
+async def test_proxy_capture_populates_durable_target_map_without_secrets(tmp_path):
+    store, client, project, _, session = await _setup(tmp_path)
+    capture = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/traffic",
         headers=_auth(),
         json={
@@ -118,7 +127,7 @@ def test_proxy_capture_populates_durable_target_map_without_secrets(tmp_path):
         "/api/users?page=1",
     ]
 
-    research = client.get(
+    research = await client.get(
         f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
     )
     assert research.status_code == 200, research.text
@@ -127,12 +136,12 @@ def test_proxy_capture_populates_durable_target_map_without_secrets(tmp_path):
     assert node["parameter_names"] == ["page"]
     assert node["last_exchange_id"] == capture.json()["id"]
     assert "secret" not in research.text
-    assert store.count(BrowserSiteNode) == 1
+    assert (await store.count(BrowserSiteNode)) == 1
 
 
-def test_interception_requires_opt_in_and_is_single_decision(tmp_path):
-    store, client, _, _, session = _setup(tmp_path)
-    disabled = client.post(
+async def test_interception_requires_opt_in_and_is_single_decision(tmp_path):
+    store, client, _, _, session = await _setup(tmp_path)
+    disabled = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/intercepts",
         headers=_auth(),
         json={
@@ -146,7 +155,7 @@ def test_interception_requires_opt_in_and_is_single_decision(tmp_path):
     )
     assert disabled.status_code == 422
 
-    enabled = client.put(
+    enabled = await client.put(
         f"/api/v1/browser-sessions/{session['id']}/capture-settings",
         headers=_auth(),
         json={
@@ -159,7 +168,7 @@ def test_interception_requires_opt_in_and_is_single_decision(tmp_path):
         },
     )
     assert enabled.status_code == 200, enabled.text
-    paused = client.post(
+    paused = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/intercepts",
         headers=_auth(),
         json={
@@ -175,7 +184,7 @@ def test_interception_requires_opt_in_and_is_single_decision(tmp_path):
     assert paused.json()["headers"][0][1].startswith("<redacted:sha256:")
     assert "Bearer secret" not in paused.text
 
-    forwarded = client.post(
+    forwarded = await client.post(
         f"/api/v1/browser-intercepts/{paused.json()['id']}/decision",
         headers=_auth(),
         json={
@@ -187,7 +196,7 @@ def test_interception_requires_opt_in_and_is_single_decision(tmp_path):
     )
     assert forwarded.status_code == 200, forwarded.text
     assert forwarded.json()["state"] == "forwarded"
-    repeated = client.post(
+    repeated = await client.post(
         f"/api/v1/browser-intercepts/{paused.json()['id']}/decision",
         headers=_auth(),
         json={
@@ -197,12 +206,12 @@ def test_interception_requires_opt_in_and_is_single_decision(tmp_path):
         },
     )
     assert repeated.status_code == 422
-    assert store.count(BrowserInterceptItem) == 1
+    assert (await store.count(BrowserInterceptItem)) == 1
 
 
-def test_bounded_crawl_lifecycle_enforces_scope_and_request_budget(tmp_path):
-    store, client, project, identity, session = _setup(tmp_path)
-    created = client.post(
+async def test_bounded_crawl_lifecycle_enforces_scope_and_request_budget(tmp_path):
+    store, client, project, identity, session = await _setup(tmp_path)
+    created = await client.post(
         f"/api/v1/engagements/{project.id}/browser-crawls",
         headers=_auth(),
         json={
@@ -219,10 +228,10 @@ def test_bounded_crawl_lifecycle_enforces_scope_and_request_budget(tmp_path):
     assert created.status_code == 201, created.text
     crawl = created.json()
     assert crawl["state"] == "draft"
-    assert store.count(BrowserCrawlJob) == 1
+    assert (await store.count(BrowserCrawlJob)) == 1
 
     for action, expected in (("queue", "queued"), ("start", "running")):
-        response = client.post(
+        response = await client.post(
             f"/api/v1/browser-crawls/{crawl['id']}/state",
             headers=_auth(),
             json={
@@ -235,7 +244,7 @@ def test_bounded_crawl_lifecycle_enforces_scope_and_request_budget(tmp_path):
         crawl = response.json()
         assert crawl["state"] == expected
 
-    exhausted = client.post(
+    exhausted = await client.post(
         f"/api/v1/browser-crawls/{crawl['id']}/state",
         headers=_auth(),
         json={
@@ -248,7 +257,7 @@ def test_bounded_crawl_lifecycle_enforces_scope_and_request_budget(tmp_path):
     )
     assert exhausted.status_code == 422
 
-    outside = client.post(
+    outside = await client.post(
         f"/api/v1/engagements/{project.id}/browser-crawls",
         headers=_auth(),
         json={
@@ -260,9 +269,9 @@ def test_bounded_crawl_lifecycle_enforces_scope_and_request_budget(tmp_path):
     assert outside.status_code == 422
 
 
-def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
-    store, client, project, identity, session = _setup(tmp_path)
-    repeater = client.post(
+async def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
+    store, client, project, identity, session = await _setup(tmp_path)
+    repeater = await client.post(
         f"/api/v1/engagements/{project.id}/browser-repeater-tabs",
         headers=_auth(),
         json={
@@ -275,10 +284,10 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
         },
     )
     assert repeater.status_code == 201, repeater.text
-    assert store.count(BrowserRepeaterTab) == 1
+    assert (await store.count(BrowserRepeaterTab)) == 1
     current_repeater = repeater.json()
     for action in ("queue", "start"):
-        moved = client.post(
+        moved = await client.post(
             f"/api/v1/browser-repeater-tabs/{current_repeater['id']}/state",
             headers=_auth(),
             json={
@@ -289,7 +298,7 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
         )
         assert moved.status_code == 200, moved.text
         current_repeater = moved.json()
-    result = client.post(
+    result = await client.post(
         f"/api/v1/browser-repeater-tabs/{current_repeater['id']}/results",
         headers=_auth(),
         json={
@@ -306,16 +315,18 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
     )
     assert result.status_code == 200, result.text
     assert result.json()["response_headers"][0][1].startswith("<redacted:sha256:")
-    assert store.count(BrowserRepeaterResult) == 1
-    workspace = client.get(
-        f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+    assert (await store.count(BrowserRepeaterResult)) == 1
+    workspace = (
+        await client.get(
+            f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+        )
     ).json()
     saved_repeater = workspace["repeater_tabs"][0]
     assert saved_repeater["state"] == "ready"
     assert saved_repeater["request_count"] == 1
     assert saved_repeater["history_exchange_ids"] == [result.json()["id"]]
 
-    attack = client.post(
+    attack = await client.post(
         f"/api/v1/engagements/{project.id}/browser-attacks",
         headers=_auth(),
         json={
@@ -340,7 +351,7 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
     assert attack.status_code == 201, attack.text
     current = attack.json()
     for action in ("queue", "start", "pause", "resume"):
-        moved = client.post(
+        moved = await client.post(
             f"/api/v1/browser-attacks/{current['id']}/state",
             headers=_auth(),
             json={
@@ -353,7 +364,7 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
         current = moved.json()
     assert current["state"] == "running"
     for sequence in range(2):
-        result = client.post(
+        result = await client.post(
             f"/api/v1/browser-attacks/{current['id']}/results",
             headers=_auth(),
             json={
@@ -363,15 +374,15 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
             },
         )
         assert result.status_code == 201, result.text
-    exhausted = client.post(
+    exhausted = await client.post(
         f"/api/v1/browser-attacks/{current['id']}/results",
         headers=_auth(),
         json={"sequence": 2, "payloads": ["2"], "status_code": 200},
     )
     assert exhausted.status_code == 422
-    assert store.count(BrowserAttack) == 1
-    assert store.count(BrowserAttackResult) == 2
-    saved_attack = store.get(BrowserAttack, current["id"])
+    assert (await store.count(BrowserAttack)) == 1
+    assert (await store.count(BrowserAttackResult)) == 2
+    saved_attack = await store.get(BrowserAttack, current["id"])
     assert saved_attack.state == "complete"
     assert saved_attack.metadata["payload_source"] == {
         "kind": "upload",
@@ -384,8 +395,10 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
     }
 
 
-def test_intruder_requires_real_markers_and_strategy_payload_cardinality(tmp_path):
-    _, client, project, identity, session = _setup(tmp_path)
+async def test_intruder_requires_real_markers_and_strategy_payload_cardinality(
+    tmp_path,
+):
+    _, client, project, identity, session = await _setup(tmp_path)
     base = {
         "session_id": session["id"],
         "identity_id": identity["id"],
@@ -396,7 +409,7 @@ def test_intruder_requires_real_markers_and_strategy_payload_cardinality(tmp_pat
         "positions": ["id"],
         "payload_sets": [{"kind": "list", "values": ["1"]}],
     }
-    missing = client.post(
+    missing = await client.post(
         f"/api/v1/engagements/{project.id}/browser-attacks",
         headers=_auth(),
         json=base,
@@ -404,7 +417,7 @@ def test_intruder_requires_real_markers_and_strategy_payload_cardinality(tmp_pat
     assert missing.status_code == 422
     assert "missing position markers" in missing.text
 
-    wrong_sets = client.post(
+    wrong_sets = await client.post(
         f"/api/v1/engagements/{project.id}/browser-attacks",
         headers=_auth(),
         json={
@@ -418,16 +431,16 @@ def test_intruder_requires_real_markers_and_strategy_payload_cardinality(tmp_pat
     assert "requires 2 payload set" in wrong_sets.text
 
 
-def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
-    store, client, project, _, session = _setup(tmp_path)
-    encoded = client.post(
+async def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
+    store, client, project, _, session = await _setup(tmp_path)
+    encoded = await client.post(
         "/api/v1/browser-utilities/decode",
         headers=_auth(),
         json={"operation": "base64_encode", "value": "nebula"},
     )
     assert encoded.status_code == 200
     assert encoded.json()["result"] == base64.b64encode(b"nebula").decode()
-    compared = client.post(
+    compared = await client.post(
         "/api/v1/browser-utilities/compare",
         headers=_auth(),
         json={"mode": "json", "left": '{"b":2,"a":1}', "right": '{"a":1,"b":3}'},
@@ -436,7 +449,7 @@ def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
     assert compared.json()["equal"] is False
     assert compared.json()["diff"]
 
-    sequencer = client.post(
+    sequencer = await client.post(
         f"/api/v1/engagements/{project.id}/browser-token-analyses",
         headers=_auth(),
         json={
@@ -447,9 +460,9 @@ def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
     )
     assert sequencer.status_code == 201, sequencer.text
     assert sequencer.json()["collision_count"] == 1
-    assert store.count(BrowserTokenAnalysis) == 1
+    assert (await store.count(BrowserTokenAnalysis)) == 1
 
-    imported = client.post(
+    imported = await client.post(
         f"/api/v1/engagements/{project.id}/browser-har/import",
         headers=_auth(),
         json={
@@ -484,7 +497,7 @@ def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
         "bodies_imported": 0,
         "redaction": "headers and bodies containing reusable secrets are not imported",
     }
-    exported = client.get(
+    exported = await client.get(
         f"/api/v1/engagements/{project.id}/browser-har/export",
         headers=_auth(),
         params={"session_id": session["id"]},
@@ -492,7 +505,7 @@ def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
     assert exported.status_code == 200
     assert '"value":"secret"' not in exported.text
 
-    evidence = store.create(
+    evidence = await store.create(
         Evidence(
             engagement_id=project.id,
             evidence_type="browser-response",
@@ -500,8 +513,10 @@ def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
             sha256="a" * 64,
         )
     )
-    node = store.list_entities(BrowserSiteNode, engagement_id=project.id, limit=100)[0]
-    finding = client.post(
+    node = (
+        await store.list_entities(BrowserSiteNode, engagement_id=project.id, limit=100)
+    )[0]
+    finding = await client.post(
         f"/api/v1/engagements/{project.id}/browser-findings",
         headers=_auth(),
         json={
@@ -514,7 +529,7 @@ def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
     assert finding.status_code == 201, finding.text
     assert finding.json()["status"] == "candidate"
     assert finding.json()["metadata"]["browser_site_node_ids"] == [node.id]
-    assert store.count(Finding) == 1
+    assert (await store.count(Finding)) == 1
 
 
 def _enable_interception(client, session):
@@ -534,24 +549,28 @@ def _enable_interception(client, session):
     return enabled.json()
 
 
-def test_intercepts_after_a_page_of_history_stay_single_visible_and_expire(tmp_path):
-    store, client, project, _, session = _setup(tmp_path)
+async def test_intercepts_after_a_page_of_history_stay_single_visible_and_expire(
+    tmp_path,
+):
+    store, client, project, _, session = await _setup(tmp_path)
     session = _enable_interception(client, session)
-    seed_older_copies(
-        store,
-        BrowserInterceptItem(
-            engagement_id=project.id,
-            session_id=session["id"],
-            tab_id="tab-1",
-            identity_id=session["identity_id"],
-            transaction_id="decided",
-            phase="request",
-            method="GET",
-            url="https://app.example.test/",
-            state="forwarded",
-            expires_at=utc_now(),
-        ),
-        vary=lambda index: {"transaction_id": f"decided-{index}"},
+    (
+        await seed_older_copies(
+            store,
+            BrowserInterceptItem(
+                engagement_id=project.id,
+                session_id=session["id"],
+                tab_id="tab-1",
+                identity_id=session["identity_id"],
+                transaction_id="decided",
+                phase="request",
+                method="GET",
+                url="https://app.example.test/",
+                state="forwarded",
+                expires_at=utc_now(),
+            ),
+            vary=lambda index: {"transaction_id": f"decided-{index}"},
+        )
     )
     body = {
         "tab_id": "tab-1",
@@ -561,7 +580,7 @@ def test_intercepts_after_a_page_of_history_stay_single_visible_and_expire(tmp_p
         "url": "https://app.example.test/profile",
     }
 
-    paused = client.post(
+    paused = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/intercepts",
         headers=_auth(),
         json=body,
@@ -569,71 +588,81 @@ def test_intercepts_after_a_page_of_history_stay_single_visible_and_expire(tmp_p
     assert paused.status_code == 201, paused.text
     # The native proxy retries a breakpoint it did not hear back about; the
     # retry must land on the same receipt, not pause the request twice.
-    retried = client.post(
+    retried = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/intercepts",
         headers=_auth(),
         json=body,
     )
     assert retried.json()["id"] == paused.json()["id"]
-    assert store.count(BrowserInterceptItem) == PAGE + 1
+    assert (await store.count(BrowserInterceptItem)) == PAGE + 1
 
-    research = client.get(
-        f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+    research = (
+        await client.get(
+            f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+        )
     ).json()
     listed = {item["id"]: item["state"] for item in research["intercepts"]}
     assert listed[paused.json()["id"]] == "paused"
 
-    store.update(
-        BrowserInterceptItem,
-        paused.json()["id"],
-        {"expires_at": utc_now() - timedelta(seconds=1)},
+    (
+        await store.update(
+            BrowserInterceptItem,
+            paused.json()["id"],
+            {"expires_at": utc_now() - timedelta(seconds=1)},
+        )
     )
-    research = client.get(
-        f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+    research = (
+        await client.get(
+            f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+        )
     ).json()
     listed = {item["id"]: item["state"] for item in research["intercepts"]}
     assert listed[paused.json()["id"]] == "interrupted"
 
 
-def test_site_map_and_har_export_reach_records_after_a_page_of_history(tmp_path):
-    store, client, project, _, session = _setup(tmp_path)
-    seed_older_copies(
-        store,
-        BrowserSiteNode(
-            engagement_id=project.id,
-            session_id=session["id"],
-            identity_id=session["identity_id"],
-            url="https://app.example.test/old",
-            scope_policy_id=project.scope_policy_id,
-            scope_policy_revision=1,
-        ),
-        vary=lambda index: {"url": f"https://app.example.test/old/{index}"},
+async def test_site_map_and_har_export_reach_records_after_a_page_of_history(tmp_path):
+    store, client, project, _, session = await _setup(tmp_path)
+    (
+        await seed_older_copies(
+            store,
+            BrowserSiteNode(
+                engagement_id=project.id,
+                session_id=session["id"],
+                identity_id=session["identity_id"],
+                url="https://app.example.test/old",
+                scope_policy_id=project.scope_policy_id,
+                scope_policy_revision=1,
+            ),
+            vary=lambda index: {"url": f"https://app.example.test/old/{index}"},
+        )
     )
-    seed_older_copies(
-        store,
-        BrowserTrafficExchange(
-            engagement_id=project.id,
-            session_id="other-session",
-            tab_id="tab-1",
-            identity_id=session["identity_id"],
-            method="GET",
-            url="https://app.example.test/old",
-            scope_state="in_scope",
-            scope_policy_id=project.scope_policy_id,
-            scope_policy_revision=1,
-        ),
+    (
+        await seed_older_copies(
+            store,
+            BrowserTrafficExchange(
+                engagement_id=project.id,
+                session_id="other-session",
+                tab_id="tab-1",
+                identity_id=session["identity_id"],
+                method="GET",
+                url="https://app.example.test/old",
+                scope_state="in_scope",
+                scope_policy_id=project.scope_policy_id,
+                scope_policy_revision=1,
+            ),
+        )
     )
 
     for _ in range(2):
-        node = client.post(
+        node = await client.post(
             f"/api/v1/engagements/{project.id}/browser-site-nodes",
             headers=_auth(),
             json={"session_id": session["id"], "url": "https://app.example.test/new"},
         )
         assert node.status_code == 201, node.text
-    assert store.count(BrowserSiteNode) == PAGE + 1
+    assert (await store.count(BrowserSiteNode)) == PAGE + 1
 
-    captured = client.post(
+    captured = await client.post(
         f"/api/v1/browser-sessions/{session['id']}/traffic",
         headers=_auth(),
         json={
@@ -644,38 +673,48 @@ def test_site_map_and_har_export_reach_records_after_a_page_of_history(tmp_path)
         },
     )
     assert captured.status_code == 201, captured.text
-    exported = client.get(
-        f"/api/v1/engagements/{project.id}/browser-har/export",
-        headers=_auth(),
-        params={"session_id": session["id"]},
+    exported = (
+        await client.get(
+            f"/api/v1/engagements/{project.id}/browser-har/export",
+            headers=_auth(),
+            params={"session_id": session["id"]},
+        )
     ).json()
     assert [entry["request"]["url"] for entry in exported["log"]["entries"]] == [
         "https://app.example.test/new"
     ]
-    workspace = client.get(
-        f"/api/v1/engagements/{project.id}/browser-workspace", headers=_auth()
+    workspace = (
+        await client.get(
+            f"/api/v1/engagements/{project.id}/browser-workspace", headers=_auth()
+        )
     ).json()
     assert len(workspace["traffic"]) == PAGE
     assert workspace["traffic"][-1]["id"] == captured.json()["id"]
 
 
-def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(tmp_path):
-    store, client, project, identity, session = _setup(tmp_path)
-    seed_older_copies(
-        store,
-        BrowserAttackResult(
-            engagement_id=project.id, attack_id="earlier-attack", sequence=0
-        ),
-        vary=lambda index: {"sequence": index},
+async def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(
+    tmp_path,
+):
+    store, client, project, identity, session = await _setup(tmp_path)
+    (
+        await seed_older_copies(
+            store,
+            BrowserAttackResult(
+                engagement_id=project.id, attack_id="earlier-attack", sequence=0
+            ),
+            vary=lambda index: {"sequence": index},
+        )
     )
-    seed_older_copies(
-        store,
-        BrowserRepeaterResult(
-            engagement_id=project.id, tab_id="earlier-tab", sequence=0
-        ),
-        vary=lambda index: {"sequence": index},
+    (
+        await seed_older_copies(
+            store,
+            BrowserRepeaterResult(
+                engagement_id=project.id, tab_id="earlier-tab", sequence=0
+            ),
+            vary=lambda index: {"sequence": index},
+        )
     )
-    attack = client.post(
+    attack = await client.post(
         f"/api/v1/engagements/{project.id}/browser-attacks",
         headers=_auth(),
         json={
@@ -693,7 +732,7 @@ def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(tmp_pa
     assert attack.status_code == 201, attack.text
     current = attack.json()
     for action in ("queue", "start"):
-        moved = client.post(
+        moved = await client.post(
             f"/api/v1/browser-attacks/{current['id']}/state",
             headers=_auth(),
             json={
@@ -705,17 +744,17 @@ def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(tmp_pa
         assert moved.status_code == 200, moved.text
         current = moved.json()
     for _ in range(2):
-        result = client.post(
+        result = await client.post(
             f"/api/v1/browser-attacks/{current['id']}/results",
             headers=_auth(),
             json={"sequence": 0, "payloads": ["0"], "status_code": 200},
         )
         assert result.status_code == 201, result.text
-    owned = store.find_entities(BrowserAttackResult, {"attack_id": current["id"]})
+    owned = await store.find_entities(BrowserAttackResult, {"attack_id": current["id"]})
     assert len(owned) == 1
-    assert store.get(BrowserAttack, current["id"]).request_count == 1
+    assert (await store.get(BrowserAttack, current["id"])).request_count == 1
 
-    repeater = client.post(
+    repeater = await client.post(
         f"/api/v1/engagements/{project.id}/browser-repeater-tabs",
         headers=_auth(),
         json={
@@ -729,7 +768,7 @@ def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(tmp_pa
     assert repeater.status_code == 201, repeater.text
     tab = repeater.json()
     for action in ("queue", "start"):
-        moved = client.post(
+        moved = await client.post(
             f"/api/v1/browser-repeater-tabs/{tab['id']}/state",
             headers=_auth(),
             json={
@@ -740,7 +779,7 @@ def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(tmp_pa
         )
         assert moved.status_code == 200, moved.text
         tab = moved.json()
-    recorded = client.post(
+    recorded = await client.post(
         f"/api/v1/browser-repeater-tabs/{tab['id']}/results",
         headers=_auth(),
         json={
@@ -750,12 +789,15 @@ def test_intruder_and_repeater_results_after_a_page_of_history_stay_owned(tmp_pa
         },
     )
     assert recorded.status_code == 200, recorded.text
-    tab = store.get(BrowserRepeaterTab, tab["id"])
-    deleted = client.delete(
+    tab = await store.get(BrowserRepeaterTab, tab["id"])
+    deleted = await client.delete(
         f"/api/v1/browser-repeater-tabs/{tab.id}",
         headers=_auth(),
         params={"expected_revision": tab.revision},
     )
     assert deleted.status_code == 204, deleted.text
-    assert store.find_entities(BrowserRepeaterResult, {"tab_id": tab.id}) == []
-    assert store.count(BrowserRepeaterResult) == PAGE
+    assert (await store.find_entities(BrowserRepeaterResult, {"tab_id": tab.id})) == []
+    assert (await store.count(BrowserRepeaterResult)) == PAGE
+
+
+pytestmark = pytest.mark.anyio

@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import hashlib
@@ -48,9 +52,9 @@ def async_test(function):
 
 @async_test
 async def test_large_workspace_execution_does_not_walk_tree(tmp_path, monkeypatch):
-    _, _, engagement, _, _, service, request = _fixture(tmp_path)
+    _, _, engagement, _, _, service, request = await _fixture(tmp_path)
     await service.startup()
-    workspace = service.tool_platform.workspace_for(engagement.id)
+    workspace = await service.tool_platform.workspace_for(engagement.id)
     with (workspace / "large.bin").open("wb") as stream:
         stream.truncate(6 * 1024**3)
 
@@ -153,19 +157,19 @@ class StubExecutionPlatform:
         )
 
 
-def _fixture(tmp_path):
+async def _fixture(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Execution Lab"))
-    policy = store.create(ScopePolicy(engagement_id=engagement.id))
-    engagement = store.update(
+    engagement = await store.create(Engagement(name="Execution Lab"))
+    policy = await store.create(ScopePolicy(engagement_id=engagement.id))
+    engagement = await store.update(
         Engagement,
         engagement.id,
         {"scope_policy_id": policy.id},
         expected_revision=engagement.revision,
     )
     markdown = "Result:\n```python\n  print('λ')\n```\n"
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             engagement_id=engagement.id,
             session_id="session-1",
@@ -198,20 +202,26 @@ def _fixture(tmp_path):
     return store, artifacts, engagement, policy, runner, service, request
 
 
-def test_run_capability_requires_unrestricted_network_runtime(tmp_path):
-    _store, _artifacts, engagement, _policy, _runner, service, _request = _fixture(
-        tmp_path
-    )
+async def test_run_capability_requires_unrestricted_network_runtime(tmp_path):
+    (
+        _store,
+        _artifacts,
+        engagement,
+        _policy,
+        _runner,
+        service,
+        _request,
+    ) = await _fixture(tmp_path)
     assert service.tool_platform is not None
     original = service.tool_platform.resolve_operator_runtime
 
-    def offline_only(engagement_id: str, language: str, *, network: bool):
+    async def offline_only(engagement_id: str, language: str, *, network: bool):
         if network:
             raise RuntimePlatformError("egress helper unavailable")
-        return original(engagement_id, language, network=network)
+        return await original(engagement_id, language, network=network)
 
     service.tool_platform.resolve_operator_runtime = offline_only  # type: ignore[method-assign]
-    capabilities = service.capabilities(engagement.id)
+    capabilities = await service.capabilities(engagement.id)
 
     assert any(runtime.offline for runtime in capabilities.runtimes)
     assert all(not runtime.scoped_network for runtime in capabilities.runtimes)
@@ -221,7 +231,7 @@ def test_run_capability_requires_unrestricted_network_runtime(tmp_path):
 
 @async_test
 async def test_empty_starter_scope_allows_offline_review_but_denies_network(tmp_path):
-    _store, _artifacts, _engagement, policy, _runner, service, request = _fixture(
+    _store, _artifacts, _engagement, policy, _runner, service, request = await _fixture(
         tmp_path
     )
     assert policy.allowed_cidrs == []
@@ -251,7 +261,7 @@ async def test_empty_starter_scope_allows_offline_review_but_denies_network(tmp_
 async def test_reviewed_execution_runs_with_unrestricted_network_without_target(
     tmp_path,
 ):
-    _store, _artifacts, _engagement, _policy, runner, service, request = _fixture(
+    _store, _artifacts, _engagement, _policy, runner, service, request = await _fixture(
         tmp_path
     )
     unrestricted = request.model_copy(
@@ -292,12 +302,12 @@ async def _await_terminal(
     task = service._tasks.get(execution_id)
     if task is not None:
         await asyncio.wait_for(asyncio.shield(task), timeout=5)
-    return service.store.get(OperatorExecution, execution_id)
+    return await service.store.get(OperatorExecution, execution_id)
 
 
 @async_test
 async def test_terminal_selection_enters_the_same_mandatory_review_path(tmp_path):
-    _store, _artifacts, engagement, _policy, _runner, service, request = _fixture(
+    _store, _artifacts, engagement, _policy, _runner, service, request = await _fixture(
         tmp_path
     )
     source = "printf 'selected command\\n'\n"
@@ -334,7 +344,7 @@ async def test_terminal_selection_enters_the_same_mandatory_review_path(tmp_path
 
 @async_test
 async def test_reviewed_execution_is_exact_isolated_redacted_and_idempotent(tmp_path):
-    store, _artifacts, _engagement, _policy, runner, service, request = _fixture(
+    store, _artifacts, _engagement, _policy, runner, service, request = await _fixture(
         tmp_path
     )
     assert request.source.startswith("  ")
@@ -372,15 +382,15 @@ async def test_reviewed_execution_is_exact_isolated_redacted_and_idempotent(tmp_
     assert sandbox_request.limits.timeout_seconds == 300
     assert sandbox_request.limits.output_bytes == 2_000_000
 
-    raw_stdout, _ = service.output_bytes(execution.id, "stdout", raw=True)
-    safe_stdout, _ = service.output_bytes(execution.id, "stdout", raw=False)
+    raw_stdout, _ = await service.output_bytes(execution.id, "stdout", raw=True)
+    safe_stdout, _ = await service.output_bytes(execution.id, "stdout", raw=False)
     assert raw_stdout == b"before sk-test-token-12345678901234567890 after\n"
     assert b"sk-test-token-12345678901234567890" not in safe_stdout
     assert b"[REDACTED TOKEN]" in safe_stdout
-    safe_stderr, _ = service.output_bytes(execution.id, "stderr", raw=False)
+    safe_stderr, _ = await service.output_bytes(execution.id, "stderr", raw=False)
     assert b"<0x1B>[31m" in safe_stderr
 
-    events = store.replay_operation_events(execution.id)
+    events = await store.replay_operation_events(execution.id)
     assert [event.sequence for event in events] == list(range(1, len(events) + 1))
     serialized = "\n".join(str(event.payload) for event in events)
     assert "sk-test-token-12345678901234567890" not in serialized
@@ -389,17 +399,19 @@ async def test_reviewed_execution_is_exact_isolated_redacted_and_idempotent(tmp_
 
 @async_test
 async def test_confirmed_policy_race_creates_a_durable_denied_record(tmp_path):
-    store, _artifacts, _engagement, policy, runner, service, request = _fixture(
+    store, _artifacts, _engagement, policy, runner, service, request = await _fixture(
         tmp_path
     )
     await service.startup()
     preview = await service.preflight(request)
     assert preview.allowed and preview.preview_token and preview.preview_fingerprint
-    store.update(
-        ScopePolicy,
-        policy.id,
-        {"prohibited_actions": ["operator_code"]},
-        expected_revision=policy.revision,
+    (
+        await store.update(
+            ScopePolicy,
+            policy.id,
+            {"prohibited_actions": ["operator_code"]},
+            expected_revision=policy.revision,
+        )
     )
     start = ExecutionStartRequest(
         **request.model_dump(),
@@ -414,16 +426,22 @@ async def test_confirmed_policy_race_creates_a_durable_denied_record(tmp_path):
     assert denied.evidence_id is None
     assert runner.requests == []
     assert (await service.start(start)).id == denied.id
-    events = store.replay_operation_events(denied.id)
+    events = await store.replay_operation_events(denied.id)
     assert [event.event_type for event in events] == ["execution.denied"]
     await service.shutdown()
 
 
 @async_test
 async def test_idempotency_key_conflict_fails_closed(tmp_path):
-    _store, _artifacts, _engagement, _policy, _runner, service, request = _fixture(
-        tmp_path
-    )
+    (
+        _store,
+        _artifacts,
+        _engagement,
+        _policy,
+        _runner,
+        service,
+        request,
+    ) = await _fixture(tmp_path)
     await service.startup()
     preview = await service.preflight(request)
     assert preview.allowed and preview.preview_token and preview.preview_fingerprint
@@ -440,3 +458,6 @@ async def test_idempotency_key_conflict_fails_closed(tmp_path):
     assert exc.value.code == "idempotency_conflict"
     await _await_terminal(service, execution.id)
     await service.shutdown()
+
+
+pytestmark = pytest.mark.anyio

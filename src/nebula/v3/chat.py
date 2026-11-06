@@ -10,7 +10,7 @@ from .async_utils import MaybeAsync
 
 from .database import DatabaseBusyError
 
-from .async_utils import async_done_callback, call_async
+from .async_utils import async_done_callback, call_async, finish_cleanup
 
 from .async_utils import resolve_workspace
 
@@ -23,7 +23,6 @@ from .diagnostics import (
 
 import asyncio
 import base64
-import contextlib
 import hashlib
 import json
 import logging
@@ -4152,6 +4151,7 @@ class ChatService:
         admission_task: asyncio.Task[ProviderAdmission] | None = None
         recovery_slot = False
         producing = False
+        cancelled = False
         try:
             assert prepared.turn is not None
             if automatic_recovery:
@@ -4198,7 +4198,7 @@ class ChatService:
             admission = await admission_task
             runtime.admission = admission
             prepared.turn = await self.store.get(ChatTurn, prepared.turn.id)
-            (await self._claim_execution(prepared))
+            await finish_cleanup(self._claim_execution(prepared))
             async with runtime.condition:
                 runtime.events.append(
                     (
@@ -4217,11 +4217,7 @@ class ChatService:
             producing = True
             await self._produce_provider_turn(prepared, runtime)
         except asyncio.CancelledError:
-            if admission_task is not None and not admission_task.done():
-                admission_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    # diagnostic-expected: the parent cancellation owns this task.
-                    await admission_task
+            cancelled = True
             raise
         except BaseException as exc:
             record_caught_exception(
@@ -4232,24 +4228,53 @@ class ChatService:
                 stage="provider-admission",
             )
             runtime.error = exc
-            if not producing and prepared.turn is not None:
-                # The producer settles every turn it starts; one that never
-                # started would otherwise read as waiting or running forever.
-                runtime.error = await self._settle_unstarted_turn(
-                    prepared,
-                    exc,
-                    holds_admission=admission is not None,
-                    automatic_recovery=automatic_recovery,
-                )
         finally:
-            if admission is not None and prepared.turn is not None:
-                await admission.release(prepared.turn.id)
-            if recovery_slot:
-                self._automatic_recovery_slots.release()
-            if not runtime.done:
-                async with runtime.condition:
-                    runtime.done = True
-                    runtime.condition.notify_all()
+
+            async def cleanup():
+                nonlocal admission
+                try:
+                    if admission_task is not None:
+                        if not admission_task.done():
+                            admission_task.cancel()
+                        # Consume a completed token even when cancellation
+                        # arrived at position(), before the normal await.
+                        result = (
+                            await asyncio.gather(admission_task, return_exceptions=True)
+                        )[0]
+                        if isinstance(result, ProviderAdmission):
+                            admission = result
+                        elif not isinstance(result, asyncio.CancelledError):
+                            runtime.error = runtime.error or result
+                    try:
+                        if not producing and prepared.turn is not None:
+                            if cancelled:
+                                if self.shutting_down:
+                                    await self._interrupt_turn_for_shutdown(prepared)
+                                else:
+                                    await self.cancel_turn(prepared.turn.id)
+                                await self.provider_scheduler.withdraw(prepared.turn.id)
+                            elif runtime.error is not None:
+                                runtime.error = await self._settle_unstarted_turn(
+                                    prepared,
+                                    runtime.error,
+                                    holds_admission=admission is not None,
+                                    automatic_recovery=automatic_recovery,
+                                )
+                    finally:
+                        if admission is not None and prepared.turn is not None:
+                            await admission.release(prepared.turn.id)
+                except BaseException as exc:
+                    runtime.error = runtime.error or exc
+                    raise
+                finally:
+                    if recovery_slot:
+                        self._automatic_recovery_slots.release()
+                    if not runtime.done:
+                        async with runtime.condition:
+                            runtime.done = True
+                            runtime.condition.notify_all()
+
+            await finish_cleanup(cleanup())
 
     async def _settle_unstarted_turn(
         self,

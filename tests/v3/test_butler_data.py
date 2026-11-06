@@ -1,8 +1,11 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -21,12 +24,12 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError, GuidedToolError
 
 
-def fixture(tmp_path):
+async def fixture(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    session = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Document review",
@@ -34,7 +37,7 @@ def fixture(tmp_path):
             model="inert",
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="PRIVATE_FOREIGN_CHAT",
@@ -42,7 +45,7 @@ def fixture(tmp_path):
             model="inert",
         )
     )
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             engagement_id=project.id,
             session_id=session.id,
@@ -51,7 +54,7 @@ def fixture(tmp_path):
             content="Document review bookmark target",
         )
     )
-    outside = store.create(
+    outside = await store.create(
         ChatMessage(
             engagement_id=other.id,
             session_id=foreign.id,
@@ -77,19 +80,23 @@ async def invoke(capabilities, name, arguments=None, *, change=False):
     )
 
 
-def test_butler_saved_results_are_scoped_paged_and_read_without_rewriting(tmp_path):
-    store, project, _, _, outside, _, capabilities = fixture(tmp_path)
+async def test_butler_saved_results_are_scoped_paged_and_read_without_rewriting(
+    tmp_path,
+):
+    store, project, _, _, outside, _, capabilities = await fixture(tmp_path)
     payload = {"unicode": "☃" * 3000, "items": [{"id": i} for i in range(10)]}
     for i in range(26):
-        store.create(
-            StructuredResult(
-                engagement_id=project.id,
-                title=f"Result {i}",
-                result=payload,
-                hints={"view": "table"},
+        (
+            await store.create(
+                StructuredResult(
+                    engagement_id=project.id,
+                    title=f"Result {i}",
+                    result=payload,
+                    hints={"view": "table"},
+                )
             )
         )
-    foreign = store.create(
+    foreign = await store.create(
         StructuredResult(
             engagement_id=outside.engagement_id,
             title="PRIVATE_FOREIGN_RESULT",
@@ -139,13 +146,13 @@ def test_butler_saved_results_are_scoped_paged_and_read_without_rewriting(tmp_pa
             await invoke(
                 capabilities, "read_result", {**arguments, "field": "engagement_id"}
             )
-        assert store.get(StructuredResult, detail["id"]).result == payload
+        assert (await store.get(StructuredResult, detail["id"])).result == payload
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_bookmarks_use_core_revisions_and_read_back_saved_state(tmp_path):
-    store, project, session, message, outside, _, capabilities = fixture(tmp_path)
+async def test_butler_bookmarks_use_core_revisions_and_read_back_saved_state(tmp_path):
+    store, project, session, message, outside, _, capabilities = await fixture(tmp_path)
 
     async def scenario():
         search = await invoke(capabilities, "search_chats", {"query": "document"})
@@ -167,7 +174,7 @@ def test_butler_bookmarks_use_core_revisions_and_read_back_saved_state(tmp_path)
             "project_id": project.id,
             "session_id": session.id,
         }
-        saved = store.get(ChatBookmark, bookmark_id(session.id, message.id))
+        saved = await store.get(ChatBookmark, bookmark_id(session.id, message.id))
         assert saved.revision == receipt["bookmark"]["revision"]
         assert (await invoke(capabilities, "search_chats", {"bookmarked": True}))[
             "items"
@@ -179,7 +186,7 @@ def test_butler_bookmarks_use_core_revisions_and_read_back_saved_state(tmp_path)
                 {**arguments, "active": False},
                 change=True,
             )
-        assert store.get(ChatBookmark, saved.id).active is True
+        assert (await store.get(ChatBookmark, saved.id)).active is True
         with pytest.raises(ValueError, match="selected chat"):
             await invoke(
                 capabilities,
@@ -199,15 +206,17 @@ def test_butler_bookmarks_use_core_revisions_and_read_back_saved_state(tmp_path)
             "items"
         ] == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
     "private_kind", ["control_assistant", "side_chat", "temporary_assistant"]
 )
-def test_butler_conversation_navigation_refuses_private_chats(tmp_path, private_kind):
-    store, project, session, _, outside, _, capabilities = fixture(tmp_path)
-    private = store.create(
+async def test_butler_conversation_navigation_refuses_private_chats(
+    tmp_path, private_kind
+):
+    store, project, session, _, outside, _, capabilities = await fixture(tmp_path)
+    private = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="PRIVATE_LOCAL_CHAT",
@@ -216,13 +225,15 @@ def test_butler_conversation_navigation_refuses_private_chats(tmp_path, private_
             metadata={private_kind: True},
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=project.id,
-            session_id=private.id,
-            sequence=1,
-            role="user",
-            content="PRIVATE_LOCAL_CONTENT document",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=project.id,
+                session_id=private.id,
+                sequence=1,
+                role="user",
+                content="PRIVATE_LOCAL_CONTENT document",
+            )
         )
     )
 
@@ -235,12 +246,14 @@ def test_butler_conversation_navigation_refuses_private_chats(tmp_path, private_
                 with pytest.raises(ValueError, match="visible chat"):
                     await invoke(capabilities, name, {"session_id": session_id})
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_result_removal_requires_browser_and_atomic_core_revision(tmp_path):
-    store, project, _, _, outside, app, capabilities = fixture(tmp_path)
-    saved = store.create(
+async def test_butler_result_removal_requires_browser_and_atomic_core_revision(
+    tmp_path,
+):
+    store, project, _, _, outside, app, capabilities = await fixture(tmp_path)
+    saved = await store.create(
         StructuredResult(
             engagement_id=project.id,
             title="Review result",
@@ -257,7 +270,9 @@ def test_butler_result_removal_requires_browser_and_atomic_core_revision(tmp_pat
         )
         assert receipt["state"] == "pending_browser_apply"
         assert receipt["client_action"]["kind"] == "result_delete"
-        assert store.get(StructuredResult, saved.id).result == {"state": "retained"}
+        assert (await store.get(StructuredResult, saved.id)).result == {
+            "state": "retained"
+        }
         with pytest.raises(ValueError, match="current revision"):
             await invoke(
                 capabilities,
@@ -266,8 +281,8 @@ def test_butler_result_removal_requires_browser_and_atomic_core_revision(tmp_pat
                 change=True,
             )
 
-    asyncio.run(scenario())
-    changed = store.update(
+    (await scenario())
+    changed = await store.update(
         StructuredResult,
         saved.id,
         {"title": "Operator changed result"},
@@ -276,25 +291,26 @@ def test_butler_result_removal_requires_browser_and_atomic_core_revision(tmp_pat
     client = TestClient(app, headers={"Authorization": "Bearer synthetic-data-token"})
     path = f"/api/v1/projects/{project.id}/structured-results/{saved.id}"
     assert (
-        client.delete(f"{path}?expected_revision={saved.revision}").status_code == 409
-    )
-    assert store.get(StructuredResult, saved.id).title == changed.title
+        await client.delete(f"{path}?expected_revision={saved.revision}")
+    ).status_code == 409
+    assert (await store.get(StructuredResult, saved.id)).title == changed.title
     assert (
-        client.delete(
+        await client.delete(
             f"/api/v1/projects/{outside.engagement_id}/structured-results/{saved.id}?expected_revision={changed.revision}"
-        ).status_code
-        == 404
-    )
+        )
+    ).status_code == 404
     assert (
-        client.delete(f"{path}?expected_revision={changed.revision}").status_code == 204
-    )
-    assert client.get(path).status_code == 404
+        await client.delete(f"{path}?expected_revision={changed.revision}")
+    ).status_code == 204
+    assert (await client.get(path)).status_code == 404
 
 
-def test_scheduled_butler_cannot_discover_interactive_saved_data_changes(tmp_path):
+async def test_scheduled_butler_cannot_discover_interactive_saved_data_changes(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    case = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=project.id,
             trigger="immediate",
@@ -313,3 +329,6 @@ def test_scheduled_butler_cannot_discover_interactive_saved_data_changes(tmp_pat
         background_case_id=case.id,
     )
     assert not any(name.startswith("nebula.data.") for name in capabilities._actions)
+
+
+pytestmark = pytest.mark.anyio

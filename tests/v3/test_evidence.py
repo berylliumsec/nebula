@@ -1,8 +1,12 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import base64
 from io import BytesIO
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from PIL import Image
 
 import nebula.v3.evidence as evidence_module
@@ -36,14 +40,14 @@ def _auth() -> dict[str, str]:
 
 
 @pytest.fixture
-def evidence_api(tmp_path):
+async def evidence_api(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-a", name="Evidence upload"))
-    asset = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Evidence upload"))
+    asset = await store.create(
         Asset(id="asset-a", engagement_id=engagement.id, name="Gateway")
     )
-    finding = store.create(
+    finding = await store.create(
         Finding(id="finding-a", engagement_id=engagement.id, title="TLS issue")
     )
     client = TestClient(
@@ -52,9 +56,9 @@ def evidence_api(tmp_path):
     return client, store, artifacts, engagement, asset, finding
 
 
-def test_upload_persists_immutable_artifact_and_listable_evidence(evidence_api):
+async def test_upload_persists_immutable_artifact_and_listable_evidence(evidence_api):
     client, store, artifacts, engagement, asset, finding = evidence_api
-    operator = OperatorProfileService(store).create_profile(
+    operator = await OperatorProfileService(store).create_profile(
         display_name="Evidence operator"
     )
     content = b"immutable analyst evidence\n"
@@ -74,8 +78,12 @@ def test_upload_persists_immutable_artifact_and_listable_evidence(evidence_api):
         "metadata": {"command": "openssl s_client", "size": 999999},
     }
 
-    assert client.post("/api/v1/evidence/upload", json=payload).status_code == 401
-    response = client.post("/api/v1/evidence/upload", headers=_auth(), json=payload)
+    assert (
+        await client.post("/api/v1/evidence/upload", json=payload)
+    ).status_code == 401
+    response = await client.post(
+        "/api/v1/evidence/upload", headers=_auth(), json=payload
+    )
 
     assert response.status_code == 201
     evidence = response.json()
@@ -94,8 +102,8 @@ def test_upload_persists_immutable_artifact_and_listable_evidence(evidence_api):
         "source": "human-terminal",
         "upload_version": "nebula.evidence-upload.v1",
     }
-    persisted = store.get(Evidence, evidence["id"])
-    artifact = store.get(Artifact, evidence["artifact_id"])
+    persisted = await store.get(Evidence, evidence["id"])
+    artifact = await store.get(Artifact, evidence["artifact_id"])
     assert persisted.artifact_id == artifact.id
     assert persisted.sha256 == artifact.sha256
     assert artifacts.read(artifact) == content
@@ -107,21 +115,23 @@ def test_upload_persists_immutable_artifact_and_listable_evidence(evidence_api):
         "command": "openssl s_client",
         "size": 999999,
     }
-    linked_finding = store.get(Finding, finding.id)
+    linked_finding = await store.get(Finding, finding.id)
     assert linked_finding.evidence_ids == [evidence["id"]]
     assert linked_finding.revision == finding.revision + 1
 
-    listed = client.get(
+    listed = await client.get(
         f"/api/v1/evidence?engagement_id={engagement.id}", headers=_auth()
     )
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()] == [evidence["id"]]
-    artifacts_list = client.get(
+    artifacts_list = await client.get(
         f"/api/v1/artifacts?engagement_id={engagement.id}", headers=_auth()
     )
     assert artifacts_list.status_code == 200
     assert [item["id"] for item in artifacts_list.json()] == [artifact.id]
-    downloaded = client.get(f"/api/v1/artifacts/{artifact.id}/content", headers=_auth())
+    downloaded = await client.get(
+        f"/api/v1/artifacts/{artifact.id}/content", headers=_auth()
+    )
     assert downloaded.status_code == 200
     assert downloaded.content == content
     assert downloaded.headers["content-type"].startswith("text/plain")
@@ -132,24 +142,21 @@ def test_upload_persists_immutable_artifact_and_listable_evidence(evidence_api):
 
     # Evidence and Artifact entities are immutable through the public CRUD API.
     assert (
-        client.post("/api/v1/evidence", headers=_auth(), json=evidence).status_code
-        == 405
-    )
+        await client.post("/api/v1/evidence", headers=_auth(), json=evidence)
+    ).status_code == 405
     assert (
-        client.patch(
+        await client.patch(
             f"/api/v1/evidence/{evidence['id']}",
             headers=_auth(),
             json={"changes": {"title": "rewritten"}},
-        ).status_code
-        == 405
-    )
+        )
+    ).status_code == 405
     assert (
-        client.delete(f"/api/v1/evidence/{evidence['id']}", headers=_auth()).status_code
-        == 405
-    )
+        await client.delete(f"/api/v1/evidence/{evidence['id']}", headers=_auth())
+    ).status_code == 405
 
 
-def test_upload_rejects_invalid_content_before_writing_blobs(evidence_api):
+async def test_upload_rejects_invalid_content_before_writing_blobs(evidence_api):
     client, store, artifacts, engagement, _, _ = evidence_api
     base_payload = {
         "engagement_id": engagement.id,
@@ -158,12 +165,12 @@ def test_upload_rejects_invalid_content_before_writing_blobs(evidence_api):
         "evidence_type": "binary",
     }
 
-    invalid = client.post(
+    invalid = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={**base_payload, "content_base64": "not base64!"},
     )
-    empty = client.post(
+    empty = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={**base_payload, "content_base64": base64.b64encode(b"").decode()},
@@ -173,18 +180,18 @@ def test_upload_rejects_invalid_content_before_writing_blobs(evidence_api):
     assert invalid.json()["detail"] == "content_base64 must be valid base64"
     assert empty.status_code == 422
     assert empty.json()["detail"] == "evidence content cannot be empty"
-    assert store.count(Artifact) == 0
-    assert store.count(Evidence) == 0
+    assert (await store.count(Artifact)) == 0
+    assert (await store.count(Evidence)) == 0
     assert list(artifacts.iter_digests()) == []
 
 
-def test_upload_requires_existing_same_engagement_references(evidence_api):
+async def test_upload_requires_existing_same_engagement_references(evidence_api):
     client, store, artifacts, engagement, _, _ = evidence_api
-    other = store.create(Engagement(id="eng-b", name="Other"))
-    other_asset = store.create(
+    other = await store.create(Engagement(id="eng-b", name="Other"))
+    other_asset = await store.create(
         Asset(id="asset-b", engagement_id=other.id, name="Other host")
     )
-    other_finding = store.create(
+    other_finding = await store.create(
         Finding(id="finding-b", engagement_id=other.id, title="Other finding")
     )
     payload = {
@@ -195,17 +202,17 @@ def test_upload_requires_existing_same_engagement_references(evidence_api):
         "content_base64": base64.b64encode(b"proof").decode(),
     }
 
-    missing = client.post(
+    missing = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={**payload, "engagement_id": "missing"},
     )
-    wrong_finding = client.post(
+    wrong_finding = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={**payload, "finding_id": other_finding.id},
     )
-    wrong_asset = client.post(
+    wrong_asset = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={**payload, "asset_ids": [other_asset.id]},
@@ -217,14 +224,14 @@ def test_upload_requires_existing_same_engagement_references(evidence_api):
     assert wrong_asset.status_code == 409
     assert "does not belong" in wrong_asset.json()["detail"]
     assert list(artifacts.iter_digests()) == []
-    assert store.count(Artifact) == 0
-    assert store.count(Evidence) == 0
+    assert (await store.count(Artifact)) == 0
+    assert (await store.count(Evidence)) == 0
 
 
-def test_database_failure_compensates_only_a_new_blob(tmp_path, monkeypatch):
+async def test_database_failure_compensates_only_a_new_blob(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-a", name="Rollback"))
+    engagement = await store.create(Engagement(id="eng-a", name="Rollback"))
     request = EvidenceUploadRequest(
         engagement_id=engagement.id,
         filename="proof.txt",
@@ -239,33 +246,37 @@ def test_database_failure_compensates_only_a_new_blob(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store, "create_many", fail_create_many)
     with pytest.raises(RuntimeError, match="database unavailable"):
-        upload_evidence(
-            store=store,
-            artifact_store=artifacts,
-            request=request,
+        (
+            await upload_evidence(
+                store=store,
+                artifact_store=artifacts,
+                request=request,
+            )
         )
     assert len(list(artifacts.iter_digests())) == 1
 
     existing = artifacts.put_bytes(b"same bytes", engagement_id=engagement.id)
     with pytest.raises(RuntimeError, match="database unavailable"):
-        upload_evidence(
-            store=store,
-            artifact_store=artifacts,
-            request=request,
+        (
+            await upload_evidence(
+                store=store,
+                artifact_store=artifacts,
+                request=request,
+            )
         )
     assert list(artifacts.iter_digests()) == [existing.sha256]
 
 
-def test_derived_evidence_preserves_parent_lineage_and_edit_recipe(tmp_path):
+async def test_derived_evidence_preserves_parent_lineage_and_edit_recipe(tmp_path):
     store = NebulaStore(tmp_path / "derived.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-a", name="Derived"))
+    engagement = await store.create(Engagement(id="eng-a", name="Derived"))
     parent = artifacts.put_bytes(
         b"original", engagement_id=engagement.id, filename="original.png"
     )
-    store.create(parent)
+    (await store.create(parent))
 
-    evidence = upload_evidence(
+    evidence = await upload_evidence(
         store=store,
         artifact_store=artifacts,
         request=EvidenceUploadRequest(
@@ -295,33 +306,35 @@ def test_derived_evidence_preserves_parent_lineage_and_edit_recipe(tmp_path):
         ),
     )
 
-    derived = store.get(Artifact, evidence.artifact_id)
+    derived = await store.get(Artifact, evidence.artifact_id)
     assert derived.parent_artifact_id == parent.id
     assert derived.metadata["source_context"]["terminal_session_id"] == "terminal-1"
     assert derived.metadata["edit_recipe"]["operations"][0]["type"] == "redact"
     assert evidence.metadata["edit_recipe"]["version"] == 1
 
 
-def test_derived_evidence_rejects_cross_engagement_parent(tmp_path):
+async def test_derived_evidence_rejects_cross_engagement_parent(tmp_path):
     store = NebulaStore(tmp_path / "cross-parent.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-a", name="One"))
-    other = store.create(Engagement(id="eng-b", name="Two"))
+    engagement = await store.create(Engagement(id="eng-a", name="One"))
+    other = await store.create(Engagement(id="eng-b", name="Two"))
     parent = artifacts.put_bytes(b"original", engagement_id=other.id)
-    store.create(parent)
+    (await store.create(parent))
 
     with pytest.raises(EvidenceReferenceError, match="parent artifact"):
-        upload_evidence(
-            store=store,
-            artifact_store=artifacts,
-            request=EvidenceUploadRequest(
-                engagement_id=engagement.id,
-                filename="bad.png",
-                title="Bad lineage",
-                evidence_type="terminal-screenshot",
-                content_base64=base64.b64encode(b"derived").decode(),
-                parent_artifact_id=parent.id,
-            ),
+        (
+            await upload_evidence(
+                store=store,
+                artifact_store=artifacts,
+                request=EvidenceUploadRequest(
+                    engagement_id=engagement.id,
+                    filename="bad.png",
+                    title="Bad lineage",
+                    evidence_type="terminal-screenshot",
+                    content_base64=base64.b64encode(b"derived").decode(),
+                    parent_artifact_id=parent.id,
+                ),
+            )
         )
 
 
@@ -590,13 +603,13 @@ def test_edit_recipe_rejects_excess_operations_and_mismatched_uploaded_image():
         request.decoded_content()
 
 
-def test_linked_finding_update_failure_rolls_back_entities_and_new_blob(
+async def test_linked_finding_update_failure_rolls_back_entities_and_new_blob(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "linked-rollback.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-a", name="Rollback"))
-    finding = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Rollback"))
+    finding = await store.create(
         Finding(id="finding-a", engagement_id=engagement.id, title="Finding")
     )
     request = EvidenceUploadRequest(
@@ -614,19 +627,21 @@ def test_linked_finding_update_failure_rolls_back_entities_and_new_blob(
 
     monkeypatch.setattr(StoreTransaction, "update", fail_update)
     with pytest.raises(RuntimeError, match="optimistic update failed"):
-        upload_evidence(
-            store=store,
-            artifact_store=artifacts,
-            request=request,
+        (
+            await upload_evidence(
+                store=store,
+                artifact_store=artifacts,
+                request=request,
+            )
         )
 
-    assert store.count(Artifact) == 0
-    assert store.count(Evidence) == 0
-    assert store.get(Finding, finding.id).evidence_ids == []
+    assert (await store.count(Artifact)) == 0
+    assert (await store.count(Evidence)) == 0
+    assert (await store.get(Finding, finding.id)).evidence_ids == []
     assert len(list(artifacts.iter_digests())) == 1
 
 
-def test_decoded_size_limit_and_missing_artifact_store(tmp_path, monkeypatch):
+async def test_decoded_size_limit_and_missing_artifact_store(tmp_path, monkeypatch):
     request = EvidenceUploadRequest(
         engagement_id="eng-a",
         filename="proof.bin",
@@ -639,9 +654,9 @@ def test_decoded_size_limit_and_missing_artifact_store(tmp_path, monkeypatch):
         request.decoded_content()
 
     store = NebulaStore(tmp_path / "no-artifacts.db")
-    engagement = store.create(Engagement(id="eng-a", name="No store"))
+    engagement = await store.create(Engagement(id="eng-a", name="No store"))
     client = TestClient(create_app(store, auth_token="test-token"))
-    response = client.post(
+    response = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={
@@ -653,7 +668,7 @@ def test_decoded_size_limit_and_missing_artifact_store(tmp_path, monkeypatch):
     assert response.json()["detail"] == "evidence upload requires an artifact store"
 
 
-def test_upload_linked_to_a_finding_is_visible_on_every_read_path(
+async def test_upload_linked_to_a_finding_is_visible_on_every_read_path(
     evidence_api, monkeypatch
 ):
     client, store, artifacts, engagement, asset, finding = evidence_api
@@ -665,12 +680,14 @@ def test_upload_linked_to_a_finding_is_visible_on_every_read_path(
         "content_base64": base64.b64encode(b"linked proof").decode("ascii"),
         "finding_id": finding.id,
     }
-    response = client.post("/api/v1/evidence/upload", headers=_auth(), json=payload)
+    response = await client.post(
+        "/api/v1/evidence/upload", headers=_auth(), json=payload
+    )
     assert response.status_code == 201
     evidence_id = response.json()["id"]
 
     # The link is an authoritative edge, so every projected read path shows it.
-    edges = client.get(
+    edges = await client.get(
         f"/api/v1/projects/{engagement.id}/relations",
         headers=_auth(),
         params={"resource_kind": "evidence", "resource_id": evidence_id},
@@ -680,21 +697,23 @@ def test_upload_linked_to_a_finding_is_visible_on_every_read_path(
         (item["source"]["id"], item["predicate"], item["target"]["id"])
         for item in edges.json()
     ] == [(evidence_id, "supports", finding.id)]
-    loaded_finding = client.get(f"/api/v1/findings/{finding.id}", headers=_auth())
+    loaded_finding = await client.get(f"/api/v1/findings/{finding.id}", headers=_auth())
     assert loaded_finding.json()["evidence_ids"] == [evidence_id]
-    listed_findings = client.get(
+    listed_findings = await client.get(
         f"/api/v1/findings?engagement_id={engagement.id}", headers=_auth()
     )
     assert [item["evidence_ids"] for item in listed_findings.json()] == [[evidence_id]]
-    loaded_evidence = client.get(f"/api/v1/evidence/{evidence_id}", headers=_auth())
+    loaded_evidence = await client.get(
+        f"/api/v1/evidence/{evidence_id}", headers=_auth()
+    )
     assert loaded_evidence.json()["finding_id"] == finding.id
-    listed_evidence = client.get(
+    listed_evidence = await client.get(
         f"/api/v1/evidence?engagement_id={engagement.id}", headers=_auth()
     )
     assert [item["finding_id"] for item in listed_evidence.json()] == [finding.id]
 
     # A later analyst edit of the finding keeps the uploaded link.
-    renamed = client.patch(
+    renamed = await client.patch(
         f"/api/v1/findings/{finding.id}",
         headers=_auth(),
         json={"changes": {"title": "TLS issue (triaged)"}},
@@ -708,12 +727,15 @@ def test_upload_linked_to_a_finding_is_visible_on_every_read_path(
         raise RuntimeError("edge write failed")
 
     monkeypatch.setattr(ResourceRelationService, "sync_legacy_edges", fail_sync)
-    failed = client.post(
+    failed = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={**payload, "content_base64": base64.b64encode(b"second").decode()},
     )
     assert failed.status_code == 500
-    assert store.count(Evidence) == 1
-    assert store.count(Artifact) == 1
-    assert store.get(Finding, finding.id).evidence_ids == [evidence_id]
+    assert (await store.count(Evidence)) == 1
+    assert (await store.count(Artifact)) == 1
+    assert (await store.get(Finding, finding.id)).evidence_ids == [evidence_id]
+
+
+pytestmark = pytest.mark.anyio

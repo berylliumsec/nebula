@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from builtins import BaseExceptionGroup
 import inspect
+import asyncio
+from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
+from typing import Any, Awaitable, Callable, Coroutine, ParamSpec, TypeVar
 
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
@@ -58,9 +61,63 @@ async def drain_callback_tasks():
 
     loop = asyncio.get_running_loop()
     tasks = _callback_tasks.get(loop, set())
+    failures = []
     while tasks:
-        await asyncio.gather(*tuple(tasks))
+        batch = tuple(tasks)
+        results = await asyncio.gather(*batch, return_exceptions=True)
+        # gather may complete inline for finished tasks, before their scheduled
+        # discard callbacks run. Remove only the batch we actually joined.
+        tasks.difference_update(batch)
+        failures.extend(value for value in results if isinstance(value, BaseException))
     _callback_tasks.pop(loop, None)
+    if len(failures) == 1:
+        raise failures[0]
+    if failures:
+        raise BaseExceptionGroup("Persistence callback cleanup failed", failures)
+
+
+async def finish_cleanup(operation: Coroutine[Any, Any, _T]) -> _T:
+    """Join owned cleanup even when its caller is cancelled repeatedly."""
+    task = asyncio.create_task(
+        operation
+    )  # diagnostic-expected: this owned task is shielded and joined below; its result or exception is always consumed.
+    cancellation = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            # diagnostic-expected: remember caller cancellation until owned cleanup has finished; child cancellation is consumed by result below.
+            if not task.cancelled():
+                cancellation = exc
+        except BaseException:
+            # diagnostic-expected: propagate the joined cleanup failure via result below, retaining caller cancellation if both failed.
+            break
+    try:
+        result = task.result()
+    except BaseException as exc:
+        if cancellation is not None:
+            raise BaseExceptionGroup(
+                "Cancellation and cleanup failure", [cancellation, exc]
+            ) from None
+        raise
+    if cancellation is not None:
+        raise cancellation
+    return result
+
+
+async def close_store_resources(stores) -> None:
+    """Drain every store before disposal, preserving failures after cleanup."""
+
+    async def close_all():
+        async with AsyncExitStack() as stack:
+            databases = {id(store.database): store.database for store in stores}
+            for database in databases.values():
+                stack.push_async_callback(database.dispose)
+            for store in stores:
+                stack.push_async_callback(store.event_history.close)
+            stack.push_async_callback(drain_callback_tasks)
+
+    await finish_cleanup(close_all())
 
 
 async def async_first(iterator, default=None):

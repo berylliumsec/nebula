@@ -1,8 +1,11 @@
 """Butler's workspace file catalog uses the selected Core workspace."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import hashlib
 import os
 
@@ -16,7 +19,7 @@ from nebula.v3.runtime_platform import RuntimePlatform
 from nebula.v3.storage import NebulaStore
 
 
-def _fixture(tmp_path):
+async def _fixture(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     runtime = RuntimePlatform(
@@ -25,8 +28,8 @@ def _fixture(tmp_path):
     app = create_app(
         store, auth_token="test-token", artifact_store=artifacts, tool_platform=runtime
     )
-    selected = store.create(Engagement(name="Selected workspace"))
-    foreign = store.create(Engagement(name="Other workspace"))
+    selected = await store.create(Engagement(name="Selected workspace"))
+    foreign = await store.create(Engagement(name="Other workspace"))
     workspace = app.state.workspace_service
     assert runtime.workspace_service is workspace
     assert app.state.harness_runtime_service.workspace_service is workspace
@@ -36,13 +39,19 @@ def _fixture(tmp_path):
     return store, artifacts, workspace, runtime, selected, foreign, capabilities
 
 
-def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path):
-    store, _artifacts, _workspace, runtime, selected, foreign, capabilities = _fixture(
-        tmp_path
-    )
-    root = runtime.workspace_for(selected.id)
+async def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path):
+    (
+        store,
+        _artifacts,
+        _workspace,
+        runtime,
+        selected,
+        foreign,
+        capabilities,
+    ) = await _fixture(tmp_path)
+    root = await runtime.workspace_for(selected.id)
     (root / "notes").mkdir()
-    foreign_root = runtime.workspace_for(foreign.id)
+    foreign_root = await runtime.workspace_for(foreign.id)
     (foreign_root / "private.txt").write_text("foreign secret")
     outside = tmp_path / "outside.txt"
     outside.write_text("outside secret")
@@ -158,7 +167,7 @@ def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path
                 },
                 change=True,
             )
-        assert store.count(Evidence, engagement_id=selected.id) == 0
+        assert (await store.count(Evidence, engagement_id=selected.id)) == 0
         preserved = await invoke(
             "preserve_evidence",
             {
@@ -177,10 +186,10 @@ def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path
             "project_id": selected.id,
             "resource": "evidence",
         }
-        saved_evidence = store.get(Evidence, preserved["evidence"]["id"])
+        saved_evidence = await store.get(Evidence, preserved["evidence"]["id"])
         assert saved_evidence.title == "Reviewed result"
         assert saved_evidence.metadata["workspace_path"] == "notes/renamed.txt"
-        assert store.count(Evidence, engagement_id=selected.id) == 1
+        assert (await store.count(Evidence, engagement_id=selected.id)) == 1
         with pytest.raises(ValueError, match="changed"):
             await invoke(
                 "delete_file",
@@ -205,14 +214,20 @@ def test_butler_workspace_file_lifecycle_uses_hash_and_project_boundary(tmp_path
         assert "Current notes" not in str(download)
         assert not (foreign_root / "notes/renamed.txt").exists()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_scheduled_butler_workspace_actions_are_unavailable(tmp_path):
-    store, artifacts, workspace, _runtime, selected, _foreign, interactive = _fixture(
-        tmp_path
-    )
-    case = store.create(
+async def test_scheduled_butler_workspace_actions_are_unavailable(tmp_path):
+    (
+        store,
+        artifacts,
+        workspace,
+        _runtime,
+        selected,
+        _foreign,
+        interactive,
+    ) = await _fixture(tmp_path)
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=selected.id,
             trigger="immediate",
@@ -234,10 +249,16 @@ def test_scheduled_butler_workspace_actions_are_unavailable(tmp_path):
     assert not any(name.startswith("nebula.workspace.") for name in scheduled._actions)
 
 
-def test_butler_workspace_directory_actions_and_device_handoff(tmp_path):
-    _store, _artifacts, workspace, runtime, selected, _foreign, capabilities = _fixture(
-        tmp_path
-    )
+async def test_butler_workspace_directory_actions_and_device_handoff(tmp_path):
+    (
+        _store,
+        _artifacts,
+        workspace,
+        runtime,
+        selected,
+        _foreign,
+        capabilities,
+    ) = await _fixture(tmp_path)
 
     async def invoke(name, arguments=None):
         return await capabilities.invoke(
@@ -256,7 +277,7 @@ def test_butler_workspace_directory_actions_and_device_handoff(tmp_path):
             },
         )
         assert created["kind"] == "directory"
-        assert (runtime.workspace_for(selected.id) / "captures").is_dir()
+        assert ((await runtime.workspace_for(selected.id)) / "captures").is_dir()
         with pytest.raises(Exception, match="changed"):
             await invoke(
                 "create_directory",
@@ -307,12 +328,15 @@ def test_butler_workspace_directory_actions_and_device_handoff(tmp_path):
             },
         )
         assert deletion["client_action"]["kind"] == "workspace_delete_directory"
-        assert (runtime.workspace_for(selected.id) / "archive").exists()
+        assert ((await runtime.workspace_for(selected.id)) / "archive").exists()
         workspace.delete(
             selected.id,
             "archive",
             expected_entry_identity=current["directory_identity"],
         )
-        assert not (runtime.workspace_for(selected.id) / "archive").exists()
+        assert not ((await runtime.workspace_for(selected.id)) / "archive").exists()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

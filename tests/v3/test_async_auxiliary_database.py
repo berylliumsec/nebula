@@ -1,5 +1,10 @@
 """Auxiliary runtime SQLite stores must also yield during database waits."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 import aiosqlite
@@ -19,7 +24,7 @@ from tests.v3.test_async_core import (
 from tests.v3.test_browserd import action
 
 
-def test_memory_api_keeps_project_scope_and_revision_after_restart(tmp_path):
+async def test_memory_api_keeps_project_scope_and_revision_after_restart(tmp_path):
     async def exercise():
         store = NebulaStore(tmp_path / "core.db")
         projects = await store.create_many(
@@ -94,11 +99,11 @@ def test_memory_api_keeps_project_scope_and_revision_after_restart(tmp_path):
                 ] == [local.id]
         assert store.database.pool_snapshot()["checked_out"] == 0
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
 @pytest.mark.parametrize("kind", ["memory", "browser_actions"])
-def test_auxiliary_writer_wait_yields_and_cancellation_cleans_up(tmp_path, kind):
+async def test_auxiliary_writer_wait_yields_and_cancellation_cleans_up(tmp_path, kind):
     async def exercise():
         path = tmp_path / (kind + ".db")
         if kind == "memory":
@@ -121,8 +126,8 @@ def test_auxiliary_writer_wait_yields_and_cancellation_cleans_up(tmp_path, kind)
             ledger = ActionLedger(path)
             await ledger.initialize()
 
-            def write():
-                return ledger.claim(action())
+            async def write():
+                return await ledger.claim(action())
 
         async with aiosqlite.connect(path) as blocker:
             await blocker.execute("BEGIN IMMEDIATE")
@@ -150,4 +155,7 @@ def test_auxiliary_writer_wait_yields_and_cancellation_cleans_up(tmp_path, kind)
             await ledger.finish(complete)
             assert await ActionLedger(path).claim(action()) == complete
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

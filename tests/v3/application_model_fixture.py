@@ -19,8 +19,8 @@ class FixtureWorkspacePaths:
         self.root = root
         self.store = store
 
-    def workspace_for(self, project_id):
-        project = self.store.get(Engagement, project_id)
+    async def workspace_for(self, project_id):
+        project = await self.store.get(Engagement, project_id)
         path = (
             Path(project.workspace_path)
             if project.workspace_path

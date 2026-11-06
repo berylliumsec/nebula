@@ -1,6 +1,10 @@
 """Core-observed exact read-only failure concern and bounded parent guidance."""
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import timedelta
 
 import pytest
@@ -49,7 +53,7 @@ class _CitedLoopReviewer:
         )
 
 
-def _record_call(
+async def _record_call(
     store,
     goal,
     *,
@@ -59,9 +63,9 @@ def _record_call(
     result=None,
     status=ToolCallStatus.FAILED,
 ):
-    session = store.get(ChatSession, goal.session_id)
+    session = await store.get(ChatSession, goal.session_id)
     started = utc_now() - timedelta(minutes=10 - index * 2)
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=goal.engagement_id,
             session_id=session.id,
@@ -74,7 +78,7 @@ def _record_call(
             created_at=started,
         )
     )
-    call = store.create(
+    call = await store.create(
         ToolCall(
             engagement_id=goal.engagement_id,
             run_id=turn.id,
@@ -91,28 +95,34 @@ def _record_call(
             created_at=started,
         )
     )
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"status": ChatTurnStatus.COMPLETE},
-        expected_revision=turn.revision,
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"status": ChatTurnStatus.COMPLETE},
+            expected_revision=turn.revision,
+        )
     )
     return call
 
 
-def test_three_exact_failures_create_one_concern_and_steer_only_the_parent(tmp_path):
-    store, app, project, main, _, child, worker = _setup(tmp_path, child=True)
+async def test_three_exact_failures_create_one_concern_and_steer_only_the_parent(
+    tmp_path,
+):
+    store, app, project, main, _, child, worker = await _setup(tmp_path, child=True)
     delivered = _capture_immediate_guidance(app)
     authority = app.state.butler_authority
     authority.write(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    calls = [_record_call(store, child, index=index) for index in range(3)]
-    _record_call(store, child, index=3)
+    calls = [(await _record_call(store, child, index=index)) for index in range(3)]
+    (await _record_call(store, child, index=3))
     events = [
         event
-        for event in store.replay_operation_events(project_stream_id(project.id))
+        for event in (
+            await store.replay_operation_events(project_stream_id(project.id))
+        )
         if event.event_type == "goal.read_only_tool_failures_repeated"
     ]
     assert len(events) == 1
@@ -122,23 +132,21 @@ def test_three_exact_failures_create_one_concern_and_steer_only_the_parent(tmp_p
         for ref in events[0].payload["evidence_refs"]
         if ref["kind"] == "tool_call"
     } == {call.id for call in calls}
-    incidents = store.find_entities(ButlerIncident, {}, engagement_id=project.id)
+    incidents = await store.find_entities(ButlerIncident, {}, engagement_id=project.id)
     assert len(incidents) == 1
     assert incidents[0].source == "repeated_read_only_tool_failure"
     assert len(incidents[0].evidence_summary) == 3
 
-    decision = asyncio.run(
-        review_pending(
-            store,
-            project.id,
-            worker.worker_id,
-            _CitedLoopReviewer(),
-            worker.memory_service,
-        )
+    decision = await review_pending(
+        store,
+        project.id,
+        worker.worker_id,
+        _CitedLoopReviewer(),
+        worker.memory_service,
     )
     assert decision is not None and decision.choice == "steer"
-    asyncio.run(authority.process_project(project.id, worker.worker_id))
-    actions = store.find_entities(ButlerAction, {}, engagement_id=project.id)
+    (await authority.process_project(project.id, worker.worker_id))
+    actions = await store.find_entities(ButlerAction, {}, engagement_id=project.id)
     assert len(actions) == 1 and actions[0].status == "dispatched"
     assert actions[0].target_session_id == main.id
     assert len(delivered) == 1
@@ -152,21 +160,27 @@ def test_three_exact_failures_create_one_concern_and_steer_only_the_parent(tmp_p
 
     reopened = NebulaStore(tmp_path / "core.db")
     restarted = ButlerOversightService(reopened)
-    state = reopened.get(ButlerProjectState, project_state_id(project.id))
-    reopened.update(
-        ButlerProjectState,
-        state.id,
-        {"lease_expires_at": utc_now() - timedelta(seconds=1)},
-        expected_revision=state.revision,
+    state = await reopened.get(ButlerProjectState, project_state_id(project.id))
+    (
+        await reopened.update(
+            ButlerProjectState,
+            state.id,
+            {"lease_expires_at": utc_now() - timedelta(seconds=1)},
+            expected_revision=state.revision,
+        )
     )
-    assert restarted.replay_project(project.id)
-    assert reopened.count_entities(ButlerIncident, engagement_id=project.id) == 1
+    assert await restarted.replay_project(project.id)
+    assert (
+        await reopened.count_entities(ButlerIncident, engagement_id=project.id)
+    ) == 1
     assert (
         len(
             [
                 event
-                for event in reopened.replay_operation_events(
-                    project_stream_id(project.id)
+                for event in (
+                    await reopened.replay_operation_events(
+                        project_stream_id(project.id)
+                    )
                 )
                 if event.event_type == "goal.read_only_tool_failures_repeated"
             ]
@@ -175,52 +189,52 @@ def test_three_exact_failures_create_one_concern_and_steer_only_the_parent(tmp_p
     )
 
 
-def test_changed_or_ambiguous_read_only_outcomes_do_not_create_concern(tmp_path):
-    store, _, project, _, goal, _, worker = _setup(tmp_path)
-    _record_call(store, goal, index=0)
-    _record_call(store, goal, index=1, arguments={"path": "other.txt"})
-    _record_call(store, goal, index=2)
-    _record_call(
-        store,
-        goal,
-        index=3,
-        result={"schema": "nebula.tool-failure/v1", "side_effects": "unknown"},
+async def test_changed_or_ambiguous_read_only_outcomes_do_not_create_concern(tmp_path):
+    store, _, project, _, goal, _, worker = await _setup(tmp_path)
+    (await _record_call(store, goal, index=0))
+    (await _record_call(store, goal, index=1, arguments={"path": "other.txt"}))
+    (await _record_call(store, goal, index=2))
+    (
+        await _record_call(
+            store,
+            goal,
+            index=3,
+            result={"schema": "nebula.tool-failure/v1", "side_effects": "unknown"},
+        )
     )
-    assert store.count_entities(ButlerIncident, engagement_id=project.id) == 0
+    assert (await store.count_entities(ButlerIncident, engagement_id=project.id)) == 0
 
 
-def test_success_after_review_cancels_redundant_parent_steer(tmp_path):
-    store, app, project, main, goal, _, worker = _setup(tmp_path)
+async def test_success_after_review_cancels_redundant_parent_steer(tmp_path):
+    store, app, project, main, goal, _, worker = await _setup(tmp_path)
     authority = app.state.butler_authority
     authority.write(
         project.id,
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
     for index in range(3):
-        _record_call(store, goal, index=index)
-    decision = asyncio.run(
-        review_pending(
-            store,
-            project.id,
-            worker.worker_id,
-            _CitedLoopReviewer(),
-            worker.memory_service,
-        )
+        (await _record_call(store, goal, index=index))
+    decision = await review_pending(
+        store,
+        project.id,
+        worker.worker_id,
+        _CitedLoopReviewer(),
+        worker.memory_service,
     )
     assert decision is not None and decision.choice == "steer"
-    _record_call(store, goal, index=3, status=ToolCallStatus.COMPLETE)
-    asyncio.run(authority.process_project(project.id, worker.worker_id))
-    assert store.count_entities(ButlerAction, engagement_id=project.id) == 0
+    (await _record_call(store, goal, index=3, status=ToolCallStatus.COMPLETE))
+    (await authority.process_project(project.id, worker.worker_id))
+    assert (await store.count_entities(ButlerAction, engagement_id=project.id)) == 0
     assert app.state.control_assistant_work.queue.get(main.id).items == []
-    assert store.count_entities(ButlerIncident, engagement_id=project.id) == 1
+    assert (await store.count_entities(ButlerIncident, engagement_id=project.id)) == 1
 
 
-def test_turn_completion_and_concern_roll_back_together_then_replay_once(
+async def test_turn_completion_and_concern_roll_back_together_then_replay_once(
     tmp_path, monkeypatch
 ):
-    store, _, project, _, goal, _, _ = _setup(tmp_path)
-    _record_call(store, goal, index=0)
-    _record_call(store, goal, index=1)
+    store, _, project, _, goal, _, _ = await _setup(tmp_path)
+    (await _record_call(store, goal, index=0))
+    (await _record_call(store, goal, index=1))
     append = tool_failures._append_project_event
 
     def fail_append(*args, **kwargs):
@@ -228,29 +242,36 @@ def test_turn_completion_and_concern_roll_back_together_then_replay_once(
 
     monkeypatch.setattr(tool_failures, "_append_project_event", fail_append)
     with pytest.raises(RuntimeError, match="injected event write failure"):
-        _record_call(store, goal, index=2)
-    latest = store.find_entities(
-        ChatTurn,
-        {"session_id": goal.session_id},
-        engagement_id=project.id,
-        newest_first=True,
-        limit=1,
+        (await _record_call(store, goal, index=2))
+    latest = (
+        await store.find_entities(
+            ChatTurn,
+            {"session_id": goal.session_id},
+            engagement_id=project.id,
+            newest_first=True,
+            limit=1,
+        )
     )[0]
     assert latest.status == ChatTurnStatus.ROUTING
-    assert store.count_entities(ButlerIncident, engagement_id=project.id) == 0
+    assert (await store.count_entities(ButlerIncident, engagement_id=project.id)) == 0
     monkeypatch.setattr(tool_failures, "_append_project_event", append)
-    completed = store.update(
+    completed = await store.update(
         ChatTurn,
         latest.id,
         {"status": ChatTurnStatus.COMPLETE},
         expected_revision=latest.revision,
     )
     assert completed.status == ChatTurnStatus.COMPLETE
-    assert store.count_entities(ButlerIncident, engagement_id=project.id) == 1
-    store.update(
-        ChatTurn,
-        latest.id,
-        {"status": ChatTurnStatus.COMPLETE},
-        expected_revision=completed.revision,
+    assert (await store.count_entities(ButlerIncident, engagement_id=project.id)) == 1
+    (
+        await store.update(
+            ChatTurn,
+            latest.id,
+            {"status": ChatTurnStatus.COMPLETE},
+            expected_revision=completed.revision,
+        )
     )
-    assert store.count_entities(ButlerIncident, engagement_id=project.id) == 1
+    assert (await store.count_entities(ButlerIncident, engagement_id=project.id)) == 1
+
+
+pytestmark = pytest.mark.anyio

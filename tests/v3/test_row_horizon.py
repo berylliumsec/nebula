@@ -7,6 +7,11 @@ new code from reintroducing that pattern; the other tests pin the store
 queries that replaced it.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import ast
 import base64
 from datetime import timedelta
@@ -121,10 +126,10 @@ def store(tmp_path):
     return NebulaStore(Database(tmp_path / "nebula.db"))
 
 
-def test_find_entities_reaches_a_row_past_the_first_page_by_indexed_and_integer_filters(
+async def test_find_entities_reaches_a_row_past_the_first_page_by_indexed_and_integer_filters(
     store,
 ):
-    project = store.create(Engagement(name="Browser automation"))
+    project = await store.create(Engagement(name="Browser automation"))
     lease = BrowserAutomationLease(
         engagement_id=project.id,
         run_id="run-1",
@@ -137,13 +142,13 @@ def test_find_entities_reaches_a_row_past_the_first_page_by_indexed_and_integer_
         expires_at=utc_now() + timedelta(minutes=5),
         status=BrowserAutomationLeaseStatus.EXPIRED,
     )
-    seed_older_copies(store, lease)
-    active = store.create(
+    (await seed_older_copies(store, lease))
+    active = await store.create(
         lease.model_copy(
             update={"id": "lease-newest", "status": BrowserAutomationLeaseStatus.ACTIVE}
         )
     )
-    other_run = store.create(
+    other_run = await store.create(
         lease.model_copy(
             update={
                 "id": "lease-other-run",
@@ -155,60 +160,69 @@ def test_find_entities_reaches_a_row_past_the_first_page_by_indexed_and_integer_
 
     assert "lease-newest" not in {
         item.id
-        for item in store.list_entities(
-            BrowserAutomationLease, engagement_id=project.id, limit=PAGE
+        for item in (
+            await store.list_entities(
+                BrowserAutomationLease, engagement_id=project.id, limit=PAGE
+            )
         )
     }
     assert [
         item.id
-        for item in store.find_entities(
-            BrowserAutomationLease,
-            {},
-            engagement_id=project.id,
-            automation_run_id="run-1",
-            automation_status="active",
+        for item in (
+            await store.find_entities(
+                BrowserAutomationLease,
+                {},
+                engagement_id=project.id,
+                automation_run_id="run-1",
+                automation_status="active",
+            )
         )
     ] == [active.id]
     assert {
         item.id
-        for item in store.find_entities(
-            BrowserAutomationLease,
-            {},
-            automation_session_id="session-1",
-            automation_status=["active", "paused"],
+        for item in (
+            await store.find_entities(
+                BrowserAutomationLease,
+                {},
+                automation_session_id="session-1",
+                automation_status=["active", "paused"],
+            )
         )
     } == {active.id, other_run.id}
     assert (
-        store.find_entities(
+        await store.find_entities(
             BrowserAutomationLease, {}, engagement_id=project.id, automation_status=[]
         )
-        == []
-    )
+    ) == []
 
     result = BrowserAttackResult(
         engagement_id=project.id, attack_id="attack-1", sequence=0
     )
-    seed_older_copies(store, result, vary=lambda index: {"sequence": index})
-    newest = store.create(
+    (await seed_older_copies(store, result, vary=lambda index: {"sequence": index}))
+    newest = await store.create(
         result.model_copy(update={"id": "result-newest", "sequence": PAGE})
     )
-    assert store.find_entities(
-        BrowserAttackResult, {"attack_id": "attack-1", "sequence": PAGE}
+    assert (
+        await store.find_entities(
+            BrowserAttackResult, {"attack_id": "attack-1", "sequence": PAGE}
+        )
     ) == [newest]
     assert [
         item.sequence
-        for item in store.find_entities(
-            BrowserAttackResult, {"attack_id": "attack-1", "sequence": 7}
+        for item in (
+            await store.find_entities(
+                BrowserAttackResult, {"attack_id": "attack-1", "sequence": 7}
+            )
         )
     ] == [7]
     with pytest.raises(TypeError, match="boolean"):
-        store.find_entities(BrowserAttackResult, {"blocked": True})
+        (await store.find_entities(BrowserAttackResult, {"blocked": True}))
 
 
-def test_list_latest_entities_windows_from_the_newest_end_in_chronological_order(
+async def test_list_latest_entities_windows_from_the_newest_end_in_chronological_order(
     store,
 ):
-    project = store.create(Engagement(name="Traffic"))
+    project = await store.create(Engagement(name="Traffic"))
     template = Artifact(
         engagement_id=project.id,
         filename="capture.bin",
@@ -217,22 +231,24 @@ def test_list_latest_entities_windows_from_the_newest_end_in_chronological_order
         size=1,
         storage_path="00/capture.bin",
     )
-    seed_older_copies(store, template)
+    (await seed_older_copies(store, template))
     base = utc_now()
     newest = [
-        store.create(
-            template.model_copy(
-                update={
-                    "id": f"artifact-new-{index}",
-                    "created_at": base + timedelta(seconds=index),
-                    "updated_at": base + timedelta(seconds=index),
-                }
+        (
+            await store.create(
+                template.model_copy(
+                    update={
+                        "id": f"artifact-new-{index}",
+                        "created_at": base + timedelta(seconds=index),
+                        "updated_at": base + timedelta(seconds=index),
+                    }
+                )
             )
         )
         for index in range(3)
     ]
 
-    window = store.list_latest_entities(Artifact, engagement_id=project.id)
+    window = await store.list_latest_entities(Artifact, engagement_id=project.id)
     assert len(window) == PAGE
     assert [item.id for item in window[-3:]] == [item.id for item in newest]
     assert [item.created_at for item in window] == sorted(
@@ -240,20 +256,22 @@ def test_list_latest_entities_windows_from_the_newest_end_in_chronological_order
     )
     assert [
         item.id
-        for item in store.list_latest_entities(
-            Artifact, {"filename": "capture.bin"}, engagement_id=project.id, limit=2
+        for item in (
+            await store.list_latest_entities(
+                Artifact, {"filename": "capture.bin"}, engagement_id=project.id, limit=2
+            )
         )
     ] == ["artifact-new-1", "artifact-new-2"]
     with pytest.raises(ValueError):
-        store.list_latest_entities(Artifact, limit=PAGE + 1)
+        (await store.list_latest_entities(Artifact, limit=PAGE + 1))
 
 
-def test_chat_image_preview_is_found_after_the_project_holds_a_page_of_artifacts(
+async def test_chat_image_preview_is_found_after_the_project_holds_a_page_of_artifacts(
     store, tmp_path
 ):
-    project = store.create(Engagement(name="Screenshots"))
+    project = await store.create(Engagement(name="Screenshots"))
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    original = store.create(
+    original = await store.create(
         artifacts.put_bytes(
             _PNG,
             engagement_id=project.id,
@@ -265,12 +283,14 @@ def test_chat_image_preview_is_found_after_the_project_holds_a_page_of_artifacts
     )
     # A long-lived Project already holds a page of other artifacts, all older
     # than the screenshot the operator attaches now.
-    seed_older_copies(
-        store,
-        original.model_copy(update={"metadata": {}}),
-        vary=lambda index: {"filename": f"evidence-{index}.png"},
+    (
+        await seed_older_copies(
+            store,
+            original.model_copy(update={"metadata": {}}),
+            vary=lambda index: {"filename": f"evidence-{index}.png"},
+        )
     )
-    preview = store.create(
+    preview = await store.create(
         artifacts.put_bytes(
             _PNG,
             engagement_id=project.id,
@@ -296,7 +316,7 @@ def test_chat_image_preview_is_found_after_the_project_holds_a_page_of_artifacts
         ],
     )
 
-    parts = resolve_chat_model_content(store, artifacts, message, project.id)
+    parts = await resolve_chat_model_content(store, artifacts, message, project.id)
 
     assert isinstance(parts, list)
     assert parts[1] == {
@@ -305,3 +325,6 @@ def test_chat_image_preview_is_found_after_the_project_holds_a_page_of_artifacts
         "data": base64.b64encode(_PNG).decode("ascii"),
         "alt": "shot",
     }
+
+
+pytestmark = pytest.mark.anyio

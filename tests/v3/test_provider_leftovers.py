@@ -12,6 +12,10 @@
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -143,7 +147,7 @@ def _dotted_request() -> ModelRequest:
     )
 
 
-def _compat_reply(text: str, *, streamed: bool):
+async def _compat_reply(text: str, *, streamed: bool):
     sent: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -170,18 +174,20 @@ def _compat_reply(text: str, *, streamed: bool):
         transport=httpx.MockTransport(handler),
     )
     if streamed:
-        events = asyncio.run(_collect(provider.stream(_dotted_request())))
+        events = await _collect(provider.stream(_dotted_request()))
         assert events[-1].type == StreamEventType.COMPLETED, events[-1]
         response = events[-1].response
     else:
-        response = asyncio.run(provider.complete(_dotted_request()))
+        response = await provider.complete(_dotted_request())
     return response, sent
 
 
 @RECOVERED_MARKUP
 @MODES
-def test_a_recovered_call_names_the_nebula_tool_not_its_wire_name(markup, streamed):
-    response, sent = _compat_reply(markup, streamed=streamed)
+async def test_a_recovered_call_names_the_nebula_tool_not_its_wire_name(
+    markup, streamed
+):
+    response, sent = await _compat_reply(markup, streamed=streamed)
 
     # The model was shown the wire name and wrote that one back.
     assert sent[0]["tools"][0]["function"]["name"] == WIRE
@@ -241,7 +247,7 @@ def test_every_native_adapter_decodes_a_recovered_call(kind):
     assert _calls(response) == [("tool_output.search", {"query": "open ports"})]
 
 
-def test_bedrock_decodes_a_recovered_call(monkeypatch):
+async def test_bedrock_decodes_a_recovered_call(monkeypatch):
     bedrock = _Bedrock(monkeypatch)
     glm = (
         "<tool_call>tool_output_search\n<arg_key>query</arg_key>\n"
@@ -254,13 +260,15 @@ def test_bedrock_decodes_a_recovered_call(monkeypatch):
     }
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
-    response = asyncio.run(provider.complete(_dotted_request()))
+    response = await provider.complete(_dotted_request())
 
     assert _calls(response) == [("tool_output.search", {"query": "open ports"})]
 
 
-def test_a_recovered_call_to_an_undeclared_tool_keeps_its_name():
-    response, _ = _compat_reply("<tool_call>list_hosts\n</tool_call>", streamed=False)
+async def test_a_recovered_call_to_an_undeclared_tool_keeps_its_name():
+    response, _ = await _compat_reply(
+        "<tool_call>list_hosts\n</tool_call>", streamed=False
+    )
 
     # Nothing to decode it to; chat answers it as an unavailable tool.
     assert _calls(response) == [("list_hosts", {})]
@@ -269,7 +277,7 @@ def test_a_recovered_call_to_an_undeclared_tool_keeps_its_name():
 # --- Typed stream errors --------------------------------------------------------
 
 
-def _compat_stream(*responses: httpx.Response) -> list[ModelStreamEvent]:
+async def _compat_stream(*responses: httpx.Response) -> list[ModelStreamEvent]:
     queue = list(responses)
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -283,7 +291,7 @@ def _compat_stream(*responses: httpx.Response) -> list[ModelStreamEvent]:
         transport=httpx.MockTransport(handler),
     )
     request = ModelRequest(messages=[ModelMessage(role="user", content="hi")])
-    return asyncio.run(_collect(provider.stream(request)))
+    return await _collect(provider.stream(request))
 
 
 STREAM_FAILURES = pytest.mark.parametrize(
@@ -322,8 +330,8 @@ STREAM_FAILURES = pytest.mark.parametrize(
 
 
 @STREAM_FAILURES
-def test_a_stream_error_event_carries_its_typed_failure(frame, kind, error_type):
-    events = _compat_stream(_sse(frame))
+async def test_a_stream_error_event_carries_its_typed_failure(frame, kind, error_type):
+    events = await _compat_stream(_sse(frame))
 
     error = events[-1]
     assert error.type == StreamEventType.ERROR
@@ -333,16 +341,16 @@ def test_a_stream_error_event_carries_its_typed_failure(frame, kind, error_type)
     assert str(failure) == error.error
 
 
-def test_a_streamed_refusal_keeps_its_reason():
-    events = _compat_stream(_sse(_chunk({}, "sensitive")))
+async def test_a_streamed_refusal_keeps_its_reason():
+    events = await _compat_stream(_sse(_chunk({}, "sensitive")))
 
     failure = events[-1].provider_error()
     assert isinstance(failure, ProviderRefusalError)
     assert failure.reason == "content filter stopped the reply (sensitive)"
 
 
-def test_an_unclassified_stream_error_names_no_kind():
-    events = _compat_stream(
+async def test_an_unclassified_stream_error_names_no_kind():
+    events = await _compat_stream(
         _sse({"error": {"code": 400, "message": "unsupported parameter"}})
     )
 
@@ -351,33 +359,33 @@ def test_an_unclassified_stream_error_names_no_kind():
     assert events[-1].provider_error() is None
 
 
-def test_the_non_streaming_fallback_types_its_error_events():
+async def test_the_non_streaming_fallback_types_its_error_events():
     provider, _ = _http_provider(
         AnthropicProvider, ProviderKind.ANTHROPIC, CYBER_REFUSAL
     )
     request = ModelRequest(messages=[ModelMessage(role="user", content="hi")])
 
-    events = asyncio.run(_collect(provider.stream(request)))
+    events = await _collect(provider.stream(request))
 
     assert events[-1].error_kind == "refusal"
     assert isinstance(events[-1].provider_error(), ProviderRefusalError)
 
 
-def _tool_free_stream(tmp_path, provider):
-    store, service, prepared, _broker = _chat(tmp_path, provider)
+async def _tool_free_stream(tmp_path, provider):
+    store, service, prepared, _broker = await _chat(tmp_path, provider)
     prepared.tools_enabled = False
 
     async def drain():
         return [item async for item in service.stream(prepared)]
 
-    return store, lambda: asyncio.run(drain())
+    return store, drain
 
 
-def test_a_streamed_answer_refusal_reaches_the_operator_as_a_refusal(tmp_path):
+async def test_a_streamed_answer_refusal_reaches_the_operator_as_a_refusal(tmp_path):
     provider, _ = _http_provider(
         AnthropicProvider, ProviderKind.ANTHROPIC, CYBER_REFUSAL
     )
-    _store, drain = _tool_free_stream(tmp_path, provider)
+    _store, drain = await _tool_free_stream(tmp_path, provider)
 
     with pytest.raises(ProviderRefusalError) as failure:
         drain()
@@ -385,7 +393,7 @@ def test_a_streamed_answer_refusal_reaches_the_operator_as_a_refusal(tmp_path):
     assert failure.value.reason.startswith("refusal (category: cyber)")
 
 
-def test_a_streamed_answer_on_spent_quota_is_a_quota_error(tmp_path):
+async def test_a_streamed_answer_on_spent_quota_is_a_quota_error(tmp_path):
     provider = OpenAICompatibleProvider(
         _config(ProviderKind.OPENAI_COMPATIBLE, ProviderFlavor.OPENROUTER),
         transport=httpx.MockTransport(
@@ -400,13 +408,13 @@ def test_a_streamed_answer_on_spent_quota_is_a_quota_error(tmp_path):
             )
         ),
     )
-    _store, drain = _tool_free_stream(tmp_path, provider)
+    _store, drain = await _tool_free_stream(tmp_path, provider)
 
     with pytest.raises(ProviderQuotaError, match="exceeded your current quota"):
         drain()
 
 
-def test_an_unclassified_streamed_answer_failure_is_still_a_chat_error(tmp_path):
+async def test_an_unclassified_streamed_answer_failure_is_still_a_chat_error(tmp_path):
     provider = OpenAICompatibleProvider(
         _config(ProviderKind.OPENAI_COMPATIBLE, ProviderFlavor.OPENROUTER),
         transport=httpx.MockTransport(
@@ -415,7 +423,7 @@ def test_an_unclassified_streamed_answer_failure_is_still_a_chat_error(tmp_path)
             )
         ),
     )
-    _store, drain = _tool_free_stream(tmp_path, provider)
+    _store, drain = await _tool_free_stream(tmp_path, provider)
 
     with pytest.raises(ChatError, match="unsupported parameter"):
         drain()
@@ -438,7 +446,7 @@ QUOTA_SPENT = {
     ],
     ids=["refusal", "quota"],
 )
-def test_a_synthesis_stream_failure_is_raised_as_its_typed_error(
+async def test_a_synthesis_stream_failure_is_raised_as_its_typed_error(
     tmp_path, status, synthesis, error_type, wording
 ):
     replies = [
@@ -457,15 +465,15 @@ def test_a_synthesis_stream_failure_is_raised_as_its_typed_error(
         _config(ProviderKind.ANTHROPIC, ProviderFlavor.ANTHROPIC),
         transport=httpx.MockTransport(handler),
     )
-    store, service, prepared, broker = _chat(tmp_path, provider)
+    store, service, prepared, broker = await _chat(tmp_path, provider)
 
     with pytest.raises(error_type, match=wording):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     # Neither is retried: the same request gets the same answer.
     assert len(sent) == 3
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    failed = store.get(ChatTurn, "turn")
+    failed = await store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert wording in failed.error
 
@@ -492,7 +500,7 @@ def test_deepseek_beta_base_url_takes_no_extra_version(path, expected):
     assert provider._path(path) == expected
 
 
-def test_deepseek_beta_requests_reach_the_beta_endpoint():
+async def test_deepseek_beta_requests_reach_the_beta_endpoint():
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -521,10 +529,8 @@ def test_deepseek_beta_requests_reach_the_beta_endpoint():
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(
-        provider.complete(
-            ModelRequest(messages=[ModelMessage(role="user", content="hi")])
-        )
+    response = await provider.complete(
+        ModelRequest(messages=[ModelMessage(role="user", content="hi")])
     )
 
     assert response.text == "3 hosts."
@@ -548,21 +554,23 @@ UNOPENED = pytest.mark.parametrize(
 
 
 @UNOPENED
-def test_bedrock_resends_a_request_whose_connection_never_opened(monkeypatch, failure):
+async def test_bedrock_resends_a_request_whose_connection_never_opened(
+    monkeypatch, failure
+):
     request = ModelRequest(messages=[ModelMessage(role="user", content="hello")])
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
     recovered = _Bedrock(monkeypatch, failure)
-    assert asyncio.run(provider.complete(request)).text == "ok"
+    assert (await provider.complete(request)).text == "ok"
     assert len(recovered.calls) == 2
 
     exhausted = _Bedrock(monkeypatch, *[failure] * 3)
     with pytest.raises(ProviderOverloadedError, match=type(failure).__name__):
-        asyncio.run(provider.complete(request))
+        (await provider.complete(request))
     assert len(exhausted.calls) == 3
 
 
-def test_bedrock_still_never_resends_after_a_read_timeout(monkeypatch):
+async def test_bedrock_still_never_resends_after_a_read_timeout(monkeypatch):
     bedrock = _Bedrock(
         monkeypatch,
         ReadTimeoutError(
@@ -572,8 +580,8 @@ def test_bedrock_still_never_resends_after_a_read_timeout(monkeypatch):
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
     with pytest.raises(ProviderError) as failure:
-        asyncio.run(
-            provider.complete(
+        (
+            await provider.complete(
                 ModelRequest(messages=[ModelMessage(role="user", content="hello")])
             )
         )
@@ -608,8 +616,8 @@ HERMES_CALLS = pytest.mark.parametrize(
 
 @HERMES_CALLS
 @MODES
-def test_hermes_tool_call_json_is_recovered_as_a_tool_call(markup, streamed):
-    response, _ = _reply(QWEN, _pieces(markup), streamed=streamed)
+async def test_hermes_tool_call_json_is_recovered_as_a_tool_call(markup, streamed):
+    response, _ = await _reply(QWEN, _pieces(markup), streamed=streamed)
 
     assert _calls(response) == [("safe_read", {"value": "a"})]
     assert response.text == ""
@@ -618,24 +626,28 @@ def test_hermes_tool_call_json_is_recovered_as_a_tool_call(markup, streamed):
 
 
 @MODES
-def test_an_answer_before_hermes_calls_stands_and_every_call_is_recovered(streamed):
+async def test_an_answer_before_hermes_calls_stands_and_every_call_is_recovered(
+    streamed,
+):
     reply = (
         "Checking both.\n\n"
         + HERMES_NEWLINE
         + '\n<tool_call>\n{"name": "list_hosts", "arguments": {}}\n</tool_call>'
     )
 
-    response, _ = _reply(QWEN, _pieces(reply, 7), streamed=streamed)
+    response, _ = await _reply(QWEN, _pieces(reply, 7), streamed=streamed)
 
     assert response.text == "Checking both."
     assert _calls(response) == [("safe_read", {"value": "a"}), ("list_hosts", {})]
 
 
 @MODES
-def test_glm_and_hermes_frames_are_each_read_in_their_own_grammar(streamed):
+async def test_glm_and_hermes_frames_are_each_read_in_their_own_grammar(streamed):
     glm = "<tool_call>list_hosts\n<arg_key>limit</arg_key>\n<arg_value>5</arg_value>\n</tool_call>"
 
-    response, _ = _reply(QWEN, _pieces(glm + "\n" + HERMES_NEWLINE), streamed=streamed)
+    response, _ = await _reply(
+        QWEN, _pieces(glm + "\n" + HERMES_NEWLINE), streamed=streamed
+    )
 
     assert _calls(response) == [
         ("list_hosts", {"limit": 5}),
@@ -667,8 +679,10 @@ UNREADABLE_HERMES = pytest.mark.parametrize(
 
 @UNREADABLE_HERMES
 @MODES
-def test_hermes_markup_core_cannot_read_is_quarantined_not_answered(frame, streamed):
-    response, _ = _reply(QWEN, _pieces(frame), streamed=streamed)
+async def test_hermes_markup_core_cannot_read_is_quarantined_not_answered(
+    frame, streamed
+):
+    response, _ = await _reply(QWEN, _pieces(frame), streamed=streamed)
 
     assert response.tool_calls == []
     assert _final_answer_problem(response) == "provider_control_frame"
@@ -708,9 +722,9 @@ def test_text_that_only_mentions_the_tag_is_still_an_answer(text):
     assert shown + answer.held_tail(text) == text
 
 
-def test_hermes_markup_in_a_routing_step_runs_like_any_other_tool_call(tmp_path):
+async def test_hermes_markup_in_a_routing_step_runs_like_any_other_tool_call(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, _provider = _prepared(
+    store, service, prepared, _provider = await _prepared(
         tmp_path,
         [
             _response(text=HERMES_NEWLINE),
@@ -722,10 +736,13 @@ def test_hermes_markup_in_a_routing_step_runs_like_any_other_tool_call(tmp_path)
         broker,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "The safe tool returned a."
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         ("safe_read", {"value": "a"})
     ]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
+
+
+pytestmark = pytest.mark.anyio

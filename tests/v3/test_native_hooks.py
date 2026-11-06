@@ -1,4 +1,7 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import json
 import subprocess
 from pathlib import Path
@@ -48,7 +51,9 @@ def _hook(
     return directory
 
 
-def test_native_hook_catalog_uses_agents_root_and_freezes_source_digests(tmp_path):
+async def test_native_hook_catalog_uses_agents_root_and_freezes_source_digests(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     directory = _hook(workspace)
     _hook(workspace / ".codex", name="ignored")
@@ -64,8 +69,8 @@ def test_native_hook_catalog_uses_agents_root_and_freezes_source_digests(tmp_pat
 
     (directory / "run.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     with pytest.raises(NativeHookError, match="executable changed"):
-        asyncio.run(
-            NativeHookRunner(NebulaStore(tmp_path / "tamper.db")).run(
+        (
+            await NativeHookRunner(NebulaStore(tmp_path / "tamper.db")).run(
                 snapshot,
                 engagement_id="eng",
                 chat_session_id="session",
@@ -76,32 +81,36 @@ def test_native_hook_catalog_uses_agents_root_and_freezes_source_digests(tmp_pat
         )
 
 
-def test_native_hook_refuses_relink_before_running_row_is_saved(tmp_path, monkeypatch):
+async def test_native_hook_refuses_relink_before_running_row_is_saved(
+    tmp_path, monkeypatch
+):
     old_folder = tmp_path / "old"
     new_folder = tmp_path / "new"
     _hook(old_folder)
     new_folder.mkdir()
     snapshot = snapshot_native_hook("audit", discover_native_hooks(old_folder))
     store = NebulaStore(tmp_path / "hook-relink.db")
-    project = store.create(
+    project = await store.create(
         Engagement(name="Hook relink", workspace_path=str(old_folder))
     )
     original_transaction = store.transaction
     relinked = False
 
-    def relink_before_admission(*args, **kwargs):
+    async def relink_before_admission(*args, **kwargs):
         nonlocal relinked
         if not relinked:
             relinked = True
-            store.relink_project_workspace(
-                project.id, str(new_folder), expected_revision=project.revision
+            (
+                await store.relink_project_workspace(
+                    project.id, str(new_folder), expected_revision=project.revision
+                )
             )
         return original_transaction(*args, **kwargs)
 
     monkeypatch.setattr(store, "transaction", relink_before_admission)
     with pytest.raises(ConflictError, match="Project workspace changed"):
-        asyncio.run(
-            NativeHookRunner(store).run(
+        (
+            await NativeHookRunner(store).run(
                 snapshot,
                 engagement_id=project.id,
                 chat_session_id="session",
@@ -113,7 +122,7 @@ def test_native_hook_refuses_relink_before_running_row_is_saved(tmp_path, monkey
         )
 
     assert relinked
-    assert store.count(NativeHookExecution, engagement_id=project.id) == 0
+    assert (await store.count(NativeHookExecution, engagement_id=project.id)) == 0
 
 
 def test_native_hook_exact_git_root_does_not_require_inheritance_opt_in(tmp_path):
@@ -270,31 +279,31 @@ def test_native_hook_discovery_preserves_symlinked_workspace_inside_shared_root(
     )
 
 
-def test_native_hook_runner_persists_versioned_bounded_outcome(tmp_path):
+async def test_native_hook_runner_persists_versioned_bounded_outcome(tmp_path):
     workspace = tmp_path / "workspace"
     _hook(workspace)
     snapshot = snapshot_native_hook("audit", discover_native_hooks(workspace))
     store = NebulaStore(tmp_path / "hooks.db")
 
-    execution = asyncio.run(
-        NativeHookRunner(store).run(
-            snapshot,
-            engagement_id="eng",
-            chat_session_id="session",
-            chat_turn_id="turn",
-            event_name="chat.turn.started",
-            payload={"model": "author/model"},
-        )
+    execution = await NativeHookRunner(store).run(
+        snapshot,
+        engagement_id="eng",
+        chat_session_id="session",
+        chat_turn_id="turn",
+        event_name="chat.turn.started",
+        payload={"model": "author/model"},
     )
 
     assert execution.status == "complete"
     assert execution.event_version == 1
     assert execution.stdout.strip() == "chat.turn.started"
     assert execution.side_effects == "workspace"
-    assert store.get(type(execution), execution.id) == execution
+    assert (await store.get(type(execution), execution.id)) == execution
 
 
-def test_native_hook_uses_user_home_for_url_scoped_git_helper(tmp_path, monkeypatch):
+async def test_native_hook_uses_user_home_for_url_scoped_git_helper(
+    tmp_path, monkeypatch
+):
     home = tmp_path / "home"
     home.mkdir()
     (home / ".gitconfig").write_text(
@@ -315,22 +324,22 @@ def test_native_hook_uses_user_home_for_url_scoped_git_helper(tmp_path, monkeypa
     )
     snapshot = snapshot_native_hook("audit", discover_native_hooks(workspace))
 
-    execution = asyncio.run(
-        NativeHookRunner(NebulaStore(tmp_path / "git-hook.db")).run(
-            snapshot,
-            engagement_id="eng",
-            chat_session_id="session",
-            chat_turn_id="turn",
-            event_name="chat.turn.started",
-            payload={},
-        )
+    execution = await NativeHookRunner(NebulaStore(tmp_path / "git-hook.db")).run(
+        snapshot,
+        engagement_id="eng",
+        chat_session_id="session",
+        chat_turn_id="turn",
+        event_name="chat.turn.started",
+        payload={},
     )
 
     assert execution.status == "complete"
     assert execution.stdout.strip() == "/tmp/fixture-git-credential"
 
 
-def test_native_hook_envelope_exposes_generic_actor_and_workspace_provenance(tmp_path):
+async def test_native_hook_envelope_exposes_generic_actor_and_workspace_provenance(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     _hook(
         workspace,
@@ -342,24 +351,22 @@ def test_native_hook_envelope_exposes_generic_actor_and_workspace_provenance(tmp
     snapshot = snapshot_native_hook("audit", discover_native_hooks(workspace))
     store = NebulaStore(tmp_path / "envelope.db")
 
-    execution = asyncio.run(
-        NativeHookRunner(store).run(
-            snapshot,
-            engagement_id="eng",
-            chat_session_id="child-session",
-            chat_turn_id="child-turn",
-            owner_kind="chat",
-            owner_id="child-session",
-            event_name="chat.turn.completed",
-            payload={"model": "model"},
-            workspace_provenance={
-                "schema": "nebula.workspace-provenance/v1",
-                "actor_id": "subagent:child-agent",
-                "supported": True,
-                "confidence": "exact",
-                "attribution": {"owned": [{"path": "owned.txt"}]},
-            },
-        )
+    execution = await NativeHookRunner(store).run(
+        snapshot,
+        engagement_id="eng",
+        chat_session_id="child-session",
+        chat_turn_id="child-turn",
+        owner_kind="chat",
+        owner_id="child-session",
+        event_name="chat.turn.completed",
+        payload={"model": "model"},
+        workspace_provenance={
+            "schema": "nebula.workspace-provenance/v1",
+            "actor_id": "subagent:child-agent",
+            "supported": True,
+            "confidence": "exact",
+            "attribution": {"owned": [{"path": "owned.txt"}]},
+        },
     )
     envelope = json.loads(execution.stdout)
 
@@ -378,7 +385,9 @@ def test_native_hook_envelope_exposes_generic_actor_and_workspace_provenance(tmp
     ]
 
 
-def test_native_hook_runner_times_out_without_treating_output_as_approval(tmp_path):
+async def test_native_hook_runner_times_out_without_treating_output_as_approval(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     _hook(
         workspace,
@@ -388,15 +397,13 @@ def test_native_hook_runner_times_out_without_treating_output_as_approval(tmp_pa
     snapshot = snapshot_native_hook("audit", discover_native_hooks(workspace))
     store = NebulaStore(tmp_path / "timeout.db")
 
-    execution = asyncio.run(
-        NativeHookRunner(store).run(
-            snapshot,
-            engagement_id="eng",
-            chat_session_id="session",
-            chat_turn_id="turn",
-            event_name="chat.turn.started",
-            payload={"approval_id": "approval"},
-        )
+    execution = await NativeHookRunner(store).run(
+        snapshot,
+        engagement_id="eng",
+        chat_session_id="session",
+        chat_turn_id="turn",
+        event_name="chat.turn.started",
+        payload={"approval_id": "approval"},
     )
 
     assert execution.status == "timed_out"
@@ -415,3 +422,6 @@ def test_native_hook_catalog_accepts_project_tool_boundaries(tmp_path):
     [descriptor] = discover_native_hooks(workspace)
 
     assert descriptor.manifest.events == ["tool.before", "tool.after"]
+
+
+pytestmark = pytest.mark.anyio

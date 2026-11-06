@@ -1,9 +1,12 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import sqlite3
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.domain import Engagement
@@ -46,13 +49,15 @@ def test_file_index_lists_exact_project_and_reports_partial_index(tmp_path):
     assert "some notebooks may be missing" in partial.warning
 
 
-def test_project_prefers_index_then_falls_back_and_removal_persists(
+async def test_project_prefers_index_then_falls_back_and_removal_persists(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "store.db")
     root = tmp_path / "workspace"
     root.mkdir()
-    project = store.create(Engagement(name="Index project", workspace_path=str(root)))
+    project = await store.create(
+        Engagement(name="Index project", workspace_path=str(root))
+    )
     service = NotebookService(
         store=store,
         workspace_resolver=lambda _: root,
@@ -85,7 +90,7 @@ def test_project_prefers_index_then_falls_back_and_removal_persists(
         assert [
             item["path"] for item in await service.list_async(project.id, refresh=True)
         ] == ["a.ipynb", "new.ipynb"]
-        assert service.file_index_status(project.id)["state"] == "partial"
+        assert (await service.file_index_status(project.id))["state"] == "partial"
         assert not scans
         with sqlite3.connect(index) as connection:
             connection.execute("UPDATE repositories SET pending_files=0")
@@ -93,30 +98,32 @@ def test_project_prefers_index_then_falls_back_and_removal_persists(
         assert [
             item["path"] for item in await service.list_async(project.id, refresh=True)
         ] == ["new.ipynb"]
-        assert service.file_index_status(project.id)["state"] == "connected"
+        assert (await service.file_index_status(project.id))["state"] == "connected"
         assert not scans
         with sqlite3.connect(index) as connection:
             connection.execute("DROP TABLE files")
         assert [
             item["path"] for item in await service.list_async(project.id, refresh=True)
         ] == ["fallback.ipynb"]
-        assert service.file_index_status(project.id)["state"] == "fallback"
+        assert (await service.file_index_status(project.id))["state"] == "fallback"
         assert len(scans) == 1
         await service.set_file_index(project.id, None)
-        assert service.file_index_status(project.id)["state"] == "none"
+        assert (await service.file_index_status(project.id))["state"] == "none"
         assert [item["path"] for item in await service.list_async(project.id)] == [
             "fallback.ipynb"
         ]
         assert len(scans) == 2
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_file_index_change_requires_current_project_revision(tmp_path):
+async def test_file_index_change_requires_current_project_revision(tmp_path):
     store = NebulaStore(tmp_path / "store.db")
     root = tmp_path / "workspace"
     root.mkdir()
-    project = store.create(Engagement(name="Index project", workspace_path=str(root)))
+    project = await store.create(
+        Engagement(name="Index project", workspace_path=str(root))
+    )
     index = _inventory(tmp_path, root)
     service = NotebookService(
         store=store,
@@ -126,7 +133,7 @@ def test_file_index_change_requires_current_project_revision(tmp_path):
     )
 
     async def scenario():
-        initial = service.file_index_status(project.id)
+        initial = await service.file_index_status(project.id)
         assert initial["path"] is None
         with pytest.raises(ConflictError, match="Project changed"):
             await service.set_file_index(
@@ -134,7 +141,7 @@ def test_file_index_change_requires_current_project_revision(tmp_path):
                 str(index),
                 expected_project_revision=initial["project_revision"] + 1,
             )
-        assert service.file_index_status(project.id)["path"] is None
+        assert (await service.file_index_status(project.id))["path"] is None
         saved = await service.set_file_index(
             project.id,
             str(index),
@@ -146,39 +153,40 @@ def test_file_index_change_requires_current_project_revision(tmp_path):
             await service.set_file_index(
                 project.id, None, expected_project_revision=initial["project_revision"]
             )
-        assert service.file_index_status(project.id)["path"] == str(index)
+        assert (await service.file_index_status(project.id))["path"] == str(index)
         removed = await service.set_file_index(
             project.id, None, expected_project_revision=saved["project_revision"]
         )
         assert removed["state"] == "none"
         assert index.is_file()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_file_index_api_rejects_stale_connect_and_remove(tmp_path):
+async def test_file_index_api_rejects_stale_connect_and_remove(tmp_path):
     store = NebulaStore(tmp_path / "store.db")
     root = tmp_path / "workspace"
     root.mkdir()
-    project = store.create(Engagement(name="Index project", workspace_path=str(root)))
+    project = await store.create(
+        Engagement(name="Index project", workspace_path=str(root))
+    )
     index = _inventory(tmp_path, root)
     url = f"/api/v1/engagements/{project.id}/notebooks/file-index"
     headers = {"Authorization": "Bearer test-token"}
-    with TestClient(create_app(store, auth_token="test-token")) as client:
-        initial = client.get(url, headers=headers).json()
+    async with TestClient(create_app(store, auth_token="test-token")) as client:
+        initial = (await client.get(url, headers=headers)).json()
         assert initial["path"] is None
         assert (
-            client.put(
+            await client.put(
                 url,
                 headers=headers,
                 json={
                     "path": str(index),
                     "expected_project_revision": initial["project_revision"] + 1,
                 },
-            ).status_code
-            == 409
-        )
-        connected = client.put(
+            )
+        ).status_code == 409
+        connected = await client.put(
             url,
             headers=headers,
             json={
@@ -190,17 +198,16 @@ def test_file_index_api_rejects_stale_connect_and_remove(tmp_path):
         saved = connected.json()
         assert saved["path"] == str(index)
         assert (
-            client.delete(
+            await client.delete(
                 url,
                 headers=headers,
                 params={
                     "expected_project_revision": initial["project_revision"],
                 },
-            ).status_code
-            == 409
-        )
-        assert client.get(url, headers=headers).json()["path"] == str(index)
-        removed = client.delete(
+            )
+        ).status_code == 409
+        assert (await client.get(url, headers=headers)).json()["path"] == str(index)
+        removed = await client.delete(
             url,
             headers=headers,
             params={
@@ -212,14 +219,14 @@ def test_file_index_api_rejects_stale_connect_and_remove(tmp_path):
         assert index.is_file()
 
 
-def test_host_index_browser_pages_sqlite_files(tmp_path):
+async def test_host_index_browser_pages_sqlite_files(tmp_path):
     browser = tmp_path / "indexes"
     browser.mkdir()
     for name in ("a.db", "b.sqlite", "c.sqlite3", "ignored.txt"):
         (browser / name).touch()
     store = NebulaStore(tmp_path / "store.db")
-    with TestClient(create_app(store, auth_token="test-token")) as client:
-        first = client.get(
+    async with TestClient(create_app(store, auth_token="test-token")) as client:
+        first = await client.get(
             "/api/v1/workspace-folders",
             params={
                 "path": str(browser),
@@ -230,7 +237,7 @@ def test_host_index_browser_pages_sqlite_files(tmp_path):
         )
         assert first.status_code == 200
         assert [item["name"] for item in first.json()["files"]] == ["a.db", "b.sqlite"]
-        second = client.get(
+        second = await client.get(
             "/api/v1/workspace-folders",
             params={
                 "path": str(browser),
@@ -242,3 +249,6 @@ def test_host_index_browser_pages_sqlite_files(tmp_path):
         )
         assert second.status_code == 200
         assert [item["name"] for item in second.json()["files"]] == ["c.sqlite3"]
+
+
+pytestmark = pytest.mark.anyio

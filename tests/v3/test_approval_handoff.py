@@ -1,5 +1,10 @@
 """Exact native handoff bookkeeping; no tools or external adapters execute."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 import httpx
@@ -11,13 +16,15 @@ from tests.v3.test_approval_continuation import fixture
 
 
 async def decide_native(tmp_path):
-    app, store, runtime, approval, turn, owner = fixture(tmp_path, "read_fixture")
-    call = store.get(ToolCall, approval.tool_call_id)
-    store.update(
-        ToolCall,
-        call.id,
-        {"metadata": {**call.metadata, "adapter_handoff": "transport_write"}},
-        expected_revision=call.revision,
+    app, store, runtime, approval, turn, owner = await fixture(tmp_path, "read_fixture")
+    call = await store.get(ToolCall, approval.tool_call_id)
+    (
+        await store.update(
+            ToolCall,
+            call.id,
+            {"metadata": {**call.metadata, "adapter_handoff": "transport_write"}},
+            expected_revision=call.revision,
+        )
     )
     future = asyncio.get_running_loop().create_future()
     runtime._approval_futures[approval.id] = future
@@ -34,36 +41,42 @@ async def decide_native(tmp_path):
     return (
         store,
         runtime,
-        store.get(Approval, approval.id),
+        (await store.get(Approval, approval.id)),
         turn,
         owner,
         response.json(),
     )
 
 
-def test_decision_response_distinguishes_waiter_delivery_from_adapter_handoff(tmp_path):
+async def test_decision_response_distinguishes_waiter_delivery_from_adapter_handoff(
+    tmp_path,
+):
     async def scenario():
         store, runtime, approval, turn, owner, response = await decide_native(tmp_path)
         assert response["continuation"]["status"] == "delivered"
         assert response["continuation"]["adapter_status"] == "pending"
         assert response["continuation"]["adapter_handoff"] == "transport_write"
         # The legacy running reservation is not evidence of execution progress.
-        current = store.get(HarnessTurn, turn.id)
-        store.update(
-            HarnessTurn,
-            turn.id,
-            {"status": "running"},
-            expected_revision=current.revision,
+        current = await store.get(HarnessTurn, turn.id)
+        (
+            await store.update(
+                HarnessTurn,
+                turn.id,
+                {"status": "running"},
+                expected_revision=current.revision,
+            )
         )
-        state = session_state(store, store.get(ChatSession, owner.session_id), runtime)
+        state = await session_state(
+            store, (await store.get(ChatSession, owner.session_id)), runtime
+        )
         assert state["execution"] == "continuing"
         assert state["decisions"][0]["progress"] == "not_observed"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("status", ["sent", "failed"])
-def test_adapter_handoff_is_bound_idempotent_and_does_not_claim_execution(
+async def test_adapter_handoff_is_bound_idempotent_and_does_not_claim_execution(
     tmp_path, status
 ):
     from nebula.v3.approval_delivery import record_adapter_handoff
@@ -72,97 +85,109 @@ def test_adapter_handoff_is_bound_idempotent_and_does_not_claim_execution(
     async def scenario():
         store, runtime, approval, turn, owner, _ = await decide_native(tmp_path)
         with pytest.raises(ConflictError):
-            record_adapter_handoff(store, approval.id, "unrelated-turn", status)
-        saved = record_adapter_handoff(store, approval.id, turn.id, status)
+            (await record_adapter_handoff(store, approval.id, "unrelated-turn", status))
+        saved = await record_adapter_handoff(store, approval.id, turn.id, status)
         assert saved.status.value == "approved"
         assert saved.continuation.status == "delivered"
         assert saved.continuation.adapter_status == status
-        assert record_adapter_handoff(store, approval.id, turn.id, status) == saved
+        assert (
+            await record_adapter_handoff(store, approval.id, turn.id, status)
+        ) == saved
         # A late conflicting receipt cannot rewrite a previously recorded handoff.
         assert (
-            record_adapter_handoff(
+            await record_adapter_handoff(
                 store, approval.id, turn.id, "failed" if status == "sent" else "sent"
             )
-            == saved
+        ) == saved
+        state = await session_state(
+            store, (await store.get(ChatSession, owner.session_id)), runtime
         )
-        state = session_state(store, store.get(ChatSession, owner.session_id), runtime)
         assert state["execution"] == (
             "continuing" if status == "sent" else "interrupted"
         )
         assert state["decisions"][0]["progress"] == "not_observed"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_only_ordered_execution_activity_in_the_owning_turn_advances_progress(tmp_path):
+async def test_only_ordered_execution_activity_in_the_owning_turn_advances_progress(
+    tmp_path,
+):
     from nebula.v3.approval_delivery import record_adapter_handoff
 
     async def scenario():
         store, runtime, approval, turn, owner, _ = await decide_native(tmp_path)
-        store.append_operation_event(
-            turn.id,
-            "harness_turn",
-            turn.engagement_id,
-            "harness.message_delta",
-            {"delta": "queued before handoff"},
+        (
+            await store.append_operation_event(
+                turn.id,
+                "harness_turn",
+                turn.engagement_id,
+                "harness.message_delta",
+                {"delta": "queued before handoff"},
+            )
         )
-        record_adapter_handoff(store, approval.id, turn.id, "sent")
-        store.append_operation_event(
-            "unrelated-turn",
-            "harness_turn",
-            turn.engagement_id,
-            "harness.message_delta",
-            {"delta": "other"},
+        (await record_adapter_handoff(store, approval.id, turn.id, "sent"))
+        (
+            await store.append_operation_event(
+                "unrelated-turn",
+                "harness_turn",
+                turn.engagement_id,
+                "harness.message_delta",
+                {"delta": "other"},
+            )
         )
-        store.append_operation_event(
-            turn.id,
-            "harness_turn",
-            turn.engagement_id,
-            "harness.status",
-            {"phase": "running"},
+        (
+            await store.append_operation_event(
+                turn.id,
+                "harness_turn",
+                turn.engagement_id,
+                "harness.status",
+                {"phase": "running"},
+            )
         )
-        chat = store.get(ChatSession, owner.session_id)
-        state = session_state(store, chat, runtime)
+        chat = await store.get(ChatSession, owner.session_id)
+        state = await session_state(store, chat, runtime)
         assert state["decisions"][0]["progress"] == "not_observed"
-        store.append_operation_event(
-            turn.id,
-            "harness_turn",
-            turn.engagement_id,
-            "harness.message_delta",
-            {"delta": "inert reply"},
+        (
+            await store.append_operation_event(
+                turn.id,
+                "harness_turn",
+                turn.engagement_id,
+                "harness.message_delta",
+                {"delta": "inert reply"},
+            )
         )
-        progressed = session_state(store, chat, runtime)
+        progressed = await session_state(store, chat, runtime)
         assert progressed["decisions"][0]["progress"] == "observed"
         assert progressed["revision"] > state["revision"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_restart_after_waiter_delivery_preserves_delivery_and_records_unknown_handoff(
+async def test_restart_after_waiter_delivery_preserves_delivery_and_records_unknown_handoff(
     tmp_path,
 ):
     async def scenario():
         store, runtime, approval, turn, owner, _ = await decide_native(tmp_path)
         await runtime.startup()
-        retained = store.get(Approval, approval.id)
+        retained = await store.get(Approval, approval.id)
         assert retained.status.value == "approved"
         assert retained.continuation.status == "delivered"
         assert retained.continuation.adapter_status == "unknown"
-        assert store.get(HarnessTurn, turn.id).status.value == "interrupted"
+        assert (await store.get(HarnessTurn, turn.id)).status.value == "interrupted"
         assert (
-            session_state(store, store.get(ChatSession, owner.session_id), runtime)[
-                "pending"
-            ]
-            == []
-        )
+            await session_state(
+                store, (await store.get(ChatSession, owner.session_id)), runtime
+            )
+        )["pending"] == []
         assert not runtime._approval_futures
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("adapter", ["codex", "grok"])
 @pytest.mark.parametrize("fail_write", [False, True])
-def test_real_permission_consumers_acknowledge_one_exact_transport_write(
+async def test_real_permission_consumers_acknowledge_one_exact_transport_write(
     tmp_path, adapter, fail_write
 ):
     from types import SimpleNamespace
@@ -185,9 +210,8 @@ def test_real_permission_consumers_acknowledge_one_exact_transport_write(
         async def respond(request_id, result):
             writes.append((request_id, result))
             assert (
-                store.get(Approval, approval.id).continuation.adapter_status
-                == "pending"
-            )
+                await store.get(Approval, approval.id)
+            ).continuation.adapter_status == "pending"
             if fail_write:
                 raise OSError("injected transport exit")
 
@@ -226,16 +250,16 @@ def test_real_permission_consumers_acknowledge_one_exact_transport_write(
         else:
             _ = [event async for event in events]
         assert len(writes) == 1 and writes[0][0] == "original-request"
-        retained = store.get(Approval, approval.id)
+        retained = await store.get(Approval, approval.id)
         assert retained.continuation.adapter_status == (
             "failed" if fail_write else "sent"
         )
         assert retained.status.value == "approved"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_receipt_storage_failure_after_write_never_resends_and_restart_is_uncertain(
+async def test_receipt_storage_failure_after_write_never_resends_and_restart_is_uncertain(
     tmp_path,
 ):
     from types import SimpleNamespace
@@ -265,24 +289,30 @@ def test_receipt_storage_failure_after_write_never_resends_and_restart_is_uncert
                 {"decision": "accept"},
             )
         assert writes == ["original"]
-        assert store.get(Approval, approval.id).continuation.adapter_status == "pending"
+        assert (
+            await store.get(Approval, approval.id)
+        ).continuation.adapter_status == "pending"
         await runtime.startup()
-        assert store.get(Approval, approval.id).continuation.adapter_status == "unknown"
+        assert (
+            await store.get(Approval, approval.id)
+        ).continuation.adapter_status == "unknown"
         assert writes == ["original"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_missing_exact_binding_does_not_guess_a_turn_from_chat_history(tmp_path):
+async def test_missing_exact_binding_does_not_guess_a_turn_from_chat_history(tmp_path):
     from nebula.v3.harnesses import HarnessStateError
 
     async def scenario():
-        _, store, runtime, approval, turn, _ = fixture(tmp_path)
-        call = store.get(ToolCall, approval.tool_call_id)
-        store.update(
-            ToolCall, call.id, {"metadata": {}}, expected_revision=call.revision
+        _, store, runtime, approval, turn, _ = await fixture(tmp_path)
+        call = await store.get(ToolCall, approval.tool_call_id)
+        (
+            await store.update(
+                ToolCall, call.id, {"metadata": {}}, expected_revision=call.revision
+            )
         )
-        decided = store.update(
+        decided = await store.update(
             Approval,
             approval.id,
             {
@@ -296,7 +326,10 @@ def test_missing_exact_binding_does_not_guess_a_turn_from_chat_history(tmp_path)
         with pytest.raises(HarnessStateError, match="binding"):
             await runtime.resolve_approval(decided)
         assert future.cancelled()
-        assert store.get(Approval, approval.id).continuation.status == "failed"
-        assert store.get(HarnessTurn, turn.id).status.value == "interrupted"
+        assert (await store.get(Approval, approval.id)).continuation.status == "failed"
+        assert (await store.get(HarnessTurn, turn.id)).status.value == "interrupted"
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

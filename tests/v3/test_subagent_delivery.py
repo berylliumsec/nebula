@@ -7,6 +7,10 @@ not strand a parent parked on its subagents.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import hashlib
@@ -95,8 +99,8 @@ def _outputs(request: ModelRequest, *names: str) -> list[dict]:
     return outputs
 
 
-def _parent(store: NebulaStore, project: Engagement, profile, **session_fields):
-    session = store.create(
+async def _parent(store: NebulaStore, project: Engagement, profile, **session_fields):
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Supervisor",
@@ -105,7 +109,7 @@ def _parent(store: NebulaStore, project: Engagement, profile, **session_fields):
             **session_fields,
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -116,7 +120,7 @@ def _parent(store: NebulaStore, project: Engagement, profile, **session_fields):
     return session, turn
 
 
-def _finished(
+async def _finished(
     store: NebulaStore,
     project: Engagement,
     session: ChatSession,
@@ -128,7 +132,7 @@ def _finished(
     backend: ChatBackend = ChatBackend.PROVIDER,
     child_turn_id: str | None = None,
 ) -> ChatSubagent:
-    return store.create(
+    return await store.create(
         ChatSubagent(
             engagement_id=project.id,
             parent_session_id=session.id,
@@ -148,24 +152,28 @@ def _finished(
     )
 
 
-def test_long_reports_reach_a_working_parent_whole_and_within_the_bound(
+async def test_long_reports_reach_a_working_parent_whole_and_within_the_bound(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
         seen: dict[str, ModelRequest] = {}
         provider = ReportingProvider([], [])
-        store, project, profile, chat = _setup(tmp_path, provider)
+        store, project, profile, chat = await _setup(tmp_path, provider)
         # A real model's window, so no earlier result is cleared to fit.
-        store.update(
-            ProviderProfile,
-            profile.id,
-            {
-                "metadata": {
-                    **profile.metadata,
-                    "model_descriptors": [{"id": "model-a", "context_window": 128_000}],
-                }
-            },
-            expected_revision=profile.revision,
+        (
+            await store.update(
+                ProviderProfile,
+                profile.id,
+                {
+                    "metadata": {
+                        **profile.metadata,
+                        "model_descriptors": [
+                            {"id": "model-a", "context_window": 128_000}
+                        ],
+                    }
+                },
+                expected_revision=profile.revision,
+            )
         )
 
         async def wait_once_both_finished(request: ModelRequest) -> ModelResponse:
@@ -195,7 +203,7 @@ def test_long_reports_reach_a_working_parent_whole_and_within_the_bound(
         prepared = await chat.prepare_async(
             _request(project, content="Split the review.", allow_subagents=True)
         )
-        parent_turn_id = chat.start_provider_turn(prepared)
+        parent_turn_id = await chat.start_provider_turn(prepared)
         await _until(
             lambda: (
                 store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
@@ -231,41 +239,47 @@ def test_long_reports_reach_a_working_parent_whole_and_within_the_bound(
         ]
         assert parts == ["1/2", "2/2"]
         assert all(output.get("delivered_by") == "nebula" for output in outputs[1:])
-        assert all(item.reported_at for item in store.list_entities(ChatSubagent))
+        assert all(
+            item.reported_at for item in (await store.list_entities(ChatSubagent))
+        )
         # Nothing needed resending.
-        assert store.list_entities(ChatSubagentMessage) == []
+        assert (await store.list_entities(ChatSubagentMessage)) == []
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_core_delivers_only_news_and_lists_stay_within_the_bound(
+async def test_core_delivers_only_news_and_lists_stay_within_the_bound(
     tmp_path: Path,
 ) -> None:
-    store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
-    session, turn = _parent(store, project, profile)
+    store, project, profile, chat = await _setup(tmp_path, RoutedProvider([], []))
+    session, turn = await _parent(store, project, profile)
     received = [
-        _finished(
-            store, project, session, turn, f"Past {index}", "x" * 300, reported=True
+        (
+            await _finished(
+                store, project, session, turn, f"Past {index}", "x" * 300, reported=True
+            )
         )
         for index in range(60)
     ]
-    fresh = _finished(store, project, session, turn, "Fresh", "New finding. " * 200)
+    fresh = await _finished(
+        store, project, session, turn, "Fresh", "New finding. " * 200
+    )
     service = chat.subagents
 
-    delivery = service.routing_delivery(turn, {"list_subagents"})
+    delivery = await service.routing_delivery(turn, {"list_subagents"})
     assert delivery is not None
     ((output, summary),) = delivery.results
     assert [view["subagent_id"] for view in output["subagents"]] == [fresh.id]
     assert output["subagents"][0]["report"] == fresh.result.strip()
     assert summary == "1 subagent report received"
     # Received once Core saved the step, not while building it.
-    assert store.get(ChatSubagent, fresh.id).reported_at is None
+    assert (await store.get(ChatSubagent, fresh.id)).reported_at is None
     delivery.commit()
-    assert store.get(ChatSubagent, fresh.id).reported_at is not None
-    assert service.routing_delivery(turn, {"list_subagents"}) is None
+    assert (await store.get(ChatSubagent, fresh.id)).reported_at is not None
+    assert (await service.routing_delivery(turn, {"list_subagents"})) is None
 
-    listed = service.list_output(session.id)
+    listed = await service.list_output(session.id)
     assert model_result_bytes(listed) <= PROVIDER_RESULT_BYTES
     assert "more_updates" in listed
     assert all(
@@ -273,22 +287,22 @@ def test_core_delivers_only_news_and_lists_stay_within_the_bound(
         for view in listed["subagents"]
     )
     # A wait on a report already received does not send it again.
-    (view,) = service.wait_output([received[0].id])["subagents"]
+    (view,) = (await service.wait_output([received[0].id]))["subagents"]
     assert view["report_received_earlier"] is True
     assert "report" not in view
     # With nothing running, waiting without ids no longer means every past
     # child whose result was never posted.
-    assert service.resolve_wait(session.id, None) == []
+    assert (await service.resolve_wait(session.id, None)) == []
 
 
-def test_listing_finished_subagents_reads_no_child_turn_or_history(
+async def test_listing_finished_subagents_reads_no_child_turn_or_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
-    session, turn = _parent(store, project, profile)
+    store, project, profile, chat = await _setup(tmp_path, RoutedProvider([], []))
+    session, turn = await _parent(store, project, profile)
     records = []
     for index in range(20):
-        child_turn = store.create(
+        child_turn = await store.create(
             ChatTurn(
                 engagement_id=project.id,
                 session_id=f"child-session-{index}",
@@ -300,26 +314,30 @@ def test_listing_finished_subagents_reads_no_child_turn_or_history(
             )
         )
         for step in range(6):
-            chat.turn_ledger.append(
-                child_turn.id,
-                {
-                    "step": step,
-                    "name": "run_command",
-                    "arguments": {"command": f"scan {index}-{step}"},
-                    "status": "complete",
-                    "provider_result": "y" * 2_000,
-                },
+            (
+                await chat.turn_ledger.append(
+                    child_turn.id,
+                    {
+                        "step": step,
+                        "name": "run_command",
+                        "arguments": {"command": f"scan {index}-{step}"},
+                        "status": "complete",
+                        "provider_result": "y" * 2_000,
+                    },
+                )
             )
         records.append(
-            _finished(
-                store,
-                project,
-                session,
-                turn,
-                f"Child {index}",
-                "done",
-                reported=True,
-                child_turn_id=child_turn.id,
+            (
+                await _finished(
+                    store,
+                    project,
+                    session,
+                    turn,
+                    f"Child {index}",
+                    "done",
+                    reported=True,
+                    child_turn_id=child_turn.id,
+                )
             )
         )
     turn_loads: list[str] = []
@@ -327,22 +345,23 @@ def test_listing_finished_subagents_reads_no_child_turn_or_history(
     real_get = store.get
     real_history = chat.turn_ledger.history
 
-    def counting_get(model, entity_id):
+    async def counting_get(model, entity_id):
         if model is ChatTurn:
             turn_loads.append(entity_id)
-        return real_get(model, entity_id)
+        return await real_get(model, entity_id)
 
-    def counting_history(loaded: ChatTurn):
+    async def counting_history(loaded: ChatTurn):
         histories.append(loaded.id)
-        return real_history(loaded)
+        return await real_history(loaded)
 
     monkeypatch.setattr(store, "get", counting_get)
     monkeypatch.setattr(chat.turn_ledger, "history", counting_history)
 
     views = [
-        chat.subagents.view(item) for item in chat.subagents.for_session(session.id)
+        (await chat.subagents.view(item))
+        for item in (await chat.subagents.for_session(session.id))
     ]
-    listed = chat.subagents.list_output(session.id)
+    listed = await chat.subagents.list_output(session.id)
 
     assert turn_loads == []
     assert histories == []
@@ -354,7 +373,7 @@ def test_listing_finished_subagents_reads_no_child_turn_or_history(
     assert {view["steps"] for view in listed["subagents"]} == {6}
 
 
-def test_parked_parent_resumes_across_a_core_update_that_changed_tool_specs(
+async def test_parked_parent_resumes_across_a_core_update_that_changed_tool_specs(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -367,19 +386,19 @@ def test_parked_parent_resumes_across_a_core_update_that_changed_tool_specs(
             ],
             child=[_response(text="Found 3 routes.")],
         )
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
         provider.child_gate = asyncio.Event()
         prepared = await chat.prepare_async(
             _request(project, content="Count.", allow_subagents=True)
         )
-        parent_turn_id = chat.start_provider_turn(prepared)
+        parent_turn_id = await chat.start_provider_turn(prepared)
         await _until(
             lambda: (
                 store.get(ChatTurn, parent_turn_id).status
                 == ChatTurnStatus.WAITING_CALLBACK
             )
         )
-        parked = store.get(ChatTurn, parent_turn_id)
+        parked = await store.get(ChatTurn, parent_turn_id)
         runtime_digest = parked.request_snapshot["automation_runtime_digest"]
         assert SUBAGENT_TOOLS_CONTRACT in runtime_digest.split("+")
         # What the Core before this one recorded: a hash of every ToolSpec
@@ -397,18 +416,20 @@ def test_parked_parent_resumes_across_a_core_update_that_changed_tool_specs(
                 sort_keys=True,
             ).encode("utf-8")
         ).hexdigest()
-        store.update(
-            ChatTurn,
-            parked.id,
-            {
-                "request_snapshot": {
-                    **parked.request_snapshot,
-                    "automation_runtime_digest": runtime_digest.replace(
-                        SUBAGENT_TOOLS_CONTRACT, f"subagents-{legacy[:16]}"
-                    ),
-                }
-            },
-            expected_revision=parked.revision,
+        (
+            await store.update(
+                ChatTurn,
+                parked.id,
+                {
+                    "request_snapshot": {
+                        **parked.request_snapshot,
+                        "automation_runtime_digest": runtime_digest.replace(
+                            SUBAGENT_TOOLS_CONTRACT, f"subagents-{legacy[:16]}"
+                        ),
+                    }
+                },
+                expected_revision=parked.revision,
+            )
         )
 
         provider.child_gate.set()
@@ -418,12 +439,12 @@ def test_parked_parent_resumes_across_a_core_update_that_changed_tool_specs(
                 in {ChatTurnStatus.COMPLETE, ChatTurnStatus.FAILED}
             )
         )
-        finished = store.get(ChatTurn, parent_turn_id)
+        finished = await store.get(ChatTurn, parent_turn_id)
         assert finished.error is None
         assert finished.status == ChatTurnStatus.COMPLETE
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_resume_still_refuses_a_changed_command_runtime() -> None:
@@ -437,7 +458,9 @@ def test_resume_still_refuses_a_changed_command_runtime() -> None:
     assert _runtime_digest_matches(None, None)
 
 
-def test_prepare_resume_refuses_only_a_real_runtime_change(tmp_path: Path) -> None:
+async def test_prepare_resume_refuses_only_a_real_runtime_change(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
@@ -446,45 +469,47 @@ def test_prepare_resume_refuses_only_a_real_runtime_change(tmp_path: Path) -> No
             ],
             child=[],
         )
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
         provider.child_gate = asyncio.Event()
         prepared = await chat.prepare_async(
             _request(project, content="Count.", allow_subagents=True)
         )
-        parent_turn_id = chat.start_provider_turn(prepared)
+        parent_turn_id = await chat.start_provider_turn(prepared)
         await _until(
             lambda: (
                 store.get(ChatTurn, parent_turn_id).status
                 == ChatTurnStatus.WAITING_CALLBACK
             )
         )
-        parked = store.get(ChatTurn, parent_turn_id)
-        store.update(
-            ChatTurn,
-            parked.id,
-            {
-                "request_snapshot": {
-                    **parked.request_snapshot,
-                    "automation_runtime_digest": "sha256:other+subagents-v1",
-                }
-            },
-            expected_revision=parked.revision,
+        parked = await store.get(ChatTurn, parent_turn_id)
+        (
+            await store.update(
+                ChatTurn,
+                parked.id,
+                {
+                    "request_snapshot": {
+                        **parked.request_snapshot,
+                        "automation_runtime_digest": "sha256:other+subagents-v1",
+                    }
+                },
+                expected_revision=parked.revision,
+            )
         )
         with pytest.raises(ChatHistoryConflict):
-            chat.prepare_resume(parent_turn_id)
+            (await chat.prepare_resume(parent_turn_id))
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_wait_after_its_turn_ended_leaves_reports_for_the_next_prompt(
+async def test_harness_wait_after_its_turn_ended_leaves_reports_for_the_next_prompt(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
+        store, project, profile, chat = await _setup(tmp_path, RoutedProvider([], []))
         # The service reads the backend from each record.
-        session, turn = _parent(store, project, profile)
-        record = _finished(
+        session, turn = await _parent(store, project, profile)
+        record = await _finished(
             store,
             project,
             session,
@@ -499,60 +524,64 @@ def test_harness_wait_after_its_turn_ended_leaves_reports_for_the_next_prompt(
             session.id, None, "all", 1.0, still_waiting=lambda: False
         )
         assert ended["subagents"][0]["report"] == "Found it."
-        assert store.get(ChatSubagent, record.id).reported_at is None
-        assert [item.id for item in service.harness_update(session.id).records] == [
-            record.id
-        ]
+        assert (await store.get(ChatSubagent, record.id)).reported_at is None
+        assert [
+            item.id for item in (await service.harness_update(session.id)).records
+        ] == [record.id]
 
         read = await service.wait_for(
             session.id, None, "all", 1.0, still_waiting=lambda: True
         )
         assert read["subagents"][0]["report"] == "Found it."
-        assert store.get(ChatSubagent, record.id).reported_at is not None
+        assert (await store.get(ChatSubagent, record.id)).reported_at is not None
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_prompt_carries_what_fits_and_marks_only_that(tmp_path: Path) -> None:
-    store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
-    session, turn = _parent(store, project, profile)
+async def test_harness_prompt_carries_what_fits_and_marks_only_that(
+    tmp_path: Path,
+) -> None:
+    store, project, profile, chat = await _setup(tmp_path, RoutedProvider([], []))
+    session, turn = await _parent(store, project, profile)
     records = [
-        _finished(
-            store,
-            project,
-            session,
-            turn,
-            f"Child {index}",
-            f"Report {index}: " + "detail " * 1_700,
-            backend=ChatBackend.HARNESS,
+        (
+            await _finished(
+                store,
+                project,
+                session,
+                turn,
+                f"Child {index}",
+                f"Report {index}: " + "detail " * 1_700,
+                backend=ChatBackend.HARNESS,
+            )
         )
         for index in range(5)
     ]
     service = chat.subagents
 
-    first = service.harness_update(session.id)
+    first = await service.harness_update(session.id)
     context = SubagentService.harness_report_context(first)
     assert len(context) <= HARNESS_REPORT_CONTEXT_CHARACTERS + 200
     assert 0 < len(first.records) < len(records)
     assert "subagent.list returns them" in context
     for record in first.records:
         assert record.result.strip() in context
-    service.mark_delivered(first)
+    (await service.mark_delivered(first))
 
-    second = service.harness_update(session.id)
+    second = await service.harness_update(session.id)
     assert {item.id for item in second.records}.isdisjoint(
         item.id for item in first.records
     )
     assert second.records
 
 
-def test_harness_prompt_updates_count_once_the_vendor_accepts_the_prompt(
+async def test_harness_prompt_updates_count_once_the_vendor_accepts_the_prompt(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _harness_setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _harness_setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Cookies lack SameSite."]
         child.gate = asyncio.Event()
 
@@ -564,12 +593,12 @@ def test_harness_prompt_updates_count_once_the_vendor_accepts_the_prompt(
         adapter.script = delegate
         parent_chat, _, turn = _prepare(runtime, project, harness, "Review auth.")
         await runtime.start_chat_turn(turn.id)
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         child.gate.set()
         await _until(
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
-        assert store.get(ChatSubagent, record.id).reported_at is None
+        assert (await store.get(ChatSubagent, record.id)).reported_at is None
 
         connection = adapter.connections[0]
         working_run_turn = connection.run_turn
@@ -586,12 +615,12 @@ def test_harness_prompt_updates_count_once_the_vendor_accepts_the_prompt(
         )
         assert "Cookies lack SameSite." in failing.prompt
         await runtime.start_chat_turn(failing.id)
-        assert store.get(HarnessTurn, failing.id).status in {
+        assert (await store.get(HarnessTurn, failing.id)).status in {
             HarnessTurnStatus.FAILED,
             HarnessTurnStatus.INTERRUPTED,
         }
         # The vendor never took the prompt, so the report is still unreceived.
-        assert store.get(ChatSubagent, record.id).reported_at is None
+        assert (await store.get(ChatSubagent, record.id)).reported_at is None
 
         connection.run_turn = working_run_turn  # type: ignore[method-assign]
         adapter.script = None
@@ -600,20 +629,22 @@ def test_harness_prompt_updates_count_once_the_vendor_accepts_the_prompt(
         await runtime._chat_turn_tasks[replacement.id]
         assert "Cookies lack SameSite." in connection.prompts[-1]
         assert (
-            store.get(HarnessTurn, replacement.id).status == HarnessTurnStatus.COMPLETE
-        )
-        assert store.get(ChatSubagent, record.id).reported_at is not None
+            await store.get(HarnessTurn, replacement.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        assert (await store.get(ChatSubagent, record.id)).reported_at is not None
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_long_peer_message_reaches_a_working_agent_in_parts(tmp_path: Path) -> None:
+async def test_long_peer_message_reaches_a_working_agent_in_parts(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "peers.db")
-        project = store.create(Engagement(name="Project"))
-        sender = _session(store, project.id, "Coordinator")
-        recipient = _session(store, project.id, "Reviewer")
+        project = await store.create(Engagement(name="Project"))
+        sender = await _session(store, project.id, "Coordinator")
+        recipient = await _session(store, project.id, "Reviewer")
         service = AgentMessageService(store)
         content = "PEER-BEGIN " + "the retry boundary is idempotent; " * 550 + "END"
         sent = await service.send(_invocation(sender, tmp_path), recipient.id, content)
@@ -625,7 +656,7 @@ def test_long_peer_message_reaches_a_working_agent_in_parts(tmp_path: Path) -> N
         )
 
         # Asked for directly, it does not fit one result and waits whole.
-        read = service.read_output(
+        read = await service.read_output(
             _invocation(recipient, tmp_path).model_copy(
                 update={"tool_name": "read_agent_messages"}
             )
@@ -634,7 +665,7 @@ def test_long_peer_message_reaches_a_working_agent_in_parts(tmp_path: Path) -> N
         assert "more_messages" in read
         assert model_result_bytes(read) <= PROVIDER_RESULT_BYTES
 
-        delivery = service.routing_delivery(turn, {"read_agent_messages"})
+        delivery = await service.routing_delivery(turn, {"read_agent_messages"})
         assert delivery is not None and len(delivery.results) > 1
         for output, _ in delivery.results:
             assert model_result_bytes(output) <= PROVIDER_RESULT_BYTES
@@ -647,25 +678,23 @@ def test_long_peer_message_reaches_a_working_agent_in_parts(tmp_path: Path) -> N
             == content
         )
         assert (
-            store.get(ChatAgentMessage, sent["message_id"]).status
-            == ChatAgentMessageStatus.PENDING
-        )
+            await store.get(ChatAgentMessage, sent["message_id"])
+        ).status == ChatAgentMessageStatus.PENDING
         delivery.commit()
         assert (
-            store.get(ChatAgentMessage, sent["message_id"]).status
-            == ChatAgentMessageStatus.DELIVERED
-        )
+            await store.get(ChatAgentMessage, sent["message_id"])
+        ).status == ChatAgentMessageStatus.DELIVERED
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_long_parent_message_reaches_a_working_subagent_in_parts(
+async def test_long_parent_message_reaches_a_working_subagent_in_parts(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
-        session, turn = _parent(store, project, profile)
-        child_session = store.create(
+        store, project, profile, chat = await _setup(tmp_path, RoutedProvider([], []))
+        session, turn = await _parent(store, project, profile)
+        child_session = await store.create(
             ChatSession(
                 engagement_id=project.id,
                 title="Subagent",
@@ -675,7 +704,7 @@ def test_long_parent_message_reaches_a_working_subagent_in_parts(
                 metadata={"subagent_id": "child-record"},
             )
         )
-        child_turn = store.create(
+        child_turn = await store.create(
             ChatTurn(
                 id="child-turn",
                 engagement_id=project.id,
@@ -684,18 +713,20 @@ def test_long_parent_message_reaches_a_working_subagent_in_parts(
                 model="model-a",
             )
         )
-        store.create(
-            ChatSubagent(
-                id="child-record",
-                engagement_id=project.id,
-                parent_session_id=session.id,
-                parent_turn_id=turn.id,
-                child_session_id=child_session.id,
-                child_turn_id=child_turn.id,
-                provider_profile_id=profile.id,
-                model="model-a",
-                name="Reader",
-                task="Read the item.",
+        (
+            await store.create(
+                ChatSubagent(
+                    id="child-record",
+                    engagement_id=project.id,
+                    parent_session_id=session.id,
+                    parent_turn_id=turn.id,
+                    child_session_id=child_session.id,
+                    child_turn_id=child_turn.id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    name="Reader",
+                    task="Read the item.",
+                )
             )
         )
         content = "PARENT-BEGIN " + "check the staging bucket policy; " * 600 + "END"
@@ -712,10 +743,12 @@ def test_long_parent_message_reaches_a_working_subagent_in_parts(
             arguments={},
             workspace=tmp_path,
         )
-        read = chat.subagents.read_parent_messages(invocation)
+        read = await chat.subagents.read_parent_messages(invocation)
         assert read["messages"] == [] and "more_messages" in read
 
-        delivery = chat.subagents.routing_delivery(child_turn, {"read_parent_messages"})
+        delivery = await chat.subagents.routing_delivery(
+            child_turn, {"read_parent_messages"}
+        )
         assert delivery is not None and len(delivery.results) > 1
         for output, _ in delivery.results:
             assert model_result_bytes(output) <= PROVIDER_RESULT_BYTES
@@ -727,19 +760,18 @@ def test_long_parent_message_reaches_a_working_subagent_in_parts(
             )
             == content
         )
-        (message,) = store.list_entities(ChatSubagentMessage)
+        (message,) = await store.list_entities(ChatSubagentMessage)
         assert message.status == ChatSubagentMessageStatus.PENDING
         delivery.commit()
         assert (
-            store.get(ChatSubagentMessage, message.id).status
-            == ChatSubagentMessageStatus.DELIVERED
-        )
+            await store.get(ChatSubagentMessage, message.id)
+        ).status == ChatSubagentMessageStatus.DELIVERED
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_a_report_past_its_bound_keeps_its_conclusion_and_says_it_was_cut(
+async def test_a_report_past_its_bound_keeps_its_conclusion_and_says_it_was_cut(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -752,22 +784,25 @@ def test_a_report_past_its_bound_keeps_its_conclusion_and_says_it_was_cut(
             ],
             child=[_response(text=answer)],
         )
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
         prepared = await chat.prepare_async(
             _request(project, content="Survey it.", allow_subagents=True)
         )
-        chat.start_provider_turn(prepared)
+        (await chat.start_provider_turn(prepared))
         await _until(
             lambda: (
                 [item.status for item in store.list_entities(ChatSubagent)]
                 == [ChatSubagentStatus.COMPLETED]
             )
         )
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert len(record.result) <= 20_000
         assert record.result.startswith("OPENING finding")
         assert record.result.endswith("CONCLUSION: port 8443 is exposed.")
         assert "characters of this report were cut here" in record.result
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

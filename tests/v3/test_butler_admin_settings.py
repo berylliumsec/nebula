@@ -1,6 +1,10 @@
 """Core-backed runtime/catalog administration; host and vendor I/O stays inert."""
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 import pytest
@@ -25,11 +29,11 @@ from ui.tests.fixtures.butler_runtime_settings_core import (
 
 
 @pytest.fixture
-def admin(tmp_path, monkeypatch):
+async def admin(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    project = store.create(Engagement(name="Selected metadata project"))
-    foreign = store.create(Engagement(name="Other metadata project"))
+    project = await store.create(Engagement(name="Selected metadata project"))
+    foreign = await store.create(Engagement(name="Other metadata project"))
     platform = RuntimePlatform(
         store=store, artifact_store=artifacts, data_root=tmp_path
     )
@@ -60,37 +64,43 @@ def admin(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_search_lifecycle_records_canonical_fields_for_new_and_existing_settings(
+async def test_search_lifecycle_records_canonical_fields_for_new_and_existing_settings(
     admin, existing
 ):
     store, _, _, _, runtime, _, _ = admin
     if existing:
-        runtime.record(image_digest="sha256:" + "b" * 64)
+        (await runtime.record(image_digest="sha256:" + "b" * 64))
 
     async def journey():
         port = await runtime.ensure_ready()
-        ready = store.get(WebSearchSettings, "web-search")
+        ready = await store.get(WebSearchSettings, "web-search")
         assert ready.image_digest == "sha256:" + ("b" if existing else "a") * 64
         assert ready.container_state == "ready" and ready.port == port
         await runtime.stop()
-        assert store.get(WebSearchSettings, ready.id).container_state == "stopped"
+        assert (
+            await store.get(WebSearchSettings, ready.id)
+        ).container_state == "stopped"
         await runtime.remove()
-        assert store.get(WebSearchSettings, ready.id).container_state == "absent"
+        assert (
+            await store.get(WebSearchSettings, ready.id)
+        ).container_state == "absent"
 
-    asyncio.run(journey())
+    (await journey())
 
 
 @pytest.mark.parametrize("operation", ["stop", "remove"])
-def test_search_command_can_record_first_known_container_state(admin, operation):
+async def test_search_command_can_record_first_known_container_state(admin, operation):
     store, _, _, _, runtime, _, _ = admin
     runtime.phase = "ready"
-    asyncio.run(getattr(runtime, operation)())
-    assert store.get(WebSearchSettings, "web-search").container_state == (
+    (await getattr(runtime, operation)())
+    assert (await store.get(WebSearchSettings, "web-search")).container_state == (
         "stopped" if operation == "stop" else "absent"
     )
 
 
-def test_butler_web_search_actions_read_current_state_and_refresh_the_real_owner(admin):
+async def test_butler_web_search_actions_read_current_state_and_refresh_the_real_owner(
+    admin,
+):
     store, project, _, _, runtime, _, gateway = admin
 
     async def journey():
@@ -115,24 +125,24 @@ def test_butler_web_search_actions_read_current_state_and_refresh_the_real_owner
                 "resource": "web-search",
             }
             assert saved["operation_accepted"] is False
-        final = store.get(WebSearchSettings, "web-search")
+        final = await store.get(WebSearchSettings, "web-search")
         assert final.image_digest == "sha256:" + "a" * 64
         assert final.engines == ["wikipedia"]
         assert final.last_test.ok is True
         assert any(call[0] == "run" for call in runtime.calls)
 
-    asyncio.run(journey())
+    (await journey())
 
 
 @pytest.mark.parametrize("action,command", [("stop", "stop"), ("remove", "rm")])
-def test_butler_search_failure_keeps_observed_state_and_retry_is_explicit(
+async def test_butler_search_failure_keeps_observed_state_and_retry_is_explicit(
     admin, action, command
 ):
     store, project, _, _, runtime, _, gateway = admin
 
     async def journey():
         await runtime.ensure_ready()
-        before = store.get(WebSearchSettings, "web-search")
+        before = await store.get(WebSearchSettings, "web-search")
         runtime.exit_codes[command] = 1
         method, path = (
             ("DELETE", "integrations/web-search")
@@ -141,7 +151,7 @@ def test_butler_search_failure_keeps_observed_state_and_retry_is_explicit(
         )
         with pytest.raises(ValueError, match="503"):
             await gateway.request(project.id, method=method, path=path)
-        assert store.get(WebSearchSettings, before.id) == before
+        assert (await store.get(WebSearchSettings, before.id)) == before
         observed = await gateway.request(
             project.id, method="GET", path="integrations/web-search"
         )
@@ -152,10 +162,10 @@ def test_butler_search_failure_keeps_observed_state_and_retry_is_explicit(
             "absent" if action == "remove" else "stopped"
         )
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_operator_profile_lifecycle_uses_exact_readback_and_current_revisions(
+async def test_butler_operator_profile_lifecycle_uses_exact_readback_and_current_revisions(
     admin,
 ):
     _, project, _, _, _, _, gateway = admin
@@ -226,16 +236,16 @@ def test_butler_operator_profile_lifecycle_uses_exact_readback_and_current_revis
         )
         assert selected["result"]["active"] is True
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_catalog_queries_are_pinned_to_the_selected_project(admin):
+async def test_settings_catalog_queries_are_pinned_to_the_selected_project(admin):
     _, project, foreign, platform, _, _, gateway = admin
     for identity, name in [
         (project.id, "fixture-selected-skill"),
         (foreign.id, "fixture-foreign-skill"),
     ]:
-        root = platform.workspace_for(identity)
+        root = await platform.workspace_for(identity)
         skill = root / ".agents" / "skills" / name
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(
@@ -270,14 +280,14 @@ def test_settings_catalog_queries_are_pinned_to_the_selected_project(admin):
                 project.id, method="GET", path=f"skills?engagement_id={foreign.id}"
             )
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_health_and_account_reads_keep_the_observation_and_exact_profile(
+async def test_settings_health_and_account_reads_keep_the_observation_and_exact_profile(
     admin,
 ):
     store, project, _, _, _, _, gateway = admin
-    harness = store.create(
+    harness = await store.create(
         HarnessProfile(
             name="Trusted fixture",
             kind="codex_app_server",
@@ -285,10 +295,10 @@ def test_settings_health_and_account_reads_keep_the_observation_and_exact_profil
             enabled=False,
         )
     )
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(name="Disabled fixture", provider_type="vllm", enabled=False)
     )
-    credits = store.create(
+    credits = await store.create(
         ProviderProfile(
             name="Disabled credits", provider_type="openrouter", enabled=False
         )
@@ -316,4 +326,7 @@ def test_settings_health_and_account_reads_keep_the_observation_and_exact_profil
         assert result["result"]["reason_code"] == "provider_disabled"
         assert "client_action" not in result
 
-    asyncio.run(journey())
+    (await journey())
+
+
+pytestmark = pytest.mark.anyio

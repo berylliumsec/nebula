@@ -1,4 +1,7 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import pytest
 
@@ -40,25 +43,27 @@ from nebula.v3.tools import InvalidToolArguments, ToolInvocation, ToolNotPermitt
 from tests.v3.test_chat import FakeProvider
 
 
-def _session(
+async def _session(
     store: NebulaStore, engagement_id: str, title: str, **metadata
 ) -> ChatSession:
-    profiles = store.list_entities(ProviderProfile, limit=1)
+    profiles = await store.list_entities(ProviderProfile, limit=1)
     profile = (
         profiles[0]
         if profiles
-        else store.create(
-            ProviderProfile(
-                id="agent-message-provider",
-                name="Agent message provider",
-                provider_type="vllm",
-                is_local=True,
-                model_allowlist=["model-a"],
-                metadata={"default_model": "model-a"},
+        else (
+            await store.create(
+                ProviderProfile(
+                    id="agent-message-provider",
+                    name="Agent message provider",
+                    provider_type="vllm",
+                    is_local=True,
+                    model_allowlist=["model-a"],
+                    metadata={"default_model": "model-a"},
+                )
             )
         )
     )
-    return store.create(
+    return await store.create(
         ChatSession(
             engagement_id=engagement_id,
             title=title,
@@ -85,39 +90,45 @@ def _invocation(
     )
 
 
-def test_peer_discovery_is_opted_in_main_agent_and_project_scoped(tmp_path):
+async def test_peer_discovery_is_opted_in_main_agent_and_project_scoped(tmp_path):
     store = NebulaStore(tmp_path / "peers.db")
-    project = store.create(Engagement(name="Project"))
-    other_project = store.create(Engagement(name="Other"))
-    sender = _session(store, project.id, "Coordinator")
-    active = _session(store, project.id, "Active peer")
-    _session(store, project.id, "Disabled", allow_agent_messaging=False)
-    _session(store, project.id, "Archived", archived_at="2026-09-22T10:00:00Z")
-    _session(store, project.id, "Temporary", temporary_assistant=True)
-    _session(store, project.id, "Side chat", side_chat=True)
-    settings = _session(store, project.id, "Settings assistant", control_assistant=True)
-    store.create(
-        ChatSession(
-            engagement_id=project.id,
-            title="Subagent",
-            provider_profile_id=sender.provider_profile_id,
-            model="model-a",
-            parent_session_id=sender.id,
-            metadata={"allow_agent_messaging": True, "subagent_id": "child-1"},
+    project = await store.create(Engagement(name="Project"))
+    other_project = await store.create(Engagement(name="Other"))
+    sender = await _session(store, project.id, "Coordinator")
+    active = await _session(store, project.id, "Active peer")
+    (await _session(store, project.id, "Disabled", allow_agent_messaging=False))
+    (await _session(store, project.id, "Archived", archived_at="2026-09-22T10:00:00Z"))
+    (await _session(store, project.id, "Temporary", temporary_assistant=True))
+    (await _session(store, project.id, "Side chat", side_chat=True))
+    settings = await _session(
+        store, project.id, "Settings assistant", control_assistant=True
+    )
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Subagent",
+                provider_profile_id=sender.provider_profile_id,
+                model="model-a",
+                parent_session_id=sender.id,
+                metadata={"allow_agent_messaging": True, "subagent_id": "child-1"},
+            )
         )
     )
-    _session(store, other_project.id, "Foreign")
-    store.create(
-        ChatTurn(
-            engagement_id=project.id,
-            session_id=active.id,
-            provider_profile_id=active.provider_profile_id,
-            model="model-a",
-            status=ChatTurnStatus.ROUTING,
+    (await _session(store, other_project.id, "Foreign"))
+    (
+        await store.create(
+            ChatTurn(
+                engagement_id=project.id,
+                session_id=active.id,
+                provider_profile_id=active.provider_profile_id,
+                model="model-a",
+                status=ChatTurnStatus.ROUTING,
+            )
         )
     )
 
-    output = AgentMessageService(store).list_output(_invocation(sender, tmp_path))
+    output = await AgentMessageService(store).list_output(_invocation(sender, tmp_path))
 
     assert output["agents"] == [
         {
@@ -137,34 +148,45 @@ def test_peer_discovery_is_opted_in_main_agent_and_project_scoped(tmp_path):
     ]
 
 
-def test_new_choice_uses_project_default_and_existing_choice_is_authoritative(tmp_path):
+async def test_new_choice_uses_project_default_and_existing_choice_is_authoritative(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "defaults.db")
-    project = store.create(Engagement(name="Project"))
-    assert resolve_agent_messaging_choice(store, project.id, None, None) is True
-    assert resolve_agent_messaging_choice(store, project.id, None, False) is False
+    project = await store.create(Engagement(name="Project"))
+    assert (await resolve_agent_messaging_choice(store, project.id, None, None)) is True
     assert (
-        resolve_agent_messaging_choice(
+        await resolve_agent_messaging_choice(store, project.id, None, False)
+    ) is False
+    assert (
+        await resolve_agent_messaging_choice(
             store, project.id, None, None, control_assistant=True
         )
-        is True
-    )
-    disabled = _session(store, project.id, "Old off", allow_agent_messaging=False)
-    enabled = _session(store, project.id, "Old on")
-    assert resolve_agent_messaging_choice(store, project.id, disabled, None) is False
-    assert resolve_agent_messaging_choice(store, project.id, enabled, None) is True
-    assert resolve_agent_messaging_choice(store, project.id, enabled, False) is False
+    ) is True
+    disabled = await _session(store, project.id, "Old off", allow_agent_messaging=False)
+    enabled = await _session(store, project.id, "Old on")
     assert (
-        resolve_agent_messaging_choice(
-            store, project.id, _session(store, project.id, "Side", side_chat=True), True
+        await resolve_agent_messaging_choice(store, project.id, disabled, None)
+    ) is False
+    assert (
+        await resolve_agent_messaging_choice(store, project.id, enabled, None)
+    ) is True
+    assert (
+        await resolve_agent_messaging_choice(store, project.id, enabled, False)
+    ) is False
+    assert (
+        await resolve_agent_messaging_choice(
+            store,
+            project.id,
+            (await _session(store, project.id, "Side", side_chat=True)),
+            True,
         )
-        is False
-    )
+    ) is False
 
 
-def test_new_goal_conversation_uses_default_and_explicit_off(tmp_path):
+async def test_new_goal_conversation_uses_default_and_explicit_off(tmp_path):
     store = NebulaStore(tmp_path / "goal-default.db")
-    project = store.create(Engagement(name="Project"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Project"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="vllm",
@@ -180,25 +202,23 @@ def test_new_goal_conversation_uses_default_and_explicit_off(tmp_path):
         objective="Coordinate review",
         completion_criteria=["Reviewed"],
     )
+    assert (await service.create_conversation(body)).session.metadata[
+        "allow_agent_messaging"
+    ] is True
     assert (
-        service.create_conversation(body).session.metadata["allow_agent_messaging"]
-        is True
-    )
-    assert (
-        service.create_conversation(
+        await service.create_conversation(
             body.model_copy(update={"allow_agent_messaging": False})
-        ).session.metadata["allow_agent_messaging"]
-        is False
-    )
+        )
+    ).session.metadata["allow_agent_messaging"] is False
 
 
-def test_provider_offers_peer_tools_on_first_verified_turn_and_keeps_text_chat_usable(
+async def test_provider_offers_peer_tools_on_first_verified_turn_and_keeps_text_chat_usable(
     tmp_path,
 ):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "provider-default.db")
-        project = store.create(Engagement(name="Project"))
-        profile = store.create(
+        project = await store.create(Engagement(name="Project"))
+        profile = await store.create(
             ProviderProfile(
                 name="Local",
                 provider_type="vllm",
@@ -251,18 +271,18 @@ def test_provider_offers_peer_tools_on_first_verified_turn_and_keeps_text_chat_u
         await service.complete(plain)
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_forks_inherit_the_source_choice_and_side_chats_cannot_message(tmp_path):
+async def test_forks_inherit_the_source_choice_and_side_chats_cannot_message(tmp_path):
     store = NebulaStore(tmp_path / "fork-choice.db")
-    project = store.create(Engagement(name="Project"))
+    project = await store.create(Engagement(name="Project"))
     service = ChatService(store)
     for enabled in (False, True):
-        source = _session(
+        source = await _session(
             store, project.id, f"Source {enabled}", allow_agent_messaging=enabled
         )
-        message = store.create(
+        message = await store.create(
             ChatMessage(
                 engagement_id=project.id,
                 session_id=source.id,
@@ -271,17 +291,23 @@ def test_forks_inherit_the_source_choice_and_side_chats_cannot_message(tmp_path)
                 content="Review this",
             )
         )
-        fork = service.fork_session(source.id, through_message_id=message.id)
+        fork = await service.fork_session(source.id, through_message_id=message.id)
         assert fork.metadata["allow_agent_messaging"] is enabled
-        side = service.fork_session(source.id, through_latest=True, side_chat=True)
-        assert resolve_agent_messaging_choice(store, project.id, side, True) is False
+        side = await service.fork_session(
+            source.id, through_latest=True, side_chat=True
+        )
+        assert (
+            await resolve_agent_messaging_choice(store, project.id, side, True)
+        ) is False
 
 
-def test_cloud_provider_messaging_needs_consent_and_explicit_off_recovers(tmp_path):
+async def test_cloud_provider_messaging_needs_consent_and_explicit_off_recovers(
+    tmp_path,
+):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "provider-cloud-consent.db")
-        project = store.create(Engagement(name="Project", work_enabled=False))
-        profile = store.create(
+        project = await store.create(Engagement(name="Project", work_enabled=False))
+        profile = await store.create(
             ProviderProfile(
                 name="Cloud",
                 provider_type="custom",
@@ -309,8 +335,8 @@ def test_cloud_provider_messaging_needs_consent_and_explicit_off_recovers(tmp_pa
         with pytest.raises(ChatToolResultConsentRequired) as refusal:
             await service.prepare_async(request)
         assert refusal.value.families == ("agent messaging",)
-        assert store.list_entities(ChatSession) == []
-        assert store.list_entities(ChatTurn) == []
+        assert (await store.list_entities(ChatSession)) == []
+        assert (await store.list_entities(ChatTurn)) == []
 
         plain = await service.prepare_async(
             request.model_copy(update={"allow_agent_messaging": False})
@@ -331,13 +357,13 @@ def test_cloud_provider_messaging_needs_consent_and_explicit_off_recovers(tmp_pa
         await service.complete(consented)
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_capability_and_cloud_consent_gate_default_messaging(tmp_path):
+async def test_harness_capability_and_cloud_consent_gate_default_messaging(tmp_path):
     store = NebulaStore(tmp_path / "harness-capability.db")
-    project = store.create(Engagement(name="Project"))
-    no_mcp = store.create(
+    project = await store.create(Engagement(name="Project"))
+    no_mcp = await store.create(
         HarnessProfile(
             name="Text harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -347,7 +373,7 @@ def test_harness_capability_and_cloud_consent_gate_default_messaging(tmp_path):
             privacy={"local_only": True, "permits_sensitive_data": True},
         )
     )
-    cloud = store.create(
+    cloud = await store.create(
         HarnessProfile(
             name="Cloud harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -364,8 +390,8 @@ def test_harness_capability_and_cloud_consent_gate_default_messaging(tmp_path):
     )
     runtime.bind_agent_messages(AgentMessageService(store))
 
-    def prepare(profile_id: str, choice: bool | None = None):
-        return runtime.prepare_chat(
+    async def prepare(profile_id: str, choice: bool | None = None):
+        return await runtime.prepare_chat(
             engagement_id=project.id,
             profile_id=profile_id,
             model=None,
@@ -376,42 +402,42 @@ def test_harness_capability_and_cloud_consent_gate_default_messaging(tmp_path):
             allow_agent_messaging=choice,
         )
 
-    chat, _turn, harness_turn = prepare(no_mcp.id)
+    chat, _turn, harness_turn = await prepare(no_mcp.id)
     assert chat.metadata["allow_agent_messaging"] is True
     assert harness_turn.metadata["allow_agent_messaging"] is False
-    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    session = await store.get(HarnessSession, harness_turn.harness_session_id)
     assert "agent.send" not in {
-        item["name"] for item in runtime._gateway_catalog(session)["tools"]
+        item["name"] for item in (await runtime._gateway_catalog(session))["tools"]
     }
     with pytest.raises(
         HarnessConfigurationError, match="explicit operator confirmation"
     ):
-        prepare(cloud.id)
-    off, _turn, _harness_turn = prepare(cloud.id, False)
+        (await prepare(cloud.id))
+    off, _turn, _harness_turn = await prepare(cloud.id, False)
     assert off.metadata["allow_agent_messaging"] is False
 
 
-def test_send_is_durable_visible_idempotent_and_rejects_invalid_targets(tmp_path):
+async def test_send_is_durable_visible_idempotent_and_rejects_invalid_targets(tmp_path):
     store = NebulaStore(tmp_path / "send.db")
-    project = store.create(Engagement(name="Project"))
-    other_project = store.create(Engagement(name="Other"))
-    sender = _session(store, project.id, "Coordinator")
-    recipient = _session(store, project.id, "Reviewer")
-    disabled = _session(store, project.id, "Disabled", allow_agent_messaging=False)
-    foreign = _session(store, other_project.id, "Foreign")
+    project = await store.create(Engagement(name="Project"))
+    other_project = await store.create(Engagement(name="Other"))
+    sender = await _session(store, project.id, "Coordinator")
+    recipient = await _session(store, project.id, "Reviewer")
+    disabled = await _session(
+        store, project.id, "Disabled", allow_agent_messaging=False
+    )
+    foreign = await _session(store, other_project.id, "Foreign")
     service = AgentMessageService(store)
     invocation = _invocation(sender, tmp_path)
 
-    first = asyncio.run(service.send(invocation, recipient.id, "Check the retry path."))
-    second = asyncio.run(
-        service.send(invocation, recipient.id, "Check the retry path.")
-    )
+    first = await service.send(invocation, recipient.id, "Check the retry path.")
+    second = await service.send(invocation, recipient.id, "Check the retry path.")
 
     assert first["message_id"] == second["message_id"]
-    messages = store.list_entities(ChatAgentMessage, engagement_id=project.id)
+    messages = await store.list_entities(ChatAgentMessage, engagement_id=project.id)
     assert len(messages) == 1
     assert messages[0].status == ChatAgentMessageStatus.PENDING
-    transcript = store.list_session_entities(ChatMessage, recipient.id)
+    transcript = await store.list_session_entities(ChatMessage, recipient.id)
     assert len(transcript) == 1
     assert transcript[0].role == ChatRole.SYSTEM
     assert transcript[0].content == "Check the retry path."
@@ -427,74 +453,73 @@ def test_send_is_durable_visible_idempotent_and_rejects_invalid_targets(tmp_path
 
     for target in (sender, disabled, foreign):
         with pytest.raises(InvalidToolArguments, match="unknown peer agent"):
-            asyncio.run(
-                service.send(
+            (
+                await service.send(
                     _invocation(sender, tmp_path, key=f"invalid-{target.id}"),
                     target.id,
                     "This must not cross the boundary.",
                 )
             )
 
-    store.delete_chat_session(sender.id)
-    assert service.inbox(recipient.id, mark=False)["messages"][0]["sender_title"] == (
-        "Deleted conversation"
-    )
-    store.delete_chat_session(recipient.id)
-    assert store.list_entities(ChatAgentMessage, engagement_id=project.id) == []
+    (await store.delete_chat_session(sender.id))
+    assert (await service.inbox(recipient.id, mark=False))["messages"][0][
+        "sender_title"
+    ] == ("Deleted conversation")
+    (await store.delete_chat_session(recipient.id))
+    assert (await store.list_entities(ChatAgentMessage, engagement_id=project.id)) == []
 
 
-def test_delivery_marks_only_the_exact_provider_or_harness_snapshot(tmp_path):
+async def test_delivery_marks_only_the_exact_provider_or_harness_snapshot(tmp_path):
     store = NebulaStore(tmp_path / "delivery.db")
-    project = store.create(Engagement(name="Project"))
-    sender = _session(store, project.id, "Coordinator")
-    recipient = _session(store, project.id, "Reviewer")
+    project = await store.create(Engagement(name="Project"))
+    sender = await _session(store, project.id, "Coordinator")
+    recipient = await _session(store, project.id, "Reviewer")
     service = AgentMessageService(store)
-    first = asyncio.run(
-        service.send(_invocation(sender, tmp_path, key="first"), recipient.id, "First")
+    first = await service.send(
+        _invocation(sender, tmp_path, key="first"), recipient.id, "First"
     )
-    second = asyncio.run(
-        service.send(
-            _invocation(sender, tmp_path, key="second"), recipient.id, "Second"
+    second = await service.send(
+        _invocation(sender, tmp_path, key="second"), recipient.id, "Second"
+    )
+    records = {item.id: item for item in (await store.list_entities(ChatAgentMessage))}
+
+    (
+        await service.mark_history_delivered(
+            recipient.id, {records[first["message_id"]].transcript_message_id}
         )
     )
-    records = {item.id: item for item in store.list_entities(ChatAgentMessage)}
-
-    service.mark_history_delivered(
-        recipient.id, {records[first["message_id"]].transcript_message_id}
-    )
 
     assert (
-        store.get(ChatAgentMessage, first["message_id"]).status
-        == ChatAgentMessageStatus.DELIVERED
-    )
+        await store.get(ChatAgentMessage, first["message_id"])
+    ).status == ChatAgentMessageStatus.DELIVERED
     assert (
-        store.get(ChatAgentMessage, second["message_id"]).status
-        == ChatAgentMessageStatus.PENDING
-    )
-    service.mark_message_ids_delivered([second["message_id"]])
+        await store.get(ChatAgentMessage, second["message_id"])
+    ).status == ChatAgentMessageStatus.PENDING
+    (await service.mark_message_ids_delivered([second["message_id"]]))
     assert (
-        store.get(ChatAgentMessage, second["message_id"]).status
-        == ChatAgentMessageStatus.DELIVERED
-    )
+        await store.get(ChatAgentMessage, second["message_id"])
+    ).status == ChatAgentMessageStatus.DELIVERED
 
 
-def test_sender_must_still_be_an_opted_in_main_agent(tmp_path):
+async def test_sender_must_still_be_an_opted_in_main_agent(tmp_path):
     store = NebulaStore(tmp_path / "sender.db")
-    project = store.create(Engagement(name="Project"))
-    sender = _session(store, project.id, "Coordinator", allow_agent_messaging=False)
-    _session(store, project.id, "Reviewer")
+    project = await store.create(Engagement(name="Project"))
+    sender = await _session(
+        store, project.id, "Coordinator", allow_agent_messaging=False
+    )
+    (await _session(store, project.id, "Reviewer"))
 
     # A setting refuses the call, not its arguments: the model reads
     # permission_denied and does not repeat it.
     with pytest.raises(ToolNotPermitted, match="turned off"):
-        AgentMessageService(store).list_output(_invocation(sender, tmp_path))
+        (await AgentMessageService(store).list_output(_invocation(sender, tmp_path)))
 
 
-def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
+async def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "harness.db")
-        project = store.create(Engagement(name="Project"))
-        profile = store.create(
+        project = await store.create(Engagement(name="Project"))
+        profile = await store.create(
             HarnessProfile(
                 name="Harness",
                 kind=HarnessKind.CODEX_APP_SERVER,
@@ -511,8 +536,8 @@ def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
         )
         service = AgentMessageService(store)
         runtime.bind_agent_messages(service)
-        peer = _session(store, project.id, "Peer reviewer")
-        chat, chat_turn, harness_turn = runtime.prepare_chat(
+        peer = await _session(store, project.id, "Peer reviewer")
+        chat, chat_turn, harness_turn = await runtime.prepare_chat(
             engagement_id=project.id,
             profile_id=profile.id,
             model=None,
@@ -522,8 +547,10 @@ def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
             mcp_server_ids=[],
         )
         assert chat.metadata["allow_agent_messaging"] is True
-        session = store.get(HarnessSession, harness_turn.harness_session_id)
-        names = {item["name"] for item in runtime._gateway_catalog(session)["tools"]}
+        session = await store.get(HarnessSession, harness_turn.harness_session_id)
+        names = {
+            item["name"] for item in (await runtime._gateway_catalog(session))["tools"]
+        }
         assert {"agent.list", "agent.send", "agent.read"} <= names
 
         sent = await runtime._gateway_agent_message(
@@ -533,21 +560,26 @@ def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
             {"session_id": peer.id, "message": "Please verify the retry boundary."},
         )
         assert sent["isError"] is False
-        assert (
-            store.list_session_entities(ChatMessage, peer.id)[0].metadata["kind"]
-            == "agent_message"
-        )
+        assert (await store.list_session_entities(ChatMessage, peer.id))[0].metadata[
+            "kind"
+        ] == "agent_message"
 
         incoming = await service.send(
             _invocation(peer, tmp_path, key="peer-reply"),
             chat.id,
             "The retry boundary is idempotent.",
         )
-        store.update(ChatTurn, chat_turn.id, {"status": ChatTurnStatus.COMPLETE})
-        store.update(
-            HarnessTurn, harness_turn.id, {"status": HarnessTurnStatus.COMPLETE}
+        (
+            await store.update(
+                ChatTurn, chat_turn.id, {"status": ChatTurnStatus.COMPLETE}
+            )
         )
-        _updated, _owner, next_turn = runtime.prepare_chat(
+        (
+            await store.update(
+                HarnessTurn, harness_turn.id, {"status": HarnessTurnStatus.COMPLETE}
+            )
+        )
+        _updated, _owner, next_turn = await runtime.prepare_chat(
             engagement_id=project.id,
             profile_id=profile.id,
             model=None,
@@ -561,13 +593,14 @@ def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
         ]
         # In the prompt, but received only once the vendor accepts it.
         assert (
-            store.get(ChatAgentMessage, incoming["message_id"]).status
-            == ChatAgentMessageStatus.PENDING
-        )
-        runtime._mark_prompt_context_delivered(next_turn)
+            await store.get(ChatAgentMessage, incoming["message_id"])
+        ).status == ChatAgentMessageStatus.PENDING
+        (await runtime._mark_prompt_context_delivered(next_turn))
         assert (
-            store.get(ChatAgentMessage, incoming["message_id"]).status
-            == ChatAgentMessageStatus.DELIVERED
-        )
+            await store.get(ChatAgentMessage, incoming["message_id"])
+        ).status == ChatAgentMessageStatus.DELIVERED
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

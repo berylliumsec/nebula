@@ -1,10 +1,14 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import shlex
 import subprocess
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3 import environments, ssh_environments
 from nebula.v3.api import create_app
@@ -274,12 +278,16 @@ def service(tmp_path, monkeypatch):
     return result
 
 
-def test_discovery_joins_config_hosts_with_saved_settings(service):
-    service.save("jetson", SshEnvironmentSettings(enabled=True, display_name="Jetson"))
+async def test_discovery_joins_config_hosts_with_saved_settings(service):
+    (
+        await service.save(
+            "jetson", SshEnvironmentSettings(enabled=True, display_name="Jetson")
+        )
+    )
     orphan = SshEnvironment(id="ssh:retired", alias="retired", enabled=True)
-    service.store.create(orphan)
+    (await service.store.create(orphan))
 
-    discovery = service.discover()
+    discovery = await service.discover()
 
     assert discovery.config_exists
     assert [(host.alias, host.in_config) for host in discovery.hosts] == [
@@ -293,12 +301,12 @@ def test_discovery_joins_config_hosts_with_saved_settings(service):
     assert jetson.environment.enabled and jetson.environment.label == "Jetson"
 
 
-def test_save_creates_once_then_updates_and_rejects_unknown_hosts(service):
-    created = service.save(
+async def test_save_creates_once_then_updates_and_rejects_unknown_hosts(service):
+    created = await service.save(
         "research3",
         SshEnvironmentSettings(enabled=True, working_directory=" ~/research "),
     )
-    updated = service.save(
+    updated = await service.save(
         "research3",
         SshEnvironmentSettings(
             notes="Verify the model first.", expected_revision=created.revision
@@ -309,41 +317,45 @@ def test_save_creates_once_then_updates_and_rejects_unknown_hosts(service):
     assert created.command_approval == SshEnvironmentApproval.ASK
     assert updated.enabled and updated.working_directory == "~/research"
     assert updated.notes == "Verify the model first."
-    assert len(service.saved()) == 1
+    assert len((await service.saved())) == 1
     with pytest.raises(NotFoundError):
-        service.save("not-in-config", SshEnvironmentSettings(enabled=True))
+        (await service.save("not-in-config", SshEnvironmentSettings(enabled=True)))
 
 
-def test_probe_records_fingerprint_and_forget_removes_settings(service):
-    probed = asyncio.run(service.probe("research3"))
+async def test_probe_records_fingerprint_and_forget_removes_settings(service):
+    probed = await service.probe("research3")
 
     assert service.probes == ["research3"]
     assert not probed.enabled
     assert probed.last_probe.status == "reachable"
     assert probed.last_probe.model == "Mac17,5"
-    service.forget("research3")
-    assert service.get("research3") is None
+    (await service.forget("research3"))
+    assert (await service.get("research3")) is None
 
 
-def test_chat_selection_defaults_to_enabled_hosts_and_rejects_disabled(service):
-    service.save("research3", SshEnvironmentSettings(enabled=True))
-    service.save("jetson", SshEnvironmentSettings(enabled=False))
+async def test_chat_selection_defaults_to_enabled_hosts_and_rejects_disabled(service):
+    (await service.save("research3", SshEnvironmentSettings(enabled=True)))
+    (await service.save("jetson", SshEnvironmentSettings(enabled=False)))
 
-    assert [item.alias for item in resolve_ssh_environments(service.store, None)] == [
-        "research3"
-    ]
-    assert resolve_ssh_environments(service.store, []) == ()
+    assert [
+        item.alias for item in (await resolve_ssh_environments(service.store, None))
+    ] == ["research3"]
+    assert (await resolve_ssh_environments(service.store, [])) == ()
     with pytest.raises(ValueError, match="not enabled"):
-        resolve_ssh_environments(service.store, ["ssh:jetson"])
+        (await resolve_ssh_environments(service.store, ["ssh:jetson"]))
 
 
-def test_chat_selection_adds_optional_config_metadata_to_model_tool(service):
-    service.save(
-        "research3",
-        SshEnvironmentSettings(enabled=True, notes="Prefer it for exact-build tests."),
+async def test_chat_selection_adds_optional_config_metadata_to_model_tool(service):
+    (
+        await service.save(
+            "research3",
+            SshEnvironmentSettings(
+                enabled=True, notes="Prefer it for exact-build tests."
+            ),
+        )
     )
 
-    selected = resolve_ssh_environments(
+    selected = await resolve_ssh_environments(
         service.store, ["ssh:research3"], config_path=service.config_path
     )
     plugin = build_ssh_tool_plugins(selected)[0]
@@ -355,15 +367,17 @@ def test_chat_selection_adds_optional_config_metadata_to_model_tool(service):
     assert "SSH config metadata: Apple Silicon research Mac" in plugin.spec.description
     assert "Nebula notes: Prefer it for exact-build tests." in plugin.spec.description
     # Enrichment is per turn; discovery never overwrites the operator's saved notes.
-    assert service.get("research3").notes == "Prefer it for exact-build tests."
+    assert (await service.get("research3")).notes == "Prefer it for exact-build tests."
 
 
-def test_chat_selection_without_config_metadata_keeps_saved_notes(service):
-    service.save(
-        "jetson", SshEnvironmentSettings(enabled=True, notes="Use for CUDA work.")
+async def test_chat_selection_without_config_metadata_keeps_saved_notes(service):
+    (
+        await service.save(
+            "jetson", SshEnvironmentSettings(enabled=True, notes="Use for CUDA work.")
+        )
     )
 
-    selected = resolve_ssh_environments(
+    selected = await resolve_ssh_environments(
         service.store, ["ssh:jetson"], config_path=service.config_path
     )
 
@@ -374,15 +388,17 @@ def test_chat_selection_without_config_metadata_keeps_saved_notes(service):
     )
 
 
-def test_several_hosts_can_be_enabled_for_one_chat_at_once(service):
-    service.save("research3", SshEnvironmentSettings(enabled=True))
-    service.save("jetson", SshEnvironmentSettings(enabled=True))
+async def test_several_hosts_can_be_enabled_for_one_chat_at_once(service):
+    (await service.save("research3", SshEnvironmentSettings(enabled=True)))
+    (await service.save("jetson", SshEnvironmentSettings(enabled=True)))
 
-    discovery = service.discover()
+    discovery = await service.discover()
     assert [host.environment.enabled for host in discovery.hosts] == [True, True]
-    automatic = resolve_ssh_environments(service.store, None)
+    automatic = await resolve_ssh_environments(service.store, None)
     assert [item.alias for item in automatic] == ["jetson", "research3"]
-    explicit = resolve_ssh_environments(service.store, ["ssh:research3", "ssh:jetson"])
+    explicit = await resolve_ssh_environments(
+        service.store, ["ssh:research3", "ssh:jetson"]
+    )
     assert [item.alias for item in explicit] == ["research3", "jetson"]
     assert [plugin.spec.name for plugin in build_ssh_tool_plugins(automatic)] == [
         "ssh.jetson.run_command",
@@ -390,21 +406,21 @@ def test_several_hosts_can_be_enabled_for_one_chat_at_once(service):
     ]
 
 
-def test_api_lists_saves_probes_and_forgets(service):
+async def test_api_lists_saves_probes_and_forgets(service):
     client = TestClient(
         create_app(
             service.store, allow_unauthenticated=True, ssh_environment_service=service
         )
     )
 
-    listed = client.get("/api/v1/ssh-environments")
-    saved = client.put(
+    listed = await client.get("/api/v1/ssh-environments")
+    saved = await client.put(
         "/api/v1/ssh-environments/research3",
         json={"enabled": True, "command_approval": "allow"},
     )
-    probed = client.post("/api/v1/ssh-environments/research3/probe")
-    missing = client.put("/api/v1/ssh-environments/nope", json={"enabled": True})
-    forgotten = client.delete("/api/v1/ssh-environments/research3")
+    probed = await client.post("/api/v1/ssh-environments/research3/probe")
+    missing = await client.put("/api/v1/ssh-environments/nope", json={"enabled": True})
+    forgotten = await client.delete("/api/v1/ssh-environments/research3")
 
     assert listed.status_code == 200
     assert [host["alias"] for host in listed.json()["hosts"]] == ["research3", "jetson"]
@@ -413,9 +429,9 @@ def test_api_lists_saves_probes_and_forgets(service):
     assert probed.json()["enabled"] is True
     assert missing.status_code == 404
     assert forgotten.status_code == 204
-    assert (
-        client.get("/api/v1/ssh-environments").json()["hosts"][0]["environment"] is None
-    )
+    assert (await client.get("/api/v1/ssh-environments")).json()["hosts"][0][
+        "environment"
+    ] is None
 
 
 def test_tool_spec_describes_host_and_follows_approval_policy():
@@ -469,16 +485,18 @@ def _local_shell(monkeypatch):
     monkeypatch.setattr(environments.ssh, "remote_command_argv", argv)
 
 
-def _platform_components(tmp_path, store, environment):
-    store.create(Engagement(id="eng-1", name="Lab"))
-    store.create(
-        ChatTurn(
-            id="turn-1",
-            engagement_id="eng-1",
-            session_id="session-1",
-            provider_profile_id="provider-1",
-            model="m",
-            status=ChatTurnStatus.ROUTING,
+async def _platform_components(tmp_path, store, environment):
+    (await store.create(Engagement(id="eng-1", name="Lab")))
+    (
+        await store.create(
+            ChatTurn(
+                id="turn-1",
+                engagement_id="eng-1",
+                session_id="session-1",
+                provider_profile_id="provider-1",
+                model="m",
+                status=ChatTurnStatus.ROUTING,
+            )
         )
     )
     platform = RuntimePlatform(
@@ -486,7 +504,7 @@ def _platform_components(tmp_path, store, environment):
         artifact_store=ArtifactStore(tmp_path / "artifacts"),
         data_root=tmp_path / "core",
     )
-    return platform.chat_components(
+    return await platform.chat_components(
         engagement_id="eng-1",
         turn_id="turn-1",
         provider=None,
@@ -509,7 +527,9 @@ def _invocation(components, tool_name, arguments):
     )
 
 
-def test_allowed_host_runs_through_the_broker_and_records_output(tmp_path, monkeypatch):
+async def test_allowed_host_runs_through_the_broker_and_records_output(
+    tmp_path, monkeypatch
+):
     _local_shell(monkeypatch)
     store = NebulaStore(tmp_path / "nebula.db")
     environment = SshEnvironment(
@@ -519,15 +539,13 @@ def test_allowed_host_runs_through_the_broker_and_records_output(tmp_path, monke
         working_directory=str(tmp_path),
         command_approval=SshEnvironmentApproval.ALLOW,
     )
-    components = _platform_components(tmp_path, store, environment)
+    components = await _platform_components(tmp_path, store, environment)
     name = ssh_tool_name("lab")
 
     assert name in components.specs
-    result = asyncio.run(
-        components.broker.execute(
-            _invocation(components, name, {"command": "pwd; echo oops >&2; exit 3"}),
-            components.scope,
-        )
+    result = await components.broker.execute(
+        _invocation(components, name, {"command": "pwd; echo oops >&2; exit 3"}),
+        components.scope,
     )
 
     assert result.exit_code == 3
@@ -536,7 +554,9 @@ def test_allowed_host_runs_through_the_broker_and_records_output(tmp_path, monke
     assert result.receipt is not None
 
 
-def test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt(monkeypatch):
+async def test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt(
+    monkeypatch,
+):
     environment = SshEnvironment(id="ssh:lab", alias="lab", enabled=True)
     plugin = build_ssh_tool_plugins((environment,))[0]
     recorded = []
@@ -550,9 +570,7 @@ def test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt(monkeyp
         "record_caught_exception",
         lambda *args, **kwargs: recorded.append((args, kwargs)),
     )
-    result = asyncio.run(
-        plugin.execute(SimpleNamespace(arguments={"command": "true"}), None)
-    )
+    result = await plugin.execute(SimpleNamespace(arguments={"command": "true"}), None)
 
     assert result.exit_code == 1
     assert recorded[0][0][:3] == (
@@ -567,18 +585,20 @@ def test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt(monkeyp
     }
 
 
-def test_ask_host_stops_for_approval_then_runs_once_approved(tmp_path, monkeypatch):
+async def test_ask_host_stops_for_approval_then_runs_once_approved(
+    tmp_path, monkeypatch
+):
     _local_shell(monkeypatch)
     store = NebulaStore(tmp_path / "nebula.db")
     environment = SshEnvironment(id="ssh:lab", alias="lab", enabled=True)
-    components = _platform_components(tmp_path, store, environment)
+    components = await _platform_components(tmp_path, store, environment)
     invocation = _invocation(
         components, ssh_tool_name("lab"), {"command": "echo hello"}
     )
 
     with pytest.raises(ApprovalRequired) as pending:
-        asyncio.run(components.broker.execute(invocation, components.scope))
-    approval = store.update(
+        (await components.broker.execute(invocation, components.scope))
+    approval = await store.update(
         Approval,
         pending.value.approval.id,
         {
@@ -587,42 +607,44 @@ def test_ask_host_stops_for_approval_then_runs_once_approved(tmp_path, monkeypat
             "decided_at": utc_now(),
         },
     )
-    result = asyncio.run(
-        components.broker.execute(invocation, components.scope, approval=approval)
+    result = await components.broker.execute(
+        invocation, components.scope, approval=approval
     )
 
     assert result.exit_code == 0
 
 
-def test_project_never_policy_auto_approves_provider_ssh_tool(tmp_path, monkeypatch):
+async def test_project_never_policy_auto_approves_provider_ssh_tool(
+    tmp_path, monkeypatch
+):
     _local_shell(monkeypatch)
     store = NebulaStore(tmp_path / "nebula.db")
-    store.create(
-        AutomationProjectPolicy(
-            id="automation:eng-1",
-            engagement_id="eng-1",
-            approval_policy="never",
+    (
+        await store.create(
+            AutomationProjectPolicy(
+                id="automation:eng-1",
+                engagement_id="eng-1",
+                approval_policy="never",
+            )
         )
     )
     environment = SshEnvironment(id="ssh:lab", alias="lab", enabled=True)
-    components = _platform_components(tmp_path, store, environment)
+    components = await _platform_components(tmp_path, store, environment)
 
-    result = asyncio.run(
-        components.broker.execute(
-            _invocation(components, ssh_tool_name("lab"), {"command": "echo approved"}),
-            components.scope,
-        )
+    result = await components.broker.execute(
+        _invocation(components, ssh_tool_name("lab"), {"command": "echo approved"}),
+        components.scope,
     )
 
     assert result.exit_code == 0
-    assert store.list_entities(Approval, engagement_id="eng-1") == []
+    assert (await store.list_entities(Approval, engagement_id="eng-1")) == []
 
 
-def test_remote_command_timeout_stops_the_process(monkeypatch):
+async def test_remote_command_timeout_stops_the_process(monkeypatch):
     _local_shell(monkeypatch)
 
-    exit_code, _, _, timed_out = asyncio.run(
-        environments.run_remote_command("lab", "sleep 5", cwd=None, timeout_seconds=1)
+    exit_code, _, _, timed_out = await environments.run_remote_command(
+        "lab", "sleep 5", cwd=None, timeout_seconds=1
     )
 
     assert timed_out and exit_code is None
@@ -637,7 +659,7 @@ def _process_alive(pid):
     return state != "Z"
 
 
-def test_cancelled_remote_command_stops_the_process(monkeypatch, tmp_path):
+async def test_cancelled_remote_command_stops_the_process(monkeypatch, tmp_path):
     import os
     import signal
     import time
@@ -659,10 +681,13 @@ def test_cancelled_remote_command_stops_the_process(monkeypatch, tmp_path):
             await task
         return int(marker.read_text())
 
-    pid = asyncio.run(scenario())
+    pid = await scenario()
     deadline = time.monotonic() + 2
     while _process_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.02)
     if _process_alive(pid):
         os.killpg(pid, signal.SIGKILL)
         pytest.fail("the remote command kept running after the turn was cancelled")
+
+
+pytestmark = pytest.mark.anyio

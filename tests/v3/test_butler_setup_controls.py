@@ -1,5 +1,10 @@
 """Core-owned fixed runtime setup through Butler's authenticated gateway."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -25,15 +30,15 @@ from ui.tests.fixtures.butler_setup_core import configure_setup_io
 
 
 @pytest.fixture
-def setup_core(tmp_path, monkeypatch):
+async def setup_core(tmp_path, monkeypatch):
     for name in ("_trusted_runtime_paths", "available", "_capture"):
         monkeypatch.setattr(
             ContainerSandboxRunner, name, getattr(ContainerSandboxRunner, name)
         )
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    selected = store.create(Engagement(name="Selected setup project"))
-    other = store.create(Engagement(name="Other setup project"))
+    selected = await store.create(Engagement(name="Selected setup project"))
+    other = await store.create(Engagement(name="Other setup project"))
     platform = RuntimePlatform(
         store=store, artifact_store=artifacts, data_root=tmp_path
     )
@@ -76,7 +81,7 @@ async def select_fixed(app, gateway, project_id):
     return candidate
 
 
-def test_butler_selects_only_core_detected_fixed_candidates(setup_core):
+async def test_butler_selects_only_core_detected_fixed_candidates(setup_core):
     _, selected, _, _, _, app, gateway = setup_core
 
     async def journey():
@@ -101,11 +106,11 @@ def test_butler_selects_only_core_detected_fixed_candidates(setup_core):
                 },
             )
 
-    asyncio.run(journey())
+    (await journey())
 
 
 @pytest.mark.parametrize("action", ["prepare", "retry"])
-def test_butler_image_preparation_cannot_be_rebound_to_another_project(
+async def test_butler_image_preparation_cannot_be_rebound_to_another_project(
     setup_core, action
 ):
     _, selected, other, _, boundary, app, gateway = setup_core
@@ -121,7 +126,7 @@ def test_butler_image_preparation_cannot_be_rebound_to_another_project(
             )
         assert boundary.prepared_projects == []
 
-    asyncio.run(journey())
+    (await journey())
 
 
 async def phase(app, expected):
@@ -134,7 +139,7 @@ async def phase(app, expected):
 
 
 @pytest.mark.parametrize("body", [None, {"project_id": None}])
-def test_butler_preparation_binds_omitted_and_null_project_to_selection(
+async def test_butler_preparation_binds_omitted_and_null_project_to_selection(
     setup_core, body
 ):
     _, selected, _, _, boundary, app, gateway = setup_core
@@ -149,10 +154,10 @@ def test_butler_preparation_binds_omitted_and_null_project_to_selection(
         assert observed["terminal"]["image_preparation"]["project_id"] == selected.id
         assert boundary.prepared_projects == [selected.id]
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_setup_failure_retry_exact_cancel_and_readiness_are_authoritative(
+async def test_butler_setup_failure_retry_exact_cancel_and_readiness_are_authoritative(
     setup_core,
 ):
     _, selected, _, _, boundary, app, gateway = setup_core
@@ -207,10 +212,12 @@ def test_butler_setup_failure_retry_exact_cancel_and_readiness_are_authoritative
         ] == "ready"
         assert boundary.prepared_projects == [selected.id] * 3
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_retry_does_not_inherit_foreign_project_and_cannot_cancel_it(setup_core):
+async def test_butler_retry_does_not_inherit_foreign_project_and_cannot_cancel_it(
+    setup_core,
+):
     _, selected, other, _, boundary, app, gateway = setup_core
 
     async def journey():
@@ -240,10 +247,12 @@ def test_butler_retry_does_not_inherit_foreign_project_and_cannot_cancel_it(setu
         assert current["terminal"]["image_preparation"]["project_id"] == selected.id
         assert boundary.prepared_projects == [other.id, other.id, selected.id]
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_shared_automation_prepare_reads_actual_cached_metadata(setup_core):
+async def test_butler_shared_automation_prepare_reads_actual_cached_metadata(
+    setup_core,
+):
     _, selected, _, platform, _, app, gateway = setup_core
 
     async def journey():
@@ -262,10 +271,10 @@ def test_butler_shared_automation_prepare_reads_actual_cached_metadata(setup_cor
             == "Synthetic fixture"
         )
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_setup_and_project_automation_reads_remain_closed(setup_core):
+async def test_butler_setup_and_project_automation_reads_remain_closed(setup_core):
     store, selected, _, _, _, app, gateway = setup_core
 
     async def journey():
@@ -273,20 +282,22 @@ def test_butler_setup_and_project_automation_reads_remain_closed(setup_core):
         setup = await observer.system({"kind": "setup_status"})
         assert setup["read_back"] is True
         policy = app.state.automation_runtime.project_policy(selected.id)
-        store.update(
-            AutomationProjectPolicy,
-            policy.id,
-            {"execution_mode": "host"},
-            expected_revision=policy.revision,
+        (
+            await store.update(
+                AutomationProjectPolicy,
+                policy.id,
+                {"execution_mode": "host"},
+                expected_revision=policy.revision,
+            )
         )
         observed = await observer.system({"kind": "automation_runtime"})
         assert json.loads(observed["text"])["runner_profile_id"] == "host"
         assert json.loads(observed["text"])["ready"] is False
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_reads_only_existing_selected_project_terminal_egress(
+async def test_butler_reads_only_existing_selected_project_terminal_egress(
     setup_core, tmp_path
 ):
     store, selected, other, platform, _, _, _ = setup_core
@@ -330,4 +341,7 @@ def test_butler_reads_only_existing_selected_project_terminal_egress(
         with pytest.raises(GuidedToolError):
             await observer.system({"kind": "terminal_public_ip"})
 
-    asyncio.run(journey())
+    (await journey())
+
+
+pytestmark = pytest.mark.anyio

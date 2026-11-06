@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import hashlib
@@ -10,7 +14,7 @@ from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from sqlalchemy import literal, select, text
 from sqlalchemy.exc import DBAPIError
 
@@ -93,18 +97,30 @@ def test_spans_record_failure_and_cancellation_and_close_inherited_requests():
     assert "canary-private-value" not in json.dumps(performance.snapshot())
 
 
-def test_sql_fingerprints_errors_expanding_parameters_and_source_privacy(tmp_path):
+async def test_sql_fingerprints_errors_expanding_parameters_and_source_privacy(
+    tmp_path,
+):
     database = Database(tmp_path / "sql.db", bootstrap=False)
     try:
-        with database.engine.connect() as connection:
-            connection.execute(select(literal("canary-secret-a"))).all()
-            connection.execute(select(literal("canary-secret-b"))).all()
-            connection.execute(select(literal(1)).where(literal(1).in_([1, 2]))).all()
-            connection.execute(
-                select(literal(1)).where(literal(1).in_([1, 2, 3]))
+        async with database.engine.connect() as connection:
+            (await connection.execute(select(literal("canary-secret-a")))).all()
+            (await connection.execute(select(literal("canary-secret-b")))).all()
+            (
+                await connection.execute(
+                    select(literal(1)).where(literal(1).in_([1, 2]))
+                )
+            ).all()
+            (
+                await connection.execute(
+                    select(literal(1)).where(literal(1).in_([1, 2, 3]))
+                )
             ).all()
             with pytest.raises(DBAPIError):
-                connection.execute(text("SELECT * FROM canary_private_missing_table"))
+                (
+                    await connection.execute(
+                        text("SELECT * FROM canary_private_missing_table")
+                    )
+                )
         operations = list(_operations(database.performance).values())
         assert sorted(item["count"] for item in operations) == [1, 2, 2]
         assert sum(item["errors"] for item in operations) == 1
@@ -112,7 +128,7 @@ def test_sql_fingerprints_errors_expanding_parameters_and_source_privacy(tmp_pat
         assert "canary" not in encoded
         assert "SELECT" not in encoded
     finally:
-        database.dispose()
+        (await database.dispose())
 
     store = NebulaStore(tmp_path / "source.db")
     try:
@@ -122,16 +138,16 @@ def test_sql_fingerprints_errors_expanding_parameters_and_source_privacy(tmp_pat
             for name in _operations(store.database.performance)
         )
         store.database.performance.slow_ms = 0
-        store.list_entities(Engagement)
+        (await store.list_entities(Engagement))
         assert any(
             item.get("source", "").startswith("nebula/v3/storage.py:")
             for item in store.database.performance.snapshot()["recent_slow"]
         )
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_worker_queue_is_separate_and_actual_work_survives_waiter_cancellation(
+async def test_worker_queue_is_separate_and_actual_work_survives_waiter_cancellation(
     monkeypatch,
 ):
     performance = PerformanceTelemetry(slow_ms=0)
@@ -166,7 +182,7 @@ def test_worker_queue_is_separate_and_actual_work_survives_waiter_cancellation(
             assert await second == 2
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
     finally:
         release.set()
         workers.shutdown()
@@ -220,7 +236,7 @@ def test_event_loop_lag_measures_lateness_and_stops_its_timer(monkeypatch):
     assert scheduled[-1][2].cancelled
 
 
-def test_long_stream_lifetime_does_not_create_a_slow_response(monkeypatch):
+async def test_long_stream_lifetime_does_not_create_a_slow_response(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr("nebula.v3.performance.time.perf_counter", lambda: clock[0])
     performance = PerformanceTelemetry(slow_ms=250)
@@ -240,8 +256,8 @@ def test_long_stream_lifetime_does_not_create_a_slow_response(monkeypatch):
     async def send(_message):
         pass
 
-    asyncio.run(
-        PerformanceMiddleware(app, performance=performance)(
+    (
+        await PerformanceMiddleware(app, performance=performance)(
             {
                 "type": "http",
                 "method": "GET",
@@ -259,7 +275,9 @@ def test_long_stream_lifetime_does_not_create_a_slow_response(monkeypatch):
     assert "private" not in json.dumps(performance.snapshot())
 
 
-def test_api_authentication_correlation_route_privacy_and_polling_exclusion(tmp_path):
+async def test_api_authentication_correlation_route_privacy_and_polling_exclusion(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "api.db")
     performance = store.database.performance
     performance.slow_ms = 0
@@ -267,17 +285,19 @@ def test_api_authentication_correlation_route_privacy_and_polling_exclusion(tmp_
 
     @app.get("/api/v1/performance-fixture/{item}")
     async def read_fixture(item: str):
-        return await read_in_worker(store.list_entities, Engagement)
+        return await store.list_entities(Engagement)
 
     try:
-        with TestClient(app) as client:
-            assert client.get("/api/v1/diagnostics/performance").status_code == 401
-            response = client.get(
+        async with TestClient(app) as client:
+            assert (
+                await client.get("/api/v1/diagnostics/performance")
+            ).status_code == 401
+            response = await client.get(
                 "/api/v1/performance-fixture/canary-private-id?secret=canary-query",
                 headers=AUTH,
             )
             assert response.status_code == 200
-            snapshot = client.get("/api/v1/diagnostics/performance", headers=AUTH)
+            snapshot = await client.get("/api/v1/diagnostics/performance", headers=AUTH)
             assert snapshot.status_code == 200
             assert snapshot.headers["cache-control"] == "private, no-store"
             slow = next(
@@ -298,33 +318,31 @@ def test_api_authentication_correlation_route_privacy_and_polling_exclusion(tmp_
                 for item in snapshot.json()["operations"]
             )
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_live_export_contains_manifested_performance_and_assistant_can_discover_it(
+async def test_live_export_contains_manifested_performance_and_assistant_can_discover_it(
     tmp_path,
 ):
     manager = DiagnosticManager(tmp_path / "logs", watch_settings=False)
     store = NebulaStore(tmp_path / "export.db")
-    project = store.create(Engagement(name="Synthetic performance"))
+    project = await store.create(Engagement(name="Synthetic performance"))
     app = create_app(
         store, auth_token="synthetic-performance-token", diagnostic_manager=manager
     )
     gateway = SettingsAssistantApi(app, "synthetic-performance-token")
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             schema = gateway.schema(path="diagnostics/performance", method="GET")
             assert schema["path"] == "/api/v1/diagnostics/performance"
             discovered = json.dumps(gateway.schema())
             assert "diagnostics/performance" in discovered
-            observed = asyncio.run(
-                gateway.request(
-                    project.id, method="GET", path="diagnostics/performance"
-                )
+            observed = await gateway.request(
+                project.id, method="GET", path="diagnostics/performance"
             )
             assert observed["result"]["schema"] == "nebula.performance/v1"
             assert observed["read_back"] is True
-            response = client.post("/api/v1/diagnostics/export", headers=AUTH)
+            response = await client.post("/api/v1/diagnostics/export", headers=AUTH)
             assert response.status_code == 200
             with zipfile.ZipFile(BytesIO(response.content)) as archive:
                 payload = archive.read("performance.json")
@@ -337,37 +355,39 @@ def test_live_export_contains_manifested_performance_and_assistant_can_discover_
         assert not list((manager.data_dir / "diagnostics-exports").glob("*.zip"))
     finally:
         manager.close()
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_provider_admission_wait_records_cancellation_without_leaking_capacity(
+async def test_provider_admission_wait_records_cancellation_without_leaking_capacity(
     tmp_path,
 ):
     from nebula.v3.domain import ChatTurn, utc_now
     from nebula.v3.provider_scheduler import ProviderScheduler, ProviderSchedulerConfig
     from tests.v3.test_chat_throughput import _store
 
-    store, project, profile, session = _store(tmp_path)
+    store, project, profile, session = await _store(tmp_path)
     scheduler = ProviderScheduler(
         store,
         worker_id="fixture",
         config=ProviderSchedulerConfig(provider_limit=2, background_limit=1),
     )
     turns = [
-        store.create(
-            ChatTurn(
-                engagement_id=project.id,
-                session_id=session.id,
-                provider_profile_id=profile.id,
-                model="model-a",
-                capacity_lane="background",
-                queued_at=utc_now(),
+        (
+            await store.create(
+                ChatTurn(
+                    engagement_id=project.id,
+                    session_id=session.id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    capacity_lane="background",
+                    queued_at=utc_now(),
+                )
             )
         )
         for _ in range(2)
     ]
     for turn in turns:
-        scheduler.enqueue(turn)
+        (await scheduler.enqueue(turn))
 
     async def scenario():
         admission = await scheduler.admit(turns[0].id)
@@ -382,10 +402,13 @@ def test_provider_admission_wait_records_cancellation_without_leaking_capacity(
         await second.release(turns[1].id)
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
         operations = _operations(store.database.performance)
         assert operations["provider.capacity.background"]["count"] == 3
         assert operations["provider.capacity.background"]["cancelled"] == 1
         assert operations["provider.capacity.shared"]["count"] == 2
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
+
+
+pytestmark = pytest.mark.anyio

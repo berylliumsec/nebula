@@ -7,6 +7,10 @@ subprocess is replaced.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -192,12 +196,14 @@ class ScriptedCli(claude_agent_sdk.Transport):
     idle stops nothing.
     """
 
-    def __init__(
-        self,
+    @classmethod
+    async def create(
+        cls,
         turns: list[list[Any]],
         *,
         on_interrupt: list[dict[str, Any]] | None = None,
-    ) -> None:
+    ):
+        self = cls.__new__(cls)
         self.turns = list(turns)
         self.on_interrupt = list(
             INTERRUPTED_TAIL if on_interrupt is None else on_interrupt
@@ -210,6 +216,7 @@ class ScriptedCli(claude_agent_sdk.Transport):
         self._interrupted = asyncio.Event()
         self._ready = False
         self._runner: asyncio.Future[None] | None = None
+        return self
 
     async def connect(self) -> None:
         self._ready = True
@@ -321,9 +328,12 @@ async def _turn(
 class ScriptedAdapter(HarnessAdapter):
     kind = HarnessKind.CLAUDE_AGENT_SDK
 
-    def __init__(self, clis: Callable[[], ScriptedCli]) -> None:
+    @classmethod
+    async def create(cls, clis: Callable[[], ScriptedCli]):
+        self = cls.__new__(cls)
         self.clis = clis
         self.opened: list[ScriptedCli] = []
+        return self
 
     async def probe(self, profile: Any, credential_store: Any) -> HarnessHealth:
         raise NotImplementedError
@@ -337,16 +347,20 @@ class ScriptedAdapter(HarnessAdapter):
 class Chat:
     """A real HarnessRuntimeService whose Claude adapter speaks to scripted CLIs."""
 
-    def __init__(
-        self,
+    @classmethod
+    async def create(
+        cls,
         tmp_path: Path,
         clis: Callable[[], ScriptedCli] | None = None,
         *,
         adapter: HarnessAdapter | None = None,
-    ) -> None:
+    ):
+        self = cls.__new__(cls)
         self.store = NebulaStore(tmp_path / "nebula.db")
-        self.engagement = self.store.create(Engagement(id="eng-a", name="Engagement A"))
-        self.profile = self.store.create(
+        self.engagement = await self.store.create(
+            Engagement(id="eng-a", name="Engagement A")
+        )
+        self.profile = await self.store.create(
             HarnessProfile(
                 id="claude-a",
                 name="Claude fixture",
@@ -368,9 +382,10 @@ class Chat:
         )
         self.chat_id: str | None = None
         self.harness_session_id: str | None = None
+        return self
 
-    def prepare(self, prompt: str) -> tuple[ChatTurn, HarnessTurn]:
-        chat, owner, turn = self.service.prepare_chat(
+    async def prepare(self, prompt: str) -> tuple[ChatTurn, HarnessTurn]:
+        chat, owner, turn = await self.service.prepare_chat(
             engagement_id=self.engagement.id,
             profile_id=self.profile.id,
             model=None,
@@ -384,17 +399,19 @@ class Chat:
         return owner, turn
 
     async def send(self, prompt: str) -> tuple[HarnessTurn, str | None]:
-        owner, turn = self.prepare(prompt)
+        owner, turn = await self.prepare(prompt)
         await asyncio.wait_for(
             self.service.start_chat_turn(turn.id), timeout=TURN_DEADLINE_SECONDS
         )
-        return self.store.get(HarnessTurn, turn.id), self.answer(owner.id)
+        return (await self.store.get(HarnessTurn, turn.id)), (
+            await self.answer(owner.id)
+        )
 
-    def answer(self, owner_id: str) -> str | None:
-        owner = self.store.get(ChatTurn, owner_id)
+    async def answer(self, owner_id: str) -> str | None:
+        owner = await self.store.get(ChatTurn, owner_id)
         if not owner.final_message_id:
             return None
-        return self.store.get(ChatMessage, owner.final_message_id).content
+        return (await self.store.get(ChatMessage, owner.final_message_id)).content
 
 
 async def _until(predicate: Callable[[], bool]) -> None:
@@ -406,7 +423,7 @@ async def _until(predicate: Callable[[], bool]) -> None:
 
 
 @pytest.mark.parametrize("interrupt_is_error", [False, True])
-def test_claude_stop_drains_the_interrupted_turn_before_the_next_prompt(
+async def test_claude_stop_drains_the_interrupted_turn_before_the_next_prompt(
     tmp_path: Path, interrupt_is_error: bool
 ) -> None:
     async def scenario() -> None:
@@ -426,9 +443,9 @@ def test_claude_stop_drains_the_interrupted_turn_before_the_next_prompt(
                 ),
             ],
         )
-        chat = Chat(tmp_path, lambda: cli)
-        _owner, first = chat.prepare("first")
-        task = chat.service.start_chat_turn(first.id)
+        chat = await Chat.create(tmp_path, lambda: cli)
+        _owner, first = await chat.prepare("first")
+        task = await chat.service.start_chat_turn(first.id)
         await _until(
             lambda: any(
                 event.type == "message_delta"
@@ -438,7 +455,7 @@ def test_claude_stop_drains_the_interrupted_turn_before_the_next_prompt(
         await chat.service.cancel_turn(first.id, reason="Operator stop")
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert chat.store.get(HarnessTurn, first.id).status == (
+        assert (await chat.store.get(HarnessTurn, first.id)).status == (
             HarnessTurnStatus.CANCELLED
         )
 
@@ -458,10 +475,10 @@ def test_claude_stop_drains_the_interrupted_turn_before_the_next_prompt(
         assert len(chat.adapter.opened) == 1
         await chat.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_abandoned_turn_is_stopped_and_drained_by_the_next_prompt(
+async def test_claude_abandoned_turn_is_stopped_and_drained_by_the_next_prompt(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -482,11 +499,11 @@ def test_claude_abandoned_turn_is_stopped_and_drained_by_the_next_prompt(
         assert cli.prompts == ["first", "second"]
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("still_running", [False, True])
-def test_claude_background_turn_the_cli_started_is_not_the_next_answer(
+async def test_claude_background_turn_the_cli_started_is_not_the_next_answer(
     tmp_path: Path, still_running: bool
 ) -> None:
     injected_turn = [
@@ -542,11 +559,11 @@ def test_claude_background_turn_the_cli_started_is_not_the_next_answer(
         assert cli.interrupts == 0
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("failure", ["crash", "eof", "idle_exit"])
-def test_claude_cli_exit_discards_the_connection_and_the_next_turn_reopens(
+async def test_claude_cli_exit_discards_the_connection_and_the_next_turn_reopens(
     tmp_path: Path, failure: str
 ) -> None:
     first_turn = {
@@ -557,7 +574,7 @@ def test_claude_cli_exit_discards_the_connection_and_the_next_turn_reopens(
     scripts = [[first_turn], [answer("fresh answer")]]
 
     async def scenario() -> None:
-        chat = Chat(tmp_path, lambda: ScriptedCli(scripts.pop(0)))
+        chat = await Chat.create(tmp_path, lambda: ScriptedCli(scripts.pop(0)))
 
         first, first_answer = await chat.send("first")
         if failure == "idle_exit":
@@ -582,10 +599,10 @@ def test_claude_cli_exit_discards_the_connection_and_the_next_turn_reopens(
         assert len(chat.adapter.opened) == 2
         await chat.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_turn_failure_interrupts_the_cli_and_isolates_the_next_turn(
+async def test_claude_turn_failure_interrupts_the_cli_and_isolates_the_next_turn(
     tmp_path: Path,
 ) -> None:
     # SDK 0.2.118 cannot parse a task notification without ``output_file``.
@@ -606,7 +623,7 @@ def test_claude_turn_failure_interrupts_the_cli_and_isolates_the_next_turn(
                 answer("SECOND ANSWER"),
             ]
         )
-        chat = Chat(tmp_path, lambda: cli)
+        chat = await Chat.create(tmp_path, lambda: cli)
 
         first, _ = await chat.send("first")
         second, second_answer = await chat.send("second")
@@ -621,11 +638,11 @@ def test_claude_turn_failure_interrupts_the_cli_and_isolates_the_next_turn(
         assert len(chat.adapter.opened) == 1
         await chat.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("final_result", ["The file says hi.", None])
-def test_claude_answer_excludes_pre_tool_narration(
+async def test_claude_answer_excludes_pre_tool_narration(
     tmp_path: Path, final_result: str | None
 ) -> None:
     async def scenario() -> None:
@@ -660,11 +677,11 @@ def test_claude_answer_excludes_pre_tool_narration(
         assert events.index(commentary[-1]) < events.index(tool_started)
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("final_result", ["Final: all good.", None])
-def test_claude_answer_excludes_subagent_text(
+async def test_claude_answer_excludes_subagent_text(
     tmp_path: Path, final_result: str | None
 ) -> None:
     async def scenario() -> None:
@@ -694,7 +711,7 @@ def test_claude_answer_excludes_subagent_text(
         assert "SUBAGENT" not in streamed
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -733,7 +750,7 @@ def test_claude_answer_excludes_subagent_text(
         ),
     ],
 )
-def test_claude_error_result_reports_the_cli_reason(
+async def test_claude_error_result_reports_the_cli_reason(
     tmp_path: Path, frame: dict[str, Any], expected: str, reason_code: str | None
 ) -> None:
     async def scenario() -> None:
@@ -760,10 +777,10 @@ def test_claude_error_result_reports_the_cli_reason(
         assert "terminal_reason" in notice.payload
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_budget_error_keeps_the_connection(tmp_path: Path) -> None:
+async def test_claude_budget_error_keeps_the_connection(tmp_path: Path) -> None:
     async def scenario() -> None:
         cli = ScriptedCli(
             [
@@ -779,7 +796,7 @@ def test_claude_budget_error_keeps_the_connection(tmp_path: Path) -> None:
                 answer("SECOND ANSWER"),
             ]
         )
-        chat = Chat(tmp_path, lambda: cli)
+        chat = await Chat.create(tmp_path, lambda: cli)
 
         first, _ = await chat.send("first")
         second, second_answer = await chat.send("second")
@@ -793,11 +810,11 @@ def test_claude_budget_error_keeps_the_connection(tmp_path: Path) -> None:
         assert len(chat.adapter.opened) == 1
         await chat.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("message_ids", [True, False])
-def test_claude_one_thinking_block_is_one_reasoning_item(
+async def test_claude_one_thinking_block_is_one_reasoning_item(
     tmp_path: Path, message_ids: bool
 ) -> None:
     def start(message_id: str) -> list[dict[str, Any]]:
@@ -848,7 +865,7 @@ def test_claude_one_thinking_block_is_one_reasoning_item(
         assert events[-1].message == "answer"
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 class RefusingInterruptConnection(HarnessConnection):
@@ -856,10 +873,13 @@ class RefusingInterruptConnection(HarnessConnection):
 
     adapter_version = "test"
 
-    def __init__(self, *, fail: bool) -> None:
+    @classmethod
+    async def create(cls, *, fail: bool):
+        self = cls.__new__(cls)
         self.external_session_id = "vendor-session"
         self.fail = fail
         self.closed = False
+        return self
 
     async def run_turn(
         self,
@@ -890,8 +910,11 @@ class RefusingInterruptConnection(HarnessConnection):
 class OpeningAdapter(HarnessAdapter):
     kind = HarnessKind.CLAUDE_AGENT_SDK
 
-    def __init__(self) -> None:
+    @classmethod
+    async def create(cls):
+        self = cls.__new__(cls)
         self.opened: list[RefusingInterruptConnection] = []
+        return self
 
     async def probe(self, profile: Any, credential_store: Any) -> HarnessHealth:
         raise NotImplementedError
@@ -902,12 +925,12 @@ class OpeningAdapter(HarnessAdapter):
         return connection
 
 
-def test_failed_turn_whose_interrupt_fails_discards_the_connection(
+async def test_failed_turn_whose_interrupt_fails_discards_the_connection(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
         adapter = OpeningAdapter()
-        chat = Chat(tmp_path, adapter=adapter)
+        chat = await Chat.create(tmp_path, adapter=adapter)
 
         first, _ = await chat.send("first")
         second, second_answer = await chat.send("second")
@@ -920,4 +943,7 @@ def test_failed_turn_whose_interrupt_fails_discards_the_connection(
         assert (second.status, second_answer) == (HarnessTurnStatus.COMPLETE, "done")
         await chat.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

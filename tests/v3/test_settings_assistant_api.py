@@ -1,12 +1,15 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 from types import SimpleNamespace
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 import httpx
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -71,11 +74,11 @@ def test_settings_api_discovers_existing_routes_and_rejects_other_core_workflows
         ("DELETE", "vpn-profiles/example", "vpn-profiles", "vpn-egress"),
     ],
 )
-def test_settings_api_keeps_private_integration_operations_in_browser(
+async def test_settings_api_keeps_private_integration_operations_in_browser(
     tmp_path, method, path, read_path, destination
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     gateway = SettingsAssistantApi(
         create_app(store, auth_token="test-token"), "test-token"
     )
@@ -98,13 +101,13 @@ def test_settings_api_keeps_private_integration_operations_in_browser(
         assert current["read_back"] is True
         assert current["result"] == before["result"]
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_saves_only_selected_project_and_reads_back(tmp_path):
+async def test_settings_api_saves_only_selected_project_and_reads_back(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
     app = create_app(store, auth_token="test-token")
     gateway = SettingsAssistantApi(app, "test-token")
 
@@ -138,12 +141,12 @@ def test_settings_api_saves_only_selected_project_and_reads_back(tmp_path):
                 body={"allow_all_targets": True},
             )
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_discovers_and_reads_back_core_wide_voice_timeout(tmp_path):
+async def test_settings_api_discovers_and_reads_back_core_wide_voice_timeout(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     gateway = SettingsAssistantApi(
         create_app(store, auth_token="test-token"), "test-token"
     )
@@ -163,12 +166,12 @@ def test_settings_api_discovers_and_reads_back_core_wide_voice_timeout(tmp_path)
         assert saved["read_back"] is True
         assert saved["result"] == {"auto_pause_seconds": 10, "revision": 1}
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_discovers_and_reads_back_nebula_wide_butler_file(tmp_path):
+async def test_settings_api_discovers_and_reads_back_nebula_wide_butler_file(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     gateway = SettingsAssistantApi(
         create_app(store, auth_token="test-token", execution_data_root=tmp_path),
         "test-token",
@@ -192,12 +195,12 @@ def test_settings_api_discovers_and_reads_back_nebula_wide_butler_file(tmp_path)
         assert saved["result"]["status"] == "ready"
         assert saved["result"]["content"] == "Check Act projects."
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_saves_and_reads_back_diagnostic_settings(tmp_path):
+async def test_settings_api_saves_and_reads_back_diagnostic_settings(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
     gateway = SettingsAssistantApi(
         create_app(
@@ -236,14 +239,14 @@ def test_settings_api_saves_and_reads_back_diagnostic_settings(tmp_path):
             )
             assert observed["result"] == saved["result"]
 
-        asyncio.run(journey())
+        (await journey())
     finally:
         manager.close()
 
 
-def test_butler_discovers_and_revision_saves_its_check_interval(tmp_path):
+async def test_butler_discovers_and_revision_saves_its_check_interval(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     gateway = SettingsAssistantApi(
         create_app(store, auth_token="test-token"), "test-token"
     )
@@ -310,12 +313,12 @@ def test_butler_discovers_and_revision_saves_its_check_interval(tmp_path):
         )
         assert observed["result"]["check_interval_minutes"] == 2
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_cannot_create_unusable_pairing_offer(tmp_path):
+async def test_settings_api_cannot_create_unusable_pairing_offer(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     app = create_app(store, auth_token="test-token", allow_insecure_device_pairing=True)
     gateway = SettingsAssistantApi(app, "test-token")
 
@@ -337,12 +340,14 @@ def test_settings_api_cannot_create_unusable_pairing_offer(tmp_path):
             )
         assert not app.state.pending_pairings
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_keeps_credential_status_but_blocks_secret_mutations(tmp_path):
+async def test_settings_api_keeps_credential_status_but_blocks_secret_mutations(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     app = create_app(store, auth_token="test-token")
     gateway = SettingsAssistantApi(app, "test-token")
     assert (
@@ -376,13 +381,13 @@ def test_settings_api_keeps_credential_status_but_blocks_secret_mutations(tmp_pa
             ):
                 await gateway.request(project.id, method=method, path=path, body=body)
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_confirms_provider_deletion_by_readback(tmp_path):
+async def test_settings_api_confirms_provider_deletion_by_readback(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    provider = await store.create(
         ProviderProfile(name="Disposable", provider_type="ollama", is_local=True)
     )
     app = create_app(store, auth_token="test-token")
@@ -399,7 +404,7 @@ def test_settings_api_confirms_provider_deletion_by_readback(tmp_path):
         assert result["read_back"] is True
         assert result["result"] == {"deleted": True}
 
-    asyncio.run(journey())
+    (await journey())
 
 
 @pytest.mark.parametrize(
@@ -423,12 +428,14 @@ def test_settings_api_confirms_provider_deletion_by_readback(tmp_path):
         ),
     ],
 )
-def test_settings_api_profile_lifecycle_reads_exact_created_identity(
+async def test_settings_api_profile_lifecycle_reads_exact_created_identity(
     tmp_path, family, model, payload
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    existing = store.create(model(name="existing-profile", enabled=False, **payload))
+    project = await store.create(Engagement(name="Selected"))
+    existing = await store.create(
+        model(name="existing-profile", enabled=False, **payload)
+    )
     gateway = SettingsAssistantApi(
         create_app(store, auth_token="test-token"), "test-token"
     )
@@ -460,7 +467,7 @@ def test_settings_api_profile_lifecycle_reads_exact_created_identity(
         profile = created["result"]
         assert profile["id"] != existing.id
         assert profile["name"] == "new-profile"
-        assert store.get(model, profile["id"]).name == "new-profile"
+        assert (await store.get(model, profile["id"])).name == "new-profile"
         path = f"{family}/{profile['id']}"
         saved = await request(
             method="PATCH",
@@ -483,29 +490,29 @@ def test_settings_api_profile_lifecycle_reads_exact_created_identity(
                     "changes": {"name": "stale-profile"},
                 },
             )
-        assert store.get(model, profile["id"]).name == "renamed-profile"
+        assert (await store.get(model, profile["id"])).name == "renamed-profile"
         with pytest.raises(ValueError, match="expected_revision"):
             await request(method="DELETE", path=path)
         with pytest.raises(ValueError, match="409"):
             await request(
                 method="DELETE", path=path, expected_revision=profile["revision"]
             )
-        assert store.get(model, profile["id"]).name == "renamed-profile"
+        assert (await store.get(model, profile["id"])).name == "renamed-profile"
         deleted = await request(
             method="DELETE", path=path, expected_revision=saved["result"]["revision"]
         )
         assert deleted["read_back"] is True
         assert deleted["result"] == {"deleted": True}
-        assert store.get(model, existing.id).name == "existing-profile"
+        assert (await store.get(model, existing.id)).name == "existing-profile"
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_api_create_keeps_identity_when_exact_readback_fails(
+async def test_settings_api_create_keeps_identity_when_exact_readback_fails(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     gateway = SettingsAssistantApi(
         create_app(store, auth_token="test-token"), "test-token"
     )
@@ -540,17 +547,18 @@ def test_settings_api_create_keeps_identity_when_exact_readback_fails(
         assert created["result"]["name"] == "saved-unverified"
         assert failed_paths == [f"/api/v1/providers/{created['result']['id']}"]
         assert (
-            store.get(ProviderProfile, created["result"]["id"]).name
-            == "saved-unverified"
-        )
+            await store.get(ProviderProfile, created["result"]["id"])
+        ).name == "saved-unverified"
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_headless_session_start_and_status_use_selected_project(tmp_path, monkeypatch):
+async def test_headless_session_start_and_status_use_selected_project(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv("NEBULA_ONE_BROWSER_CUTOVER", raising=False)
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     app = create_app(store, auth_token="test-token")
     calls: list[str] = []
 
@@ -565,12 +573,12 @@ def test_headless_session_start_and_status_use_selected_project(tmp_path, monkey
 
     monkeypatch.setattr(app.state.agent_security_sessions, "ensure", ensure)
     monkeypatch.setattr(app.state.agent_security_tools, "call_tool", status)
-    with TestClient(app) as client:
+    async with TestClient(app) as client:
         headers = {"Authorization": "Bearer test-token"}
-        started = client.post(
+        started = await client.post(
             f"/api/v1/engagements/{project.id}/agent-security/start", headers=headers
         )
-        observed = client.get(
+        observed = await client.get(
             f"/api/v1/engagements/{project.id}/agent-security/status", headers=headers
         )
         assert started.status_code == 200
@@ -605,16 +613,16 @@ def test_headless_session_start_and_status_use_selected_project(tmp_path, monkey
         ),
     ],
 )
-def test_settings_profile_edits_preserve_browser_owned_authentication(
+async def test_settings_profile_edits_preserve_browser_owned_authentication(
     tmp_path, family, payload, private, cleared
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     app = create_app(store, auth_token="test-token")
     gateway = SettingsAssistantApi(app, "test-token")
     client = TestClient(app, headers={"Authorization": "Bearer test-token"})
     body = {"name": "operator-profile", "enabled": False, **payload, **private}
-    response = client.post(f"/api/v1/{family}", json=body)
+    response = await client.post(f"/api/v1/{family}", json=body)
     assert response.status_code == 201, response.text
     original = response.json()
     path = f"{family}/{original['id']}"
@@ -642,9 +650,9 @@ def test_settings_profile_edits_preserve_browser_owned_authentication(
                     **payload,
                 },
             )
-        assert client.get(f"/api/v1/{path}").json() == original
+        assert (await client.get(f"/api/v1/{path}")).json() == original
         for method in ("PATCH", "PUT"):
-            current = client.get(f"/api/v1/{path}").json()
+            current = (await client.get(f"/api/v1/{path}")).json()
             updated = await gateway.request(
                 project.id,
                 method=method,
@@ -658,14 +666,14 @@ def test_settings_profile_edits_preserve_browser_owned_authentication(
             )
             assert updated["read_back"] is True
             assert updated["result"]["name"] == f"renamed-{method}"
-            observed = client.get(f"/api/v1/{path}").json()
+            observed = (await client.get(f"/api/v1/{path}")).json()
             for key, value in private.items():
                 assert observed[key] == value
             if family == "mcp-servers":
                 assert updated["result"]["environment_secret_refs"] == {
                     "TOKEN": "[redacted]"
                 }
-        current = client.get(f"/api/v1/{path}").json()
+        current = (await client.get(f"/api/v1/{path}")).json()
         with pytest.raises(ValueError, match="current revision"):
             await gateway.request(
                 project.id,
@@ -683,9 +691,9 @@ def test_settings_profile_edits_preserve_browser_owned_authentication(
                     "changes": {"name": "stale"},
                 },
             )
-        assert client.get(f"/api/v1/{path}").json() == current
+        assert (await client.get(f"/api/v1/{path}")).json() == current
 
-    asyncio.run(journey())
+    (await journey())
 
 
 @pytest.mark.parametrize(
@@ -695,17 +703,17 @@ def test_settings_profile_edits_preserve_browser_owned_authentication(
         ("harnesses", {"kind": "codex_app_server", "executable": "/bin/true"}),
     ],
 )
-def test_settings_profile_privacy_cannot_grant_or_silently_clear_consent(
+async def test_settings_profile_privacy_cannot_grant_or_silently_clear_consent(
     tmp_path, family, payload
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     app = create_app(store, auth_token="test-token")
     gateway = SettingsAssistantApi(app, "test-token")
     client = TestClient(app, headers={"Authorization": "Bearer test-token"})
     privacy = {"permits_sensitive_data": True, "auto_share_tool_results": True}
     body = {"name": "operator-consent", "enabled": False, **payload, "privacy": privacy}
-    created = client.post(f"/api/v1/{family}", json=body)
+    created = await client.post(f"/api/v1/{family}", json=body)
     assert created.status_code == 201, created.text
     current = created.json()
     path = f"{family}/{current['id']}"
@@ -734,7 +742,7 @@ def test_settings_profile_privacy_cannot_grant_or_silently_clear_consent(
                         "changes": {"privacy": flags},
                     },
                 )
-        assert client.get(f"/api/v1/{path}").json() == current
+        assert (await client.get(f"/api/v1/{path}")).json() == current
         saved = await gateway.request(
             project.id,
             method="PATCH",
@@ -754,13 +762,13 @@ def test_settings_profile_privacy_cannot_grant_or_silently_clear_consent(
         assert saved["result"]["privacy"]["auto_share_tool_results"] is True
         assert saved["result"]["privacy"]["permits_sensitive_data"] is True
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_profile_trust_stays_bound_to_the_operator_program(tmp_path):
+async def test_settings_profile_trust_stays_bound_to_the_operator_program(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         McpServerProfile(
             name="Trusted",
             transport="stdio",
@@ -791,15 +799,17 @@ def test_settings_profile_trust_stays_bound_to_the_operator_program(tmp_path):
                     path=f"mcp-servers/{profile.id}",
                     body={"expected_revision": profile.revision, "changes": changes},
                 )
-        assert store.get(McpServerProfile, profile.id) == profile
+        assert (await store.get(McpServerProfile, profile.id)) == profile
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_profile_replace_fences_a_concurrent_browser_credential_edit(tmp_path):
+async def test_settings_profile_replace_fences_a_concurrent_browser_credential_edit(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         ProviderProfile(name="Concurrent", provider_type="ollama", is_local=True)
     )
     app = create_app(store, auth_token="test-token")
@@ -812,11 +822,13 @@ def test_settings_profile_replace_fences_a_concurrent_browser_credential_edit(tm
             and request.url.path == f"/api/v1/providers/{profile.id}"
         ):
             observed_headers.append(request.headers.get("If-Match"))
-            store.update(
-                ProviderProfile,
-                profile.id,
-                {"secret_ref": "session:" + "b" * 32},
-                expected_revision=profile.revision,
+            (
+                await store.update(
+                    ProviderProfile,
+                    profile.id,
+                    {"secret_ref": "session:" + "b" * 32},
+                    expected_revision=profile.revision,
+                )
             )
         return await call_next(request)
 
@@ -831,26 +843,28 @@ def test_settings_profile_replace_fences_a_concurrent_browser_credential_edit(tm
                 body={**profile.model_dump(mode="json"), "name": "stale rename"},
             )
         assert observed_headers == [str(profile.revision)]
-        current = store.get(ProviderProfile, profile.id)
+        current = await store.get(ProviderProfile, profile.id)
         assert current.name == profile.name
         assert current.secret_ref == "session:" + "b" * 32
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_mcp_collection_and_export_filter_before_serialization(tmp_path):
+async def test_settings_mcp_collection_and_export_filter_before_serialization(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(store, auth_token="test-token")
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
     for index in range(103):
-        store.create(
-            McpServerProfile(
-                name=f"foreign-private-{index}",
-                transport="streamable_http",
-                url="https://example.test/mcp",
-                enabled=False,
-                metadata={"engagement_id": other.id},
+        (
+            await store.create(
+                McpServerProfile(
+                    name=f"foreign-private-{index}",
+                    transport="streamable_http",
+                    url="https://example.test/mcp",
+                    enabled=False,
+                    metadata={"engagement_id": other.id},
+                )
             )
         )
     gateway = SettingsAssistantApi(app, "test-token")
@@ -861,13 +875,15 @@ def test_settings_mcp_collection_and_export_filter_before_serialization(tmp_path
         )
         assert empty["result"] == {"config": {"mcpServers": {}}, "warnings": []}
         visible = [
-            store.create(
-                McpServerProfile(
-                    name=name,
-                    transport="streamable_http",
-                    url="https://example.test/mcp",
-                    enabled=False,
-                    metadata=metadata,
+            (
+                await store.create(
+                    McpServerProfile(
+                        name=name,
+                        transport="streamable_http",
+                        url="https://example.test/mcp",
+                        enabled=False,
+                        metadata=metadata,
+                    )
                 )
             )
             for name, metadata in (
@@ -890,15 +906,15 @@ def test_settings_mcp_collection_and_export_filter_before_serialization(tmp_path
                     selected.id, method="GET", path=path
                 )
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_mcp_exact_operations_refuse_another_project(tmp_path):
+async def test_settings_mcp_exact_operations_refuse_another_project(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(store, auth_token="test-token")
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    foreign = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    foreign = await store.create(
         McpServerProfile(
             name="other-project-profile",
             transport="streamable_http",
@@ -934,16 +950,16 @@ def test_settings_mcp_exact_operations_refuse_another_project(tmp_path):
                 )
             assert refusal.value.code == "mcp_project_scope"
             assert getattr(refusal.value, "_nebula_before_execution", False) is True
-            assert store.get(McpServerProfile, foreign.id) == foreign
+            assert (await store.get(McpServerProfile, foreign.id)) == foreign
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_mcp_edits_preserve_project_ownership(tmp_path):
+async def test_settings_mcp_edits_preserve_project_ownership(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(store, auth_token="test-token")
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
     gateway = SettingsAssistantApi(app, "test-token")
 
     async def journey():
@@ -998,16 +1014,16 @@ def test_settings_mcp_edits_preserve_project_ownership(tmp_path):
         )
         assert deleted["result"] == {"deleted": True}
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_mcp_probe_pins_the_selected_project(tmp_path, monkeypatch):
+async def test_settings_mcp_probe_pins_the_selected_project(tmp_path, monkeypatch):
     from nebula.v3.mcp import McpProbeService
 
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(store, auth_token="test-token")
-    selected = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         McpServerProfile(
             name="shared",
             transport="streamable_http",
@@ -1039,15 +1055,15 @@ def test_settings_mcp_probe_pins_the_selected_project(tmp_path, monkeypatch):
         await gateway.request(selected.id, method="POST", path=path, body={})
         assert observed == [(profile.id, selected.id)]
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_mcp_changed_readback_preserves_uncertain_effects(tmp_path):
+async def test_settings_mcp_changed_readback_preserves_uncertain_effects(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(store, auth_token="test-token")
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         McpServerProfile(
             name="selected-profile",
             transport="streamable_http",
@@ -1064,12 +1080,14 @@ def test_settings_mcp_changed_readback_preserves_uncertain_effects(tmp_path):
             request.method == "PATCH"
             and request.url.path == f"/api/v1/mcp-servers/{profile.id}"
         ):
-            current = store.get(McpServerProfile, profile.id)
-            store.update(
-                McpServerProfile,
-                profile.id,
-                {"metadata": {"engagement_id": other.id}},
-                expected_revision=current.revision,
+            current = await store.get(McpServerProfile, profile.id)
+            (
+                await store.update(
+                    McpServerProfile,
+                    profile.id,
+                    {"metadata": {"engagement_id": other.id}},
+                    expected_revision=current.revision,
+                )
             )
         return response
 
@@ -1088,16 +1106,16 @@ def test_settings_mcp_changed_readback_preserves_uncertain_effects(tmp_path):
             )
         assert getattr(refusal.value, "_nebula_before_execution", False) is False
         assert (
-            store.get(McpServerProfile, profile.id).name == "saved-before-owner-change"
-        )
+            await store.get(McpServerProfile, profile.id)
+        ).name == "saved-before-owner-change"
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def _policy_gateway(tmp_path):
+async def _policy_gateway(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    policy = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    policy = await store.create(
         AutomationProjectPolicy(
             id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{project.id}")),
             engagement_id=project.id,
@@ -1128,8 +1146,10 @@ def _policy_gateway(tmp_path):
 
 
 @pytest.mark.parametrize("acknowledgment", [True, "true", 1, "yes"])
-def test_settings_policy_cannot_create_first_host_consent(tmp_path, acknowledgment):
-    store, project, policy, app, gateway = _policy_gateway(tmp_path)
+async def test_settings_policy_cannot_create_first_host_consent(
+    tmp_path, acknowledgment
+):
+    store, project, policy, app, gateway = await _policy_gateway(tmp_path)
     preparations = []
 
     @app.middleware("http")
@@ -1154,14 +1174,16 @@ def test_settings_policy_cannot_create_first_host_consent(tmp_path, acknowledgme
             assert refusal.value.code == "host_consent_required"
             assert "setting_id=network-scope" in refusal.value.next_action
             assert getattr(refusal.value, "_nebula_before_execution", False)
-            assert store.get(AutomationProjectPolicy, policy.id) == policy
+            assert (await store.get(AutomationProjectPolicy, policy.id)) == policy
         assert preparations == []
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_policy_preserves_prior_consent_and_requires_body_revision(tmp_path):
-    store, project, policy, app, gateway = _policy_gateway(tmp_path)
+async def test_settings_policy_preserves_prior_consent_and_requires_body_revision(
+    tmp_path,
+):
+    store, project, policy, app, gateway = await _policy_gateway(tmp_path)
     path = "engagements/{project}/automation-policy"
 
     async def journey():
@@ -1192,8 +1214,10 @@ def test_settings_policy_preserves_prior_consent_and_requires_body_revision(tmp_
         assert saved["result"]["host_access_acknowledged"] is False
         # The direct browser API retains its separate consent authority. This
         # metadata-only Docker request launches no Host program or session.
-        with TestClient(app, headers={"Authorization": "Bearer test-token"}) as client:
-            response = client.put(
+        async with TestClient(
+            app, headers={"Authorization": "Bearer test-token"}
+        ) as client:
+            response = await client.put(
                 f"/api/v1/engagements/{project.id}/automation-policy",
                 json={
                     "execution_mode": "docker",
@@ -1226,20 +1250,22 @@ def test_settings_policy_preserves_prior_consent_and_requires_body_revision(tmp_
             )
         assert refusal.value.code == "settings_revision_conflict"
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_settings_policy_refuses_a_concurrent_operator_edit(tmp_path):
-    store, project, policy, app, gateway = _policy_gateway(tmp_path)
+async def test_settings_policy_refuses_a_concurrent_operator_edit(tmp_path):
+    store, project, policy, app, gateway = await _policy_gateway(tmp_path)
 
     @app.middleware("http")
     async def concurrent_edit(request, call_next):
         if request.method == "PUT" and request.url.path.endswith("/automation-policy"):
-            store.update(
-                AutomationProjectPolicy,
-                policy.id,
-                {"network_enabled": False},
-                expected_revision=policy.revision,
+            (
+                await store.update(
+                    AutomationProjectPolicy,
+                    policy.id,
+                    {"network_enabled": False},
+                    expected_revision=policy.revision,
+                )
             )
         return await call_next(request)
 
@@ -1256,9 +1282,12 @@ def test_settings_policy_refuses_a_concurrent_operator_edit(tmp_path):
                     "expected_revision": policy.revision,
                 },
             )
-        current = store.get(AutomationProjectPolicy, policy.id)
+        current = await store.get(AutomationProjectPolicy, policy.id)
         assert current.network_enabled is False
         assert current.max_timeout_ms == policy.max_timeout_ms
         assert current.host_access_acknowledged is False
 
-    asyncio.run(journey())
+    (await journey())
+
+
+pytestmark = pytest.mark.anyio

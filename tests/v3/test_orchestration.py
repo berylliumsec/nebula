@@ -1,4 +1,7 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import json
 
 import pytest
@@ -167,7 +170,7 @@ def _runtime(tmp_path, supervisor, specialists, verifier=None):
     return runtime, store
 
 
-def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path):
+async def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path):
     planning = PlannedTask(
         id="planning",
         role=SpecialistRole.SCOPE_PLANNING,
@@ -212,12 +215,10 @@ def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path)
         },
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-1",
-            objective="Produce a defensible report",
-            budget=RunBudget(max_tokens=10, max_tool_calls=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-1",
+        objective="Produce a defensible report",
+        budget=RunBudget(max_tokens=10, max_tool_calls=0),
     )
 
     assert state["final_summary"] == "complete: Produce a defensible report"
@@ -227,10 +228,12 @@ def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path)
     assert reporter.contexts[0].prior_results[planning.id].summary == "scope normalized"
     assert planner.contexts[0].allowed_tools == frozenset()
     assert reporter.contexts[0].allowed_tools == frozenset()
-    assert store.get(AgentRun, state["run_id"]).status == RunStatus.COMPLETE
-    assert store.get(Task, planning.id).status == TaskStatus.COMPLETE
-    assert store.get(Task, reporting.id).status == TaskStatus.COMPLETE
-    assert [event.event_type for event in store.replay_events(state["run_id"])] == [
+    assert (await store.get(AgentRun, state["run_id"])).status == RunStatus.COMPLETE
+    assert (await store.get(Task, planning.id)).status == TaskStatus.COMPLETE
+    assert (await store.get(Task, reporting.id)).status == TaskStatus.COMPLETE
+    assert [
+        event.event_type for event in (await store.replay_events(state["run_id"]))
+    ] == [
         "run.started",
         "run.planned",
         "task.started",
@@ -245,7 +248,7 @@ def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path)
     ]
 
 
-def test_investigative_turns_continue_without_consuming_retry_budget(tmp_path):
+async def test_investigative_turns_continue_without_consuming_retry_budget(tmp_path):
     task = PlannedTask(
         id="investigate",
         role=SpecialistRole.NETWORK_SERVICE,
@@ -271,12 +274,10 @@ def test_investigative_turns_continue_without_consuming_retry_budget(tmp_path):
         {SpecialistRole.NETWORK_SERVICE: specialist},
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-turns",
-            objective="Inspect the service",
-            budget=RunBudget(max_tool_calls=2, max_retries=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-turns",
+        objective="Inspect the service",
+        budget=RunBudget(max_tool_calls=2, max_retries=0),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
@@ -284,7 +285,9 @@ def test_investigative_turns_continue_without_consuming_retry_budget(tmp_path):
     assert state["retry_counts"] == {}
     assert state["tool_calls"] == 1
     assert specialist.contexts[1].prior_turns[0].summary.startswith("scan failed")
-    assert [event.event_type for event in store.replay_events(state["run_id"])] == [
+    assert [
+        event.event_type for event in (await store.replay_events(state["run_id"]))
+    ] == [
         "run.started",
         "run.planned",
         "task.started",
@@ -298,7 +301,7 @@ def test_investigative_turns_continue_without_consuming_retry_budget(tmp_path):
     ]
 
 
-def test_exact_token_exhaustion_blocks_before_another_turn(tmp_path):
+async def test_exact_token_exhaustion_blocks_before_another_turn(tmp_path):
     task = PlannedTask(
         id="token-exhausted",
         role=SpecialistRole.NETWORK_SERVICE,
@@ -322,26 +325,21 @@ def test_exact_token_exhaustion_blocks_before_another_turn(tmp_path):
         {SpecialistRole.NETWORK_SERVICE: specialist},
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-token-exhausted",
-            objective="Stop at the exact token cap",
-            budget=RunBudget(max_tokens=1, max_retries=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-token-exhausted",
+        objective="Stop at the exact token cap",
+        budget=RunBudget(max_tokens=1, max_retries=0),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.BLOCKED.value}
     assert state["retry_counts"] == {}
     assert len(specialist.contexts) == 1
-    assert (
-        store.get(AgentRun, state["run_id"]).metadata["partial_observations"][0][
-            "summary"
-        ]
-        == "partial observation"
-    )
+    assert (await store.get(AgentRun, state["run_id"])).metadata[
+        "partial_observations"
+    ][0]["summary"] == "partial observation"
 
 
-def test_runtime_retry_receives_prior_error_separately_from_turns(tmp_path):
+async def test_runtime_retry_receives_prior_error_separately_from_turns(tmp_path):
     task = PlannedTask(
         id="retry",
         role=SpecialistRole.NETWORK_SERVICE,
@@ -362,12 +360,10 @@ def test_runtime_retry_receives_prior_error_separately_from_turns(tmp_path):
         {SpecialistRole.NETWORK_SERVICE: specialist},
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-retry",
-            objective="Recover",
-            budget=RunBudget(max_tool_calls=1, max_retries=1),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-retry",
+        objective="Recover",
+        budget=RunBudget(max_tool_calls=1, max_retries=1),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
@@ -376,7 +372,7 @@ def test_runtime_retry_receives_prior_error_separately_from_turns(tmp_path):
     assert specialist.contexts[1].retry_errors == ["provider temporarily unavailable"]
 
 
-def test_verification_rejection_requests_new_evidence_before_completion(tmp_path):
+async def test_verification_rejection_requests_new_evidence_before_completion(tmp_path):
     task = PlannedTask(
         id="verify-more",
         role=SpecialistRole.NETWORK_SERVICE,
@@ -406,12 +402,10 @@ def test_verification_rejection_requests_new_evidence_before_completion(tmp_path
         {SpecialistRole.NETWORK_SERVICE: specialist},
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-verify",
-            objective="Verify the candidate",
-            budget=RunBudget(max_tool_calls=1, max_retries=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-verify",
+        objective="Verify the candidate",
+        budget=RunBudget(max_tool_calls=1, max_retries=0),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
@@ -419,12 +413,14 @@ def test_verification_rejection_requests_new_evidence_before_completion(tmp_path
     assert specialist.contexts[1].prior_turns[0].summary == (
         "candidate without evidence"
     )
-    event_types = [event.event_type for event in store.replay_events(state["run_id"])]
+    event_types = [
+        event.event_type for event in (await store.replay_events(state["run_id"]))
+    ]
     assert event_types.count("task.verification_failed") == 1
     assert "task.continuing" in event_types
     progress = [
         event
-        for event in store.replay_events(state["run_id"])
+        for event in (await store.replay_events(state["run_id"]))
         if event.event_type == "run.progress"
     ]
     assert [event.payload["completed_tasks"] for event in progress] == [1]
@@ -432,7 +428,9 @@ def test_verification_rejection_requests_new_evidence_before_completion(tmp_path
     assert event_types[-1] == "run.completed"
 
 
-def test_verified_progress_is_saved_before_synthesis_without_changing_status(tmp_path):
+async def test_verified_progress_is_saved_before_synthesis_without_changing_status(
+    tmp_path,
+):
     task = PlannedTask(
         id="progress-task",
         role=SpecialistRole.SCOPE_PLANNING,
@@ -442,11 +440,11 @@ def test_verified_progress_is_saved_before_synthesis_without_changing_status(tmp
 
     class SnapshotSupervisor(PlannedSupervisor):
         async def synthesize(self, objective, plan, results):
-            run = store.list_entities(AgentRun)[0]
+            run = (await store.list_entities(AgentRun))[0]
             assert run.status == RunStatus.RUNNING
             assert run.metadata["completed_tasks"] == 1
             assert run.completed_at is None
-            events = store.replay_events(run.id)
+            events = await store.replay_events(run.id)
             assert events[-1].event_type == "run.progress"
             assert events[-1].payload["completed_tasks"] == 1
             return await super().synthesize(objective, plan, results)
@@ -464,15 +462,13 @@ def test_verified_progress_is_saved_before_synthesis_without_changing_status(tmp
             )
         },
     )
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="progress-project", objective="Summarize", budget=RunBudget()
-        )
+    state = await runtime.start(
+        engagement_id="progress-project", objective="Summarize", budget=RunBudget()
     )
-    assert store.get(AgentRun, state["run_id"]).status == RunStatus.COMPLETE
+    assert (await store.get(AgentRun, state["run_id"])).status == RunStatus.COMPLETE
 
 
-def test_unchanged_evidence_is_not_reverified(tmp_path):
+async def test_unchanged_evidence_is_not_reverified(tmp_path):
     class RecordingVerifier:
         def __init__(self):
             self.evidence = []
@@ -524,12 +520,10 @@ def test_unchanged_evidence_is_not_reverified(tmp_path):
         verifier,
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-verify-changed",
-            objective="Produce new evidence",
-            budget=RunBudget(max_tool_calls=2, max_retries=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-verify-changed",
+        objective="Produce new evidence",
+        budget=RunBudget(max_tool_calls=2, max_retries=0),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
@@ -537,22 +531,24 @@ def test_unchanged_evidence_is_not_reverified(tmp_path):
     assert "unchanged" in specialist.contexts[2].retry_errors[-1]
 
 
-def test_mission_compacts_only_model_facing_dependency_context_and_charges_usage(
+async def test_mission_compacts_only_model_facing_dependency_context_and_charges_usage(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "mission-context.db")
-    engagement = store.create(Engagement(id="engagement-1", name="Compaction"))
-    store.create(
-        ProviderProfile(
-            id="provider-a",
-            name="Local model",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
-            metadata={
-                "default_model": "model-a",
-                "options": {"context_window": 1_500, "max_output_tokens": 100},
-            },
+    engagement = await store.create(Engagement(id="engagement-1", name="Compaction"))
+    (
+        await store.create(
+            ProviderProfile(
+                id="provider-a",
+                name="Local model",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={
+                    "default_model": "model-a",
+                    "options": {"context_window": 1_500, "max_output_tokens": 100},
+                },
+            )
         )
     )
     planning = PlannedTask(
@@ -595,14 +591,12 @@ def test_mission_compacts_only_model_facing_dependency_context_and_charges_usage
         },
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id=engagement.id,
-            objective="Produce a bounded report",
-            budget=RunBudget(max_tokens=2_000, max_tool_calls=0),
-            provider_id=provider.config.id,
-            model="model-a",
-        )
+    state = await runtime.start(
+        engagement_id=engagement.id,
+        objective="Produce a bounded report",
+        budget=RunBudget(max_tokens=2_000, max_tool_calls=0),
+        provider_id=provider.config.id,
+        model="model-a",
     )
 
     compaction_requests = [
@@ -621,33 +615,39 @@ def test_mission_compacts_only_model_facing_dependency_context_and_charges_usage
         compaction_requests
     )
     assert state["results"][planning.id]["summary"].startswith("scope-result")
-    assert store.get(AgentRun, state["run_id"]).status == RunStatus.COMPLETE
-    snapshot = store.list_entities(
-        ContextSnapshot, engagement_id=engagement.id, limit=100
+    assert (await store.get(AgentRun, state["run_id"])).status == RunStatus.COMPLETE
+    snapshot = (
+        await store.list_entities(
+            ContextSnapshot, engagement_id=engagement.id, limit=100
+        )
     )[0]
     assert snapshot.owner_type == ContextOwnerType.AGENT_RUN
     assert snapshot.source_references[0].source_id == planning.id
-    event_types = [event.event_type for event in store.replay_events(state["run_id"])]
+    event_types = [
+        event.event_type for event in (await store.replay_events(state["run_id"]))
+    ]
     assert "context.compaction_started" in event_types
     assert "context.compacted" in event_types
 
 
-def test_mission_rejects_compaction_before_call_when_budget_is_insufficient(
+async def test_mission_rejects_compaction_before_call_when_budget_is_insufficient(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "mission-context-budget.db")
-    engagement = store.create(Engagement(id="engagement-1", name="Compaction"))
-    store.create(
-        ProviderProfile(
-            id="provider-a",
-            name="Local model",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
-            metadata={
-                "default_model": "model-a",
-                "options": {"context_window": 1_500, "max_output_tokens": 100},
-            },
+    engagement = await store.create(Engagement(id="engagement-1", name="Compaction"))
+    (
+        await store.create(
+            ProviderProfile(
+                id="provider-a",
+                name="Local model",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={
+                    "default_model": "model-a",
+                    "options": {"context_window": 1_500, "max_output_tokens": 100},
+                },
+            )
         )
     )
     planning = PlannedTask(
@@ -690,18 +690,16 @@ def test_mission_rejects_compaction_before_call_when_budget_is_insufficient(
         },
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id=engagement.id,
-            objective="Produce a bounded report",
-            budget=RunBudget(
-                max_tokens=120,
-                max_tool_calls=0,
-                max_retries=0,
-            ),
-            provider_id=provider.config.id,
-            model="model-a",
-        )
+    state = await runtime.start(
+        engagement_id=engagement.id,
+        objective="Produce a bounded report",
+        budget=RunBudget(
+            max_tokens=120,
+            max_tool_calls=0,
+            max_retries=0,
+        ),
+        provider_id=provider.config.id,
+        model="model-a",
     )
 
     assert not [
@@ -712,12 +710,14 @@ def test_mission_rejects_compaction_before_call_when_budget_is_insufficient(
     assert state["task_status"][reporting.id] == TaskStatus.BLOCKED.value
     assert "insufficient mission token budget" in state["errors"][reporting.id]
     assert state["input_tokens"] + state["output_tokens"] == 15
-    event_types = [event.event_type for event in store.replay_events(state["run_id"])]
+    event_types = [
+        event.event_type for event in (await store.replay_events(state["run_id"]))
+    ]
     assert "context.compaction_started" in event_types
     assert "context.compaction_failed" in event_types
 
 
-def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
+async def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
     task = PlannedTask(
         id="scan",
         role=SpecialistRole.NETWORK_SERVICE,
@@ -735,19 +735,17 @@ def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
         {SpecialistRole.NETWORK_SERVICE: specialist},
     )
 
-    waiting = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-approval",
-            objective="Run one bounded scan",
-            budget=RunBudget(max_retries=0),
-        )
+    waiting = await runtime.start(
+        engagement_id="engagement-approval",
+        objective="Run one bounded scan",
+        budget=RunBudget(max_retries=0),
     )
     assert waiting["task_status"] == {task.id: TaskStatus.WAITING_APPROVAL.value}
     assert waiting["attempts"] == {task.id: 0}
     assert waiting["__interrupt__"][0].value["kind"] == "tool_approval"
 
-    completed = asyncio.run(
-        runtime.resume(waiting["run_id"], {"status": "approved", "operator": "alice"})
+    completed = await runtime.resume(
+        waiting["run_id"], {"status": "approved", "operator": "alice"}
     )
 
     assert completed["task_status"] == {task.id: TaskStatus.COMPLETE.value}
@@ -757,7 +755,9 @@ def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
         "status": "approved",
         "operator": "alice",
     }
-    assert [event.event_type for event in store.replay_events(waiting["run_id"])] == [
+    assert [
+        event.event_type for event in (await store.replay_events(waiting["run_id"]))
+    ] == [
         "run.started",
         "run.planned",
         "task.started",
@@ -769,7 +769,7 @@ def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
     ]
 
 
-def test_rejected_approval_becomes_an_observation_and_allows_an_alternative(
+async def test_rejected_approval_becomes_an_observation_and_allows_an_alternative(
     tmp_path,
 ):
     class RejectionAwareSpecialist:
@@ -824,18 +824,14 @@ def test_rejected_approval_becomes_an_observation_and_allows_an_alternative(
         {SpecialistRole.NETWORK_SERVICE: specialist},
     )
 
-    waiting = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-rejection",
-            objective="Investigate without bypassing approval",
-            budget=RunBudget(max_retries=0),
-        )
+    waiting = await runtime.start(
+        engagement_id="engagement-rejection",
+        objective="Investigate without bypassing approval",
+        budget=RunBudget(max_retries=0),
     )
-    completed = asyncio.run(
-        runtime.resume(
-            waiting["run_id"],
-            {"status": "rejected", "operator": "alice"},
-        )
+    completed = await runtime.resume(
+        waiting["run_id"],
+        {"status": "rejected", "operator": "alice"},
     )
 
     assert completed["task_status"] == {task.id: TaskStatus.COMPLETE.value}
@@ -847,11 +843,11 @@ def test_rejected_approval_becomes_an_observation_and_allows_an_alternative(
     }
     assert specialist.contexts[2].approval_response is None
     assert "task.continuing" in [
-        event.event_type for event in store.replay_events(waiting["run_id"])
+        event.event_type for event in (await store.replay_events(waiting["run_id"]))
     ]
 
 
-def test_projected_budget_overrun_fails_run_durably(tmp_path):
+async def test_projected_budget_overrun_fails_run_durably(tmp_path):
     task = PlannedTask(
         id="budgeted",
         role=SpecialistRole.SCOPE_PLANNING,
@@ -871,24 +867,24 @@ def test_projected_budget_overrun_fails_run_durably(tmp_path):
         {SpecialistRole.SCOPE_PLANNING: specialist},
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-budget",
-            objective="Remain analysis-only",
-            budget=RunBudget(max_tool_calls=0, max_retries=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-budget",
+        objective="Remain analysis-only",
+        budget=RunBudget(max_tool_calls=0, max_retries=0),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.BLOCKED.value}
     assert state["errors"] == {task.id: "mission tool-call budget exceeded"}
     assert state["tool_calls"] == 1
     assert state["final_summary"].startswith("mission failed:")
-    persisted_run = store.get(AgentRun, state["run_id"])
+    persisted_run = await store.get(AgentRun, state["run_id"])
     assert persisted_run.status == RunStatus.FAILED
     assert persisted_run.metadata["partial_observations"][0]["summary"] == (
         "invalid usage"
     )
-    assert [event.event_type for event in store.replay_events(state["run_id"])] == [
+    assert [
+        event.event_type for event in (await store.replay_events(state["run_id"]))
+    ] == [
         "run.started",
         "run.planned",
         "task.started",
@@ -897,7 +893,7 @@ def test_projected_budget_overrun_fails_run_durably(tmp_path):
     ]
 
 
-def test_start_does_not_resurrect_a_failed_run(tmp_path):
+async def test_start_does_not_resurrect_a_failed_run(tmp_path):
     task = PlannedTask(
         id="never-run",
         role=SpecialistRole.SCOPE_PLANNING,
@@ -908,7 +904,7 @@ def test_start_does_not_resurrect_a_failed_run(tmp_path):
         MissionPlan(summary="Terminal run", rationale="Retry guard", tasks=[task])
     )
     runtime, store = _runtime(tmp_path, supervisor, {})
-    failed = store.create(
+    failed = await store.create(
         AgentRun(
             id="failed-run",
             engagement_id="engagement-1",
@@ -918,19 +914,19 @@ def test_start_does_not_resurrect_a_failed_run(tmp_path):
     )
 
     with pytest.raises(MissionError, match="already terminal"):
-        asyncio.run(
-            runtime.start(
+        (
+            await runtime.start(
                 engagement_id=failed.engagement_id,
                 objective=failed.objective,
                 run_id=failed.id,
             )
         )
 
-    assert store.get(AgentRun, failed.id) == failed
-    assert store.replay_events(failed.id) == []
+    assert (await store.get(AgentRun, failed.id)) == failed
+    assert (await store.replay_events(failed.id)) == []
 
 
-def test_plan_node_recovery_reuses_durable_tasks_and_event(tmp_path):
+async def test_plan_node_recovery_reuses_durable_tasks_and_event(tmp_path):
     task = PlannedTask(
         id="recovered-task",
         role=SpecialistRole.SCOPE_PLANNING,
@@ -941,7 +937,7 @@ def test_plan_node_recovery_reuses_durable_tasks_and_event(tmp_path):
         MissionPlan(summary="Recoverable", rationale="Checkpoint retry", tasks=[task])
     )
     runtime, store = _runtime(tmp_path, supervisor, {})
-    run = store.create(
+    run = await store.create(
         AgentRun(
             id="recovered-run",
             engagement_id="engagement-1",
@@ -957,17 +953,17 @@ def test_plan_node_recovery_reuses_durable_tasks_and_event(tmp_path):
         "budget": run.budget.model_dump(mode="json"),
     }
 
-    first = asyncio.run(runtime._plan(state))
-    retried = asyncio.run(runtime._plan(state))
+    first = await runtime._plan(state)
+    retried = await runtime._plan(state)
 
     assert retried == first
-    assert store.count(Task, engagement_id=run.engagement_id) == 1
-    assert store.get(AgentRun, run.id).status == RunStatus.RUNNING
-    [event] = store.replay_events(run.id)
+    assert (await store.count(Task, engagement_id=run.engagement_id)) == 1
+    assert (await store.get(AgentRun, run.id)).status == RunStatus.RUNNING
+    [event] = await store.replay_events(run.id)
     assert event.event_type == "run.planned"
 
 
-def test_evidence_verifier_requires_linked_evidence_and_reproduction_steps():
+async def test_evidence_verifier_requires_linked_evidence_and_reproduction_steps():
     verifier = EvidenceVerifier()
     task = PlannedTask(
         role=SpecialistRole.EVIDENCE_VERIFICATION,
@@ -975,32 +971,26 @@ def test_evidence_verifier_requires_linked_evidence_and_reproduction_steps():
         instructions="Check the evidence",
     )
 
-    no_evidence = asyncio.run(
-        verifier.verify(
-            task,
-            SpecialistResult(summary="candidate", candidate_finding_ids=["finding-1"]),
-        )
+    no_evidence = await verifier.verify(
+        task,
+        SpecialistResult(summary="candidate", candidate_finding_ids=["finding-1"]),
     )
-    no_steps = asyncio.run(
-        verifier.verify(
-            task,
-            SpecialistResult(
-                summary="candidate",
-                candidate_finding_ids=["finding-1"],
-                evidence_ids=["evidence-1"],
-            ),
-        )
+    no_steps = await verifier.verify(
+        task,
+        SpecialistResult(
+            summary="candidate",
+            candidate_finding_ids=["finding-1"],
+            evidence_ids=["evidence-1"],
+        ),
     )
-    complete = asyncio.run(
-        verifier.verify(
-            task,
-            SpecialistResult(
-                summary="candidate",
-                candidate_finding_ids=["finding-1"],
-                evidence_ids=["evidence-1"],
-                reproducible_steps=["Replay artifact-1"],
-            ),
-        )
+    complete = await verifier.verify(
+        task,
+        SpecialistResult(
+            summary="candidate",
+            candidate_finding_ids=["finding-1"],
+            evidence_ids=["evidence-1"],
+            reproducible_steps=["Replay artifact-1"],
+        ),
     )
 
     assert no_evidence.accepted is False
@@ -1011,7 +1001,7 @@ def test_evidence_verifier_requires_linked_evidence_and_reproduction_steps():
     assert complete.evidence_ids == ["evidence-1"]
 
 
-def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
+async def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
     """A pending Approval dropped by a budget overrun must not stay PENDING."""
 
     task = PlannedTask(
@@ -1035,7 +1025,7 @@ def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
         async def run(self, context):
             assert self.store is not None
             # The broker persists the card before the specialist pauses on it.
-            approval = self.store.create(
+            approval = await self.store.create(
                 Approval(
                     id="approval-budget",
                     engagement_id=context.engagement_id,
@@ -1064,12 +1054,10 @@ def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
     )
     specialist.store = store
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-approval-budget",
-            objective="Run one bounded scan",
-            budget=RunBudget(max_tokens=10, max_retries=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-approval-budget",
+        objective="Run one bounded scan",
+        budget=RunBudget(max_tokens=10, max_retries=0),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.BLOCKED.value}
@@ -1077,8 +1065,11 @@ def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
         task.id: "mission token budget exceeded by context compaction"
     }
     assert state.get("waiting_approvals", {}) == {}
-    approval = store.get(Approval, "approval-budget")
+    approval = await store.get(Approval, "approval-budget")
     assert approval.status == ApprovalStatus.CANCELLED
     assert approval.decision_note == "mission budget exhausted"
     assert approval.decided_at is not None
     assert approval.decided_by
+
+
+pytestmark = pytest.mark.anyio

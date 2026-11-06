@@ -1,5 +1,10 @@
 """Real Core-owned Playwright identity through the separate security sidecar."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import os
 from pathlib import Path
@@ -23,13 +28,13 @@ from pydantic import SecretStr
     or not os.environ.get("NEBULA_MITMDUMP_EXECUTABLE"),
     reason="verified Playwright Chromium and mitmdump sidecar are not both staged",
 )
-def test_real_headless_identity_captures_only_its_own_scoped_request(
+async def test_real_headless_identity_captures_only_its_own_scoped_request(
     tmp_path, monkeypatch
 ):
     addon = Path(__file__).parents[2] / "security-proxy" / "addon.py"
     monkeypatch.setenv("NEBULA_SECURITY_PROXY_ADDON", str(addon))
     store = NebulaStore(tmp_path / "nebula.db")
-    project = store.create(Engagement(name="Headless integration"))
+    project = await store.create(Engagement(name="Headless integration"))
     artifacts = ArtifactStore(tmp_path / "artifacts")
 
     async def fixture(reader, writer):
@@ -45,14 +50,14 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
     async def run():
         server = await asyncio.start_server(fixture, "127.0.0.1", 0)
         port = server.sockets[0].getsockname()[1]
-        scope = store.create(
+        scope = await store.create(
             ScopePolicy(
                 engagement_id=project.id,
                 allowed_cidrs=["127.0.0.1/32"],
                 allowed_ports=[port],
             )
         )
-        store.update(Engagement, project.id, {"scope_policy_id": scope.id})
+        (await store.update(Engagement, project.id, {"scope_policy_id": scope.id}))
         host = ManagedBrowserHost(
             store,
             tmp_path / "security-browser",
@@ -76,11 +81,13 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
             )
             assert response.status_code == 200
             assert response.body_base64 == "aGVhZGxlc3M="
-            traffic = BrowserSecurityService(store).workspace(project.id).traffic
+            traffic = (
+                await BrowserSecurityService(store).workspace(project.id)
+            ).traffic
             assert len(traffic) == 1
             assert traffic[0].session_id == session.id
             assert traffic[0].response_body_artifact_id
-            artifact = store.get(Artifact, traffic[0].response_body_artifact_id)
+            artifact = await store.get(Artifact, traffic[0].response_body_artifact_id)
             assert artifacts.read(artifact) == b"headless"
             assert await service.stop(project.id, reason="test stop") == 1
             with pytest.raises(ValueError, match="stopped"):
@@ -98,7 +105,7 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
             server.close()
             await server.wait_closed()
 
-    asyncio.run(run())
+    (await run())
 
 
 @pytest.mark.skipif(
@@ -106,11 +113,13 @@ def test_real_headless_identity_captures_only_its_own_scoped_request(
     or not os.environ.get("NEBULA_MITMDUMP_EXECUTABLE"),
     reason="verified Playwright Chromium and mitmdump sidecar are not both staged",
 )
-def test_headless_security_mcp_uses_protected_socks5_upstream(tmp_path, monkeypatch):
+async def test_headless_security_mcp_uses_protected_socks5_upstream(
+    tmp_path, monkeypatch
+):
     addon = Path(__file__).parents[2] / "security-proxy" / "addon.py"
     monkeypatch.setenv("NEBULA_SECURITY_PROXY_ADDON", str(addon))
     store = NebulaStore(tmp_path / "nebula.db")
-    project = store.create(Engagement(name="Headless SOCKS5 integration"))
+    project = await store.create(Engagement(name="Headless SOCKS5 integration"))
     credentials = CredentialStore()
     reference = credentials.create(
         CredentialCreateRequest(
@@ -169,14 +178,14 @@ def test_headless_security_mcp_uses_protected_socks5_upstream(tmp_path, monkeypa
         socks_server = await asyncio.start_server(socks_proxy, "127.0.0.1", 0)
         target_port = target_server.sockets[0].getsockname()[1]
         socks_port = socks_server.sockets[0].getsockname()[1]
-        scope = store.create(
+        scope = await store.create(
             ScopePolicy(
                 engagement_id=project.id,
                 allowed_cidrs=["127.0.0.1/32"],
                 allowed_ports=[target_port],
             )
         )
-        store.update(Engagement, project.id, {"scope_policy_id": scope.id})
+        (await store.update(Engagement, project.id, {"scope_policy_id": scope.id}))
         host = ManagedBrowserHost(
             store,
             tmp_path / "security-browser",
@@ -208,7 +217,10 @@ def test_headless_security_mcp_uses_protected_socks5_upstream(tmp_path, monkeypa
             assert response.status_code == 200
             assert response.body_base64 == "dGhyb3VnaA=="
             assert proxied == [("127.0.0.1", target_port)]
-            assert len(BrowserSecurityService(store).workspace(project.id).traffic) == 1
+            assert (
+                len((await BrowserSecurityService(store).workspace(project.id)).traffic)
+                == 1
+            )
         finally:
             await runtime.close()
             await host.close()
@@ -217,4 +229,7 @@ def test_headless_security_mcp_uses_protected_socks5_upstream(tmp_path, monkeypa
             await target_server.wait_closed()
             await socks_server.wait_closed()
 
-    asyncio.run(run())
+    (await run())
+
+
+pytestmark = pytest.mark.anyio

@@ -6,6 +6,11 @@ tests pin the same tolerance for Nebula's automatic tool routing step, without
 ever running a call Core could not validate.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 import httpx
@@ -65,7 +70,7 @@ def _probe_spec() -> ToolSpec:
 # ROUTE-1: prose beside a tool call stays visible and separate from reasoning.
 
 
-def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
+async def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -76,14 +81,14 @@ def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
         _response(calls=[_finish()]),
         _response(text="Value is a."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
     events = _stream(service, prepared)
 
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         ("safe_read", {"value": "a"})
     ]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     answer = "".join(payload["delta"] for name, payload in events if name == "delta")
     assert answer == "I'll read the value first.\n\nValue is a."
@@ -95,36 +100,38 @@ def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
     assert turn.reasoning == thinking
     stored = [
         item
-        for item in service.session_messages("session")
+        for item in (await service.session_messages("session"))
         if item.role == ChatRole.ASSISTANT
     ]
     assert stored[-1].content == answer
     assert stored[-1].reasoning == thinking
 
 
-def test_routing_prose_beside_finish_response_finishes_through_synthesis(tmp_path):
+async def test_routing_prose_beside_finish_response_finishes_through_synthesis(
+    tmp_path,
+):
     broker = RecordingBroker()
     responses = [
         _response(text="Hello! How can I help today?", calls=[_finish()]),
         _response(text="Hello! How can I help today?"),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Hello! How can I help today?"
     assert broker.calls == []
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
-def test_routing_prose_without_a_call_is_the_answer(tmp_path):
+async def test_routing_prose_without_a_call_is_the_answer(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_call("call-1", "safe_read", value="a")]),
         # Automatic routing lets the model answer in prose.
         _response(text="The value is a."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
     events = _stream(service, prepared)
 
@@ -134,7 +141,7 @@ def test_routing_prose_without_a_call_is_the_answer(tmp_path):
     # as the answer.
     assert not [name for name, _ in events if name == "reasoning_delta"]
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
     # Both requests were routing steps; no synthesis request followed. The
@@ -146,14 +153,14 @@ def test_routing_prose_without_a_call_is_the_answer(tmp_path):
     assert len(_turn_requests(provider)) == 2
 
 
-def test_unreadable_routing_control_frame_finishes_through_synthesis(tmp_path):
+async def test_unreadable_routing_control_frame_finishes_through_synthesis(tmp_path):
     broker = RecordingBroker()
     frame = (
         '<｜DSML｜ calls> <｜DSML｜ invoke name="tool_output_read">'
         "the artifact</｜DSML｜ invoke> </｜DSML｜ calls>"
     )
     responses = [_response(text=frame), _response(text="Nothing to read yet.")]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
     events = _stream(service, prepared)
 
@@ -164,7 +171,7 @@ def test_unreadable_routing_control_frame_finishes_through_synthesis(tmp_path):
     )
     assert shown == "Nothing to read yet."
     assert broker.calls == []
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
 # ROUTE-2: the finish tool is a control signal; its arguments carry nothing.
@@ -174,7 +181,7 @@ def test_unreadable_routing_control_frame_finishes_through_synthesis(tmp_path):
     "arguments",
     [{"response": "All done."}, {"_": ""}, {"reason": "no tool needed"}],
 )
-def test_finish_response_arguments_are_ignored(tmp_path, monkeypatch, arguments):
+async def test_finish_response_arguments_are_ignored(tmp_path, monkeypatch, arguments):
     recorded = []
     original = chat_module.record_diagnostic
 
@@ -188,13 +195,13 @@ def test_finish_response_arguments_are_ignored(tmp_path, monkeypatch, arguments)
         _response(calls=[_finish(**arguments)]),
         _response(text="Done."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Done."
     assert broker.calls == []
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.tool_history == []
     [(level, _, fields)] = [
@@ -212,7 +219,7 @@ def test_finish_response_arguments_are_ignored(tmp_path, monkeypatch, arguments)
 # ROUTE-5: an unavailable tool is answered with an error, never a failed turn.
 
 
-def test_unknown_tool_is_answered_with_an_error_result(tmp_path):
+async def test_unknown_tool_is_answered_with_an_error_result(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -224,14 +231,14 @@ def test_unknown_tool_is_answered_with_an_error_result(tmp_path):
         _response(calls=[_finish()]),
         _response(text="Value is a."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
     events = _stream(service, prepared)
 
     # The valid call in the same batch still ran; the unknown one never
     # reached the broker.
     assert [call.tool_name for call in broker.calls] == ["safe_read"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == ["complete", "failed"]
     refused = turn.tool_history[1]
@@ -251,7 +258,7 @@ def test_unknown_tool_is_answered_with_an_error_result(tmp_path):
     assert [item["status"] for item in completed] == ["complete", "failed"]
 
 
-def test_spent_budget_tool_call_finishes_instead_of_failing(tmp_path):
+async def test_spent_budget_tool_call_finishes_instead_of_failing(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_call("call-1", "safe_read", value="a")]),
@@ -261,15 +268,15 @@ def test_spent_budget_tool_call_finishes_instead_of_failing(tmp_path):
         _response(calls=[_finish()]),
         _response(text="Read a."),
     ]
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path, responses, broker, max_tool_calls=1, extra_specs=[_probe_spec()]
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read a."
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == ["complete", "failed"]
     assert turn.execution_tool_calls == 1
@@ -279,7 +286,7 @@ def test_spent_budget_tool_call_finishes_instead_of_failing(tmp_path):
     assert "Answer from the results above" in str(replayed.output)
 
 
-def test_repeated_deviations_finish_through_synthesis(tmp_path):
+async def test_repeated_deviations_finish_through_synthesis(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_call("call-1", "bash", command="id")]),
@@ -287,15 +294,15 @@ def test_repeated_deviations_finish_through_synthesis(tmp_path):
         _response(calls=[_call("call-3", "bash", command="id")]),
         _response(text="I could not run a shell here."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # Three consecutive refused routing responses end the loop instead of
     # routing forever; the synthesis answers from what the turn has.
     assert completion.message.content == "I could not run a shell here."
     assert broker.calls == []
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == ["failed"] * 3
     assert turn.execution_tool_calls == 0
@@ -307,7 +314,7 @@ def test_repeated_deviations_finish_through_synthesis(tmp_path):
 # ROUTE-9: a call cut off by the output limit is never executed.
 
 
-def test_length_truncated_routing_calls_are_not_executed(tmp_path):
+async def test_length_truncated_routing_calls_are_not_executed(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -318,13 +325,13 @@ def test_length_truncated_routing_calls_are_not_executed(tmp_path):
         _response(calls=[_finish()]),
         _response(text="Read partial-value."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read partial-value."
     assert [call.arguments["value"] for call in broker.calls] == ["partial-value"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == ["failed", "complete"]
     assert turn.execution_tool_calls == 1
@@ -334,7 +341,7 @@ def test_length_truncated_routing_calls_are_not_executed(tmp_path):
     assert "Re-issue" in str(cut.output)
 
 
-def test_finish_queued_behind_a_cut_off_call_routes_again(tmp_path):
+async def test_finish_queued_behind_a_cut_off_call_routes_again(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -345,21 +352,21 @@ def test_finish_queued_behind_a_cut_off_call_routes_again(tmp_path):
         _response(calls=[_finish("finish-2")]),
         _response(text="Read a."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # The model gets to re-issue the call it wanted before the turn finishes.
     assert completion.message.content == "Read a."
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert [entry["status"] for entry in turn.tool_history] == ["failed", "complete"]
 
 
 # ROUTE-10: a reused provider call id never fails the turn or repeats an effect.
 
 
-def test_reused_provider_id_for_a_new_call_runs_under_a_core_id(tmp_path):
+async def test_reused_provider_id_for_a_new_call_runs_under_a_core_id(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_call("call_0", "safe_read", value="a")]),
@@ -368,13 +375,13 @@ def test_reused_provider_id_for_a_new_call_runs_under_a_core_id(tmp_path):
         _response(calls=[_finish()]),
         _response(text="a and b"),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "a and b"
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     ids = [entry["model_call_id"] for entry in turn.tool_history]
     assert ids[0] == "call_0"
@@ -386,7 +393,7 @@ def test_reused_provider_id_for_a_new_call_runs_under_a_core_id(tmp_path):
     assert len(set(replayed)) == 2
 
 
-def test_repeated_id_inside_one_batch_runs_both_distinct_calls(tmp_path):
+async def test_repeated_id_inside_one_batch_runs_both_distinct_calls(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -398,18 +405,18 @@ def test_repeated_id_inside_one_batch_runs_both_distinct_calls(tmp_path):
         _response(calls=[_finish()]),
         _response(text="a and b"),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     ids = [entry["model_call_id"] for entry in turn.tool_history]
     assert ids[0] == "0" and len(set(ids)) == 2
 
 
-def test_identical_repeat_of_a_reissued_call_is_not_run_again(tmp_path):
+async def test_identical_repeat_of_a_reissued_call_is_not_run_again(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_call("call_0", "safe_read", value="a")]),
@@ -418,14 +425,14 @@ def test_identical_repeat_of_a_reissued_call_is_not_run_again(tmp_path):
         _response(calls=[_finish()]),
         _response(text="a and b"),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     # The third call replays the second under the same provider id: it was
     # answered from history, not run a second time.
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == [
         "complete",
@@ -463,9 +470,9 @@ class _RequiredChoiceRejectingProvider(ScriptedProvider):
         return await super().complete(request)
 
 
-def test_routing_uses_auto_without_required_choice_retry(tmp_path):
+async def test_routing_uses_auto_without_required_choice_retry(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     provider = _RequiredChoiceRejectingProvider(
         [
             _response(calls=[_call("call-1", "safe_read", value="a")]),
@@ -476,11 +483,11 @@ def test_routing_uses_auto_without_required_choice_retry(tmp_path):
     )
     prepared.provider = provider
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read a."
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     routing = [
         request
         for request in _turn_requests(provider)
@@ -493,9 +500,9 @@ def test_routing_uses_auto_without_required_choice_retry(tmp_path):
     ]
 
 
-def test_an_unrelated_routing_rejection_still_fails_the_turn(tmp_path):
+async def test_an_unrelated_routing_rejection_still_fails_the_turn(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
 
     class RejectingProvider(_RequiredChoiceRejectingProvider):
         async def complete(self, request):
@@ -514,8 +521,11 @@ def test_an_unrelated_routing_rejection_still_fails_the_turn(tmp_path):
     prepared.provider = provider
 
     with pytest.raises(ProviderError, match="HTTP 400"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     assert len(_turn_requests(provider)) == 1
     assert broker.calls == []
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.FAILED
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.FAILED
+
+
+pytestmark = pytest.mark.anyio

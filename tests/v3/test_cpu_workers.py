@@ -1,5 +1,10 @@
 """Owned CPU processes preserve admission, cancellation and shutdown boundaries."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 from contextvars import ContextVar
 import os
@@ -49,7 +54,7 @@ def test_invalid_pool_bounds_are_rejected(arguments):
         CpuWorkerPool(**arguments)
 
 
-def test_jobs_run_in_owned_processes_and_callbacks_stay_in_core():
+async def test_jobs_run_in_owned_processes_and_callbacks_stay_in_core():
     async def scenario():
         pool = CpuWorkerPool(workers=2)
         callbacks = []
@@ -77,10 +82,10 @@ def test_jobs_run_in_owned_processes_and_callbacks_stay_in_core():
             await pool.shutdown()
         assert not any(worker["alive"] for worker in pool.snapshot()["workers"])
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_start_callback_preserves_the_request_context():
+async def test_start_callback_preserves_the_request_context():
     actor = ContextVar("cpu_test_actor", default="startup")
 
     async def scenario():
@@ -94,10 +99,10 @@ def test_start_callback_preserves_the_request_context():
         finally:
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_queue_bound_fifo_and_queued_cancellation(tmp_path):
+async def test_queue_bound_fifo_and_queued_cancellation(tmp_path):
     async def scenario():
         pool = CpuWorkerPool(workers=1, queued=2)
         release, started = tmp_path / "release", tmp_path / "started"
@@ -142,10 +147,10 @@ def test_queue_bound_fifo_and_queued_cancellation(tmp_path):
             release.touch()
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_running_cancellation_holds_capacity_until_actual_completion(tmp_path):
+async def test_running_cancellation_holds_capacity_until_actual_completion(tmp_path):
     async def scenario():
         pool = CpuWorkerPool(workers=1, queued=0)
         release, started = tmp_path / "release", tmp_path / "started"
@@ -168,10 +173,10 @@ def test_running_cancellation_holds_capacity_until_actual_completion(tmp_path):
             release.touch()
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_snapshot_bytes_are_bounded_independently_of_job_count(tmp_path):
+async def test_snapshot_bytes_are_bounded_independently_of_job_count(tmp_path):
     async def scenario():
         pool = CpuWorkerPool(
             workers=1, queued=4, max_input_bytes=100, max_total_input_bytes=150
@@ -194,10 +199,10 @@ def test_snapshot_bytes_are_bounded_independently_of_job_count(tmp_path):
             await work
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_job_exception_and_unpicklable_input_do_not_poison_the_worker():
+async def test_job_exception_and_unpicklable_input_do_not_poison_the_worker():
     async def scenario():
         pool = CpuWorkerPool(workers=1)
         try:
@@ -212,10 +217,10 @@ def test_job_exception_and_unpicklable_input_do_not_poison_the_worker():
         finally:
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_start_callback_failure_does_not_execute_or_restart_a_worker(tmp_path):
+async def test_start_callback_failure_does_not_execute_or_restart_a_worker(tmp_path):
     async def scenario():
         pool = CpuWorkerPool(workers=1)
 
@@ -234,10 +239,10 @@ def test_start_callback_failure_does_not_execute_or_restart_a_worker(tmp_path):
         finally:
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_worker_exit_fails_once_then_replaces_only_that_worker(tmp_path):
+async def test_worker_exit_fails_once_then_replaces_only_that_worker(tmp_path):
     async def scenario():
         pool = CpuWorkerPool(workers=1, queued=2)
         try:
@@ -257,10 +262,10 @@ def test_worker_exit_fails_once_then_replaces_only_that_worker(tmp_path):
         finally:
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_shutdown_cancels_queue_and_stops_running_children(tmp_path):
+async def test_shutdown_cancels_queue_and_stops_running_children(tmp_path):
     async def scenario():
         pool = CpuWorkerPool(workers=1, queued=1, shutdown_timeout=0.05)
         release, started = tmp_path / "release", tmp_path / "started"
@@ -284,10 +289,10 @@ def test_shutdown_cancels_queue_and_stops_running_children(tmp_path):
             await pool.run(identify)
         await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_concurrent_teardown_waits_for_the_owned_pipe_close():
+async def test_concurrent_teardown_waits_for_the_owned_pipe_close():
     async def scenario():
         closing = threading.Event()
         release = threading.Event()
@@ -329,10 +334,10 @@ def test_concurrent_teardown_waits_for_the_owned_pipe_close():
             outcomes = await asyncio.gather(first, second, return_exceptions=True)
         assert outcomes == [None, None] and connection.closed
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_timeout_cleans_up_owned_child(monkeypatch):
+async def test_startup_timeout_cleans_up_owned_child(monkeypatch):
     monkeypatch.setattr(cpu_workers, "_worker_main", no_startup_ack)
 
     async def scenario():
@@ -342,10 +347,10 @@ def test_startup_timeout_cleans_up_owned_child(monkeypatch):
         await pool.shutdown()
         assert pool.snapshot()["closed"] and not pool._workers
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_shutdown_during_startup_cannot_leave_a_new_child():
+async def test_shutdown_during_startup_cannot_leave_a_new_child():
     async def scenario():
         pool = CpuWorkerPool(workers=2)
         starting = asyncio.create_task(pool.start())
@@ -355,10 +360,10 @@ def test_shutdown_during_startup_cannot_leave_a_new_child():
             await starting
         assert not any(worker["alive"] for worker in pool.snapshot()["workers"])
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_pool_refuses_a_different_event_loop():
+async def test_pool_refuses_a_different_event_loop():
     async def scenario():
         pool = CpuWorkerPool(workers=1)
         try:
@@ -372,4 +377,7 @@ def test_pool_refuses_a_different_event_loop():
         finally:
             await pool.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import hashlib
@@ -8,7 +12,7 @@ import shutil
 import subprocess
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.workspace as workspace_module
 from nebula.v3.api import create_app
@@ -45,7 +49,7 @@ class StubWorkspacePlatform:
         return path
 
 
-def _services(tmp_path):
+async def _services(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     platform = StubWorkspacePlatform(tmp_path / "workspaces")
@@ -55,7 +59,7 @@ def _services(tmp_path):
         tool_platform=platform,  # type: ignore[arg-type]
         operator_id=lambda: "operator-1",
     )
-    engagement = store.create(Engagement(name="Workspace Lab"))
+    engagement = await store.create(Engagement(name="Workspace Lab"))
     client = TestClient(
         create_app(
             store,
@@ -67,8 +71,10 @@ def _services(tmp_path):
     return store, artifacts, platform, workspace, engagement, client
 
 
-def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "notes").mkdir()
     exact = "first line\nUnicode: λ\n"
@@ -77,8 +83,8 @@ def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
     outside.write_text("must remain private", encoding="utf-8")
     os.symlink(outside, root / "escape")
 
-    with client:
-        listing = client.get(
+    async with client:
+        listing = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace", headers=AUTH
         )
         assert listing.status_code == 200
@@ -87,7 +93,7 @@ def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
             ("escape", "symlink"),
         ]
 
-        preview = client.get(
+        preview = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/preview",
             headers=AUTH,
             params={"path": "notes/result.txt"},
@@ -95,7 +101,7 @@ def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
         assert preview.status_code == 200
         assert preview.json()["text"] == exact
 
-        download = client.get(
+        download = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/download",
             headers=AUTH,
             params={"path": "notes/result.txt"},
@@ -104,7 +110,7 @@ def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
         assert download.content == exact.encode()
         assert download.headers["x-content-type-options"] == "nosniff"
 
-        escaped = client.get(
+        escaped = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/preview",
             headers=AUTH,
             params={"path": "escape"},
@@ -113,8 +119,12 @@ def test_workspace_lists_previews_downloads_and_rejects_symlinks(tmp_path):
         assert escaped.json()["code"] == "workspace_path_invalid"
 
 
-def test_workspace_discovers_manifest_and_test_tasks_without_following_links(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+async def test_workspace_discovers_manifest_and_test_tasks_without_following_links(
+    tmp_path,
+):
+    _store, _artifacts, platform, workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "package.json").write_text(
         '{"scripts":{"test":"vitest run","build":"vite build","odd name":"echo ok"}}',
@@ -130,7 +140,7 @@ def test_workspace_discovers_manifest_and_test_tasks_without_following_links(tmp
     (outside / "test_secret.py").write_text("secret\n", encoding="utf-8")
     os.symlink(outside, root / "linked-tests")
 
-    result = workspace.tasks(engagement.id)
+    result = await workspace.tasks(engagement.id)
     commands = {task.command for task in result.tasks}
     assert {
         "npm run test",
@@ -143,15 +153,17 @@ def test_workspace_discovers_manifest_and_test_tasks_without_following_links(tmp
     } <= commands
     assert all("secret" not in (task.path or "") for task in result.tasks)
 
-    response = client.get(
+    response = await client.get(
         f"/api/v1/engagements/{engagement.id}/workspace/tasks", headers=AUTH
     )
     assert response.status_code == 200
     assert response.json()["engagement_id"] == engagement.id
 
 
-def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+async def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / ".vscode").mkdir()
     (root / ".vscode" / "tasks.json").write_text(
@@ -175,7 +187,7 @@ def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
         encoding="utf-8",
     )
 
-    result = workspace.tasks(engagement.id)
+    result = await workspace.tasks(engagement.id)
     configured = {task.label: task for task in result.tasks}
     assert configured["Scan fixture"].command == (
         "cd -- /workspace/research && env MODE=safe "
@@ -193,7 +205,7 @@ def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
         configured["Background watcher"].unsupported_reason or ""
     )
 
-    response = client.get(
+    response = await client.get(
         f"/api/v1/engagements/{engagement.id}/workspace/tasks", headers=AUTH
     )
     assert response.status_code == 200
@@ -202,7 +214,7 @@ def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
     assert rows["Extension task"]["supported"] is False
 
     (root / ".vscode" / "tasks.json").write_bytes(b" " * (129 * 1024))
-    oversized = workspace.tasks(engagement.id)
+    oversized = await workspace.tasks(engagement.id)
     notice = next(
         task for task in oversized.tasks if task.label == "VS Code tasks need attention"
     )
@@ -210,8 +222,10 @@ def test_workspace_normalizes_vscode_tasks_into_reviewed_commands(tmp_path):
     assert "128 KiB configuration limit" in (notice.unsupported_reason or "")
 
 
-def test_workspace_imports_only_launch_profiles_inside_debug_boundary(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+async def test_workspace_imports_only_launch_profiles_inside_debug_boundary(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / ".vscode").mkdir()
     (root / ".vscode" / "launch.json").write_text(
@@ -237,7 +251,7 @@ def test_workspace_imports_only_launch_profiles_inside_debug_boundary(tmp_path):
         encoding="utf-8",
     )
 
-    result = workspace.debug_configurations(engagement.id, "research/parser.py")
+    result = await workspace.debug_configurations(engagement.id, "research/parser.py")
     profiles = {profile.name: profile for profile in result.configurations}
     assert profiles["Active parser"].supported is True
     assert profiles["Active parser"].path == "research/parser.py"
@@ -256,7 +270,7 @@ def test_workspace_imports_only_launch_profiles_inside_debug_boundary(tmp_path):
     )
     assert profiles["Attach process"].supported is False
 
-    response = client.get(
+    response = await client.get(
         f"/api/v1/engagements/{engagement.id}/workspace/debug-configurations",
         headers=AUTH,
         params={"path": "research/parser.py"},
@@ -267,8 +281,12 @@ def test_workspace_imports_only_launch_profiles_inside_debug_boundary(tmp_path):
     assert len(payload["configurations"]) == 4
 
 
-def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(
+    tmp_path,
+):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "src").mkdir()
     (root / "src" / "scanner.py").write_text(
@@ -280,8 +298,8 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
     outside.write_text("scan_target must not escape", encoding="utf-8")
     os.symlink(outside, root / "linked-secret")
 
-    with client:
-        files = client.get(
+    async with client:
+        files = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/search",
             headers=AUTH,
             params={"query": "scanner", "mode": "files"},
@@ -291,7 +309,7 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
             (match["path"], match["kind"]) for match in files.json()["matches"]
         ] == [("src/scanner-assets", "directory"), ("src/scanner.py", "path")]
 
-        text = client.get(
+        text = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/search",
             headers=AUTH,
             params={"query": "SCAN_TARGET", "mode": "text"},
@@ -309,7 +327,7 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
         assert text.json()["scanned_files"] == 2
         assert text.json()["truncated"] is False
 
-        escaped = client.get(
+        escaped = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/search",
             headers=AUTH,
             params={"query": "secret", "path": "../"},
@@ -319,8 +337,10 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="Git is not installed")
-def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
 
     def git(*arguments: str) -> None:
@@ -350,8 +370,8 @@ def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
     (root / ".gitattributes").write_text("*.txt diff=unsafe\n", encoding="utf-8")
     git("config", "diff.unsafe.textconv", str(textconv))
 
-    with client:
-        status = client.get(
+    async with client:
+        status = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/source-control",
             headers=AUTH,
         )
@@ -364,7 +384,7 @@ def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
         assert changed["scanner.txt"]["worktree_status"] == "modified"
         assert changed["new-rule.yaml"]["worktree_status"] == "untracked"
 
-        diff = client.get(
+        diff = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/source-control/diff",
             headers=AUTH,
             params={"path": "scanner.txt"},
@@ -374,7 +394,7 @@ def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
         assert diff.json()["head"] == payload["head"]
         assert not textconv_marker.exists()
 
-        escaped = client.get(
+        escaped = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/source-control/diff",
             headers=AUTH,
             params={"path": "../outside"},
@@ -384,8 +404,10 @@ def test_workspace_source_control_reports_status_and_hardened_diffs(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="Git is not installed")
-def test_workspace_source_control_refuses_parent_repository_scope(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_source_control_refuses_parent_repository_scope(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     parent = root.parent
     subprocess.run(
@@ -395,8 +417,8 @@ def test_workspace_source_control_refuses_parent_repository_scope(tmp_path):
         stderr=subprocess.PIPE,
     )
 
-    with client:
-        response = client.get(
+    async with client:
+        response = await client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/source-control",
             headers=AUTH,
         )
@@ -405,13 +427,15 @@ def test_workspace_source_control_refuses_parent_repository_scope(tmp_path):
         assert "outside the selected project boundary" in response.json()["detail"]
 
 
-def test_host_workspace_folder_browser_lists_only_directories(tmp_path):
-    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+async def test_host_workspace_folder_browser_lists_only_directories(tmp_path):
+    _store, _artifacts, _platform, _workspace, _engagement, client = await _services(
+        tmp_path
+    )
     selectable = tmp_path / "selectable-project"
     selectable.mkdir()
     (tmp_path / "ordinary-file.txt").write_text("not a folder", encoding="utf-8")
 
-    response = client.get(
+    response = await client.get(
         "/api/v1/workspace-folders",
         params={"path": str(tmp_path)},
         headers=AUTH,
@@ -429,7 +453,7 @@ def test_host_workspace_folder_browser_lists_only_directories(tmp_path):
         directory["name"] for directory in listing["directories"]
     }
 
-    unavailable = client.get(
+    unavailable = await client.get(
         "/api/v1/workspace-folders",
         params={"path": str(tmp_path / "missing")},
         headers=AUTH,
@@ -438,10 +462,12 @@ def test_host_workspace_folder_browser_lists_only_directories(tmp_path):
     assert unavailable.json()["detail"] == "folder is unavailable"
 
 
-def test_host_workspace_folder_browser_creates_one_bounded_child(tmp_path):
-    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+async def test_host_workspace_folder_browser_creates_one_bounded_child(tmp_path):
+    _store, _artifacts, _platform, _workspace, _engagement, client = await _services(
+        tmp_path
+    )
 
-    created = client.post(
+    created = await client.post(
         "/api/v1/workspace-folders",
         headers=AUTH,
         json={"parent_path": str(tmp_path), "name": "new-project"},
@@ -454,7 +480,7 @@ def test_host_workspace_folder_browser_creates_one_bounded_child(tmp_path):
     assert listing["path"] == str(expected)
     assert listing["parent"] == str(tmp_path.resolve())
 
-    duplicate = client.post(
+    duplicate = await client.post(
         "/api/v1/workspace-folders",
         headers=AUTH,
         json={"parent_path": str(tmp_path), "name": "new-project"},
@@ -463,7 +489,7 @@ def test_host_workspace_folder_browser_creates_one_bounded_child(tmp_path):
     assert duplicate.json()["detail"] == "folder already exists"
 
     for invalid_name in ("../outside", "nested/child", r"nested\child"):
-        rejected = client.post(
+        rejected = await client.post(
             "/api/v1/workspace-folders",
             headers=AUTH,
             json={"parent_path": str(tmp_path), "name": invalid_name},
@@ -473,14 +499,16 @@ def test_host_workspace_folder_browser_creates_one_bounded_child(tmp_path):
     assert not (tmp_path / "nested").exists()
 
 
-def test_host_workspace_folder_browser_paginates_all_directories(tmp_path):
-    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+async def test_host_workspace_folder_browser_paginates_all_directories(tmp_path):
+    _store, _artifacts, _platform, _workspace, _engagement, client = await _services(
+        tmp_path
+    )
     browse_root = tmp_path / "many-projects"
     browse_root.mkdir()
     for index in range(503):
         (browse_root / f"project-{index:03d}").mkdir()
 
-    first = client.get(
+    first = await client.get(
         "/api/v1/workspace-folders",
         params={"path": str(browse_root), "limit": 500},
         headers=AUTH,
@@ -493,7 +521,7 @@ def test_host_workspace_folder_browser_paginates_all_directories(tmp_path):
     assert first_listing["next_offset"] == 500
     assert first_listing["truncated"] is True
 
-    second = client.get(
+    second = await client.get(
         "/api/v1/workspace-folders",
         params={
             "path": str(browse_root),
@@ -513,10 +541,12 @@ def test_host_workspace_folder_browser_paginates_all_directories(tmp_path):
     assert second_listing["truncated"] is False
 
 
-def test_host_workspace_folder_browser_filters_all_directories_case_insensitively(
+async def test_host_workspace_folder_browser_filters_all_directories_case_insensitively(
     tmp_path,
 ):
-    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+    _store, _artifacts, _platform, _workspace, _engagement, client = await _services(
+        tmp_path
+    )
     browse_root = tmp_path / "filter-projects"
     browse_root.mkdir()
     for index in range(503):
@@ -524,7 +554,7 @@ def test_host_workspace_folder_browser_filters_all_directories_case_insensitivel
     target = browse_root / "Research-Target"
     target.mkdir()
 
-    response = client.get(
+    response = await client.get(
         "/api/v1/workspace-folders",
         params={"path": str(browse_root), "filter": "research"},
         headers=AUTH,
@@ -537,8 +567,10 @@ def test_host_workspace_folder_browser_filters_all_directories_case_insensitivel
     assert response.json()["truncated"] is False
 
 
-def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
-    store, artifacts, platform, workspace, engagement, client = _services(tmp_path)
+async def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
+    store, artifacts, platform, workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     payload = b"immutable promoted evidence\n"
     (root / "result.bin").write_bytes(payload)
@@ -547,8 +579,8 @@ def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
     (outside / "keep.txt").write_text("keep", encoding="utf-8")
     os.symlink(outside, root / "linked-directory")
 
-    with client:
-        promoted = client.post(
+    async with client:
+        promoted = await client.post(
             f"/api/v1/engagements/{engagement.id}/workspace/promote",
             headers=AUTH,
             json={"path": "result.bin", "title": "Exact result"},
@@ -557,14 +589,14 @@ def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
         evidence = promoted.json()
         assert evidence["sha256"] == hashlib.sha256(payload).hexdigest()
 
-        wrong = client.post(
+        wrong = await client.post(
             f"/api/v1/engagements/{engagement.id}/workspace/reset",
             headers=AUTH,
             json={"engagement_name": "wrong"},
         )
         assert wrong.status_code == 422
 
-        reset = client.post(
+        reset = await client.post(
             f"/api/v1/engagements/{engagement.id}/workspace/reset",
             headers=AUTH,
             json={"engagement_name": engagement.name},
@@ -574,21 +606,23 @@ def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
 
     assert list(root.iterdir()) == []
     assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep"
-    artifact = store.get(Artifact, evidence["artifact_id"])
+    artifact = await store.get(Artifact, evidence["artifact_id"])
     assert artifacts.verify(artifact)
     assert artifacts.read(artifact) == payload
 
 
-def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
-    store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
+    store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "old.txt").write_text("content", encoding="utf-8")
     (root / "occupied.txt").write_text("keep", encoding="utf-8")
     (root / "nonempty").mkdir()
     (root / "nonempty" / "child.txt").write_text("keep", encoding="utf-8")
 
-    with client:
-        renamed = client.patch(
+    async with client:
+        renamed = await client.patch(
             f"/api/v1/engagements/{engagement.id}/workspace/entry",
             headers=AUTH,
             json={"path": "old.txt", "new_name": "renamed.txt"},
@@ -598,14 +632,14 @@ def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
         assert not (root / "old.txt").exists()
         assert (root / "renamed.txt").read_text(encoding="utf-8") == "content"
 
-        collision = client.patch(
+        collision = await client.patch(
             f"/api/v1/engagements/{engagement.id}/workspace/entry",
             headers=AUTH,
             json={"path": "renamed.txt", "new_name": "occupied.txt"},
         )
         assert collision.status_code == 409
 
-        nonempty = client.delete(
+        nonempty = await client.delete(
             f"/api/v1/engagements/{engagement.id}/workspace/entry",
             headers=AUTH,
             params={"path": "nonempty"},
@@ -613,7 +647,7 @@ def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
         assert nonempty.status_code == 409
         assert (root / "nonempty" / "child.txt").exists()
 
-        deleted = client.delete(
+        deleted = await client.delete(
             f"/api/v1/engagements/{engagement.id}/workspace/entry",
             headers=AUTH,
             params={"path": "renamed.txt"},
@@ -621,23 +655,25 @@ def test_workspace_entry_rename_and_delete_are_bounded_and_audited(tmp_path):
         assert deleted.status_code == 200
         assert not (root / "renamed.txt").exists()
 
-    events = store.list_operation_events(engagement.id, limit=100)
+    events = await store.list_operation_events(engagement.id, limit=100)
     assert {event.event_type for event in events} >= {
         "workspace.renamed",
         "workspace.deleted",
     }
 
 
-def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     source = root / "draft.txt"
     source.write_text("first draft")
     original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     endpoint = f"/api/v1/engagements/{engagement.id}/workspace/entry"
 
-    with client:
-        stale_rename = client.patch(
+    async with client:
+        stale_rename = await client.patch(
             endpoint,
             headers=AUTH,
             json={
@@ -648,7 +684,7 @@ def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
         )
         assert stale_rename.status_code == 412
         assert source.read_text() == "first draft"
-        renamed = client.patch(
+        renamed = await client.patch(
             endpoint,
             headers=AUTH,
             json={
@@ -660,7 +696,7 @@ def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
         assert renamed.status_code == 200
         target = root / "final.txt"
         target.write_text("second draft")
-        stale_delete = client.delete(
+        stale_delete = await client.delete(
             endpoint,
             headers={**AUTH, "If-Match": original_hash},
             params={"path": "final.txt"},
@@ -668,7 +704,7 @@ def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
         assert stale_delete.status_code == 412
         assert target.read_text() == "second draft"
         current_hash = hashlib.sha256(target.read_bytes()).hexdigest()
-        deleted = client.delete(
+        deleted = await client.delete(
             endpoint,
             headers={**AUTH, "If-Match": current_hash},
             params={"path": "final.txt"},
@@ -676,7 +712,7 @@ def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
         assert deleted.status_code == 200
         assert not target.exists()
         (root / "folder").mkdir()
-        directory = client.delete(
+        directory = await client.delete(
             endpoint,
             headers={**AUTH, "If-Match": "a" * 64},
             params={"path": "folder"},
@@ -689,8 +725,10 @@ def test_workspace_file_rename_and_delete_refuse_stale_hashes(tmp_path):
     not hasattr(os, "mkfifo") or not hasattr(signal, "setitimer"),
     reason="FIFO and bounded synchronous-open regression requires POSIX signals",
 )
-def test_workspace_file_actions_reject_fifo_without_blocking(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_file_actions_reject_fifo_without_blocking(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     pipe = platform.workspace_for(engagement.id) / "pipe"
     os.mkfifo(pipe)
 
@@ -724,39 +762,45 @@ def test_workspace_file_actions_reject_fifo_without_blocking(tmp_path):
     assert pipe.exists()
 
 
-def test_reset_refuses_a_queued_execution(tmp_path):
-    store, _artifacts, _platform, workspace, engagement, _client = _services(tmp_path)
-    store.create(
-        OperatorExecution(
-            engagement_id=engagement.id,
-            operator_id="operator-1",
-            origin=ExecutionOrigin(kind="rerun", execution_id="parent"),
-            language="python",
-            source_sha256="a" * 64,
-            source_artifact_id="source",
-            runtime=ExecutionRuntimeSnapshot(
+async def test_reset_refuses_a_queued_execution(tmp_path):
+    store, _artifacts, _platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
+    (
+        await store.create(
+            OperatorExecution(
+                engagement_id=engagement.id,
+                operator_id="operator-1",
+                origin=ExecutionOrigin(kind="rerun", execution_id="parent"),
                 language="python",
-                interpreter="/usr/bin/python3",
-                arguments=["-I", "-B"],
-                runtime_digest="sha256:" + "b" * 64,
-                image="sha256:" + "c" * 64,
-                runner_profile_id="runner",
-                runner_profile_revision=1,
-                runner_runtime=RunnerRuntime.PODMAN,
-                runner_isolation=RunnerIsolation.ROOTLESS,
-                runner_executable="/usr/bin/podman",
-                runner_platform="linux/amd64",
-            ),
-            preview_fingerprint="d" * 64,
-            request_fingerprint="e" * 64,
-            client_idempotency_key="queued",
-            status=OperatorExecutionStatus.QUEUED,
+                source_sha256="a" * 64,
+                source_artifact_id="source",
+                runtime=ExecutionRuntimeSnapshot(
+                    language="python",
+                    interpreter="/usr/bin/python3",
+                    arguments=["-I", "-B"],
+                    runtime_digest="sha256:" + "b" * 64,
+                    image="sha256:" + "c" * 64,
+                    runner_profile_id="runner",
+                    runner_profile_revision=1,
+                    runner_runtime=RunnerRuntime.PODMAN,
+                    runner_isolation=RunnerIsolation.ROOTLESS,
+                    runner_executable="/usr/bin/podman",
+                    runner_platform="linux/amd64",
+                ),
+                preview_fingerprint="d" * 64,
+                request_fingerprint="e" * 64,
+                client_idempotency_key="queued",
+                status=OperatorExecutionStatus.QUEUED,
+            )
         )
     )
 
     try:
-        workspace.reset(
-            engagement.id, WorkspaceResetRequest(engagement_name=engagement.name)
+        (
+            await workspace.reset(
+                engagement.id, WorkspaceResetRequest(engagement_name=engagement.name)
+            )
         )
     except Exception as exc:
         assert getattr(exc, "code", None) == "workspace_busy"
@@ -764,8 +808,10 @@ def test_reset_refuses_a_queued_execution(tmp_path):
         raise AssertionError("queued execution should block workspace reset")
 
 
-def test_reset_status_reports_active_execution_and_stable_recovery_code(tmp_path):
-    store, _artifacts, _platform, _workspace, engagement, client = _services(tmp_path)
+async def test_reset_status_reports_active_execution_and_stable_recovery_code(tmp_path):
+    store, _artifacts, _platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     execution = OperatorExecution(
         engagement_id=engagement.id,
         operator_id="operator-1",
@@ -791,9 +837,9 @@ def test_reset_status_reports_active_execution_and_stable_recovery_code(tmp_path
         client_idempotency_key="status",
         status=OperatorExecutionStatus.RUNNING,
     )
-    stored = store.create(execution)
+    stored = await store.create(execution)
 
-    blocked = client.get(
+    blocked = await client.get(
         f"/api/v1/engagements/{engagement.id}/workspace/reset-status", headers=AUTH
     )
     assert blocked.status_code == 200
@@ -801,23 +847,27 @@ def test_reset_status_reports_active_execution_and_stable_recovery_code(tmp_path
     assert blocked.json()["active_execution_count"] == 1
     assert blocked.json()["reason_code"] == "workspace_busy"
 
-    store.update(
-        OperatorExecution,
-        stored.id,
-        {"status": OperatorExecutionStatus.COMPLETED},
-        expected_revision=stored.revision,
+    (
+        await store.update(
+            OperatorExecution,
+            stored.id,
+            {"status": OperatorExecutionStatus.COMPLETED},
+            expected_revision=stored.revision,
+        )
     )
-    ready = client.get(
+    ready = await client.get(
         f"/api/v1/engagements/{engagement.id}/workspace/reset-status", headers=AUTH
     )
     assert ready.json()["can_reset"] is True
     assert ready.json()["reason_code"] is None
 
 
-def test_workspace_upload_is_atomic_without_quota_scan_and_requires_overwrite(
+async def test_workspace_upload_is_atomic_without_quota_scan_and_requires_overwrite(
     tmp_path, monkeypatch
 ):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "notes").mkdir()
     with (root / "large-existing.bin").open("wb") as stream:
@@ -832,12 +882,10 @@ def test_workspace_upload_is_atomic_without_quota_scan_and_requires_overwrite(
         for value in values:
             yield value
 
-    result = asyncio.run(
-        workspace.upload(
-            engagement.id,
-            "notes/result.txt",
-            chunks(b"hello ", b"world"),
-        )
+    result = await workspace.upload(
+        engagement.id,
+        "notes/result.txt",
+        chunks(b"hello ", b"world"),
     )
     assert result.path == "notes/result.txt"
     assert result.size == 11
@@ -845,8 +893,8 @@ def test_workspace_upload_is_atomic_without_quota_scan_and_requires_overwrite(
     assert (root / result.path).read_bytes() == b"hello world"
 
     try:
-        asyncio.run(
-            workspace.upload(
+        (
+            await workspace.upload(
                 engagement.id,
                 "notes/result.txt",
                 chunks(b"replacement"),
@@ -858,21 +906,21 @@ def test_workspace_upload_is_atomic_without_quota_scan_and_requires_overwrite(
         raise AssertionError("upload should require overwrite confirmation")
     assert (root / result.path).read_bytes() == b"hello world"
 
-    replaced = asyncio.run(
-        workspace.upload(
-            engagement.id,
-            "notes/result.txt",
-            chunks(b"replacement"),
-            overwrite=True,
-        )
+    replaced = await workspace.upload(
+        engagement.id,
+        "notes/result.txt",
+        chunks(b"replacement"),
+        overwrite=True,
     )
     assert replaced.overwritten is True
     assert (root / result.path).read_bytes() == b"replacement"
     assert not list((root / "notes").glob(".nebula-upload-*.tmp"))
 
 
-def test_workspace_upload_rejects_escape_and_symlink_destination(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_upload_rejects_escape_and_symlink_destination(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
@@ -883,7 +931,7 @@ def test_workspace_upload_rejects_escape_and_symlink_destination(tmp_path):
 
     for path in ("../escape", "linked"):
         try:
-            asyncio.run(workspace.upload(engagement.id, path, chunks(), overwrite=True))
+            (await workspace.upload(engagement.id, path, chunks(), overwrite=True))
         except Exception as exc:
             assert getattr(exc, "code", None) in {
                 "workspace_path_invalid",
@@ -894,11 +942,13 @@ def test_workspace_upload_rejects_escape_and_symlink_destination(tmp_path):
     assert outside.read_text(encoding="utf-8") == "outside"
 
 
-def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
 
-    with client:
-        mismatch = client.put(
+    async with client:
+        mismatch = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={
                 **AUTH,
@@ -912,7 +962,7 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
         assert mismatch.json()["code"] == "workspace_upload_hash_mismatch"
         assert not (platform.workspace_for(engagement.id) / "integrity.bin").exists()
 
-        integrity_created = client.put(
+        integrity_created = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={
                 **AUTH,
@@ -928,7 +978,7 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
             == hashlib.sha256(b"first payload").hexdigest()
         )
 
-        overwrite_mismatch = client.put(
+        overwrite_mismatch = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={
                 **AUTH,
@@ -943,7 +993,7 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
             platform.workspace_for(engagement.id) / "integrity.bin"
         ).read_bytes() == b"first payload"
 
-        created = client.put(
+        created = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={**AUTH, "Content-Type": "application/octet-stream"},
             params={"path": "result.bin"},
@@ -952,7 +1002,7 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
         assert created.status_code == 201
         assert created.json()["sha256"] == hashlib.sha256(b"first payload").hexdigest()
 
-        conflict = client.put(
+        conflict = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={**AUTH, "Content-Type": "application/octet-stream"},
             params={"path": "result.bin"},
@@ -961,7 +1011,7 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
         assert conflict.status_code == 409
         assert conflict.json()["code"] == "workspace_file_exists"
 
-        replaced = client.put(
+        replaced = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={**AUTH, "Content-Type": "application/octet-stream"},
             params={"path": "result.bin", "overwrite": "true"},
@@ -975,8 +1025,10 @@ def test_workspace_streaming_upload_api_requires_explicit_overwrite(tmp_path):
     ).read_bytes() == b"second payload"
 
 
-def test_workspace_upload_if_match_prevents_lost_terminal_changes(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_upload_if_match_prevents_lost_terminal_changes(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     path = platform.workspace_for(engagement.id) / "shared.py"
     original = b"print('editor opened this')\n"
     terminal_change = b"print('terminal changed this')\n"
@@ -985,8 +1037,8 @@ def test_workspace_upload_if_match_prevents_lost_terminal_changes(tmp_path):
     path.write_bytes(original)
     path.write_bytes(terminal_change)
 
-    with client:
-        stale = client.put(
+    async with client:
+        stale = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={
                 **AUTH,
@@ -1000,7 +1052,7 @@ def test_workspace_upload_if_match_prevents_lost_terminal_changes(tmp_path):
         assert stale.json()["code"] == "workspace_file_changed"
         assert path.read_bytes() == terminal_change
 
-        matched = client.put(
+        matched = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={
                 **AUTH,
@@ -1015,11 +1067,13 @@ def test_workspace_upload_if_match_prevents_lost_terminal_changes(tmp_path):
         assert path.read_bytes() == b"print('fresh editor save')\n"
 
 
-def test_workspace_upload_if_match_rejects_deleted_file(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_upload_if_match_rejects_deleted_file(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
 
-    with client:
-        response = client.put(
+    async with client:
+        response = await client.put(
             f"/api/v1/engagements/{engagement.id}/workspace/file",
             headers={
                 **AUTH,
@@ -1035,17 +1089,19 @@ def test_workspace_upload_if_match_rejects_deleted_file(tmp_path):
     assert not (platform.workspace_for(engagement.id) / "deleted.py").exists()
 
 
-def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
-    _store, _artifacts, platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
+    _store, _artifacts, platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     entry = f"/api/v1/engagements/{engagement.id}/workspace/entry"
     directory = f"/api/v1/engagements/{engagement.id}/workspace/directory"
     upload = f"/api/v1/engagements/{engagement.id}/workspace/file"
-    with client:
-        root_state = client.get(entry, headers=AUTH, params={"path": ""})
+    async with client:
+        root_state = await client.get(entry, headers=AUTH, params={"path": ""})
         assert root_state.status_code == 200
         root_identity = root_state.json()["entry_identity"]
-        made = client.post(
+        made = await client.post(
             directory,
             headers=AUTH,
             json={
@@ -1055,7 +1111,7 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
         )
         assert made.status_code == 201
         assert (root / "captures").is_dir()
-        stale_create = client.post(
+        stale_create = await client.post(
             directory,
             headers=AUTH,
             json={
@@ -1066,11 +1122,13 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
         assert stale_create.status_code == 412
         assert not (root / "other").exists()
 
-        folder = client.get(entry, headers=AUTH, params={"path": "captures"}).json()
+        folder = (
+            await client.get(entry, headers=AUTH, params={"path": "captures"})
+        ).json()
         folder_identity = folder["entry_identity"]
         content = b"\x00\xff binary workspace data"
         digest = hashlib.sha256(content).hexdigest()
-        saved = client.put(
+        saved = await client.put(
             upload,
             headers={
                 **AUTH,
@@ -1082,14 +1140,14 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
             content=content,
         )
         assert saved.status_code == 201
-        file_state = client.get(
+        file_state = await client.get(
             entry, headers=AUTH, params={"path": "captures/raw.bin"}
         )
         assert file_state.json()["sha256"] == digest
         assert file_state.json()["size"] == len(content)
         assert file_state.json()["kind"] == "file"
 
-        stale_upload = client.put(
+        stale_upload = await client.put(
             upload,
             headers={
                 **AUTH,
@@ -1102,7 +1160,7 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
         )
         assert stale_upload.status_code == 412
         assert not (root / "captures/new.bin").exists()
-        stale_delete = client.delete(
+        stale_delete = await client.delete(
             entry,
             headers={
                 **AUTH,
@@ -1111,10 +1169,10 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
             params={"path": "captures"},
         )
         assert stale_delete.status_code == 412
-        current_folder = client.get(
-            entry, headers=AUTH, params={"path": "captures"}
+        current_folder = (
+            await client.get(entry, headers=AUTH, params={"path": "captures"})
         ).json()
-        nonempty = client.delete(
+        nonempty = await client.delete(
             entry,
             headers={
                 **AUTH,
@@ -1125,14 +1183,16 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
         assert nonempty.status_code == 409
         assert nonempty.json()["code"] == "workspace_directory_not_empty"
 
-        removed_file = client.delete(
+        removed_file = await client.delete(
             entry,
             headers={**AUTH, "If-Match": digest},
             params={"path": "captures/raw.bin"},
         )
         assert removed_file.status_code == 200
-        empty = client.get(entry, headers=AUTH, params={"path": "captures"}).json()
-        renamed = client.patch(
+        empty = (
+            await client.get(entry, headers=AUTH, params={"path": "captures"})
+        ).json()
+        renamed = await client.patch(
             entry,
             headers=AUTH,
             json={
@@ -1144,11 +1204,12 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
         assert renamed.status_code == 200
         assert renamed.json()["path"] == "archive"
         assert (
-            client.get(entry, headers=AUTH, params={"path": "captures"}).status_code
-            == 404
-        )
-        archive = client.get(entry, headers=AUTH, params={"path": "archive"}).json()
-        removed = client.delete(
+            await client.get(entry, headers=AUTH, params={"path": "captures"})
+        ).status_code == 404
+        archive = (
+            await client.get(entry, headers=AUTH, params={"path": "archive"})
+        ).json()
+        removed = await client.delete(
             entry,
             headers={
                 **AUTH,
@@ -1158,24 +1219,25 @@ def test_workspace_directory_identity_and_device_upload_preconditions(tmp_path):
         )
         assert removed.status_code == 200
         assert (
-            client.get(entry, headers=AUTH, params={"path": "archive"}).status_code
-            == 404
-        )
+            await client.get(entry, headers=AUTH, params={"path": "archive"})
+        ).status_code == 404
 
 
-def test_workspace_entry_mutations_reject_the_workspace_root(tmp_path):
-    _store, _artifacts, _platform, _workspace, engagement, client = _services(tmp_path)
+async def test_workspace_entry_mutations_reject_the_workspace_root(tmp_path):
+    _store, _artifacts, _platform, _workspace, engagement, client = await _services(
+        tmp_path
+    )
 
-    with client:
+    async with client:
         for path in (".", "./"):
-            renamed = client.patch(
+            renamed = await client.patch(
                 f"/api/v1/engagements/{engagement.id}/workspace/entry",
                 headers=AUTH,
                 json={"path": path, "new_name": "renamed.txt"},
             )
             assert renamed.status_code == 422, path
             assert "required" in renamed.text
-            deleted = client.delete(
+            deleted = await client.delete(
                 f"/api/v1/engagements/{engagement.id}/workspace/entry",
                 headers=AUTH,
                 params={"path": path},
@@ -1184,8 +1246,12 @@ def test_workspace_entry_mutations_reject_the_workspace_root(tmp_path):
             assert "required" in deleted.text
 
 
-def test_workspace_listing_skips_entries_removed_while_listing(tmp_path, monkeypatch):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_listing_skips_entries_removed_while_listing(
+    tmp_path, monkeypatch
+):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "stable.txt").write_text("keep", encoding="utf-8")
     (root / "vanishing.txt").write_text("gone", encoding="utf-8")
@@ -1217,19 +1283,21 @@ def test_workspace_listing_skips_entries_removed_while_listing(tmp_path, monkeyp
         os, "scandir", lambda *args, **kwargs: _Scan(real_scandir(*args, **kwargs))
     )
 
-    listing = workspace.list(engagement.id, path="")
+    listing = await workspace.list(engagement.id, path="")
 
     assert [entry.name for entry in listing.entries] == ["stable.txt"]
 
 
-def test_workspace_preview_decodes_large_utf8_on_a_character_boundary(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_preview_decodes_large_utf8_on_a_character_boundary(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     payload = ("ア" * 100_000).encode("utf-8")
     assert len(payload) > MAX_PREVIEW_BYTES
     (root / "report.md").write_bytes(payload)
 
-    preview = workspace.preview(engagement.id, "report.md")
+    preview = await workspace.preview(engagement.id, "report.md")
 
     complete = MAX_PREVIEW_BYTES - (MAX_PREVIEW_BYTES % 3)
     assert preview.text == payload[:complete].decode("utf-8")
@@ -1239,12 +1307,14 @@ def test_workspace_preview_decodes_large_utf8_on_a_character_boundary(tmp_path):
 
     (root / "broken.md").write_bytes(b"prefix " + "ア".encode("utf-8")[:2])
     with pytest.raises(Exception) as caught:
-        workspace.preview(engagement.id, "broken.md")
+        (await workspace.preview(engagement.id, "broken.md"))
     assert getattr(caught.value, "code", None) == "unsupported_preview"
 
 
-def test_workspace_search_opens_one_directory_at_a_time(tmp_path, monkeypatch):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_search_opens_one_directory_at_a_time(tmp_path, monkeypatch):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     for index in range(120):
         folder = root / f"pkg-{index:03d}"
@@ -1272,7 +1342,7 @@ def test_workspace_search_opens_one_directory_at_a_time(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "open", counting_open)
     monkeypatch.setattr(os, "close", counting_close)
 
-    result = workspace.search(engagement.id, "needle", mode="text", limit=200)
+    result = await workspace.search(engagement.id, "needle", mode="text", limit=200)
 
     assert len(result.matches) == 120
     assert result.truncated is False
@@ -1280,8 +1350,10 @@ def test_workspace_search_opens_one_directory_at_a_time(tmp_path, monkeypatch):
     assert peak <= 3
 
 
-def test_workspace_search_skips_generated_directories(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_search_skips_generated_directories(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "src").mkdir()
     (root / "src" / "app.py").write_text("needle = 1\n", encoding="utf-8")
@@ -1292,23 +1364,27 @@ def test_workspace_search_skips_generated_directories(tmp_path):
     (root / ".git").mkdir()
     (root / ".git" / "config").write_text("needle\n", encoding="utf-8")
 
-    text = workspace.search(engagement.id, "needle", mode="text")
+    text = await workspace.search(engagement.id, "needle", mode="text")
     assert [match.path for match in text.matches] == ["src/app.py"]
     assert text.scanned_files == 1
     assert text.skipped_directories == 2
 
-    files = workspace.search(engagement.id, "index", mode="files")
+    files = await workspace.search(engagement.id, "index", mode="files")
     assert files.matches == []
 
-    explicit = workspace.search(
+    explicit = await workspace.search(
         engagement.id, "needle", mode="text", path="node_modules"
     )
     assert [match.path for match in explicit.matches] == ["node_modules/pkg/index.js"]
 
 
 @pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
-def test_workspace_text_search_ripgrep_preserves_python_results(tmp_path, monkeypatch):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_text_search_ripgrep_preserves_python_results(
+    tmp_path, monkeypatch
+):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     padding = "padding\n" * 3_000
     for index in range(70):
@@ -1333,13 +1409,13 @@ def test_workspace_text_search_ripgrep_preserves_python_results(tmp_path, monkey
 
     monkeypatch.setattr(workspace_module, "_ripgrep_candidates", counted_candidates)
     accelerated = {
-        query: workspace.search(engagement.id, query, mode="text").model_dump()
+        query: (await workspace.search(engagement.id, query, mode="text")).model_dump()
         for query in ("ss", "a+b", "unrelated")
     }
     assert calls
     monkeypatch.setattr(workspace_module.shutil, "which", lambda _name: None)
     fallback = {
-        query: workspace.search(engagement.id, query, mode="text").model_dump()
+        query: (await workspace.search(engagement.id, query, mode="text")).model_dump()
         for query in accelerated
     }
     assert accelerated == fallback
@@ -1355,10 +1431,12 @@ def test_workspace_text_search_ripgrep_preserves_python_results(tmp_path, monkey
 
 
 @pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
-def test_workspace_text_search_pins_files_and_falls_back_on_rg_failure(
+async def test_workspace_text_search_pins_files_and_falls_back_on_rg_failure(
     tmp_path, monkeypatch
 ):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     target = root / "target.txt"
     target.write_text("inside needle\n" + "padding\n" * 3_000, encoding="utf-8")
@@ -1372,7 +1450,7 @@ def test_workspace_text_search_pins_files_and_falls_back_on_rg_failure(
         return real_candidates(*args)
 
     monkeypatch.setattr(workspace_module, "_ripgrep_candidates", replace_path)
-    pinned = workspace.search(engagement.id, "needle", mode="text")
+    pinned = await workspace.search(engagement.id, "needle", mode="text")
     assert [(match.path, match.preview) for match in pinned.matches] == [
         ("target.txt", "inside needle")
     ]
@@ -1386,14 +1464,16 @@ def test_workspace_text_search_pins_files_and_falls_back_on_rg_failure(
         raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
 
     monkeypatch.setattr(workspace_module.subprocess, "run", time_out)
-    recovered = workspace.search(engagement.id, "needle", mode="text")
+    recovered = await workspace.search(engagement.id, "needle", mode="text")
     assert [match.path for match in recovered.matches] == ["moved.txt"]
     assert calls == 1
 
 
 @pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
-def test_workspace_text_search_limit_keeps_original_file_count(tmp_path):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_text_search_limit_keeps_original_file_count(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     padding = "padding\n" * 3_000
     for index in range(70):
@@ -1401,15 +1481,17 @@ def test_workspace_text_search_limit_keeps_original_file_count(tmp_path):
             ("needle\n" if index == 0 else "other\n") + padding,
             encoding="utf-8",
         )
-    result = workspace.search(engagement.id, "needle", mode="text", limit=1)
+    result = await workspace.search(engagement.id, "needle", mode="text", limit=1)
     assert [match.path for match in result.matches] == ["file-00.txt"]
     assert result.scanned_files == 1
     assert result.truncated is True
 
 
 @pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep is not installed")
-def test_workspace_text_search_uses_python_for_small_files(tmp_path, monkeypatch):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_text_search_uses_python_for_small_files(tmp_path, monkeypatch):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     root = platform.workspace_for(engagement.id)
     (root / "small.txt").write_text("one needle\n", encoding="utf-8")
 
@@ -1417,12 +1499,16 @@ def test_workspace_text_search_uses_python_for_small_files(tmp_path, monkeypatch
         raise AssertionError("small files should use Python without spawning ripgrep")
 
     monkeypatch.setattr(workspace_module, "_ripgrep_candidates", unexpected_ripgrep)
-    result = workspace.search(engagement.id, "needle", mode="text")
+    result = await workspace.search(engagement.id, "needle", mode="text")
     assert [(match.path, match.line) for match in result.matches] == [("small.txt", 1)]
 
 
-def test_workspace_upload_success_records_no_handled_exceptions(tmp_path, monkeypatch):
-    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+async def test_workspace_upload_success_records_no_handled_exceptions(
+    tmp_path, monkeypatch
+):
+    _store, _artifacts, platform, workspace, engagement, _client = await _services(
+        tmp_path
+    )
     (platform.workspace_for(engagement.id) / "notes").mkdir()
     recorded: list[tuple[str, str]] = []
 
@@ -1436,28 +1522,26 @@ def test_workspace_upload_success_records_no_handled_exceptions(tmp_path, monkey
         for value in values:
             yield value
 
-    created = asyncio.run(
-        workspace.upload(engagement.id, "notes/new.txt", chunks(b"first"))
-    )
-    replaced = asyncio.run(
-        workspace.upload(
-            engagement.id,
-            "notes/new.txt",
-            chunks(b"second"),
-            overwrite=True,
-            expected_sha256=created.sha256,
-        )
+    created = await workspace.upload(engagement.id, "notes/new.txt", chunks(b"first"))
+    replaced = await workspace.upload(
+        engagement.id,
+        "notes/new.txt",
+        chunks(b"second"),
+        overwrite=True,
+        expected_sha256=created.sha256,
     )
     assert replaced.overwritten is True
     assert recorded == []
 
 
-def test_workspace_api_runs_filesystem_operations_off_the_event_loop(
+async def test_workspace_api_runs_filesystem_operations_off_the_event_loop(
     tmp_path, monkeypatch
 ):
     from nebula.v3.executions import ExecutionServiceError
 
-    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+    _store, _artifacts, platform, workspace, engagement, client = await _services(
+        tmp_path
+    )
     platform.workspace_for(engagement.id)
     on_loop: dict[str, bool] = {}
 
@@ -1477,30 +1561,45 @@ def test_workspace_api_runs_filesystem_operations_off_the_event_loop(
         monkeypatch.setattr(workspace, name, stub(name))
 
     base = f"/api/v1/engagements/{engagement.id}/workspace"
-    with client:
+    async with client:
         responses = {
-            "list": client.get(base, headers=AUTH),
-            "search": client.get(f"{base}/search", headers=AUTH, params={"query": "x"}),
-            "preview": client.get(
-                f"{base}/preview", headers=AUTH, params={"path": "a.txt"}
+            "list": (await client.get(base, headers=AUTH)),
+            "search": (
+                await client.get(f"{base}/search", headers=AUTH, params={"query": "x"})
             ),
-            "rename": client.patch(
-                f"{base}/entry",
-                headers=AUTH,
-                json={"path": "a.txt", "new_name": "b.txt"},
+            "preview": (
+                await client.get(
+                    f"{base}/preview", headers=AUTH, params={"path": "a.txt"}
+                )
             ),
-            "delete": client.delete(
-                f"{base}/entry", headers=AUTH, params={"path": "a.txt"}
+            "rename": (
+                await client.patch(
+                    f"{base}/entry",
+                    headers=AUTH,
+                    json={"path": "a.txt", "new_name": "b.txt"},
+                )
             ),
-            "promote": client.post(
-                f"{base}/promote", headers=AUTH, json={"path": "a.txt"}
+            "delete": (
+                await client.delete(
+                    f"{base}/entry", headers=AUTH, params={"path": "a.txt"}
+                )
             ),
-            "reset": client.post(
-                f"{base}/reset",
-                headers=AUTH,
-                json={"engagement_name": engagement.name},
+            "promote": (
+                await client.post(
+                    f"{base}/promote", headers=AUTH, json={"path": "a.txt"}
+                )
+            ),
+            "reset": (
+                await client.post(
+                    f"{base}/reset",
+                    headers=AUTH,
+                    json={"engagement_name": engagement.name},
+                )
             ),
         }
     for name, response in responses.items():
         assert response.status_code == 418, (name, response.text)
         assert on_loop[name] is False, f"{name} ran on the event loop"
+
+
+pytestmark = pytest.mark.anyio

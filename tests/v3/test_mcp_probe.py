@@ -1,4 +1,7 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import json
 import sys
 import textwrap
@@ -78,12 +81,12 @@ LATE_STDERR_SERVER = textwrap.dedent(
 )
 
 
-def _stdio_service(tmp_path, capabilities, errors=None, *, source=SERVER):
+async def _stdio_service(tmp_path, capabilities, errors=None, *, source=SERVER):
     script = tmp_path / "server.py"
     script.write_text(source, encoding="utf-8")
     log = tmp_path / "methods.log"
     store = NebulaStore(tmp_path / "mcp.db")
-    profile = store.create(
+    profile = await store.create(
         McpServerProfile(
             name="probe",
             transport=McpTransport.STDIO,
@@ -105,19 +108,19 @@ def _stdio_service(tmp_path, capabilities, errors=None, *, source=SERVER):
     return store, profile, service, log
 
 
-def _probe(tmp_path, capabilities, errors=None):
-    _, profile, service, log = _stdio_service(tmp_path, capabilities, errors)
-    report = asyncio.run(service.probe(profile.id, engagement_id="eng"))
+async def _probe(tmp_path, capabilities, errors=None):
+    _, profile, service, log = await _stdio_service(tmp_path, capabilities, errors)
+    report = await service.probe(profile.id, engagement_id="eng")
     methods = log.read_text().split() if log.exists() else []
     return report, methods
 
 
 @pytest.mark.parametrize("phase", ["before", "success", "failure"])
-def test_project_mcp_probe_refuses_foreign_lookup_and_save(
+async def test_project_mcp_probe_refuses_foreign_lookup_and_save(
     tmp_path, monkeypatch, phase
 ):
     store = NebulaStore(tmp_path / "scope.db")
-    profile = store.create(
+    profile = await store.create(
         McpServerProfile(
             name="Scoped",
             transport="streamable_http",
@@ -134,11 +137,13 @@ def test_project_mcp_probe_refuses_foreign_lookup_and_save(
         async def request(self, method, params):
             calls.append(method)
             if method == "initialize":
-                store.update(
-                    McpServerProfile,
-                    profile.id,
-                    {"metadata": {"engagement_id": "other"}},
-                    expected_revision=profile.revision,
+                (
+                    await store.update(
+                        McpServerProfile,
+                        profile.id,
+                        {"metadata": {"engagement_id": "other"}},
+                        expected_revision=profile.revision,
+                    )
                 )
                 if phase == "failure":
                     raise mcp.McpProbeError("synthetic failure")
@@ -157,8 +162,8 @@ def test_project_mcp_probe_refuses_foreign_lookup_and_save(
 
     monkeypatch.setattr(service, "_connect", connect)
     with pytest.raises(mcp.McpProbeError, match="not in the selected project"):
-        asyncio.run(service.probe(profile.id, engagement_id="selected"))
-    current = store.get(McpServerProfile, profile.id)
+        (await service.probe(profile.id, engagement_id="selected"))
+    current = await store.get(McpServerProfile, profile.id)
     assert current.capabilities == profile.capabilities
     assert current.metadata == {"engagement_id": "other"}
     assert current.revision == profile.revision + (phase != "before")
@@ -174,9 +179,9 @@ def test_project_mcp_probe_refuses_foreign_lookup_and_save(
     )
 
 
-def _http_service(tmp_path, *, startup: float, tool: float):
+async def _http_service(tmp_path, *, startup: float, tool: float):
     store = NebulaStore(tmp_path / "mcp.db")
-    profile = store.create(
+    profile = await store.create(
         McpServerProfile(
             name="remote",
             transport=McpTransport.STREAMABLE_HTTP,
@@ -234,8 +239,8 @@ def _slow_http_server(monkeypatch, *, answers_after: float, seen: dict):
     )
 
 
-def test_unadvertised_resources_and_prompts_are_not_requested(tmp_path):
-    report, methods = _probe(
+async def test_unadvertised_resources_and_prompts_are_not_requested(tmp_path):
+    report, methods = await _probe(
         tmp_path,
         {"tools": {}},
         {name: [-32600, "Unsupported"] for name in ("resources/list", "prompts/list")},
@@ -248,8 +253,8 @@ def test_unadvertised_resources_and_prompts_are_not_requested(tmp_path):
     assert methods == ["initialize", "tools/list"]
 
 
-def test_tools_are_listed_even_when_the_capability_is_omitted(tmp_path):
-    report, methods = _probe(tmp_path, {})
+async def test_tools_are_listed_even_when_the_capability_is_omitted(tmp_path):
+    report, methods = await _probe(tmp_path, {})
 
     assert report.compatible is True, report.detail
     assert [tool.name for tool in report.capabilities.tools] == ["scan"]
@@ -257,8 +262,10 @@ def test_tools_are_listed_even_when_the_capability_is_omitted(tmp_path):
 
 
 @pytest.mark.parametrize("message", ["Unsupported", "Unknown method", ""])
-def test_method_not_found_code_is_optional_whatever_the_message(tmp_path, message):
-    report, _ = _probe(
+async def test_method_not_found_code_is_optional_whatever_the_message(
+    tmp_path, message
+):
+    report, _ = await _probe(
         tmp_path,
         {"tools": {}, "resources": {}, "prompts": {}},
         {
@@ -273,8 +280,8 @@ def test_method_not_found_code_is_optional_whatever_the_message(tmp_path, messag
     assert report.capabilities.prompts is False
 
 
-def test_other_errors_fail_the_probe_even_if_they_say_not_found(tmp_path):
-    report, _ = _probe(
+async def test_other_errors_fail_the_probe_even_if_they_say_not_found(tmp_path):
+    report, _ = await _probe(
         tmp_path,
         {"tools": {}},
         {"tools/list": [-32603, "Config file not found"]},
@@ -285,8 +292,10 @@ def test_other_errors_fail_the_probe_even_if_they_say_not_found(tmp_path):
     assert report.capabilities.tools == []
 
 
-def test_advertised_resources_and_prompts_are_still_discovered(tmp_path):
-    report, methods = _probe(tmp_path, {"tools": {}, "resources": {}, "prompts": {}})
+async def test_advertised_resources_and_prompts_are_still_discovered(tmp_path):
+    report, methods = await _probe(
+        tmp_path, {"tools": {}, "resources": {}, "prompts": {}}
+    )
 
     assert report.compatible is True, report.detail
     assert report.capabilities.resources is True
@@ -300,15 +309,15 @@ def test_advertised_resources_and_prompts_are_still_discovered(tmp_path):
     ]
 
 
-def test_http_tool_call_waits_for_the_tool_timeout_not_the_startup_timeout(
+async def test_http_tool_call_waits_for_the_tool_timeout_not_the_startup_timeout(
     tmp_path, monkeypatch
 ):
     seen: dict = {}
     _slow_http_server(monkeypatch, answers_after=1.0, seen=seen)
-    profile, service = _http_service(tmp_path, startup=0.2, tool=5.0)
+    profile, service = await _http_service(tmp_path, startup=0.2, tool=5.0)
 
-    result = asyncio.run(
-        service.call_tool(profile, engagement_id="eng", tool_name="scan", arguments={})
+    result = await service.call_tool(
+        profile, engagement_id="eng", tool_name="scan", arguments={}
     )
 
     assert result["content"] == [{"type": "text", "text": "done"}]
@@ -317,10 +326,10 @@ def test_http_tool_call_waits_for_the_tool_timeout_not_the_startup_timeout(
     assert seen["tools/call"]["read"] == pytest.approx(5.0)
 
 
-def test_http_tool_timeout_is_reported_as_timed_out(tmp_path, monkeypatch):
+async def test_http_tool_timeout_is_reported_as_timed_out(tmp_path, monkeypatch):
     _slow_http_server(monkeypatch, answers_after=1.0, seen={})
-    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
-    [plugin] = build_mcp_tool_plugins(service, (profile,))
+    profile, service = await _http_service(tmp_path, startup=0.2, tool=0.5)
+    [plugin] = await build_mcp_tool_plugins(service, (profile,))
     recorded = []
     monkeypatch.setattr(
         mcp,
@@ -328,8 +337,8 @@ def test_http_tool_timeout_is_reported_as_timed_out(tmp_path, monkeypatch):
         lambda *args, **kwargs: recorded.append((args, kwargs)),
     )
 
-    result = asyncio.run(
-        plugin.execute(SimpleNamespace(engagement_id="eng", arguments={}), None)
+    result = await plugin.execute(
+        SimpleNamespace(engagement_id="eng", arguments={}), None
     )
 
     assert result.exit_code == 1
@@ -345,21 +354,21 @@ def test_http_tool_timeout_is_reported_as_timed_out(tmp_path, monkeypatch):
     }
 
 
-def test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name(tmp_path):
+async def test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name(tmp_path):
     """The runtime name routes the call; the display name is what a person reads."""
 
-    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
-    [plugin] = build_mcp_tool_plugins(service, (profile,))
+    profile, service = await _http_service(tmp_path, startup=0.2, tool=0.5)
+    [plugin] = await build_mcp_tool_plugins(service, (profile,))
 
     assert plugin.spec.name == mcp_tool_runtime_name(profile.id, "scan")
     assert plugin.spec.name != plugin.spec.display_name
     assert plugin.spec.display_name == "remote · scan"
 
 
-def test_rebuilt_mcp_tools_reuse_validated_schema_but_recheck_nested_edits(
+async def test_rebuilt_mcp_tools_reuse_validated_schema_but_recheck_nested_edits(
     tmp_path, monkeypatch
 ):
-    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
+    profile, service = await _http_service(tmp_path, startup=0.2, tool=0.5)
     schema = {
         "type": "object",
         "properties": {
@@ -381,26 +390,28 @@ def test_rebuilt_mcp_tools_reuse_validated_schema_but_recheck_nested_edits(
 
     monkeypatch.setattr(Draft202012Validator, "check_schema", classmethod(count_checks))
 
-    build_mcp_tool_plugins(service, (profile,))
-    build_mcp_tool_plugins(service, (profile.model_copy(deep=True),))
+    (await build_mcp_tool_plugins(service, (profile,)))
+    (await build_mcp_tool_plugins(service, (profile.model_copy(deep=True),)))
     assert checked == 1
 
     schema["properties"]["mcp_schema_cache_regression"]["properties"]["value"][
         "type"
     ] = "integer"
-    build_mcp_tool_plugins(service, (profile,))
+    (await build_mcp_tool_plugins(service, (profile,)))
     assert checked == 2
 
     schema["properties"]["mcp_schema_cache_regression"]["properties"]["value"][
         "type"
     ] = "not-a-json-schema-type"
     with pytest.raises(ValueError, match="invalid JSON Schema"):
-        build_mcp_tool_plugins(service, (profile,))
+        (await build_mcp_tool_plugins(service, (profile,)))
     assert checked == 3
 
 
-def test_concurrent_mcp_turns_check_the_same_new_schema_once(tmp_path, monkeypatch):
-    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
+async def test_concurrent_mcp_turns_check_the_same_new_schema_once(
+    tmp_path, monkeypatch
+):
+    profile, service = await _http_service(tmp_path, startup=0.2, tool=0.5)
     profile.capabilities.tools[0].input_schema = {
         "type": "object",
         "properties": {"mcp_schema_parallel_regression": {"type": "string"}},
@@ -421,9 +432,9 @@ def test_concurrent_mcp_turns_check_the_same_new_schema_once(tmp_path, monkeypat
 
     monkeypatch.setattr(Draft202012Validator, "check_schema", classmethod(count_checks))
 
-    def build():
+    async def build():
         start.wait(timeout=2)
-        return build_mcp_tool_plugins(service, (profile.model_copy(deep=True),))
+        return await build_mcp_tool_plugins(service, (profile.model_copy(deep=True),))
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(build) for _ in range(4)]
@@ -435,13 +446,15 @@ def test_concurrent_mcp_turns_check_the_same_new_schema_once(tmp_path, monkeypat
     assert checked == 1
 
 
-def test_open_world_mcp_is_explicitly_network_capable_and_deny_is_bypassable(tmp_path):
-    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
+async def test_open_world_mcp_is_explicitly_network_capable_and_deny_is_bypassable(
+    tmp_path,
+):
+    profile, service = await _http_service(tmp_path, startup=0.2, tool=0.5)
     denied = profile.model_copy(update={"default_approval": McpApprovalMode.DENY})
-    [bounded] = build_mcp_tool_plugins(service, (denied,))
+    [bounded] = await build_mcp_tool_plugins(service, (denied,))
     assert bounded.spec.policy_deny_reason is not None
 
-    [plugin] = build_mcp_tool_plugins(service, (denied,), bypass_permissions=True)
+    [plugin] = await build_mcp_tool_plugins(service, (denied,), bypass_permissions=True)
     assert plugin.spec.network_access is True
     assert plugin.spec.opaque_network_access is True
     assert plugin.spec.policy_deny_reason is not None
@@ -456,12 +469,12 @@ def test_mcp_display_name_stays_bounded_and_single_line(tmp_path):
 
 
 @pytest.mark.parametrize("owner", [None, "eng"])
-def test_probe_keeps_discovered_tools_when_the_profile_changes_meanwhile(
+async def test_probe_keeps_discovered_tools_when_the_profile_changes_meanwhile(
     tmp_path, monkeypatch, owner
 ):
-    store, profile, service, _ = _stdio_service(tmp_path, {"tools": {}})
+    store, profile, service, _ = await _stdio_service(tmp_path, {"tools": {}})
     if owner:
-        profile = store.update(
+        profile = await store.update(
             McpServerProfile,
             profile.id,
             {"metadata": {"engagement_id": owner}},
@@ -471,12 +484,14 @@ def test_probe_keeps_discovered_tools_when_the_profile_changes_meanwhile(
 
     async def edit_profile_during_listing(client, method):
         if method == "tools/list":
-            latest = store.get(McpServerProfile, profile.id)
-            store.update(
-                McpServerProfile,
-                profile.id,
-                {"tool_timeout_seconds": 90},
-                expected_revision=latest.revision,
+            latest = await store.get(McpServerProfile, profile.id)
+            (
+                await store.update(
+                    McpServerProfile,
+                    profile.id,
+                    {"tool_timeout_seconds": 90},
+                    expected_revision=latest.revision,
+                )
             )
         return await original(client, method)
 
@@ -484,19 +499,24 @@ def test_probe_keeps_discovered_tools_when_the_profile_changes_meanwhile(
         McpProbeService, "_optional_list", staticmethod(edit_profile_during_listing)
     )
 
-    report = asyncio.run(service.probe(profile.id, engagement_id="eng"))
+    report = await service.probe(profile.id, engagement_id="eng")
 
     assert report.compatible is True, report.detail
-    stored = store.get(McpServerProfile, profile.id)
+    stored = await store.get(McpServerProfile, profile.id)
     assert [tool.name for tool in stored.capabilities.tools] == ["scan"]
     assert stored.tool_timeout_seconds == 90
 
 
-def test_stdio_exit_message_waits_briefly_for_stderr(tmp_path):
-    _, profile, service, _ = _stdio_service(tmp_path, {}, source=LATE_STDERR_SERVER)
+async def test_stdio_exit_message_waits_briefly_for_stderr(tmp_path):
+    _, profile, service, _ = await _stdio_service(
+        tmp_path, {}, source=LATE_STDERR_SERVER
+    )
 
-    report = asyncio.run(service.probe(profile.id, engagement_id="eng"))
+    report = await service.probe(profile.id, engagement_id="eng")
 
     assert report.compatible is False
     assert "exited during discovery" in (report.detail or "")
     assert "boom: missing config" in (report.detail or "")
+
+
+pytestmark = pytest.mark.anyio

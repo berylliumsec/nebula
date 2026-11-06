@@ -18,6 +18,20 @@ if row is None:
 profile = json.loads(row[0])
 if profile.get("connection_mode") != "spawn":
     raise SystemExit("This bounded acceptance fixture requires a spawned local runtime")
-print(json.dumps({key: profile[key] for key in (
-    "kind", "executable", "arguments", "connection_mode", "transport", "auth_mode", "default_model"
-) if key in profile}))
+print(
+    json.dumps(
+        {
+            key: profile[key]
+            for key in (
+                "kind",
+                "executable",
+                "arguments",
+                "connection_mode",
+                "transport",
+                "auth_mode",
+                "default_model",
+            )
+            if key in profile
+        }
+    )
+)

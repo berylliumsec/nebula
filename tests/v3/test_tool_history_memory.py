@@ -9,6 +9,11 @@ writes with ``notes.write`` survive both: a checkpoint carries them, and a new
 turn starts with them.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -95,7 +100,9 @@ def _step(step: int, status: str = "complete") -> dict:
     }
 
 
-def test_checkpoint_receipts_say_what_each_step_did_within_a_scaled_bound(tmp_path):
+async def test_checkpoint_receipts_say_what_each_step_did_within_a_scaled_bound(
+    tmp_path,
+):
     """F1: receipts were an 80-character summary under a fixed 16 KiB cap."""
 
     # A small window's receipts take at most 15% of its capacity (L3).
@@ -105,13 +112,13 @@ def test_checkpoint_receipts_say_what_each_step_did_within_a_scaled_bound(tmp_pa
     assert checkpoint_byte_limit(400_000) == 36_000
     assert checkpoint_byte_limit(1_000_000) == CHECKPOINT_BYTE_CEILING
 
-    store, turn, ledger = _ledger_turn(tmp_path)
+    store, turn, ledger = await _ledger_turn(tmp_path)
     entries = [
         _step(step, "failed" if step % 10 == 3 else "complete") for step in range(200)
     ]
-    small = ledger._write_checkpoint(turn.id, entries, byte_limit=16 * 1024)
-    wide_turn = store.create(turn.model_copy(update={"id": "wide-turn"}))
-    wide = ledger._write_checkpoint(wide_turn.id, entries, byte_limit=64 * 1024)
+    small = await ledger._write_checkpoint(turn.id, entries, byte_limit=16 * 1024)
+    wide_turn = await store.create(turn.model_copy(update={"id": "wide-turn"}))
+    wide = await ledger._write_checkpoint(wide_turn.id, entries, byte_limit=64 * 1024)
 
     for checkpoint, limit in ((small, 16 * 1024), (wide, 64 * 1024)):
         summary = checkpoint.summary
@@ -144,8 +151,10 @@ def test_checkpoint_receipts_say_what_each_step_did_within_a_scaled_bound(tmp_pa
     assert wide.token_estimate > 4_000
 
 
-def test_a_checkpoint_carries_the_working_notes_outside_the_receipt_bound(tmp_path):
-    _, turn, ledger = _ledger_turn(tmp_path)
+async def test_a_checkpoint_carries_the_working_notes_outside_the_receipt_bound(
+    tmp_path,
+):
+    _, turn, ledger = await _ledger_turn(tmp_path)
     notes = {"content": "- [x] scanned\n- [ ] report", "revision": 3}
     reads = []
 
@@ -154,13 +163,15 @@ def test_a_checkpoint_carries_the_working_notes_outside_the_receipt_bound(tmp_pa
         return notes
 
     for step in range(8):
-        ledger.append(turn.id, _step(step))
-        checkpoint, _ = ledger.compacted_history(turn, working_notes=working_notes)
+        (await ledger.append(turn.id, _step(step)))
+        checkpoint, _ = await ledger.compacted_history(
+            turn, working_notes=working_notes
+        )
     # Nothing folded yet, so the notes were never read.
     assert checkpoint is None and reads == []
     for step in range(8, 40):
-        ledger.append(turn.id, _step(step))
-        checkpoint, _ = ledger.compacted_history(
+        (await ledger.append(turn.id, _step(step)))
+        checkpoint, _ = await ledger.compacted_history(
             turn, byte_limit=16 * 1024, working_notes=working_notes
         )
     assert checkpoint is not None
@@ -309,9 +320,9 @@ def test_tool_activity_keeps_a_command_output_ahead_of_later_file_reads():
     assert activity["omitted"] == 33 - len(kept)
 
 
-def test_a_saved_answer_records_what_each_tool_call_acted_on(tmp_path):
+async def test_a_saved_answer_records_what_each_tool_call_acted_on(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path,
         [
             _response(
@@ -327,9 +338,9 @@ def test_a_saved_answer_records_what_each_tool_call_acted_on(tmp_path):
         broker,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
-    answer = store.get(ChatMessage, completion.message.id)
+    answer = await store.get(ChatMessage, completion.message.id)
     (result,) = answer.metadata["tool_results"]
     assert result["brief"] == '{"value":"a"}'
     text = _stored_model_text(answer)
@@ -337,20 +348,24 @@ def test_a_saved_answer_records_what_each_tool_call_acted_on(tmp_path):
     assert result["tool_call_id"] in text
 
 
-def test_tool_output_reads_an_earlier_turn_of_the_same_conversation_only(tmp_path):
+async def test_tool_output_reads_an_earlier_turn_of_the_same_conversation_only(
+    tmp_path,
+):
     """The ids an answer carries forward are readable from its later turns."""
 
     store = NebulaStore(tmp_path / "output.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    store.create(Engagement(id="project", name="Output"))
+    (await store.create(Engagement(id="project", name="Output")))
     for session_id in ("session-a", "session-b"):
-        store.create(
-            ChatSession(
-                id=session_id,
-                engagement_id="project",
-                title=session_id,
-                provider_profile_id="provider",
-                model="model-a",
+        (
+            await store.create(
+                ChatSession(
+                    id=session_id,
+                    engagement_id="project",
+                    title=session_id,
+                    provider_profile_id="provider",
+                    model="model-a",
+                )
             )
         )
     for turn_id, session_id in (
@@ -358,29 +373,33 @@ def test_tool_output_reads_an_earlier_turn_of_the_same_conversation_only(tmp_pat
         ("turn-2", "session-a"),
         ("turn-other", "session-b"),
     ):
-        store.create(
-            ChatTurn(
-                id=turn_id,
-                engagement_id="project",
-                session_id=session_id,
-                provider_profile_id="provider",
-                model="model-a",
-                status=ChatTurnStatus.COMPLETE,
+        (
+            await store.create(
+                ChatTurn(
+                    id=turn_id,
+                    engagement_id="project",
+                    session_id=session_id,
+                    provider_profile_id="provider",
+                    model="model-a",
+                    status=ChatTurnStatus.COMPLETE,
+                )
             )
         )
-    store.create(
-        StoredToolCall(
-            id="earlier-call",
-            engagement_id="project",
-            run_id="turn-1",
-            origin=ToolCallOrigin.CHAT,
-            chat_session_id="session-a",
-            tool_name="run_command",
-            risk_class=RiskClass.WORKSPACE_WRITE,
-            status=ToolCallStatus.COMPLETE,
+    (
+        await store.create(
+            StoredToolCall(
+                id="earlier-call",
+                engagement_id="project",
+                run_id="turn-1",
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id="session-a",
+                tool_name="run_command",
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                status=ToolCallStatus.COMPLETE,
+            )
         )
     )
-    stdout = store.create(
+    stdout = await store.create(
         artifacts.put_bytes(
             b"listen 8443\nserver_name example.test\n",
             engagement_id="project",
@@ -391,14 +410,14 @@ def test_tool_output_reads_an_earlier_turn_of_the_same_conversation_only(tmp_pat
     )
     service = ToolOutputService(store, artifacts)
 
-    read = service.read(
+    read = await service.read(
         engagement_id="project", owner_id="turn-2", artifact_id=stdout.id
     )
     assert [line["text"] for line in read["lines"]] == [
         "listen 8443",
         "server_name example.test",
     ]
-    search = service.search(
+    search = await service.search(
         engagement_id="project",
         owner_id="turn-2",
         tool_call_id="earlier-call",
@@ -406,15 +425,19 @@ def test_tool_output_reads_an_earlier_turn_of_the_same_conversation_only(tmp_pat
     )
     assert search["matches"]
     with pytest.raises(ToolOutputAccessError):
-        service.read(
-            engagement_id="project", owner_id="turn-other", artifact_id=stdout.id
+        (
+            await service.read(
+                engagement_id="project", owner_id="turn-other", artifact_id=stdout.id
+            )
         )
     with pytest.raises(ToolOutputAccessError):
-        service.search(
-            engagement_id="project",
-            owner_id="turn-other",
-            tool_call_id="earlier-call",
-            query="8443",
+        (
+            await service.search(
+                engagement_id="project",
+                owner_id="turn-other",
+                tool_call_id="earlier-call",
+                query="8443",
+            )
         )
 
 
@@ -431,57 +454,59 @@ def _invocation(content, *, session_id="session", turn_id="turn-1"):
     )
 
 
-def test_notes_write_replaces_the_conversation_notes(tmp_path):
+async def test_notes_write_replaces_the_conversation_notes(tmp_path):
     store = NebulaStore(tmp_path / "notes.db")
-    store.create(Engagement(id="project", name="Notes"))
+    (await store.create(Engagement(id="project", name="Notes")))
     tool = WriteNotesTool(store)
 
-    first = asyncio.run(tool.execute(_invocation("- [ ] scan"), None))
-    second = asyncio.run(
-        tool.execute(_invocation("- [x] scan\n- [ ] report", turn_id="turn-2"), None)
+    first = await tool.execute(_invocation("- [ ] scan"), None)
+    second = await tool.execute(
+        _invocation("- [x] scan\n- [ ] report", turn_id="turn-2"), None
     )
 
     assert first.output["revision"] == 1
     assert second.output["revision"] == 2
-    notes = read_working_notes(store, "session")
+    notes = await read_working_notes(store, "session")
     assert notes is not None
     assert notes.content == "- [x] scan\n- [ ] report"
     assert notes.turn_id == "turn-2"
     # Another conversation keeps its own notes.
-    asyncio.run(tool.execute(_invocation("other", session_id="session-2"), None))
-    assert read_working_notes(store, "session").content == notes.content
-    assert read_working_notes(store, "session-2").content == "other"
+    (await tool.execute(_invocation("other", session_id="session-2"), None))
+    assert (await read_working_notes(store, "session")).content == notes.content
+    assert (await read_working_notes(store, "session-2")).content == "other"
     # Bytes, not characters, bound the notes.
     with pytest.raises(InvalidToolArguments, match="at most 8192 bytes"):
         asyncio.run(tool.execute(_invocation("é" * 5_000), None))
     with pytest.raises(ToolBrokerError):
-        asyncio.run(tool.execute(_invocation("x", session_id=None), None))
-    assert read_working_notes(store, "session").revision == 2
+        (await tool.execute(_invocation("x", session_id=None), None))
+    assert (await read_working_notes(store, "session")).revision == 2
     # Deleting the conversation deletes its notes.
-    store.create(
-        ChatSession(
-            id="session",
-            engagement_id="project",
-            title="Notes",
-            provider_profile_id="provider",
-            model="model-a",
+    (
+        await store.create(
+            ChatSession(
+                id="session",
+                engagement_id="project",
+                title="Notes",
+                provider_profile_id="provider",
+                model="model-a",
+            )
         )
     )
-    store.delete_chat_session("session")
-    assert read_working_notes(store, "session") is None
-    assert read_working_notes(store, "session-2") is not None
+    (await store.delete_chat_session("session"))
+    assert (await read_working_notes(store, "session")) is None
+    assert (await read_working_notes(store, "session-2")) is not None
 
 
-def test_a_new_turn_starts_with_the_notes_and_the_context_api_shows_them(
+async def test_a_new_turn_starts_with_the_notes_and_the_context_api_shows_them(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "notes-turn.db")
-    engagement = store.create(Engagement(id="project", name="Notes"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="project", name="Notes"))
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(store)
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id=engagement.id,
@@ -491,8 +516,8 @@ def test_a_new_turn_starts_with_the_notes_and_the_context_api_shows_them(
         )
     )
 
-    def prepare(content: str):
-        return service.prepare(
+    async def prepare(content: str):
+        return await service.prepare(
             ChatCompletionRequest(
                 provider_id=profile.id,
                 engagement_id=engagement.id,
@@ -502,18 +527,18 @@ def test_a_new_turn_starts_with_the_notes_and_the_context_api_shows_them(
             )
         )
 
-    plain = prepare("What is next?")
+    plain = await prepare("What is next?")
     assert plain.model_request.messages[-1].content == "What is next?"
-    assert service.context_status(session.id).working_notes is None
+    assert (await service.context_status(session.id)).working_notes is None
 
-    notes = write_working_notes(
+    notes = await write_working_notes(
         store,
         engagement_id=engagement.id,
         session_id=session.id,
         content="## Findings\n- port 8443 (tool-call-1)\n## Todo\n- [ ] report",
         turn_id="turn-1",
     )
-    noted = prepare("What is next?")
+    noted = await prepare("What is next?")
     last = noted.model_request.messages[-1]
     assert last.role == "user"
     operator, block = last.content.split("\n\n", 1)
@@ -530,7 +555,7 @@ def test_a_new_turn_starts_with_the_notes_and_the_context_api_shows_them(
     assert noted.context_reserved_tokens == plain.context_reserved_tokens + (
         estimate_tokens("\n\n" + block)
     )
-    status = service.context_status(session.id)
+    status = await service.context_status(session.id)
     assert status.working_notes is not None
     assert status.working_notes.model_dump() == {
         "content": notes.content,
@@ -562,19 +587,21 @@ class NotingProvider(LongTurnProvider):
         return await super().complete(request)
 
 
-def test_notes_written_early_in_a_long_turn_survive_its_checkpoint(tmp_path):
+async def test_notes_written_early_in_a_long_turn_survive_its_checkpoint(tmp_path):
     broker = ScanBroker()
     provider = NotingProvider(calls=30)
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
     components = prepared.tool_components
     prepared.tool_components = combine_tool_components(
         components, notes_components(store, components.scope, tmp_path)
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
-    notes = store.get(ChatWorkingNotes, read_working_notes(store, "session").id)
+    notes = await store.get(
+        ChatWorkingNotes, (await read_working_notes(store, "session")).id
+    )
     assert notes.content == "- port 1000 open on scan 1"
     routing = [
         request
@@ -594,3 +621,6 @@ def test_notes_written_early_in_a_long_turn_survive_its_checkpoint(tmp_path):
     checkpoint = json.loads(block.split("\n", 1)[1])
     assert checkpoint["working_notes"]["content"] == "- port 1000 open on scan 1"
     assert checkpoint["working_notes"]["revision"] == 1
+
+
+pytestmark = pytest.mark.anyio

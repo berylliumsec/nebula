@@ -1,8 +1,13 @@
 """Operator reset: scope, durable retries, stale evidence and atomic rollback."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from sqlalchemy import insert, select, text
 
 from nebula.v3.api import create_app
@@ -16,13 +21,13 @@ from nebula.v3.storage import NebulaStore
 
 
 @pytest.fixture
-def setup(tmp_path):
+async def setup(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Reset this project"))
-    other = store.create(Engagement(name="Keep this project"))
+    project = await store.create(Engagement(name="Reset this project"))
+    other = await store.create(Engagement(name="Keep this project"))
 
-    def observation(project_id, source):
-        return store.create(
+    async def observation(project_id, source):
+        return await store.create(
             Observation(
                 engagement_id=project_id,
                 title="Capture",
@@ -31,9 +36,9 @@ def setup(tmp_path):
             )
         )
 
-    captured = observation(project.id, "browser_companion")
-    kept = observation(project.id, "manual")
-    other_capture = observation(other.id, "browser_companion")
+    captured = await observation(project.id, "browser_companion")
+    kept = await observation(project.id, "manual")
+    other_capture = await observation(other.id, "browser_companion")
     service = ApplicationModelService(store)
     transaction = GraphTransaction(
         expected_revision=0,
@@ -53,7 +58,7 @@ def setup(tmp_path):
             }
         ],
     )
-    service.transact(project.id, transaction)
+    (await service.transact(project.id, transaction))
     request = GraphReset(
         expected_revision=1,
         idempotency_key="reset-one",
@@ -71,23 +76,25 @@ def setup(tmp_path):
     )
 
 
-def test_reset_scope_persistence_and_fresh_evidence(setup):
+async def test_reset_scope_persistence_and_fresh_evidence(setup):
     store, service, project, captured, kept, other, transaction, request = setup
-    assert preview(service, project) == dict(
+    assert (await preview(service, project)) == dict(
         revision=1, objects=1, relationships=0, captures=1, custom_definitions=0
     )
-    assert reset(service, project, request) == dict(revision=2, cleared_captures=1)
+    assert (await reset(service, project, request)) == dict(
+        revision=2, cleared_captures=1
+    )
     reopened = ApplicationModelService(NebulaStore(store.database))
-    assert reopened.workspace(project)["objects"] == []
-    assert reopened.snapshot(project)["revision"] == 2
-    assert store.get(Observation, kept.id).id == kept.id
-    assert store.get(Observation, other.id).id == other.id
-    assert reopened.evidence_list(project)["evidence"] == []
+    assert (await reopened.workspace(project))["objects"] == []
+    assert (await reopened.snapshot(project))["revision"] == 2
+    assert (await store.get(Observation, kept.id)).id == kept.id
+    assert (await store.get(Observation, other.id)).id == other.id
+    assert (await reopened.evidence_list(project))["evidence"] == []
     for source in (captured, kept):
         with pytest.raises(HTTPException) as error:
-            reopened.evidence(project, "observations", source.id)
+            (await reopened.evidence(project, "observations", source.id))
         assert error.value.status_code == 404
-    fresh = store.create(
+    fresh = await store.create(
         Observation(
             engagement_id=project,
             title="Fresh",
@@ -95,17 +102,19 @@ def test_reset_scope_persistence_and_fresh_evidence(setup):
             source="browser_companion",
         )
     )
-    assert reopened.evidence(project, "observations", fresh.id)["id"] == fresh.id
-    assert len(reopened.history(project)["edits"]) == 1
+    assert (await reopened.evidence(project, "observations", fresh.id))[
+        "id"
+    ] == fresh.id
+    assert len((await reopened.history(project))["edits"]) == 1
     with pytest.raises(HTTPException) as error:
-        reopened.transact(project, transaction)
+        (await reopened.transact(project, transaction))
     assert error.value.status_code == 409
 
 
-def test_retry_does_not_clear_new_captures_or_model(setup):
+async def test_retry_does_not_clear_new_captures_or_model(setup):
     store, service, project, _, _, _, _, request = setup
-    result = reset(service, project, request)
-    fresh = store.create(
+    result = await reset(service, project, request)
+    fresh = await store.create(
         Observation(
             engagement_id=project,
             title="Fresh",
@@ -113,34 +122,36 @@ def test_retry_does_not_clear_new_captures_or_model(setup):
             source="browser_companion",
         )
     )
-    service.transact(
-        project,
-        GraphTransaction(
-            expected_revision=2,
-            idempotency_key="fresh",
-            operations=[
-                {
-                    "op": "put_object",
-                    "id": "new",
-                    "properties": {
-                        "purpose": {
-                            "value": "Identify the entry point into the fresh login workflow."
-                        }
-                    },
-                    "label": "New",
-                    "classification": {"value": "Page"},
-                    "authentication_context": "anonymous",
-                }
-            ],
-        ),
+    (
+        await service.transact(
+            project,
+            GraphTransaction(
+                expected_revision=2,
+                idempotency_key="fresh",
+                operations=[
+                    {
+                        "op": "put_object",
+                        "id": "new",
+                        "properties": {
+                            "purpose": {
+                                "value": "Identify the entry point into the fresh login workflow."
+                            }
+                        },
+                        "label": "New",
+                        "classification": {"value": "Page"},
+                        "authentication_context": "anonymous",
+                    }
+                ],
+            ),
+        )
     )
-    assert reset(service, project, request) == result
-    assert store.get(Observation, fresh.id).id == fresh.id
-    assert service.snapshot(project)["revision"] == 3
-    assert len(service.workspace(project)["objects"]) == 1
+    assert (await reset(service, project, request)) == result
+    assert (await store.get(Observation, fresh.id)).id == fresh.id
+    assert (await service.snapshot(project))["revision"] == 3
+    assert len((await service.workspace(project))["objects"]) == 1
 
 
-def test_exact_capture_kinds_and_project_boundary(setup):
+async def test_exact_capture_kinds_and_project_boundary(setup):
     store, service, project, _, _, other, _, request = setup
     cleared = (
         "browser_traffic",
@@ -159,23 +170,25 @@ def test_exact_capture_kinds_and_project_boundary(setup):
     )
     # Storage-level sentinels prove the deletion predicate cannot include any
     # neighbouring document kind or another project, irrespective of payload.
-    with store.database.engine.begin() as connection:
+    async with store.database.engine.begin() as connection:
         for owner in (project, other.engagement_id):
             for kind in (*cleared, *retained):
-                connection.execute(
-                    insert(EntityRow).values(
-                        id=f"{owner}-{kind}",
-                        kind=kind,
-                        engagement_id=owner,
-                        payload={},
-                        created_at=utc_now(),
-                        updated_at=utc_now(),
+                (
+                    await connection.execute(
+                        insert(EntityRow).values(
+                            id=f"{owner}-{kind}",
+                            kind=kind,
+                            engagement_id=owner,
+                            payload={},
+                            created_at=utc_now(),
+                            updated_at=utc_now(),
+                        )
                     )
                 )
-    assert preview(service, project)["captures"] == 4
-    assert reset(service, project, request)["cleared_captures"] == 4
-    with store.database.engine.connect() as connection:
-        ids = set(connection.execute(select(EntityRow.id)).scalars())
+    assert (await preview(service, project))["captures"] == 4
+    assert (await reset(service, project, request))["cleared_captures"] == 4
+    async with store.database.engine.connect() as connection:
+        ids = set((await connection.execute(select(EntityRow.id))).scalars())
     for kind in cleared:
         assert f"{project}-{kind}" not in ids
     for kind in retained:
@@ -184,39 +197,41 @@ def test_exact_capture_kinds_and_project_boundary(setup):
         assert f"{other.engagement_id}-{kind}" in ids
 
 
-def test_conflict_and_key_reuse_leave_data_intact(setup):
+async def test_conflict_and_key_reuse_leave_data_intact(setup):
     _, service, project, _, _, _, _, request = setup
     for bad in (
         request.model_copy(update={"expected_revision": 0}),
         request.model_copy(update={"idempotency_key": "original"}),
     ):
         with pytest.raises(HTTPException) as error:
-            reset(service, project, bad)
+            (await reset(service, project, bad))
         assert error.value.status_code == 409
-        assert preview(service, project)["captures"] == 1
-        assert preview(service, project)["objects"] == 1
+        assert (await preview(service, project))["captures"] == 1
+        assert (await preview(service, project))["objects"] == 1
 
 
-def test_reset_rolls_back_deletions_on_database_failure(setup):
+async def test_reset_rolls_back_deletions_on_database_failure(setup):
     store, service, project, _, _, _, _, request = setup
     from nebula.v3.application_model.persistence import graphs
 
-    with store.database.engine.begin() as connection:
-        connection.execute(
-            text(
-                f"CREATE TRIGGER fail_reset BEFORE UPDATE ON {graphs.name} BEGIN SELECT RAISE(ABORT, 'test rollback'); END"
+    async with store.database.engine.begin() as connection:
+        (
+            await connection.execute(
+                text(
+                    f"CREATE TRIGGER fail_reset BEFORE UPDATE ON {graphs.name} BEGIN SELECT RAISE(ABORT, 'test rollback'); END"
+                )
             )
         )
     with pytest.raises(Exception, match="test rollback"):
-        reset(service, project, request)
-    assert preview(service, project)["captures"] == 1
-    assert preview(service, project)["objects"] == 1
-    assert len(service.history(project)["edits"]) == 1
+        (await reset(service, project, request))
+    assert (await preview(service, project))["captures"] == 1
+    assert (await preview(service, project))["objects"] == 1
+    assert len((await service.history(project))["edits"]) == 1
 
 
-def test_reset_http_auth_confirmation_and_empty_project(tmp_path):
+async def test_reset_http_auth_confirmation_and_empty_project(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Empty"))
+    project = await store.create(Engagement(name="Empty"))
     app = create_app(
         store,
         artifact_store=ArtifactStore(tmp_path / "artifacts"),
@@ -229,25 +244,26 @@ def test_reset_http_auth_confirmation_and_empty_project(tmp_path):
         idempotency_key="empty-reset",
         confirmation="clear-model-and-browser-captures",
     )
-    with TestClient(app) as client:
-        assert client.get(base + "/reset-preview").status_code == 401
-        assert client.post(base + "/reset", json=body).status_code == 401
+    async with TestClient(app) as client:
+        assert (await client.get(base + "/reset-preview")).status_code == 401
+        assert (await client.post(base + "/reset", json=body)).status_code == 401
         assert (
-            client.post(
+            await client.post(
                 base + "/reset", headers=auth, json={**body, "confirmation": "yes"}
-            ).status_code
-            == 422
-        )
-        assert client.post(base + "/reset", headers=auth, json=body).json() == dict(
-            revision=1, cleared_captures=0
-        )
-        assert client.post(base + "/reset", headers=auth, json=body).json() == dict(
-            revision=1, cleared_captures=0
-        )
+            )
+        ).status_code == 422
         assert (
-            client.get(
+            await client.post(base + "/reset", headers=auth, json=body)
+        ).json() == dict(revision=1, cleared_captures=0)
+        assert (
+            await client.post(base + "/reset", headers=auth, json=body)
+        ).json() == dict(revision=1, cleared_captures=0)
+        assert (
+            await client.get(
                 "/api/v1/engagements/missing/application-model/reset-preview",
                 headers=auth,
-            ).status_code
-            == 404
-        )
+            )
+        ).status_code == 404
+
+
+pytestmark = pytest.mark.anyio

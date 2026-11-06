@@ -1,5 +1,10 @@
 """The reconciled PR must upgrade either previously published migration leaf."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,7 +20,9 @@ from tests.v3.test_migrations import _run_migration
 @pytest.mark.parametrize(
     "previous", [None, "0024_entity_hot_lookup_indexes", "0024_project_create_requests"]
 )
-def test_reconciled_butler_migrations_preserve_either_existing_leaf(tmp_path, previous):
+async def test_reconciled_butler_migrations_preserve_either_existing_leaf(
+    tmp_path, previous
+):
     path = tmp_path / "core.db"
     engine = create_engine(f"sqlite+pysqlite:///{path}")
     stamp = datetime(2026, 11, 2, tzinfo=timezone.utc)
@@ -89,6 +96,9 @@ def test_reconciled_butler_migrations_preserve_either_existing_leaf(tmp_path, pr
                         == "synthetic-project"
                     )
         database = Database(path)
-        database.engine.dispose()
+        (await database.engine.dispose())
     finally:
         engine.dispose()
+
+
+pytestmark = pytest.mark.anyio

@@ -6,6 +6,11 @@ models, Gemini tool schemas, request timeouts, retryable vendor overloads,
 Responses strict schemas and storage, and Converse role alternation.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -230,13 +235,13 @@ def test_anthropic_omits_temperature_for_models_that_reject_sampling(
         ("amazon.nova-pro-v1:0", True),
     ],
 )
-def test_bedrock_omits_temperature_for_claude_models_that_reject_sampling(
+async def test_bedrock_omits_temperature_for_claude_models_that_reject_sampling(
     monkeypatch, model, keeps_temperature
 ):
     bedrock = _Bedrock(monkeypatch)
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
-    asyncio.run(provider.complete(_routing(model, tools=[], tool_choice="auto")))
+    (await provider.complete(_routing(model, tools=[], tool_choice="auto")))
 
     inference = bedrock.calls[0]["inferenceConfig"]
     assert inference["maxTokens"] == 512
@@ -282,13 +287,13 @@ def test_anthropic_forced_tool_choice_falls_back_to_auto_where_rejected(model, c
         ("amazon.nova-pro-v1:0", {"any": {}}, None),
     ],
 )
-def test_bedrock_forced_tool_choice_is_model_gated(
+async def test_bedrock_forced_tool_choice_is_model_gated(
     monkeypatch, model, tool_choice, thinking
 ):
     bedrock = _Bedrock(monkeypatch)
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
-    asyncio.run(provider.complete(_routing(model)))
+    (await provider.complete(_routing(model)))
 
     sent = bedrock.calls[0]
     assert sent["toolConfig"]["toolChoice"] == tool_choice
@@ -296,12 +301,12 @@ def test_bedrock_forced_tool_choice_is_model_gated(
     assert extra.get("thinking") == thinking
 
 
-def test_bedrock_auto_tool_choice_keeps_default_thinking(monkeypatch):
+async def test_bedrock_auto_tool_choice_keeps_default_thinking(monkeypatch):
     bedrock = _Bedrock(monkeypatch)
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
-    asyncio.run(
-        provider.complete(
+    (
+        await provider.complete(
             _routing("anthropic.claude-sonnet-5", tool_choice=ToolChoice.AUTO)
         )
     )
@@ -319,11 +324,11 @@ def test_bedrock_auto_tool_choice_keeps_default_thinking(monkeypatch):
         ("claude-opus-5", ProviderVerificationStatus.VERIFIED),
     ],
 )
-def test_capability_probe_verifies_models_that_only_accept_auto_tool_choice(
+async def test_capability_probe_verifies_models_that_only_accept_auto_tool_choice(
     tmp_path, model, status
 ):
     store = NebulaStore(tmp_path / "nebula.db")
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             name="Anthropic",
             provider_type="anthropic",
@@ -364,7 +369,7 @@ def test_capability_probe_verifies_models_that_only_accept_auto_tool_choice(
             transport=httpx.MockTransport(handler),
         )
 
-    result = asyncio.run(_verify_provider_capability(store, profile, model, factory))
+    result = await _verify_provider_capability(store, profile, model, factory)
 
     assert result.verification.status == status, result.verification.failure_detail
     assert "temperature" not in sent[0]
@@ -375,7 +380,7 @@ def test_capability_probe_verifies_models_that_only_accept_auto_tool_choice(
 # --- NAT-4: Gemini tool schemas --------------------------------------------
 
 
-def test_gemini_declares_tools_with_json_schema():
+async def test_gemini_declares_tools_with_json_schema():
     cwd_tool = ToolDefinition(
         name="run_command",
         description="Run a command in the workspace",
@@ -395,7 +400,7 @@ def test_gemini_declares_tools_with_json_schema():
         transport=recorder.transport,
     )
 
-    asyncio.run(provider.complete(_routing("gemini-2.5-pro", tools=[cwd_tool, FINISH])))
+    (await provider.complete(_routing("gemini-2.5-pro", tools=[cwd_tool, FINISH])))
 
     declarations = recorder.payloads[0]["tools"][0]["functionDeclarations"]
     assert [item["name"] for item in declarations] == ["run_command", "finish_response"]
@@ -451,17 +456,19 @@ def test_native_adapters_honour_the_profile_request_timeout(
     assert timeout_for(_profile(provider_type))["read"] == 900
 
 
-def test_bedrock_client_uses_profile_timeout_and_no_socket_replay(monkeypatch):
+async def test_bedrock_client_uses_profile_timeout_and_no_socket_replay(monkeypatch):
     bedrock = _Bedrock(monkeypatch)
     request = ModelRequest(messages=[ModelMessage(role="user", content="hello")])
 
-    asyncio.run(
-        provider_from_profile(
+    (
+        await provider_from_profile(
             _profile("bedrock", region="us-east-1", request_timeout_seconds=900)
         ).complete(request)
     )
-    asyncio.run(
-        provider_from_profile(_profile("bedrock", region="us-east-1")).complete(request)
+    (
+        await provider_from_profile(_profile("bedrock", region="us-east-1")).complete(
+            request
+        )
     )
 
     configured, default = (kwargs for _service, kwargs in bedrock.clients)
@@ -482,14 +489,14 @@ OVERLOADED = (
 )
 
 
-def test_anthropic_529_overloaded_is_retried():
+async def test_anthropic_529_overloaded_is_retried():
     recorder = _Recorder(OVERLOADED, (200, ANTHROPIC_OK))
     provider = AnthropicProvider(
         _config(ProviderKind.ANTHROPIC, ProviderFlavor.ANTHROPIC),
         transport=recorder.transport,
     )
 
-    response = asyncio.run(provider.complete(_routing("claude-haiku-4-5")))
+    response = await provider.complete(_routing("claude-haiku-4-5"))
 
     assert response.text == "ok"
     assert len(recorder.payloads) == 2
@@ -500,12 +507,12 @@ def test_anthropic_529_overloaded_is_retried():
         transport=exhausted.transport,
     )
     with pytest.raises(ProviderOverloadedError, match="after 3 attempts"):
-        asyncio.run(provider.complete(_routing("claude-haiku-4-5")))
+        (await provider.complete(_routing("claude-haiku-4-5")))
 
     async def collect():
         return [event async for event in provider.stream(_routing("claude-haiku-4-5"))]
 
-    error = [e for e in asyncio.run(collect()) if e.type == StreamEventType.ERROR]
+    error = [e for e in (await collect()) if e.type == StreamEventType.ERROR]
     assert error[0].retryable is True
 
 
@@ -556,7 +563,7 @@ def test_responses_requests_are_not_stored():
 # --- NAT-15: Converse role alternation -------------------------------------
 
 
-def test_bedrock_merges_consecutive_same_role_messages(monkeypatch):
+async def test_bedrock_merges_consecutive_same_role_messages(monkeypatch):
     bedrock = _Bedrock(monkeypatch)
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
     request = ModelRequest(
@@ -580,7 +587,7 @@ def test_bedrock_merges_consecutive_same_role_messages(monkeypatch):
         ],
     )
 
-    asyncio.run(provider.complete(request))
+    (await provider.complete(request))
 
     messages = bedrock.calls[0]["messages"]
     assert [message["role"] for message in messages] == ["user", "assistant", "user"]
@@ -609,19 +616,19 @@ def test_bedrock_merges_consecutive_same_role_messages(monkeypatch):
         ("ModelTimeoutException", 408),
     ],
 )
-def test_bedrock_throttling_and_unavailability_are_retryable_overloads(
+async def test_bedrock_throttling_and_unavailability_are_retryable_overloads(
     monkeypatch, code, status
 ):
     request = ModelRequest(messages=[ModelMessage(role="user", content="hello")])
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
     recovered = _Bedrock(monkeypatch, _bedrock_error(code, status))
-    assert asyncio.run(provider.complete(request)).text == "ok"
+    assert (await provider.complete(request)).text == "ok"
     assert len(recovered.calls) == 2
 
     exhausted = _Bedrock(monkeypatch, *[_bedrock_error(code, status)] * 3)
     with pytest.raises(ProviderOverloadedError, match=code) as failure:
-        asyncio.run(provider.complete(request))
+        (await provider.complete(request))
     assert len(exhausted.calls) == 3
     assert failure.value.status_code == status
 
@@ -630,20 +637,23 @@ def test_bedrock_throttling_and_unavailability_are_retryable_overloads(
     async def collect():
         return [event async for event in provider.stream(request)]
 
-    error = [e for e in asyncio.run(collect()) if e.type == StreamEventType.ERROR]
+    error = [e for e in (await collect()) if e.type == StreamEventType.ERROR]
     assert error[0].retryable is True
 
 
-def test_bedrock_request_defects_are_not_retried(monkeypatch):
+async def test_bedrock_request_defects_are_not_retried(monkeypatch):
     bedrock = _Bedrock(monkeypatch, _bedrock_error("ValidationException", 400))
     provider = BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK))
 
     with pytest.raises(ProviderError) as failure:
-        asyncio.run(
-            provider.complete(
+        (
+            await provider.complete(
                 ModelRequest(messages=[ModelMessage(role="user", content="hello")])
             )
         )
 
     assert not isinstance(failure.value, ProviderOverloadedError)
     assert len(bedrock.calls) == 1
+
+
+pytestmark = pytest.mark.anyio

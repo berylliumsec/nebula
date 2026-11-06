@@ -1,3 +1,8 @@
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import base64
 from urllib.parse import urlsplit
@@ -5,7 +10,7 @@ from urllib.parse import urlsplit
 from nebula.v3.browser_host_proxy import BrowserHostProxy
 
 
-def test_proxy_authentication_scope_and_header_isolation():
+async def test_proxy_authentication_scope_and_header_isolation():
     async def exercise():
         received = []
 
@@ -62,10 +67,10 @@ def test_proxy_authentication_scope_and_header_isolation():
             server.close()
             await server.wait_closed()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_tunnel_rechecks_revocation_and_closes_active_connections():
+async def test_tunnel_rechecks_revocation_and_closes_active_connections():
     async def exercise():
         revoked = False
         destinations = []
@@ -116,4 +121,7 @@ def test_tunnel_rechecks_revocation_and_closes_active_connections():
             await server.wait_closed()
         assert not proxy._clients
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

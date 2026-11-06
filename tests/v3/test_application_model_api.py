@@ -1,13 +1,19 @@
 """Real Core graph routes and the shared browser/harness tool contract."""
 
-from fastapi.testclient import TestClient
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from nebula.v3.api import create_app
 from nebula.v3.storage import NebulaStore
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.application_model.tools import INPUTS
 
 
-def test_real_core_graph_capture_and_project_scope(tmp_path):
+async def test_real_core_graph_capture_and_project_scope(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(
         store,
@@ -15,18 +21,25 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
         auth_token="test-token",
     )
     auth = {"Authorization": "Bearer test-token"}
-    with TestClient(app) as client:
-        project = client.post(
-            "/api/v1/engagements", headers=auth, json={"name": "Site A"}
+    async with TestClient(app) as client:
+        project = (
+            await client.post(
+                "/api/v1/engagements", headers=auth, json={"name": "Site A"}
+            )
         ).json()
         base = f"/api/v1/engagements/{project['id']}/application-model"
-        assert client.get(base + "/graph").status_code == 401
-        assert client.get(base + "/graph", headers=auth).json()["objects"] == []
-        assert len(client.get(base + "/schema", headers=auth).json()["types"]) == 33
-        browser = client.get(
-            f"/api/v1/engagements/{project['id']}/browser-workspace", headers=auth
+        assert (await client.get(base + "/graph")).status_code == 401
+        assert (await client.get(base + "/graph", headers=auth)).json()["objects"] == []
+        assert (
+            len((await client.get(base + "/schema", headers=auth)).json()["types"])
+            == 33
+        )
+        browser = (
+            await client.get(
+                f"/api/v1/engagements/{project['id']}/browser-workspace", headers=auth
+            )
         ).json()["sessions"][0]
-        sync = client.put(
+        sync = await client.put(
             f"/api/v1/browser-sessions/{browser['id']}/tabs",
             headers=auth,
             json={
@@ -44,7 +57,7 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
             },
         )
         assert sync.status_code == 200, sync.text
-        capture = client.post(
+        capture = await client.post(
             f"/api/v1/browser-sessions/{browser['id']}/traffic",
             headers=auth,
             json={
@@ -56,9 +69,11 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
             },
         )
         assert capture.status_code == 201, capture.text
-        evidence = client.get(base + "/evidence", headers=auth).json()["evidence"][0]
+        evidence = (await client.get(base + "/evidence", headers=auth)).json()[
+            "evidence"
+        ][0]
         assert evidence["facts"]["status_code"]["value"] == 403
-        assert client.get(base + "/graph", headers=auth).json()["objects"] == []
+        assert (await client.get(base + "/graph", headers=auth)).json()["objects"] == []
         transaction = {
             "expected_revision": 0,
             "idempotency_key": "save",
@@ -92,36 +107,37 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
             **transaction,
             "operations": [{**transaction["operations"][0], "properties": {}}],
         }
-        rejected = client.post(
+        rejected = await client.post(
             base + "/transactions", headers=auth, json=missing_purpose
         )
         assert rejected.status_code == 422
         assert "properties.purpose" in rejected.text
-        assert client.get(base + "/graph", headers=auth).json()["objects"] == []
-        response = client.post(base + "/transactions", headers=auth, json=transaction)
+        assert (await client.get(base + "/graph", headers=auth)).json()["objects"] == []
+        response = await client.post(
+            base + "/transactions", headers=auth, json=transaction
+        )
         assert response.status_code == 200, response.text
         assert (
-            client.post(base + "/transactions", headers=auth, json=transaction).json()
-            == response.json()
-        )
-        assert (
-            client.get(base + "/graph", headers=auth).json()["objects"][0][
-                "classification"
-            ]["status"]
-            == "hypothesized"
-        )
-        other = client.post(
-            "/api/v1/engagements", headers=auth, json={"name": "Other"}
+            await client.post(base + "/transactions", headers=auth, json=transaction)
+        ).json() == response.json()
+        assert (await client.get(base + "/graph", headers=auth)).json()["objects"][0][
+            "classification"
+        ]["status"] == "hypothesized"
+        other = (
+            await client.post(
+                "/api/v1/engagements", headers=auth, json={"name": "Other"}
+            )
         ).json()
         otherbase = f"/api/v1/engagements/{other['id']}/application-model"
         assert (
-            client.get(
+            await client.get(
                 otherbase + f"/evidence/{evidence['kind']}/{evidence['id']}",
                 headers=auth,
-            ).status_code
-            == 404
-        )
-        assert client.post(base + "/sessions", headers=auth, json={}).status_code == 404
+            )
+        ).status_code == 404
+        assert (
+            await client.post(base + "/sessions", headers=auth, json={})
+        ).status_code == 404
         assert not any(
             "queries" in path or "states" in path
             for path in app.openapi()["paths"]
@@ -129,8 +145,7 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
         )
 
 
-def test_browser_and_project_tools_expose_same_graph(tmp_path):
-    import asyncio
+async def test_browser_and_project_tools_expose_same_graph(tmp_path):
     from nebula.v3.domain import (
         Engagement,
         BrowserSession,
@@ -144,8 +159,8 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
     import pytest
 
     store = NebulaStore(tmp_path / "broker.db")
-    project = store.create(Engagement(name="Shared graph"))
-    chat = store.create(
+    project = await store.create(Engagement(name="Shared graph"))
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Model",
@@ -153,7 +168,7 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
             provider_profile_id="fixture",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=chat.id,
@@ -282,4 +297,7 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
                 scope,
             )
 
-    asyncio.run(journey())
+    (await journey())
+
+
+pytestmark = pytest.mark.anyio

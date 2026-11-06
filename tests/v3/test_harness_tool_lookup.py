@@ -1,5 +1,10 @@
 """Tool-event reads seek to the current turn's pending calls, regardless of history."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import datetime, timezone
 
 import pytest
@@ -19,9 +24,9 @@ from nebula.v3.harnesses import HarnessEvent, HarnessRuntimeService
 from nebula.v3.storage import NebulaStore
 
 
-def _fixture(tmp_path, origin):
+async def _fixture(tmp_path, origin):
     store = NebulaStore(tmp_path / "tools.db")
-    session = store.create(
+    session = await store.create(
         HarnessSession(
             id="harness",
             engagement_id="project",
@@ -29,7 +34,7 @@ def _fixture(tmp_path, origin):
             model="fixture-model",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         HarnessTurn(
             id="turn",
             engagement_id="project",
@@ -44,14 +49,16 @@ def _fixture(tmp_path, origin):
         )
     )
     if origin == "chat":
-        store.create(
-            ChatTurn(
-                id="chat-turn",
-                engagement_id="project",
-                session_id="chat",
-                backend="harness",
-                model="fixture-model",
-                harness_turn_id=turn.id,
+        (
+            await store.create(
+                ChatTurn(
+                    id="chat-turn",
+                    engagement_id="project",
+                    session_id="chat",
+                    backend="harness",
+                    model="fixture-model",
+                    harness_turn_id=turn.id,
+                )
             )
         )
     runtime = HarnessRuntimeService(
@@ -82,25 +89,27 @@ def _call(turn, key, *, status="running", owner=None, project=None):
 
 @pytest.mark.parametrize("origin", ["chat", "mission"])
 @pytest.mark.parametrize("history_owner", ["turn", "older-turn"])
-def test_pending_lookup_work_is_bounded_by_active_calls(
+async def test_pending_lookup_work_is_bounded_by_active_calls(
     tmp_path, origin, history_owner
 ):
-    store, _session, turn, runtime = _fixture(tmp_path, origin)
+    store, _session, turn, runtime = await _fixture(tmp_path, origin)
     wanted = (
         ToolCallStatus.PROPOSED,
         ToolCallStatus.WAITING_APPROVAL,
         ToolCallStatus.APPROVED,
         ToolCallStatus.RUNNING,
     )
-    store.create_many(
-        [
-            _call(turn, f"active-{index}", status=status)
-            for index, status in enumerate(wanted)
-        ]
-        + [
-            _call(turn, "different-turn", owner="different-turn"),
-            _call(turn, "different-project", project="foreign"),
-        ]
+    (
+        await store.create_many(
+            [
+                _call(turn, f"active-{index}", status=status)
+                for index, status in enumerate(wanted)
+            ]
+            + [
+                _call(turn, "different-turn", owner="different-turn"),
+                _call(turn, "different-project", project="foreign"),
+            ]
+        )
     )
     queries = []
     steps = []
@@ -124,23 +133,26 @@ def test_pending_lookup_work_is_bounded_by_active_calls(
         baseline_steps = None
         for history in (0, 4500):
             if history:
-                store.create_many(
-                    [
-                        _call(
-                            turn,
-                            f"history-{index}",
-                            status="complete",
-                            owner=history_owner,
-                        ).model_copy(update={"result": "x" * 4096})
-                        for index in range(history)
-                    ]
+                (
+                    await store.create_many(
+                        [
+                            _call(
+                                turn,
+                                f"history-{index}",
+                                status="complete",
+                                owner=history_owner,
+                            ).model_copy(update={"result": "x" * 4096})
+                            for index in range(history)
+                        ]
+                    )
                 )
             queries.clear()
             steps.clear()
             event.listen(store.database.engine, "before_cursor_execute", capture)
             try:
                 assert [
-                    call.id for call in runtime._turn_tool_calls(turn, statuses=wanted)
+                    call.id
+                    for call in (await runtime._turn_tool_calls(turn, statuses=wanted))
                 ] == [f"active-{index}" for index in range(4)]
             finally:
                 for connection in progress_connections:
@@ -158,15 +170,17 @@ def test_pending_lookup_work_is_bounded_by_active_calls(
                 baseline_steps = len(steps)
             else:
                 assert len(steps) <= baseline_steps + 2, (baseline_steps, len(steps))
-        assert runtime._turn_tool_calls(turn, statuses=()) == []
+        assert (await runtime._turn_tool_calls(turn, statuses=())) == []
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
 @pytest.mark.parametrize("origin", ["chat", "mission"])
 @pytest.mark.parametrize("vendor", ["codex", "claude", "mcp"])
-def test_tool_events_reuse_the_approved_call_and_settle_it(tmp_path, origin, vendor):
-    store, session, turn, runtime = _fixture(tmp_path, origin)
+async def test_tool_events_reuse_the_approved_call_and_settle_it(
+    tmp_path, origin, vendor
+):
+    store, session, turn, runtime = await _fixture(tmp_path, origin)
     call = _call(turn, "item-1", status="approved")
     if vendor == "mcp":
         server = McpServerProfile(
@@ -183,10 +197,10 @@ def test_tool_events_reuse_the_approved_call_and_settle_it(tmp_path, origin, ven
         )
     else:
         call = call.model_copy(update={"vendor_tool_name": f"{vendor}:synthetic.noop"})
-    store.create(call)
+    (await store.create(call))
     try:
         for kind in ("tool_started", "tool_completed"):
-            recorded = runtime._record_tool_event(
+            recorded = await runtime._record_tool_event(
                 turn,
                 session,
                 HarnessEvent(
@@ -198,24 +212,32 @@ def test_tool_events_reuse_the_approved_call_and_settle_it(tmp_path, origin, ven
                 ),
             )
             assert recorded.tool_call_id == call.id
-            latest = store.get(ToolCall, call.id)
+            latest = await store.get(ToolCall, call.id)
             assert latest.status == (
                 ToolCallStatus.RUNNING
                 if kind == "tool_started"
                 else ToolCallStatus.COMPLETE
             )
-        assert runtime._turn_tool_calls(turn, statuses=(ToolCallStatus.RUNNING,)) == []
         assert (
-            len(store.find_entities(ToolCall, {"metadata.harness_turn_id": turn.id}))
+            await runtime._turn_tool_calls(turn, statuses=(ToolCallStatus.RUNNING,))
+        ) == []
+        assert (
+            len(
+                (
+                    await store.find_entities(
+                        ToolCall, {"metadata.harness_turn_id": turn.id}
+                    )
+                )
+            )
             == 1
         )
         assert latest.result == "Synthetic retained result"
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_harness_turn_projection_preserves_metadata_filter_types(tmp_path):
-    store, _session, turn, _runtime = _fixture(tmp_path, "mission")
+async def test_harness_turn_projection_preserves_metadata_filter_types(tmp_path):
+    store, _session, turn, _runtime = await _fixture(tmp_path, "mission")
     try:
         for key, value in [
             ("string", "12"),
@@ -225,27 +247,40 @@ def test_harness_turn_projection_preserves_metadata_filter_types(tmp_path):
             ("array", ["12"]),
             ("boolean", True),
         ]:
-            store.create(
-                _call(turn, key).model_copy(
-                    update={"metadata": {"harness_turn_id": value}}
+            (
+                await store.create(
+                    _call(turn, key).model_copy(
+                        update={"metadata": {"harness_turn_id": value}}
+                    )
                 )
             )
-        store.create(_call(turn, "missing").model_copy(update={"metadata": {}}))
+        (await store.create(_call(turn, "missing").model_copy(update={"metadata": {}})))
         assert [
             c.id
-            for c in store.find_entities(ToolCall, {"metadata.harness_turn_id": "12"})
+            for c in (
+                await store.find_entities(ToolCall, {"metadata.harness_turn_id": "12"})
+            )
         ] == ["string"]
         assert [
             c.id
-            for c in store.find_entities(ToolCall, {"metadata.harness_turn_id": 12})
+            for c in (
+                await store.find_entities(ToolCall, {"metadata.harness_turn_id": 12})
+            )
         ] == ["number", "string"]  # Preserve the existing integer/text comparison.
         assert [
             c.id
-            for c in store.find_entities(ToolCall, {"metadata.harness_turn_id": ""})
+            for c in (
+                await store.find_entities(ToolCall, {"metadata.harness_turn_id": ""})
+            )
         ] == ["empty"]
         assert {
             c.id
-            for c in store.find_entities(ToolCall, {"metadata.harness_turn_id": None})
+            for c in (
+                await store.find_entities(ToolCall, {"metadata.harness_turn_id": None})
+            )
         } == {"null", "missing"}
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
+
+
+pytestmark = pytest.mark.anyio

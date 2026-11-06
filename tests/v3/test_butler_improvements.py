@@ -1,10 +1,16 @@
 """Focused issue destination, draft safety, and publication receipts."""
 
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.butler_improvements import (
     ButlerImprovementService,
@@ -84,10 +90,10 @@ class Mcp:
         return {"content": [{"type": "text", "text": json.dumps(value)}]}
 
 
-def setup(tmp_path):
+async def setup(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    codex = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    codex = await store.create(
         HarnessProfile(
             name="Host Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -115,7 +121,7 @@ def destination(service, project, codex, repository="owner/nebula", **changes):
     return service.create_destination(project.id, DestinationWrite(**data))
 
 
-def candidate(store, project, dest, key="refresh-failure", **changes):
+async def candidate(store, project, dest, key="refresh-failure", **changes):
     data = dict(
         engagement_id=project.id,
         destination_id=dest.id,
@@ -130,11 +136,11 @@ def candidate(store, project, dest, key="refresh-failure", **changes):
         public_independent=True,
     )
     data.update(changes)
-    return store.create(ButlerIssueCandidate(**data))
+    return await store.create(ButlerIssueCandidate(**data))
 
 
-def test_public_issue_rechecks_visibility_and_holds_private_content(tmp_path):
-    store, project, codex, _, _, service = setup(tmp_path)
+async def test_public_issue_rechecks_visibility_and_holds_private_content(tmp_path):
+    store, project, codex, _, _, service = await setup(tmp_path)
     dest = destination(service, project, codex)
     calls = []
 
@@ -152,14 +158,14 @@ def test_public_issue_rechecks_visibility_and_holds_private_content(tmp_path):
         return {"number": 1, "html_url": "https://github.com/owner/nebula/issues/1"}
 
     service._github = github
-    unsafe = candidate(
+    unsafe = await candidate(
         store, project, dest, title="Fix /home/agent/private_research leak"
     )
-    held = asyncio.run(service.publish(unsafe))
+    held = await service.publish(unsafe)
     assert held.status == "held" and held.reason == "private_or_research_detail"
     assert not any(method == "POST" for method, _ in calls)
-    safe = candidate(store, project, dest, key="second-problem")
-    published = asyncio.run(service.publish(safe))
+    safe = await candidate(store, project, dest, key="second-problem")
+    published = await service.publish(safe)
     assert published.status == "published"
     assert published.issue_url == "https://github.com/owner/nebula/issues/1"
     assert sum(method == "POST" for method, _ in calls) == 1
@@ -173,19 +179,21 @@ def test_public_issue_rechecks_visibility_and_holds_private_content(tmp_path):
     )
 
 
-def test_private_to_public_change_blocks_research_draft_before_create(tmp_path):
-    store, project, codex, _, _, service = setup(tmp_path)
+async def test_private_to_public_change_blocks_research_draft_before_create(tmp_path):
+    store, project, codex, _, _, service = await setup(tmp_path)
     dest = destination(service, project, codex, auto_publish=False)
-    draft = candidate(
+    draft = await candidate(
         store,
         project,
         dest,
         body=("The public wording still contains proprietary Apple research details."),
         public_independent=False,
     )
-    held = asyncio.run(service.publish(draft))
+    held = await service.publish(draft)
     assert held.reason == "automatic_publishing_not_granted"
-    updated = store.update(ButlerIssueDestination, dest.id, {"auto_publish": True})
+    updated = await store.update(
+        ButlerIssueDestination, dest.id, {"auto_publish": True}
+    )
     created = []
 
     async def target(_):
@@ -196,15 +204,15 @@ def test_private_to_public_change_blocks_research_draft_before_create(tmp_path):
         raise AssertionError("unsafe public draft must never be sent")
 
     service._target, service._create = target, create
-    blocked = asyncio.run(service.publish(store.get(ButlerIssueCandidate, draft.id)))
+    blocked = await service.publish((await store.get(ButlerIssueCandidate, draft.id)))
     assert updated.auto_publish and blocked.status == "held"
     assert blocked.reason == "private_or_research_detail" and created == []
 
 
-def test_unknown_github_visibility_holds_before_create(tmp_path):
-    store, project, codex, _, _, service = setup(tmp_path)
+async def test_unknown_github_visibility_holds_before_create(tmp_path):
+    store, project, codex, _, _, service = await setup(tmp_path)
     dest = destination(service, project, codex)
-    draft = candidate(store, project, dest)
+    draft = await candidate(store, project, dest)
 
     async def github(_, method, path, **kwargs):
         assert method == "GET" and path.startswith("/repos/")
@@ -215,12 +223,14 @@ def test_unknown_github_visibility_holds_before_create(tmp_path):
         }
 
     service._github = github
-    held = asyncio.run(service.publish(draft))
+    held = await service.publish(draft)
     assert held.status == "held" and held.reason == "target_visibility_unavailable"
 
 
-def test_destination_identity_is_fixed_and_uncertain_create_cannot_be_revised(tmp_path):
-    store, project, codex, _, _, service = setup(tmp_path)
+async def test_destination_identity_is_fixed_and_uncertain_create_cannot_be_revised(
+    tmp_path,
+):
+    store, project, codex, _, _, service = await setup(tmp_path)
     dest = destination(service, project, codex)
     data = DestinationWrite(
         name="Updated name",
@@ -231,12 +241,12 @@ def test_destination_identity_is_fixed_and_uncertain_create_cannot_be_revised(tm
         auto_publish=True,
     )
     try:
-        service.update_destination(project.id, dest.id, data, dest.revision)
+        (await service.update_destination(project.id, dest.id, data, dest.revision))
     except ValueError as exc:
         assert "new destination" in str(exc)
     else:
         raise AssertionError("existing candidates must not be rerouted")
-    draft = candidate(store, project, dest, status="uncertain")
+    draft = await candidate(store, project, dest, status="uncertain")
     edit = DraftEdit(
         expected_revision=draft.revision,
         title=draft.title,
@@ -245,17 +255,17 @@ def test_destination_identity_is_fixed_and_uncertain_create_cannot_be_revised(tm
         public_independent=True,
     )
     try:
-        service.edit_candidate(project.id, draft.id, edit)
+        (await service.edit_candidate(project.id, draft.id, edit))
     except ValueError as exc:
         assert "held or reviewed" in str(exc)
     else:
         raise AssertionError("an uncertain create must be reconciled before revision")
 
 
-def test_slow_issue_review_does_not_occupy_the_oversight_worker(tmp_path):
+async def test_slow_issue_review_does_not_occupy_the_oversight_worker(tmp_path):
     async def scenario():
         store = NebulaStore(tmp_path / "core.db")
-        project = store.create(Engagement(name="Selected"))
+        project = await store.create(Engagement(name="Selected"))
         started = asyncio.Event()
         release = asyncio.Event()
 
@@ -277,13 +287,13 @@ def test_slow_issue_review_does_not_occupy_the_oversight_worker(tmp_path):
         await asyncio.wait_for(first, timeout=1)
         await oversight.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interrupted_source_review_is_held_without_replaying_codex(tmp_path):
-    store, project, codex, harness, _, service = setup(tmp_path)
+async def test_interrupted_source_review_is_held_without_replaying_codex(tmp_path):
+    store, project, codex, harness, _, service = await setup(tmp_path)
     dest = destination(service, project, codex)
-    scan = store.create(
+    scan = await store.create(
         ButlerIssueScan(
             engagement_id=project.id,
             destination_id=dest.id,
@@ -291,17 +301,17 @@ def test_interrupted_source_review_is_held_without_replaying_codex(tmp_path):
             source_id="turn-1",
         )
     )
-    assert service._scan_already_started(scan.id)
-    held = store.get(ButlerIssueScan, scan.id)
+    assert await service._scan_already_started(scan.id)
+    held = await store.get(ButlerIssueScan, scan.id)
     assert held.status == "held" and held.reason == "review_interrupted"
-    assert service._scan_already_started(scan.id)
+    assert await service._scan_already_started(scan.id)
     assert harness.calls == []
 
 
-def test_timeout_is_reconciled_by_key_without_blind_retry(tmp_path):
-    store, project, codex, _, _, service = setup(tmp_path)
+async def test_timeout_is_reconciled_by_key_without_blind_retry(tmp_path):
+    store, project, codex, _, _, service = await setup(tmp_path)
     dest = destination(service, project, codex)
-    draft = candidate(store, project, dest)
+    draft = await candidate(store, project, dest)
     creates = []
     found = []
 
@@ -316,25 +326,24 @@ def test_timeout_is_reconciled_by_key_without_blind_retry(tmp_path):
         raise TimeoutError("response lost")
 
     service._target, service._find, service._create = target, lookup, create
-    uncertain = asyncio.run(service.publish(draft))
+    uncertain = await service.publish(draft)
     assert uncertain.status == "uncertain" and len(creates) == 1
-    assert asyncio.run(service.publish(uncertain)).status == "uncertain"
+    assert (await service.publish(uncertain)).status == "uncertain"
     assert len(creates) == 1
     found.append(("17", "https://github.com/owner/nebula/issues/17"))
     assert (
-        asyncio.run(service.publish(store.get(ButlerIssueCandidate, draft.id))).status
-        == "published"
-    )
+        await service.publish((await store.get(ButlerIssueCandidate, draft.id)))
+    ).status == "published"
     assert len(creates) == 1
 
 
-def test_trusted_mcp_contract_routes_to_selected_private_repository(tmp_path):
-    store, project, codex, _, mcp, service = setup(tmp_path)
+async def test_trusted_mcp_contract_routes_to_selected_private_repository(tmp_path):
+    store, project, codex, _, mcp, service = await setup(tmp_path)
     tools = [
         McpToolSnapshot(name=name, input_schema={"type": "object"})
         for name in ("issue_target", "issue_find", "issue_create")
     ]
-    server = store.create(
+    server = await store.create(
         McpServerProfile(
             name="issue-tools",
             transport=McpTransport.STDIO,
@@ -353,8 +362,8 @@ def test_trusted_mcp_contract_routes_to_selected_private_repository(tmp_path):
         credential_ref=None,
         mcp_profile_id=server.id,
     )
-    draft = candidate(store, project, dest)
-    result = asyncio.run(service.publish(draft))
+    draft = await candidate(store, project, dest)
+    result = await service.publish(draft)
     assert (
         result.status == "published"
         and result.issue_url == "https://issues.example.test/42"
@@ -367,10 +376,12 @@ def test_trusted_mcp_contract_routes_to_selected_private_repository(tmp_path):
     assert all(args["repository"] == "someone/custom" for _, args in mcp.calls)
 
 
-def test_completed_saved_chat_creates_separate_candidates_with_toolless_codex(tmp_path):
-    store, project, codex, harness, _, service = setup(tmp_path)
+async def test_completed_saved_chat_creates_separate_candidates_with_toolless_codex(
+    tmp_path,
+):
+    store, project, codex, harness, _, service = await setup(tmp_path)
     dest = destination(service, project, codex)
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -378,7 +389,7 @@ def test_completed_saved_chat_creates_separate_candidates_with_toolless_codex(tm
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main",
@@ -386,7 +397,7 @@ def test_completed_saved_chat_creates_separate_candidates_with_toolless_codex(tm
             model="model-a",
         )
     )
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             engagement_id=project.id,
             session_id=chat.id,
@@ -395,7 +406,7 @@ def test_completed_saved_chat_creates_separate_candidates_with_toolless_codex(tm
             content="Refresh loses selection; a separate export action fails.",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=chat.id,
@@ -405,8 +416,10 @@ def test_completed_saved_chat_creates_separate_candidates_with_toolless_codex(tm
             final_message_id=message.id,
         )
     )
-    service.store.update(
-        ButlerIssueDestination, dest.id, {"observe_from": turn.created_at}
+    (
+        await service.store.update(
+            ButlerIssueDestination, dest.id, {"observe_from": turn.created_at}
+        )
     )
     harness.response = json.dumps(
         [
@@ -437,24 +450,24 @@ def test_completed_saved_chat_creates_separate_candidates_with_toolless_codex(tm
         ], f"https://github.com/owner/nebula/issues/{draft.dedup_key[:6]}"
 
     service._target, service._find, service._create = target, lookup, create
-    asyncio.run(service.process_project(project.id))
-    rows = service.candidates(project.id)
+    (await service.process_project(project.id))
+    rows = await service.candidates(project.id)
     assert len(rows) == 2 and all(row.status == "published" for row in rows)
     assert len({row.dedup_key for row in rows}) == 2
     assert harness.calls[0]["nebula_tools"] is False
     assert "private-test-token" not in harness.calls[0]["prompt"]
-    asyncio.run(service.process_project(project.id))
+    (await service.process_project(project.id))
     assert len(harness.calls) == 1
 
 
-def test_destination_api_requires_auth_and_persists_per_project_grant(
+async def test_destination_api_requires_auth_and_persists_per_project_grant(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("GITHUB_TOKEN", "disposable-test-token")
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    codex = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    codex = await store.create(
         HarnessProfile(
             name="Host Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -474,32 +487,33 @@ def test_destination_api_requires_auth_and_persists_per_project_grant(
         auto_publish=False,
         enabled=True,
     )
-    assert client.post(path + "/destinations", json=data).status_code == 401
+    assert (await client.post(path + "/destinations", json=data)).status_code == 401
     headers = {"Authorization": "Bearer test-token"}
-    created = client.post(path + "/destinations", json=data, headers=headers)
+    created = await client.post(path + "/destinations", json=data, headers=headers)
     assert created.status_code == 200, created.text
     row = created.json()
     assert row["repository"] == "someone/other-tool" and row["auto_publish"] is False
+    assert (await client.get(path, headers=headers)).json()["destinations"][0][
+        "id"
+    ] == row["id"]
     assert (
-        client.get(path, headers=headers).json()["destinations"][0]["id"] == row["id"]
-    )
-    assert (
-        client.get(
+        await client.get(
             f"/api/v1/engagements/{other.id}/butler/issues", headers=headers
-        ).json()["destinations"]
-        == []
-    )
-    changed = client.put(
+        )
+    ).json()["destinations"] == []
+    changed = await client.put(
         path + f"/destinations/{row['id']}?expected_revision={row['revision']}",
         json={**data, "auto_publish": True},
         headers=headers,
     )
     assert changed.status_code == 200 and changed.json()["auto_publish"] is True
     assert (
-        client.put(
+        await client.put(
             path + f"/destinations/{row['id']}?expected_revision={row['revision']}",
             json=data,
             headers=headers,
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
+
+
+pytestmark = pytest.mark.anyio

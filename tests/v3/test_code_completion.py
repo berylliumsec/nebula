@@ -1,6 +1,11 @@
 """Editor completions must stay inside the virtual project and a bounded time."""
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import threading
 import time
@@ -8,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import jedi
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3 import api, code_completion, language_server
 from nebula.v3.api import create_app
@@ -56,11 +61,11 @@ def test_completion_analyzes_the_buffer_under_the_virtual_project(
         assert project.load_unsafe_extensions is False
 
 
-def test_code_completions_route_is_bounded_by_the_analysis_timeout(
+async def test_code_completions_route_is_bounded_by_the_analysis_timeout(
     tmp_path: Path, monkeypatch
 ) -> None:
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Completions"))
+    engagement = await store.create(Engagement(name="Completions"))
     release = threading.Event()
 
     def slow_complete(source: str, path: str, offset: int) -> list[dict[str, Any]]:
@@ -72,7 +77,7 @@ def test_code_completions_route_is_bounded_by_the_analysis_timeout(
     client = TestClient(create_app(store, auth_token="test-token"))
     try:
         started = time.monotonic()
-        response = client.post(
+        response = await client.post(
             "/api/v1/code/completions",
             headers={"Authorization": "Bearer test-token"},
             json={
@@ -89,3 +94,6 @@ def test_code_completions_route_is_bounded_by_the_analysis_timeout(
     assert response.status_code == 200
     assert response.json()["items"] == []
     assert elapsed < 2
+
+
+pytestmark = pytest.mark.anyio

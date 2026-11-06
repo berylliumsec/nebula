@@ -1,3 +1,9 @@
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+import asyncio
 import hashlib
 import json
 import re
@@ -175,22 +181,26 @@ def test_doctor_reports_analysis_only_without_host_fallback(tmp_path, monkeypatc
     }
 
 
-def test_doctor_reports_unprepared_kali_runtime_without_crashing(tmp_path):
+async def test_doctor_reports_unprepared_kali_runtime_without_crashing(tmp_path):
     data_dir = tmp_path / "doctor-unprepared-runtime"
     store = NebulaStore(data_dir / "nebula.db")
-    store.create(
-        RunnerProfile(
-            id="local",
-            name="Local Docker",
-            runtime=RunnerRuntime.DOCKER,
-            executable="/usr/bin/docker",
-            platform="linux/amd64",
-            isolation=RunnerIsolation.ROOTLESS,
-            healthy=True,
+    (
+        await store.create(
+            RunnerProfile(
+                id="local",
+                name="Local Docker",
+                runtime=RunnerRuntime.DOCKER,
+                executable="/usr/bin/docker",
+                platform="linux/amd64",
+                isolation=RunnerIsolation.ROOTLESS,
+                healthy=True,
+            )
         )
     )
 
-    result = CliRunner().invoke(app, ["doctor", "--json", "--data-dir", str(data_dir)])
+    result = await asyncio.to_thread(
+        CliRunner().invoke, app, ["doctor", "--json", "--data-dir", str(data_dir)]
+    )
 
     assert result.exit_code == 0, result.stdout
     runtime = json.loads(result.stdout)["automation_runtime"]
@@ -205,14 +215,14 @@ def test_doctor_reports_unprepared_kali_runtime_without_crashing(tmp_path):
     }
 
 
-def test_doctor_reports_corrupt_persisted_artifacts(tmp_path, monkeypatch):
+async def test_doctor_reports_corrupt_persisted_artifacts(tmp_path, monkeypatch):
     async def unavailable(_self):
         return False, "not configured"
 
     monkeypatch.setattr("nebula.v3.cli.ContainerSandboxRunner.available", unavailable)
     data_dir = tmp_path / "doctor-data"
     store = NebulaStore(data_dir / "nebula.db")
-    artifact = store.create(
+    artifact = await store.create(
         Artifact(
             engagement_id="eng-a",
             sha256="a" * 64,
@@ -221,7 +231,8 @@ def test_doctor_reports_corrupt_persisted_artifacts(tmp_path, monkeypatch):
         )
     )
 
-    result = CliRunner().invoke(
+    result = await asyncio.to_thread(
+        CliRunner().invoke,
         app,
         ["doctor", "--json", "--data-dir", str(data_dir)],
     )
@@ -234,7 +245,7 @@ def test_doctor_reports_corrupt_persisted_artifacts(tmp_path, monkeypatch):
     assert report["artifacts"]["corrupt_ids"] == [artifact.id]
 
 
-def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(
+async def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(
     tmp_path, monkeypatch
 ):
     async def unavailable(_self):
@@ -244,31 +255,35 @@ def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(
     data_dir = tmp_path / "terminal-doctor-data"
     store = NebulaStore(data_dir / "nebula.db")
     artifacts = ArtifactStore(data_dir / "artifacts")
-    project = store.create(Engagement(name="Terminal doctor"))
+    project = await store.create(Engagement(name="Terminal doctor"))
     now = datetime.now(timezone.utc)
     output = b"verified terminal result"
-    TerminalCommandHistory(
-        store.database, store=store, artifact_store=artifacts
-    ).record_capture(
-        engagement_id=project.id,
-        session_id="doctor-terminal-session",
-        operator_id="operator-1",
-        capture=CapturedTerminalCommand(
-            shell_sequence="1",
-            command="printf verified",
-            cwd="/workspace",
-            status="completed",
-            exit_code=0,
-            started_at=now,
-            completed_at=now,
-            output=output,
-            observed_output_bytes=len(output),
-            output_sha256=hashlib.sha256(output).hexdigest(),
-            output_truncated=False,
-        ),
+    (
+        await TerminalCommandHistory(
+            store.database, store=store, artifact_store=artifacts
+        ).record_capture(
+            engagement_id=project.id,
+            session_id="doctor-terminal-session",
+            operator_id="operator-1",
+            capture=CapturedTerminalCommand(
+                shell_sequence="1",
+                command="printf verified",
+                cwd="/workspace",
+                status="completed",
+                exit_code=0,
+                started_at=now,
+                completed_at=now,
+                output=output,
+                observed_output_bytes=len(output),
+                output_sha256=hashlib.sha256(output).hexdigest(),
+                output_truncated=False,
+            ),
+        )
     )
 
-    healthy = CliRunner().invoke(app, ["doctor", "--json", "--data-dir", str(data_dir)])
+    healthy = await asyncio.to_thread(
+        CliRunner().invoke, app, ["doctor", "--json", "--data-dir", str(data_dir)]
+    )
     assert healthy.exit_code == 0, healthy.stdout
     assert json.loads(healthy.stdout)["terminal_audit"] == {
         "checked": 1,
@@ -276,13 +291,15 @@ def test_doctor_verifies_terminal_audit_hashes_artifacts_and_events(
         "error_records": [],
     }
 
-    with store.database.engine.begin() as connection:
-        connection.exec_driver_sql(
-            "UPDATE terminal_command_records SET command_sha256 = ?",
-            ("0" * 64,),
+    async with store.database.engine.begin() as connection:
+        (
+            await connection.exec_driver_sql(
+                "UPDATE terminal_command_records SET command_sha256 = ?",
+                ("0" * 64,),
+            )
         )
-    corrupted = CliRunner().invoke(
-        app, ["doctor", "--json", "--data-dir", str(data_dir)]
+    corrupted = await asyncio.to_thread(
+        CliRunner().invoke, app, ["doctor", "--json", "--data-dir", str(data_dir)]
     )
     assert corrupted.exit_code == 1
     audit = json.loads(corrupted.stdout)["terminal_audit"]
@@ -325,7 +342,9 @@ def test_runtime_status_reports_the_prepared_kali_runtime(tmp_path, monkeypatch)
     assert payload["binary_inventory"][0]["name"] == "rg"
 
 
-def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypatch):
+async def test_cli_imports_legacy_side_by_side_then_exports_bundle(
+    tmp_path, monkeypatch
+):
     monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
     monkeypatch.delenv("NEBULA_V3_ARTIFACT_DIR", raising=False)
     source = tmp_path / "legacy"
@@ -345,7 +364,8 @@ def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypat
     data_dir = tmp_path / "v3-data"
     runner = CliRunner()
 
-    imported = runner.invoke(
+    imported = await asyncio.to_thread(
+        runner.invoke,
         app,
         ["import-2x", str(source), "--data-dir", str(data_dir)],
     )
@@ -356,11 +376,12 @@ def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypat
     assert report["source_unchanged"] is True
     assert _manifest(source) == before
     store = NebulaStore(data_dir / "nebula.db")
-    engagement = store.get(Engagement, report["target_engagement_id"])
+    engagement = await store.get(Engagement, report["target_engagement_id"])
     assert engagement.name == "Legacy consultancy engagement"
 
     destination = tmp_path / "legacy-export.zip"
-    exported = runner.invoke(
+    exported = await asyncio.to_thread(
+        runner.invoke,
         app,
         [
             "export",
@@ -377,7 +398,7 @@ def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypat
     assert destination.is_file()
 
 
-def test_export_reports_known_failures_without_tracebacks(tmp_path, monkeypatch):
+async def test_export_reports_known_failures_without_tracebacks(tmp_path, monkeypatch):
     monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
     monkeypatch.delenv("NEBULA_V3_ARTIFACT_DIR", raising=False)
     data_dir = tmp_path / "v3-data"
@@ -385,18 +406,22 @@ def test_export_reports_known_failures_without_tracebacks(tmp_path, monkeypatch)
     runner = CliRunner()
     arguments = ["export", "project", str(destination), "--data-dir", str(data_dir)]
 
-    missing = runner.invoke(app, arguments)
+    missing = await asyncio.to_thread(runner.invoke, app, arguments)
     assert missing.exit_code == 1
     assert isinstance(missing.exception, SystemExit)
     assert "entity not found: project" in missing.output
     assert "Traceback" not in missing.output
 
-    NebulaStore(data_dir / "nebula.db").create(Engagement(id="project", name="P"))
-    first = runner.invoke(app, arguments)
+    (
+        await NebulaStore(data_dir / "nebula.db").create(
+            Engagement(id="project", name="P")
+        )
+    )
+    first = await asyncio.to_thread(runner.invoke, app, arguments)
     assert first.exit_code == 0, first.output
     assert destination.is_file()
 
-    second = runner.invoke(app, arguments)
+    second = await asyncio.to_thread(runner.invoke, app, arguments)
     assert second.exit_code == 1
     assert isinstance(second.exception, SystemExit)
     assert "destination already exists" in second.output
@@ -411,7 +436,11 @@ def test_serve_reports_a_busy_port_without_a_traceback(tmp_path, monkeypatch):
         port = busy.getsockname()[1]
         monkeypatch.setattr(
             "nebula.v3.cli._services",
-            lambda value=None, *, diagnostics_level=None: (tmp_path, None, None),
+            lambda value=None, **_kwargs: (
+                tmp_path,
+                NebulaStore(tmp_path / "busy-port.db"),
+                None,
+            ),
         )
         monkeypatch.setattr(
             "nebula.v3.cli.ChromaKnowledgeIndex", lambda path, *, reranker: None
@@ -435,11 +464,13 @@ def test_serve_reports_a_busy_port_without_a_traceback(tmp_path, monkeypatch):
     assert "Traceback" not in result.output
 
 
-def test_cli_run_uses_an_explicit_vllm_profile_without_tools(tmp_path, monkeypatch):
+async def test_cli_run_uses_an_explicit_vllm_profile_without_tools(
+    tmp_path, monkeypatch
+):
     data_dir = tmp_path / "v3-data"
     store = NebulaStore(data_dir / "nebula.db")
-    engagement = store.create(Engagement(name="vLLM mission"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="vLLM mission"))
+    profile = await store.create(
         ProviderProfile(
             name="Lab vLLM",
             provider_type="vllm",
@@ -486,7 +517,8 @@ def test_cli_run_uses_an_explicit_vllm_profile_without_tools(tmp_path, monkeypat
         "nebula.v3.cli.provider_from_profile", lambda selected: provider
     )
 
-    result = CliRunner().invoke(
+    result = await asyncio.to_thread(
+        CliRunner().invoke,
         app,
         [
             "run",
@@ -506,6 +538,9 @@ def test_cli_run_uses_an_explicit_vllm_profile_without_tools(tmp_path, monkeypat
     assert result.exit_code == 0, result.stdout
     report = json.loads(result.stdout)
     assert "Scope is bounded and reviewable." in report["summary"]
-    run = store.list_entities(AgentRun)[0]
+    run = (await store.list_entities(AgentRun))[0]
     assert run.supervisor_provider_id == profile.id
     assert run.supervisor_model == "security-model"
+
+
+pytestmark = pytest.mark.anyio

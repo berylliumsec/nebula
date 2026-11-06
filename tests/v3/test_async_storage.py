@@ -1,5 +1,10 @@
 """Storage behavior retained while every unit of work uses the async driver."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 from contextlib import asynccontextmanager
 
@@ -25,7 +30,7 @@ async def open_store(tmp_path):
         await store.database.dispose()
 
 
-def test_async_crud_revision_checks_and_delete(tmp_path):
+async def test_async_crud_revision_checks_and_delete(tmp_path):
     async def exercise():
         async with open_store(tmp_path) as store:
             project = await store.create(Engagement(name="Synthetic project"))
@@ -47,10 +52,10 @@ def test_async_crud_revision_checks_and_delete(tmp_path):
             with pytest.raises(NotFoundError):
                 await store.get(Engagement, project.id)
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_async_transaction_rolls_back_every_entity(tmp_path):
+async def test_async_transaction_rolls_back_every_entity(tmp_path):
     async def exercise():
         async with open_store(tmp_path) as store:
             project = Engagement(name="Rollback")
@@ -64,10 +69,10 @@ def test_async_transaction_rolls_back_every_entity(tmp_path):
             assert await store.count(Engagement) == 0
             assert await store.count(Asset) == 0
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_async_ledger_initializes_first_and_deduplicates(tmp_path):
+async def test_async_ledger_initializes_first_and_deduplicates(tmp_path):
     async def exercise():
         async with open_store(tmp_path) as store:
             first = await store.append_event(
@@ -86,10 +91,10 @@ def test_async_ledger_initializes_first_and_deduplicates(tmp_path):
                     "run", "created", {"changed": True}, idempotency_key="once"
                 )
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_async_ledger_serializes_concurrent_tasks(tmp_path):
+async def test_async_ledger_serializes_concurrent_tasks(tmp_path):
     async def exercise():
         async with open_store(tmp_path) as store:
             events = await asyncio.gather(
@@ -98,10 +103,10 @@ def test_async_ledger_serializes_concurrent_tasks(tmp_path):
             assert sorted(e.sequence for e in events) == list(range(1, 21))
             assert store.database.pool_snapshot()["checked_out"] == 0
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_async_harness_titles_seek_requested_sessions(tmp_path):
+async def test_async_harness_titles_seek_requested_sessions(tmp_path):
     async def exercise():
         async with open_store(tmp_path) as store:
             project = await store.create(Engagement(name="Names"))
@@ -139,4 +144,7 @@ def test_async_harness_titles_seek_requested_sessions(tmp_path):
                 item.id async for item in store.iter_readable_entities(HarnessSession)
             ] == [session.id]
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

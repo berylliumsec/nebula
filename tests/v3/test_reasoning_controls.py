@@ -25,6 +25,11 @@ the controls that route is sent:
   and Fable 5.1 is sent ``tool_choice: auto`` instead of a forced choice.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -346,7 +351,7 @@ def test_zai_steps_get_their_reasoning_back_once_it_is_kept():
         ),
     ],
 )
-def test_a_route_that_refuses_to_skip_thinking_is_asked_again(
+async def test_a_route_that_refuses_to_skip_thinking_is_asked_again(
     route, model, sent, resent
 ):
     """``none`` is a preference: a 400 naming thinking gets the default (#498)."""
@@ -357,13 +362,13 @@ def test_a_route_that_refuses_to_skip_thinking_is_asked_again(
     )
     provider = _compatible(route, model, transport=recorder.transport)
 
-    response = asyncio.run(provider.complete(_ask(model, "none")))
+    response = await provider.complete(_ask(model, "none"))
 
     assert response.text == "ok"
     assert [_pick(p, CHAT_CONTROLS) for p in recorder.payloads] == [sent, resent]
 
 
-def test_a_level_the_operator_chose_is_never_dropped():
+async def test_a_level_the_operator_chose_is_never_dropped():
     recorder = _Recorder(
         (400, {"error": {"message": "reasoning_effort max is not supported"}}),
         (200, CHAT_OK),
@@ -371,7 +376,7 @@ def test_a_level_the_operator_chose_is_never_dropped():
     provider = _compatible(DEEPSEEK, "deepseek-chat", transport=recorder.transport)
 
     with pytest.raises(ProviderError):
-        asyncio.run(provider.complete(_ask("deepseek-chat", "xhigh")))
+        (await provider.complete(_ask("deepseek-chat", "xhigh")))
 
     assert len(recorder.payloads) == 1
 
@@ -890,3 +895,6 @@ def test_responses_keep_the_level_when_summaries_are_refused():
         {"effort": "high", "summary": "auto"},
         {"effort": "high"},
     ]
+
+
+pytestmark = pytest.mark.anyio

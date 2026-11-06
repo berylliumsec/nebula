@@ -44,6 +44,7 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from .database_pool import ConnectionBudget, PoolSettings, connection_budget
+from .async_utils import finish_cleanup
 from .query_predicates import visible_harness_chat_title
 
 from .domain import utc_now
@@ -985,16 +986,8 @@ class Database:
             raise
         finally:
             self._active_session.reset(owner)
-            # Shield cleanup from a second cancellation, and wait for it before
-            # disposal can proceed. Each session belongs only to its caller.
-            close = asyncio.create_task(
-                session.close()
-            )  # diagnostic-expected: owned cleanup is shielded and awaited below, including after cancellation; close failures propagate.
-            try:
-                await asyncio.shield(close)
-            except asyncio.CancelledError:
-                await close
-                raise
+            # Repeated caller cancellation must still join connection cleanup.
+            await finish_cleanup(session.close())
 
     def task_session(self) -> AsyncSession | None:
         current = self._active_session.get()

@@ -13,6 +13,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -37,13 +38,13 @@ from sqlalchemy import (
     Select,
     String,
     and_,
+    bindparam,
     case,
     cast as sql_cast,
     delete,
     exists,
     func,
     insert,
-    literal,
     or_,
     select,
     text,
@@ -773,6 +774,54 @@ class StoreTransaction:
         except IntegrityError as exc:
             raise ConflictError("operation event already exists") from exc
         return event
+
+
+@lru_cache(maxsize=32)
+def _harness_title_queries(dialect: str, scoped: bool, size: int):
+    """Compile immutable top-one lookup shapes once per requested batch size."""
+    keys: Any = select(bindparam("requested_0", type_=String).label("session_id"))
+    if size > 1:
+        keys = keys.union_all(
+            *[
+                select(bindparam(f"requested_{i}", type_=String).label("session_id"))
+                for i in range(1, size)
+            ]
+        )
+    requested = keys.cte("requested_harness_sessions")
+    queries = []
+    for model, newest_first in (
+        (ChatSession, True),
+        (AgentRun, True),
+        (HarnessTurn, False),
+    ):
+        candidate = aliased(EntityRow)
+        eligible = [candidate.harness_session_id == requested.c.session_id]
+        if scoped:
+            eligible.append(candidate.engagement_id == bindparam("engagement_id"))
+        if model is ChatSession:
+            eligible.append(visible_harness_chat_title(candidate, dialect))
+        else:
+            eligible.append(candidate.kind == model.entity_kind)
+        order = (candidate.created_at, candidate.id)
+        if newest_first:
+            order = tuple(column.desc() for column in order)
+        selected = (
+            select(candidate.id)
+            .where(*eligible)
+            .order_by(*order)
+            .limit(1)
+            .correlate(requested)
+            .scalar_subquery()
+        )
+        queries.append(
+            (
+                model,
+                select(EntityRow)
+                .select_from(requested)
+                .join(EntityRow, EntityRow.id == selected),
+            )
+        )
+    return tuple(queries)
 
 
 class NebulaStore:
@@ -1571,54 +1620,17 @@ class NebulaStore:
             # Keep SQLite's bind count bounded when the API requests 1,000 rows.
             for start in range(0, len(ids), 500):
                 chunk = ids[start : start + 500]
-                for model, newest_first in (
-                    (ChatSession, True),
-                    (AgentRun, True),
-                    (HarnessTurn, False),
+                parameters = {f"requested_{i}": key for i, key in enumerate(chunk)}
+                if engagement_id is not None:
+                    parameters["engagement_id"] = engagement_id
+                # Requested keys are values, never a scan of historical IDs.
+                # Every correlated lookup stops at its first indexed match.
+                for model, statement in _harness_title_queries(
+                    self.database.engine.dialect.name,
+                    engagement_id is not None,
+                    len(chunk),
                 ):
-                    # The requested keys are values, not a DISTINCT scan of
-                    # the historical entity table. Each correlated lookup can
-                    # stop at its first indexed match.
-                    keys: Any = select(literal(chunk[0]).label("session_id"))
-                    if len(chunk) > 1:
-                        keys = keys.union_all(
-                            *[
-                                select(literal(key).label("session_id"))
-                                for key in chunk[1:]
-                            ]
-                        )
-                    requested = keys.cte("requested_harness_sessions")
-                    candidate = aliased(EntityRow)
-                    eligible = [
-                        candidate.harness_session_id == requested.c.session_id,
-                    ]
-                    if engagement_id is not None:
-                        eligible.append(candidate.engagement_id == engagement_id)
-                    if model is ChatSession:
-                        eligible.append(
-                            visible_harness_chat_title(
-                                candidate, self.database.engine.dialect.name
-                            )
-                        )
-                    else:
-                        eligible.append(candidate.kind == model.entity_kind)
-                    order: tuple[Any, ...] = (candidate.created_at, candidate.id)
-                    if newest_first:
-                        order = tuple(column.desc() for column in order)
-                    selected = (
-                        select(candidate.id)
-                        .where(*eligible)
-                        .order_by(*order)
-                        .limit(1)
-                        .correlate(requested)
-                        .scalar_subquery()
-                    )
-                    statement = (
-                        select(EntityRow)
-                        .select_from(requested)
-                        .join(EntityRow, EntityRow.id == selected)
-                    )
-                    for row in await session.scalars(statement):
+                    for row in await session.scalars(statement, parameters):
                         item = _row_to_entity(row, model)
                         if isinstance(item, ChatSession):
                             if item.harness_session_id:

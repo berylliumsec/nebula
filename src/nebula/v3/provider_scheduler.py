@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import ColumnElement, case, exists, func, or_, select, update
 
@@ -15,6 +16,8 @@ from .domain import ChatTurn, ChatTurnStatus, utc_now
 from .storage import ConflictError, NebulaStore
 from .host_load import HostLoadGate
 from .host_admission import save_host_wait
+from .async_utils import finish_cleanup
+from .diagnostics import create_diagnostic_task
 
 # A turn waiting in one of these states resumes through admission again, so
 # its admission stays parked until it does.
@@ -110,18 +113,38 @@ class ProviderAdmission:
         self.scheduler = scheduler
         self.lane = lane
         self.released = False
+        # Fence cleanup to this admission, including commit whose result was
+        # lost to cancellation. An older token cannot close a later lease.
+        self.lease_owner = uuid4().hex
+        self._release_task: asyncio.Task[None] | None = None
 
     async def release(self, turn_id: str) -> None:
         # The turn frees its slot as soon as provider work ends, before it
         # settles; the task that admitted it releases again on exit. A second
         # release must not complete a later admission of the same turn.
-        if self.released:
-            return
-        self.released = True
-        (await self.scheduler._complete(turn_id))
-        if self.lane == "background":
-            self.scheduler._background.release()
-        self.scheduler._provider.release()
+        if self._release_task is None:
+            self.released = True
+            self._release_task = create_diagnostic_task(
+                self._release(turn_id),
+                feature="chat",
+                event_code="chat.provider_admission.release_failed",
+                failure_message="A provider admission's durable lease could not be closed.",
+                name="nebula-provider-admission-release",
+            )
+
+        async def join():
+            await self._release_task
+
+        await finish_cleanup(join())
+
+    async def _release(self, turn_id: str) -> None:
+        try:
+            await self.scheduler._complete(turn_id, self.lease_owner)
+        finally:
+            # A database failure must not permanently consume process capacity.
+            if self.lane == "background":
+                self.scheduler._background.release()
+            self.scheduler._provider.release()
 
 
 class ProviderScheduler:
@@ -141,11 +164,23 @@ class ProviderScheduler:
         self._provider = asyncio.Semaphore(self.config.provider_limit)
         self._background = asyncio.Semaphore(self.config.background_limit)
         self._active: dict[str, str] = {}
+        self._active_owners: dict[str, str] = {}
+        # Positions are display state. Share one short-lived ordered snapshot
+        # across waiters instead of querying/ranking the queue for every poll.
+        # Admission, claims and leases always read durable state independently.
+        self._positions: dict[str, int] = {}
+        self._positions_until = 0.0
+        self._positions_generation = 0
+        self._positions_lock = asyncio.Lock()
         self.host_load = host_load
         self._host_reasons: dict[str, str] = {}
 
     def queue_detail(self, turn_id: str) -> str:
         return self._host_reasons.get(turn_id, "Waiting for Core capacity")
+
+    def _invalidate_positions(self) -> None:
+        self._positions_until = 0.0
+        self._positions_generation += 1
 
     async def enqueue(self, turn: ChatTurn) -> None:
         now = turn.queued_at or utc_now()
@@ -167,6 +202,7 @@ class ProviderScheduler:
                 row.completed_at = None
                 row.lease_owner = None
                 row.lease_expires_at = None
+        self._invalidate_positions()
 
     async def admit(self, turn_id: str) -> ProviderAdmission:
         turn = await self.store.get(ChatTurn, turn_id)
@@ -182,6 +218,7 @@ class ProviderScheduler:
             if lane == "background":
                 self._background.release()
             raise
+        admission = ProviderAdmission(self, lane)
         try:
             if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
 
@@ -219,22 +256,26 @@ class ProviderScheduler:
                 )
                 row.state = "running"
                 row.admitted_at = admitted_at
-                row.lease_owner = self.worker_id
+                row.lease_owner = admission.lease_owner
                 row.lease_expires_at = admitted_at + timedelta(hours=24)
                 (await transaction.session.flush())
             self._active[turn_id] = lane
+            self._active_owners[turn_id] = admission.lease_owner
+            self._invalidate_positions()
             del updated
             self._host_reasons.pop(turn_id, None)
-            return ProviderAdmission(self, lane)
+            return admission
         except BaseException:
             self._host_reasons.pop(turn_id, None)
-            self._provider.release()
-            if lane == "background":
-                self._background.release()
+            # This also handles a commit followed by cancelled connection
+            # cleanup, when no token has reached the parent yet.
+            await admission.release(turn_id)
             raise
 
-    async def _complete(self, turn_id: str) -> None:
-        self._active.pop(turn_id, None)
+    async def _complete(self, turn_id: str, lease_owner: str) -> None:
+        if self._active_owners.get(turn_id) == lease_owner:
+            self._active.pop(turn_id, None)
+            self._active_owners.pop(turn_id, None)
         # Read in SQL, so a turn that is gone or unreadable still frees the
         # admission (and, in ProviderAdmission.release, its slots).
         async with self.store.database.session() as session:
@@ -244,6 +285,7 @@ class ProviderScheduler:
                     .where(
                         ProviderTurnQueueRow.turn_id == turn_id,
                         ProviderTurnQueueRow.state == "running",
+                        ProviderTurnQueueRow.lease_owner == lease_owner,
                     )
                     .values(
                         state=_released_state(),
@@ -254,6 +296,7 @@ class ProviderScheduler:
                     .execution_options(synchronize_session=False)
                 )
             )
+        self._invalidate_positions()
 
     async def cancel(self, turn_id: str) -> None:
         async with self.store.database.session() as session:
@@ -261,6 +304,7 @@ class ProviderScheduler:
             if row is not None and row.state == "queued":
                 row.state = "cancelled"
                 row.completed_at = utc_now()
+        self._invalidate_positions()
 
     def admitted(self, turn_id: str) -> bool:
         """Whether this process holds a provider slot for ``turn_id``."""
@@ -295,6 +339,7 @@ class ProviderScheduler:
                     .execution_options(synchronize_session=False)
                 )
             )
+        self._invalidate_positions()
 
     async def settle(self, turn_id: str | None = None) -> list[str]:
         """Close queued or parked admissions whose turn ended or no longer exists.
@@ -340,6 +385,7 @@ class ProviderScheduler:
                         .execution_options(synchronize_session=False)
                     )
                 )
+        self._invalidate_positions()
         return settled
 
     async def recover(self) -> list[str]:
@@ -383,35 +429,39 @@ class ProviderScheduler:
                     row.lease_owner = None
                     row.lease_expires_at = None
                 queued.append(row.turn_id)
-            return queued
+        self._invalidate_positions()
+        return queued
+
+    async def _load_positions(self) -> dict[str, int]:
+        async with self.store.database.session() as session:
+            ids = await session.scalars(
+                select(ProviderTurnQueueRow.turn_id)
+                .where(ProviderTurnQueueRow.state == "queued")
+                .order_by(
+                    ProviderTurnQueueRow.accepted_at, ProviderTurnQueueRow.turn_id
+                )
+            )
+            return {key: rank for rank, key in enumerate(ids, 1)}
 
     async def position(self, turn_id: str) -> int | None:
-        async with self.store.database.session() as session:
-            row = await session.get(ProviderTurnQueueRow, turn_id)
-            if row is None or row.state != "queued":
-                return None
-            return int(
-                (
-                    await session.scalar(
-                        select(func.count())
-                        .select_from(ProviderTurnQueueRow)
-                        .where(
-                            ProviderTurnQueueRow.state == "queued",
-                            (
-                                (ProviderTurnQueueRow.accepted_at < row.accepted_at)
-                                | (
-                                    (
-                                        ProviderTurnQueueRow.accepted_at
-                                        == row.accepted_at
-                                    )
-                                    & (ProviderTurnQueueRow.turn_id <= row.turn_id)
-                                )
-                            ),
-                        )
+        # An enclosing transaction may see its own uncommitted queue writes;
+        # those observations must never be published to other tasks.
+        if self.store.database.task_session() is not None:
+            return (await self._load_positions()).get(turn_id)
+        loop = asyncio.get_running_loop()
+        if loop.time() >= self._positions_until:
+            async with self._positions_lock:
+                if loop.time() >= self._positions_until:
+                    generation = self._positions_generation
+                    self._positions = await self._load_positions()
+                    # Local mutations invalidate immediately; other processes'
+                    # changes become visible within half the one-second poll.
+                    self._positions_until = (
+                        loop.time() + 0.5
+                        if generation == self._positions_generation
+                        else 0.0
                     )
-                )
-                or 0
-            )
+        return self._positions.get(turn_id)
 
     async def metrics(self) -> dict[str, Any]:
         async with self.store.database.session() as session:

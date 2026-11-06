@@ -1,5 +1,10 @@
 """Real async Core entry points with synthetic data and inert providers."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import sqlite3
 
@@ -43,7 +48,7 @@ def reject_synchronous_database_waits(monkeypatch):
         event.remove(Engine, "before_cursor_execute", before_execute)
 
 
-def test_async_core_lifespan_authentication_and_listing(tmp_path):
+async def test_async_core_lifespan_authentication_and_listing(tmp_path):
     async def exercise():
         store = NebulaStore(tmp_path / "core.db")
         project = await store.create(Engagement(name="Synthetic Core project"))
@@ -72,10 +77,12 @@ def test_async_core_lifespan_authentication_and_listing(tmp_path):
                 assert performance.json()["database_pool"]["max_overflow"] == 0
         assert store.database.pool_snapshot()["checked_out"] == 0
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_async_core_provider_turn_persists_complete_history(tmp_path, monkeypatch):
+async def test_async_core_provider_turn_persists_complete_history(
+    tmp_path, monkeypatch
+):
     import nebula.v3.chat as chat_module
     from nebula.v3.domain import ProviderProfile, ChatMessage, ChatTurn, ChatTurnStatus
     from tests.v3.test_chat_api import ApiChatProvider
@@ -150,10 +157,12 @@ def test_async_core_provider_turn_persists_complete_history(tmp_path, monkeypatc
                 )
                 assert any(message.content == "API chat works." for message in messages)
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_settings_assistant_actions_await_reads_and_preserve_pending_apply(tmp_path):
+async def test_settings_assistant_actions_await_reads_and_preserve_pending_apply(
+    tmp_path,
+):
     from nebula.v3.butler_notes import ButlerNotes
     from nebula.v3.domain import Observation
     from nebula.v3.sandbox import AnalysisOnlyRunner
@@ -205,4 +214,7 @@ def test_settings_assistant_actions_await_reads_and_preserve_pending_apply(tmp_p
             await store.event_history.close()
             await store.database.dispose()
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

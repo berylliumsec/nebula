@@ -1,13 +1,14 @@
 {
-  "change_digest": "0c69686cffc78a38f75ed16ed97381a7e1c5b88efce2486aba89b55b2183c7b3",
+  "change_digest": "e5f8556b1419f6a9ab7606e051e3c2cea3ea0632e76a21c26f8d876885d87d15",
   "reviewed_by": "Codex; independent diagnosis of database blocking, harness-list cost, and goal runtime authority before implementation",
-  "reason": "Focused async database and recovery contracts on SQLite/PostgreSQL, real Core auth/chat/listing/Butler-memory entry points, bounded pools, revisions/events/claims, cancellation, runtime-switch activation and compaction consent, indexed harness title seeks, additive rollback, and frozen-driver dependencies. Includes 25 existing storage cases, 14 selected existing recovery/tool cases and one existing action-ledger case. Three UI mapping cases are selected. Additional runtime-switch regressions preserve later metadata and reject invalidated settings or dependency revisions; auxiliary SQLite tests reject synchronous drivers on the event loop. The selected CI job provisions PostgreSQL for its eight existing database cases and fails clearly if configuration is absent; it does not broaden test scope.",
-  "exclusions": "No full suites. Browser acceptance and bundled product-knowledge rebuild remain blocked by denied runtime/model downloads. Corrected mixed-load and five-minute soak measurements exist for an earlier source hash; the chat admission performance gate has not passed. Remaining repository diagnostic/test callers require async API migration.",
+  "reason": "Focused async database and recovery contracts on SQLite/PostgreSQL, real Core auth/chat/listing/Butler-memory entry points, bounded pools, revisions/events/claims, cancellation, runtime-switch activation and compaction consent, indexed harness title seeks, additive rollback, and frozen-driver dependencies. Includes 25 existing storage cases, 14 selected existing recovery/tool cases and one existing action-ledger case. Three UI mapping cases are selected. Additional runtime-switch regressions preserve later metadata and reject invalidated settings or dependency revisions; auxiliary SQLite tests reject synchronous drivers on the event loop. The selected CI job provisions PostgreSQL for its eight existing database cases and fails clearly if configuration is absent; it does not broaden test scope. Nine additional cases exercise callback failures, repeated shutdown cancellation, purger rollback, serial auxiliary budgets, single-flight queue position reads, cache expiry and uncommitted session isolation. Seven existing API/CLI/WebSocket/scheduler cases validate the migrated caller and test-loop boundaries; four product-index cases verify its current digest, discoverability and Chroma synchronization. The selected frozen Linux job builds the real distribution and executes exactly two owned database journeys, with a non-administrative PostgreSQL role. Eight focused admission cases cover failed/cancelled release, repeated cancellation, stale lease fencing, both-database postcommit cancellation, completed-token ownership and recovery-slot cleanup. Six existing restart/ownership cases are rerun after this change.",
+  "exclusions": "No full suites. The 24-case production LAN browser matrix passed in CI. Bundled product knowledge and a frozen executable remain to be verified on hosted CI because local model/runtime downloads are denied. Chat admission performance acceptance remains open; final matched measurements follow the polling and query-shape repairs. Remaining repository diagnostic/test callers are being migrated.",
   "expected_tests": {
-    "python": 103,
+    "python": 131,
     "frontend": 3,
     "native": 0,
-    "playwright": 24
+    "playwright": 24,
+    "manual": 2
   },
   "python": [
     "tests/v3/test_async_database.py",
@@ -34,7 +35,21 @@
     "tests/v3/test_packaging.py::test_core_archive_requires_native_async_database_runtime",
     "tests/v3/test_async_rollback.py",
     "tests/v3/test_async_auxiliary_database.py",
-    "tests/v3/test_browserd.py::test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguous"
+    "tests/v3/test_browserd.py::test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguous",
+    "tests/v3/test_async_shutdown.py",
+    "tests/v3/test_async_queue_positions.py",
+    "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
+    "tests/v3/test_api.py::test_run_event_rest_and_authenticated_websocket_replay",
+    "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
+    "tests/v3/test_cli.py::test_doctor_reports_analysis_only_without_host_fallback",
+    "tests/v3/test_cli.py::test_serve_reports_a_busy_port_without_a_traceback",
+    "tests/v3/test_cli.py::test_cli_run_uses_an_explicit_vllm_profile_without_tools",
+    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_postgresql_migration_and_offline_cutover",
+    "tests/v3/test_product_knowledge.py::test_product_guidance_finds_bounded_pool_and_pending_runtime_switch",
+    "tests/v3/test_async_admission_cleanup.py"
   ],
   "frontend": [
     "ui/src/api/asyncRuntimeSwitch.test.ts"
@@ -43,5 +58,9 @@
   "playwright": [
     "area:harness-provider-switch",
     "area:provider-runtime-switch"
+  ],
+  "manual": [
+    "scripts/verify_async_frozen_core.py::sqlite",
+    "scripts/verify_async_frozen_core.py::postgresql"
   ]
 }

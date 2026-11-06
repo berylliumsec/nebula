@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import hashlib
 import base64
 from datetime import datetime, timedelta
@@ -6,7 +10,7 @@ import json
 import httpx
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from nebula.v3.api import create_app
@@ -69,7 +73,18 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
-def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
+async def test_provider_chat_goal_api_persists_explicit_lifecycle(
+    api, tmp_path, monkeypatch
+):
+    import asyncio
+    from nebula.v3.provider_scheduler import ProviderScheduler
+
+    async def held_admission(*_args, **_kwargs):
+        # This metadata case leaves its continuation waiting for capacity.
+        # Shutdown cancels that wait before any execution claim or effect.
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ProviderScheduler, "admit", held_admission)
     client, store, _ = api
     workspace = tmp_path / "goal-workspace"
     skill = workspace / ".agents" / "skills" / "review" / "SKILL.md"
@@ -81,27 +96,31 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
         "Review carefully. Read [the shared rule](../../../.agents/rules/accuracy.md).",
         encoding="utf-8",
     )
-    store.create(
-        Engagement(
-            id="goal-project", name="Goal project", workspace_path=str(workspace)
+    (
+        await store.create(
+            Engagement(
+                id="goal-project", name="Goal project", workspace_path=str(workspace)
+            )
         )
     )
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             id="goal-provider", name="OpenRouter", provider_type="openrouter"
         )
     )
-    store.create(
-        ChatSession(
-            id="goal-session",
-            engagement_id="goal-project",
-            title="Goal session",
-            provider_profile_id=provider.id,
-            model="model",
+    (
+        await store.create(
+            ChatSession(
+                id="goal-session",
+                engagement_id="goal-project",
+                title="Goal session",
+                provider_profile_id=provider.id,
+                model="model",
+            )
         )
     )
 
-    created = client.post(
+    created = await client.post(
         "/api/v1/chat/sessions/goal-session/goal",
         headers=_auth(),
         json={
@@ -115,7 +134,7 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     goal = created.json()
     assert goal["status"] == ChatGoalStatus.DRAFT.value
 
-    edited = client.patch(
+    edited = await client.patch(
         "/api/v1/chat/sessions/goal-session/goal",
         headers=_auth(),
         json={
@@ -131,7 +150,7 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     assert goal["objective"] == "Finish the revised bounded task"
     assert goal["step_budget"] == 5
 
-    attached = client.put(
+    attached = await client.put(
         "/api/v1/chat/sessions/goal-session/goal/skills",
         headers=_auth(),
         json={
@@ -147,12 +166,14 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     )
     original_digest = attached_goal["skill_snapshots"][0]["sha256"]
     skill.write_text("Changed after attachment.", encoding="utf-8")
-    loaded = client.get("/api/v1/chat/sessions/goal-session/goal", headers=_auth())
+    loaded = await client.get(
+        "/api/v1/chat/sessions/goal-session/goal", headers=_auth()
+    )
     assert loaded.status_code == 200
     assert loaded.json()["revision"] == attached_goal["revision"]
     assert loaded.json()["skill_snapshots"][0]["sha256"] == original_digest
     skill.unlink()
-    retained = client.put(
+    retained = await client.put(
         "/api/v1/chat/sessions/goal-session/goal/skills",
         headers=_auth(),
         json={
@@ -163,7 +184,7 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     assert retained.status_code == 200, retained.text
     assert retained.json()["skill_snapshots"][0]["sha256"] == original_digest
 
-    removed = client.put(
+    removed = await client.put(
         "/api/v1/chat/sessions/goal-session/goal/skills",
         headers=_auth(),
         json={"expected_revision": retained.json()["revision"], "skills": []},
@@ -171,7 +192,7 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     assert removed.status_code == 200, removed.text
     assert removed.json()["skill_snapshots"] == []
 
-    started = client.post(
+    started = await client.post(
         "/api/v1/chat/sessions/goal-session/goal/actions",
         headers=_auth(),
         json={"expected_revision": removed.json()["revision"], "action": "start"},
@@ -180,10 +201,10 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     assert started.json()["status"] == ChatGoalStatus.RUNNING.value
     assert started.json()["current_step"] == 1
 
-    active = client.get(
-        "/api/v1/chat/sessions/goal-session/goal", headers=_auth()
+    active = (
+        await client.get("/api/v1/chat/sessions/goal-session/goal", headers=_auth())
     ).json()
-    running_edit = client.patch(
+    running_edit = await client.patch(
         "/api/v1/chat/sessions/goal-session/goal",
         headers=_auth(),
         json={
@@ -199,10 +220,10 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     assert running_edit.json()["objective"] == "Finish the active revised task"
 
 
-def test_goal_conversation_exists_before_its_first_message(api):
+async def test_goal_conversation_exists_before_its_first_message(api):
     client, store, _ = api
-    store.create(Engagement(id="goal-first-project", name="Goal first"))
-    provider = store.create(
+    (await store.create(Engagement(id="goal-first-project", name="Goal first")))
+    provider = await store.create(
         ProviderProfile(
             id="goal-first-provider",
             name="Local provider",
@@ -212,7 +233,7 @@ def test_goal_conversation_exists_before_its_first_message(api):
         )
     )
 
-    rejected = client.post(
+    rejected = await client.post(
         "/api/v1/chat/goal-conversations",
         headers=_auth(),
         json={
@@ -224,10 +245,10 @@ def test_goal_conversation_exists_before_its_first_message(api):
         },
     )
     assert rejected.status_code == 409, rejected.text
-    assert store.list_entities(ChatSession) == []
-    assert store.list_entities(ChatGoal) == []
+    assert (await store.list_entities(ChatSession)) == []
+    assert (await store.list_entities(ChatGoal)) == []
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/goal-conversations",
         headers=_auth(),
         json={
@@ -257,8 +278,8 @@ def test_goal_conversation_exists_before_its_first_message(api):
         "subagent_reasoning_effort": None,
         "provider_subagent": None,
         # An omitted choice inherits the project's durable default.
-        "allow_agent_messaging": store.get(
-            Engagement, "goal-first-project"
+        "allow_agent_messaging": (
+            await store.get(Engagement, "goal-first-project")
         ).assistant_defaults.allow_agent_messaging,
         "max_active_subagents": None,
         "message_count": 0,
@@ -267,10 +288,12 @@ def test_goal_conversation_exists_before_its_first_message(api):
     }
     assert goal["session_id"] == session["id"]
     assert goal["status"] == ChatGoalStatus.DRAFT.value
-    assert store.list_session_entities(ChatTurn, session["id"]) == []
+    assert (await store.list_session_entities(ChatTurn, session["id"])) == []
 
 
-def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(api, tmp_path):
+async def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(
+    api, tmp_path
+):
     client, store, _ = api
     workspace = tmp_path / "linked-project"
     shared = workspace / ".agents" / "skills" / "review" / "SKILL.md"
@@ -282,15 +305,19 @@ def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(api, tmp
     managed = tmp_path / ".agents" / "skills" / "report" / "SKILL.md"
     managed.parent.mkdir(parents=True, exist_ok=True)
     managed.write_text("managed instructions", encoding="utf-8")
-    store.create(
-        Engagement(
-            id="skill-project",
-            name="Skill project",
-            workspace_path=str(workspace),
+    (
+        await store.create(
+            Engagement(
+                id="skill-project",
+                name="Skill project",
+                workspace_path=str(workspace),
+            )
         )
     )
 
-    response = client.get("/api/v1/skills?engagement_id=skill-project", headers=_auth())
+    response = await client.get(
+        "/api/v1/skills?engagement_id=skill-project", headers=_auth()
+    )
 
     assert response.status_code == 200, response.text
     assert response.json() == [
@@ -307,7 +334,7 @@ def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(api, tmp
             "root": str((tmp_path / ".agents" / "skills").resolve()),
         },
     ]
-    roots = client.get(
+    roots = await client.get(
         "/api/v1/skills/catalog?engagement_id=skill-project", headers=_auth()
     )
     assert roots.status_code == 200
@@ -317,7 +344,7 @@ def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(api, tmp
     }
 
 
-def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch):
+async def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch):
     client, store, _ = api
     workspace = tmp_path / "hook-run-project"
     hook = workspace / ".agents" / "hooks" / "audit"
@@ -338,14 +365,16 @@ def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch
         ),
         encoding="utf-8",
     )
-    store.create(
-        Engagement(
-            id="hook-run-project",
-            name="Hook run project",
-            workspace_path=str(workspace),
+    (
+        await store.create(
+            Engagement(
+                id="hook-run-project",
+                name="Hook run project",
+                workspace_path=str(workspace),
+            )
         )
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="hook-run-provider",
             name="Local provider",
@@ -401,7 +430,7 @@ def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch
         "nebula.v3.chat.provider_from_profile", lambda _: ApiHookProvider(profile.id)
     )
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -414,7 +443,7 @@ def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch
         },
     )
     assert response.status_code == 200, response.text
-    executions = client.get(
+    executions = await client.get(
         f"/api/v1/chat/sessions/{response.json()['session_id']}/hooks",
         headers=_auth(),
     )
@@ -425,7 +454,7 @@ def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch
     ]
 
 
-def test_native_hook_catalog_uses_only_project_agents_root(api, tmp_path):
+async def test_native_hook_catalog_uses_only_project_agents_root(api, tmp_path):
     client, store, _ = api
     workspace = tmp_path / "hook-project"
     hook = workspace / ".agents" / "hooks" / "audit"
@@ -448,15 +477,19 @@ def test_native_hook_catalog_uses_only_project_agents_root(api, tmp_path):
     )
     ignored = workspace / ".codex" / "hooks" / "ignored"
     ignored.mkdir(parents=True)
-    store.create(
-        Engagement(
-            id="hook-project",
-            name="Hook project",
-            workspace_path=str(workspace),
+    (
+        await store.create(
+            Engagement(
+                id="hook-project",
+                name="Hook project",
+                workspace_path=str(workspace),
+            )
         )
     )
 
-    response = client.get("/api/v1/hooks?engagement_id=hook-project", headers=_auth())
+    response = await client.get(
+        "/api/v1/hooks?engagement_id=hook-project", headers=_auth()
+    )
 
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()] == ["audit"]
@@ -464,13 +497,15 @@ def test_native_hook_catalog_uses_only_project_agents_root(api, tmp_path):
     assert response.json()[0]["manifest"]["events"] == ["chat.turn.started"]
 
 
-def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(api):
+async def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(
+    api,
+):
     client, store, _ = api
-    store.create(Engagement(id="hook-recovery-project", name="Hook recovery"))
-    provider = store.create(
+    (await store.create(Engagement(id="hook-recovery-project", name="Hook recovery")))
+    provider = await store.create(
         ProviderProfile(id="hook-provider", name="Provider", provider_type="ollama")
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="hook-session",
             engagement_id="hook-recovery-project",
@@ -479,7 +514,7 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
             model="model",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="hook-turn",
             engagement_id="hook-recovery-project",
@@ -497,7 +532,7 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
             },
         )
     )
-    hook_execution = store.create(
+    hook_execution = await store.create(
         NativeHookExecution(
             id="hook-run",
             engagement_id=turn.engagement_id,
@@ -513,14 +548,16 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
             error="Core restarted before the hook outcome was known.",
         )
     )
-    store.update(
-        NativeHookExecution,
-        hook_execution.id,
-        {"late_outcome": NativeHookLateOutcome(status="failed", exit_code=2)},
-        expected_revision=hook_execution.revision,
+    (
+        await store.update(
+            NativeHookExecution,
+            hook_execution.id,
+            {"late_outcome": NativeHookLateOutcome(status="failed", exit_code=2)},
+            expected_revision=hook_execution.revision,
+        )
     )
 
-    pending = client.get(
+    pending = await client.get(
         f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
     )
     assert pending.status_code == 200, pending.text
@@ -531,14 +568,14 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
     )
     assert pending.json()["recovery_blocked"] is True
     assert pending.json()["unresolved_hook_execution_ids"] == ["hook-run"]
-    outcomes = client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())
+    outcomes = await client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())
     assert outcomes.status_code == 200, outcomes.text
     assert outcomes.json()[0]["hook_id"] == "audit"
     assert outcomes.json()[0]["late_outcome_status"] == "failed"
     assert outcomes.json()[0]["late_outcome_exit_code"] == 2
     assert "hook_snapshot" not in outcomes.json()[0]
 
-    reconciled = client.post(
+    reconciled = await client.post(
         f"/api/v1/chat/turns/{turn.id}/reconcile-hook",
         headers=_auth(),
         json={
@@ -553,15 +590,17 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
     assert reconciled.json()["unresolved_hook_execution_ids"] == []
 
 
-def test_pending_turn_api_recovers_recorded_result_after_restart(api):
+async def test_pending_turn_api_recovers_recorded_result_after_restart(api):
     client, store, _ = api
-    engagement = store.create(Engagement(id="late-result-project", name="Recovery"))
-    provider = store.create(
+    engagement = await store.create(
+        Engagement(id="late-result-project", name="Recovery")
+    )
+    provider = await store.create(
         ProviderProfile(
             id="late-result-provider", name="Provider", provider_type="ollama"
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="late-result-session",
             engagement_id=engagement.id,
@@ -570,7 +609,7 @@ def test_pending_turn_api_recovers_recorded_result_after_restart(api):
             model="model",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="late-result-turn",
             engagement_id=engagement.id,
@@ -594,46 +633,50 @@ def test_pending_turn_api_recovers_recorded_result_after_restart(api):
         status=ToolResultStatus.COMPLETED,
         summary="The command completed before the old worker exited.",
     ).as_model_result()
-    store.create(
-        StoredToolCall(
-            id="late-result-tool",
-            engagement_id=engagement.id,
-            run_id=turn.id,
-            origin=ToolCallOrigin.CHAT,
-            chat_session_id=session.id,
-            chat_turn_id=turn.id,
-            tool_name="run_command",
-            status=ToolCallStatus.COMPLETE,
-            risk_class=RiskClass.LOCAL_READ,
-            result=receipt,
-            completed_at=utc_now(),
-            metadata={"provider_call_id": "provider-call", "provider_step": 0},
+    (
+        await store.create(
+            StoredToolCall(
+                id="late-result-tool",
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                tool_name="run_command",
+                status=ToolCallStatus.COMPLETE,
+                risk_class=RiskClass.LOCAL_READ,
+                result=receipt,
+                completed_at=utc_now(),
+                metadata={"provider_call_id": "provider-call", "provider_step": 0},
+            )
         )
     )
 
-    first = client.get(
+    first = await client.get(
         f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
     )
     assert first.status_code == 200, first.text
     assert first.json()["recovery_blocked"] is False
     assert first.json()["unresolved_tool_call_ids"] == []
-    second = client.get(
+    second = await client.get(
         f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
     )
     assert second.status_code == 200, second.text
     assert second.json()["revision"] == first.json()["revision"]
-    assert len(store.get(ChatTurn, turn.id).tool_history) == 1
+    assert len((await store.get(ChatTurn, turn.id)).tool_history) == 1
 
 
-def test_hook_execution_summaries_page_beyond_the_store_cap(api):
+async def test_hook_execution_summaries_page_beyond_the_store_cap(api):
     client, store, _ = api
-    engagement = store.create(Engagement(id="hook-page-project", name="Hook pages"))
-    provider = store.create(
+    engagement = await store.create(
+        Engagement(id="hook-page-project", name="Hook pages")
+    )
+    provider = await store.create(
         ProviderProfile(
             id="hook-page-provider", name="Provider", provider_type="ollama"
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="hook-page-session",
             engagement_id=engagement.id,
@@ -642,7 +685,7 @@ def test_hook_execution_summaries_page_beyond_the_store_cap(api):
             model="model",
         )
     )
-    decoy = store.create(
+    decoy = await store.create(
         ChatTurn(
             id="hook-page-decoy",
             engagement_id=engagement.id,
@@ -652,7 +695,7 @@ def test_hook_execution_summaries_page_beyond_the_store_cap(api):
             status=ChatTurnStatus.COMPLETE,
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="hook-page-turn",
             engagement_id=engagement.id,
@@ -663,53 +706,59 @@ def test_hook_execution_summaries_page_beyond_the_store_cap(api):
         )
     )
     started = utc_now()
-    store.create_many(
-        [
+    (
+        await store.create_many(
+            [
+                NativeHookExecution(
+                    id=f"decoy-hook-{index}",
+                    engagement_id=engagement.id,
+                    chat_session_id=session.id,
+                    chat_turn_id=decoy.id,
+                    hook_id="noise",
+                    hook_snapshot={},
+                    event_name="chat.turn.started",
+                    status="complete",
+                    started_at=started,
+                    completed_at=started,
+                )
+                for index in range(1_000)
+            ]
+        )
+    )
+    (
+        await store.create(
             NativeHookExecution(
-                id=f"decoy-hook-{index}",
+                id="visible-hook",
                 engagement_id=engagement.id,
                 chat_session_id=session.id,
-                chat_turn_id=decoy.id,
-                hook_id="noise",
+                chat_turn_id=turn.id,
+                hook_id="audit",
                 hook_snapshot={},
-                event_name="chat.turn.started",
+                event_name="chat.turn.completed",
                 status="complete",
                 started_at=started,
                 completed_at=started,
             )
-            for index in range(1_000)
-        ]
-    )
-    store.create(
-        NativeHookExecution(
-            id="visible-hook",
-            engagement_id=engagement.id,
-            chat_session_id=session.id,
-            chat_turn_id=turn.id,
-            hook_id="audit",
-            hook_snapshot={},
-            event_name="chat.turn.completed",
-            status="complete",
-            started_at=started,
-            completed_at=started,
         )
     )
 
-    response = client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())
+    response = await client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())
 
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()] == ["visible-hook"]
-    session_hooks = client.get(
+    session_hooks = await client.get(
         f"/api/v1/chat/sessions/{session.id}/hooks", headers=_auth()
     )
     assert session_hooks.status_code == 200, session_hooks.text
     assert [item["id"] for item in session_hooks.json()] == ["visible-hook"]
 
 
-def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
+async def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
     client, store, _ = api
-    engagement = store.create(Engagement(id="switch-project", name="Switch project"))
-    profile = store.create(
+    engagement = await store.create(
+        Engagement(id="switch-project", name="Switch project")
+    )
+    profile = await store.create(
         ProviderProfile(
             id="switch-provider",
             name="Local provider",
@@ -731,7 +780,7 @@ def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
             },
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="switch-session",
             engagement_id=engagement.id,
@@ -741,7 +790,7 @@ def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
         )
     )
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/sessions/switch-session/runtime-switch/preflight",
         headers=_auth(),
         json={
@@ -757,11 +806,11 @@ def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
     assert "not verified for the tools" in response.json()["reason"]
     # The caller verifies the model and asks again instead of reading prose.
     assert response.json()["reason_code"] == "model_not_tool_verified"
-    unchanged = store.get(ChatSession, session.id)
+    unchanged = await store.get(ChatSession, session.id)
     assert unchanged.model == "model-a"
     assert unchanged.revision == session.revision
 
-    stale = client.post(
+    stale = await client.post(
         "/api/v1/chat/sessions/switch-session/runtime-switch/preflight",
         headers=_auth(),
         json={
@@ -774,16 +823,15 @@ def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
     assert "reload" in stale.json()["detail"].lower()
 
 
-def test_health_and_data_routes_require_auth(api):
+async def test_health_and_data_routes_require_auth(api):
     client, _, _ = api
-    assert client.get("/api/v1/health").status_code == 401
+    assert (await client.get("/api/v1/health")).status_code == 401
     assert (
-        client.get(
+        await client.get(
             "/api/v1/health", headers={"Authorization": "Bearer wrong-token"}
-        ).status_code
-        == 401
-    )
-    response = client.get("/api/v1/health", headers=_auth())
+        )
+    ).status_code == 401
+    response = await client.get("/api/v1/health", headers=_auth())
     assert response.status_code == 200
     assert response.json()["journal_mode"] == "wal"
     assert response.json()["human_pty"] == "unavailable"
@@ -795,9 +843,9 @@ def test_health_and_data_routes_require_auth(api):
         "build_timestamp",
         "distribution_channel",
     } <= response.json().keys()
-    assert client.get("/api/v1/engagements").status_code == 401
-    assert client.get("/api/v1/engagements", headers=_auth()).status_code == 200
-    catalog = client.get("/api/v1/provider-catalog", headers=_auth())
+    assert (await client.get("/api/v1/engagements")).status_code == 401
+    assert (await client.get("/api/v1/engagements", headers=_auth())).status_code == 200
+    catalog = await client.get("/api/v1/provider-catalog", headers=_auth())
     assert catalog.status_code == 200
     assert any(
         item["flavor"] == "vllm" and item["local"] is True for item in catalog.json()
@@ -811,11 +859,11 @@ def test_health_and_data_routes_require_auth(api):
     )
 
 
-def test_action_resolution_endpoint_uses_core_resource_and_device_authority(api):
+async def test_action_resolution_endpoint_uses_core_resource_and_device_authority(api):
     client, store, _ = api
-    project = store.create(Engagement(name="Action project"))
-    asset = store.create(Asset(engagement_id=project.id, name="Gateway"))
-    response = client.post(
+    project = await store.create(Engagement(name="Action project"))
+    asset = await store.create(Asset(engagement_id=project.id, name="Gateway"))
+    response = await client.post(
         "/api/v1/actions/resolve",
         headers=_auth(),
         json={
@@ -836,21 +884,27 @@ def test_action_resolution_endpoint_uses_core_resource_and_device_authority(api)
     assert actions["copy"]["available"] is True
 
 
-def test_canonical_resource_resolution_preserves_project_identity(api):
+async def test_canonical_resource_resolution_preserves_project_identity(api):
     client, _, _ = api
-    first = client.post(
-        "/api/v1/engagements", headers=_auth(), json={"name": "First"}
+    first = (
+        await client.post(
+            "/api/v1/engagements", headers=_auth(), json={"name": "First"}
+        )
     ).json()
-    second = client.post(
-        "/api/v1/engagements", headers=_auth(), json={"name": "Second"}
+    second = (
+        await client.post(
+            "/api/v1/engagements", headers=_auth(), json={"name": "Second"}
+        )
     ).json()
-    asset = client.post(
-        "/api/v1/assets",
-        headers=_auth(),
-        json={"engagement_id": first["id"], "name": "api.example.test"},
+    asset = (
+        await client.post(
+            "/api/v1/assets",
+            headers=_auth(),
+            json={"engagement_id": first["id"], "name": "api.example.test"},
+        )
     ).json()
 
-    available = client.post(
+    available = await client.post(
         "/api/v1/resources/resolve",
         headers=_auth(),
         json={"project_id": first["id"], "kind": "asset", "id": asset["id"]},
@@ -859,7 +913,7 @@ def test_canonical_resource_resolution_preserves_project_identity(api):
     assert available.json()["state"] == "available"
     assert available.json()["ref"]["revision"] == asset["revision"]
 
-    wrong_project = client.post(
+    wrong_project = await client.post(
         "/api/v1/resources/resolve",
         headers=_auth(),
         json={"project_id": second["id"], "kind": "asset", "id": asset["id"]},
@@ -868,7 +922,7 @@ def test_canonical_resource_resolution_preserves_project_identity(api):
     assert wrong_project.json()["state"] == "wrong_project"
     assert wrong_project.json()["actual_project_id"] == first["id"]
 
-    deleted = client.post(
+    deleted = await client.post(
         "/api/v1/resources/resolve",
         headers=_auth(),
         json={"project_id": first["id"], "kind": "asset", "id": "missing"},
@@ -877,7 +931,7 @@ def test_canonical_resource_resolution_preserves_project_identity(api):
     assert deleted.json()["state"] == "deleted"
 
 
-def test_local_provider_discovery_probes_only_fixed_services(api, monkeypatch):
+async def test_local_provider_discovery_probes_only_fixed_services(api, monkeypatch):
     client, _, _ = api
     observed: list[tuple[ProviderFlavor, str]] = []
 
@@ -892,7 +946,7 @@ def test_local_provider_discovery_probes_only_fixed_services(api, monkeypatch):
         return ProviderHealth(provider_id=runtime.config.id, healthy=False)
 
     monkeypatch.setattr(OpenAICompatibleProvider, "health", health)
-    response = client.get("/api/v1/providers/discover-local", headers=_auth())
+    response = await client.get("/api/v1/providers/discover-local", headers=_auth())
 
     assert response.status_code == 200
     assert response.json() == [
@@ -910,9 +964,9 @@ def test_local_provider_discovery_probes_only_fixed_services(api, monkeypatch):
     }
 
 
-def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
+async def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
     client, store, _ = api
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             name="Lab vLLM",
             provider_type="vllm",
@@ -932,7 +986,9 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
 
     monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
 
-    response = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+    response = await client.post(
+        f"/api/v1/providers/{profile.id}/health", headers=_auth()
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -952,9 +1008,9 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
     }
 
 
-def test_provider_health_persists_exact_model_context_catalog(api, monkeypatch):
+async def test_provider_health_persists_exact_model_context_catalog(api, monkeypatch):
     client, store, _ = api
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="openrouter-context",
             name="OpenRouter",
@@ -981,10 +1037,12 @@ def test_provider_health_persists_exact_model_context_catalog(api, monkeypatch):
 
     monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
 
-    response = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+    response = await client.post(
+        f"/api/v1/providers/{profile.id}/health", headers=_auth()
+    )
 
     assert response.status_code == 200, response.text
-    stored = store.get(ProviderProfile, profile.id)
+    stored = await store.get(ProviderProfile, profile.id)
     assert response.json()["provider_revision"] == stored.revision
     assert stored.revision == profile.revision + 1
     assert stored.metadata["model_descriptors"][0]["context_window"] == 200_000
@@ -992,7 +1050,7 @@ def test_provider_health_persists_exact_model_context_catalog(api, monkeypatch):
     assert len(stored.metadata["model_catalog_revision"]) == 64
 
 
-def test_provider_health_keeps_verified_openrouter_route_limits(api, monkeypatch):
+async def test_provider_health_keeps_verified_openrouter_route_limits(api, monkeypatch):
     client, store, _ = api
     routes = {
         "route_limits": [
@@ -1010,7 +1068,7 @@ def test_provider_health_keeps_verified_openrouter_route_limits(api, monkeypatch
         "route_limits_checked_at": "2026-09-19T20:33:00+00:00",
         "route_limits_error": None,
     }
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="openrouter-verified-routes",
             name="OpenRouter",
@@ -1041,11 +1099,13 @@ def test_provider_health_keeps_verified_openrouter_route_limits(api, monkeypatch
 
     monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
 
-    first = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
-    second = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+    first = await client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+    second = await client.post(
+        f"/api/v1/providers/{profile.id}/health", headers=_auth()
+    )
 
     assert first.status_code == second.status_code == 200
-    stored = store.get(ProviderProfile, profile.id)
+    stored = await store.get(ProviderProfile, profile.id)
     assert stored.revision == profile.revision + 1
     descriptor = stored.metadata["model_descriptors"][0]
     assert {key: descriptor[key] for key in routes} == routes
@@ -1056,11 +1116,11 @@ def test_provider_health_keeps_verified_openrouter_route_limits(api, monkeypatch
     assert limits.context_window == 1_048_576
 
 
-def test_provider_health_reports_discovered_models_outside_the_allowlist(
+async def test_provider_health_reports_discovered_models_outside_the_allowlist(
     api, monkeypatch
 ):
     client, store, _ = api
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="openrouter-unlisted",
             name="OpenRouter",
@@ -1083,7 +1143,9 @@ def test_provider_health_reports_discovered_models_outside_the_allowlist(
 
     monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
 
-    response = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+    response = await client.post(
+        f"/api/v1/providers/{profile.id}/health", headers=_auth()
+    )
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -1094,16 +1156,16 @@ def test_provider_health_reports_discovered_models_outside_the_allowlist(
         (item["id"], item["context_window"])
         for item in body["unlisted_model_descriptors"]
     ] == [("model-b", 400_000)]
-    stored = store.get(ProviderProfile, profile.id)
+    stored = await store.get(ProviderProfile, profile.id)
     assert stored.model_allowlist == ["model-a"]
     assert [item["id"] for item in stored.metadata["model_descriptors"]] == ["model-a"]
 
 
-def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverification(
+async def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverification(
     api, monkeypatch
 ):
     client, store, _ = api
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             name="Lab vLLM",
             provider_type="vllm",
@@ -1132,7 +1194,7 @@ def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverif
         )
 
     monkeypatch.setattr(OpenAICompatibleProvider, "complete", valid_probe)
-    verified = client.post(
+    verified = await client.post(
         f"/api/v1/providers/{profile.id}/capabilities/verify",
         headers=_auth(),
         json={"model": "coder-model", "expected_revision": profile.revision},
@@ -1142,11 +1204,11 @@ def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverif
     assert verified.json()["verification"]["status"] == "verified", verified.json()[
         "verification"
     ]["failure_detail"]
-    stored = store.get(ProviderProfile, profile.id)
+    stored = await store.get(ProviderProfile, profile.id)
     assert stored.tools_verified_for("coder-model") is True
     assert stored.capabilities.tool_calling is True
 
-    changed = client.patch(
+    changed = await client.patch(
         f"/api/v1/providers/{profile.id}",
         headers=_auth(),
         json={
@@ -1165,9 +1227,11 @@ def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverif
     assert changed.json()["capabilities"]["tool_calling"] is False
 
 
-def test_openrouter_capability_probe_persists_verified_route_limits(api, monkeypatch):
+async def test_openrouter_capability_probe_persists_verified_route_limits(
+    api, monkeypatch
+):
     client, store, _ = api
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="openrouter-routes",
             name="OpenRouter",
@@ -1217,14 +1281,14 @@ def test_openrouter_capability_probe_persists_verified_route_limits(api, monkeyp
     monkeypatch.setattr(OpenAICompatibleProvider, "complete", valid_probe)
     monkeypatch.setattr(OpenAICompatibleProvider, "openrouter_route_limits", routes)
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/providers/{profile.id}/capabilities/verify",
         headers=_auth(),
         json={"model": "author/model", "expected_revision": profile.revision},
     )
 
     assert response.status_code == 200, response.text
-    stored = store.get(ProviderProfile, profile.id)
+    stored = await store.get(ProviderProfile, profile.id)
     descriptor = stored.metadata["model_descriptors"][0]
     assert descriptor["route_limits_verified"] is True
     assert descriptor["route_limits"][0]["context_window"] == 65_536
@@ -1233,9 +1297,9 @@ def test_openrouter_capability_probe_persists_verified_route_limits(api, monkeyp
     assert len(stored.metadata["route_catalog_revision"]) == 64
 
 
-def test_openrouter_capability_probe_measures_the_alias_target(api, monkeypatch):
+async def test_openrouter_capability_probe_measures_the_alias_target(api, monkeypatch):
     client, store, _ = api
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="openrouter-alias",
             name="OpenRouter",
@@ -1287,7 +1351,7 @@ def test_openrouter_capability_probe_measures_the_alias_target(api, monkeypatch)
     monkeypatch.setattr(OpenAICompatibleProvider, "complete", valid_probe)
     monkeypatch.setattr(OpenAICompatibleProvider, "openrouter_route_limits", routes)
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/providers/{profile.id}/capabilities/verify",
         headers=_auth(),
         json={
@@ -1297,7 +1361,7 @@ def test_openrouter_capability_probe_measures_the_alias_target(api, monkeypatch)
     )
 
     assert response.status_code == 200, response.text
-    stored = store.get(ProviderProfile, profile.id)
+    stored = await store.get(ProviderProfile, profile.id)
     descriptor = stored.metadata["model_descriptors"][0]
     assert descriptor["route_limits_verified"] is True
     assert descriptor["route_limits_source_model"] == "author/model-a"
@@ -1309,10 +1373,12 @@ def test_openrouter_capability_probe_measures_the_alias_target(api, monkeypatch)
     assert limits.route_limits_verified is True
 
 
-def test_capability_probe_never_narrows_an_empty_model_allowlist(api, monkeypatch):
+async def test_capability_probe_never_narrows_an_empty_model_allowlist(
+    api, monkeypatch
+):
     client, store, _ = api
     models = ["author/first", "author/second"]
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="openrouter-open-catalog",
             name="OpenRouter",
@@ -1355,21 +1421,21 @@ def test_capability_probe_never_narrows_an_empty_model_allowlist(api, monkeypatc
     monkeypatch.setattr(OpenAICompatibleProvider, "openrouter_route_limits", routes)
 
     for model in models:
-        revision = store.get(ProviderProfile, profile.id).revision
-        response = client.post(
+        revision = (await store.get(ProviderProfile, profile.id)).revision
+        response = await client.post(
             f"/api/v1/providers/{profile.id}/capabilities/verify",
             headers=_auth(),
             json={"model": model, "expected_revision": revision},
         )
         assert response.status_code == 200, response.text
 
-    stored = store.get(ProviderProfile, profile.id)
+    stored = await store.get(ProviderProfile, profile.id)
     # Verifying one model must not pin the provider to it; every model stays selectable.
     assert stored.model_allowlist == []
     assert sorted(stored.capability_verifications) == models
 
 
-def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
+async def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
     client, store, _ = api
     engagement = Engagement(id="eng-chat-approval", name="Chat approval")
     session = ChatSession(
@@ -1401,9 +1467,9 @@ def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
         policy_rationale="operator confirmation required",
         requested_by="chat-assistant",
     )
-    store.create_many([engagement, session, turn, approval])
+    (await store.create_many([engagement, session, turn, approval]))
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/approvals/{approval.id}/decision",
         headers=_auth(),
         json={"decision": "approve"},
@@ -1412,12 +1478,16 @@ def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
     assert response.status_code == 200
     assert response.json()["origin"] == "chat"
     assert response.json()["status"] == "approved"
-    assert store.get(ChatTurn, turn.id).status == ChatTurnStatus.WAITING_APPROVAL
+    assert (
+        await store.get(ChatTurn, turn.id)
+    ).status == ChatTurnStatus.WAITING_APPROVAL
 
 
-def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeypatch):
+async def test_disabled_provider_health_fails_closed_without_network(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "disabled-provider.db")
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             name="Disabled",
             provider_type="vllm",
@@ -1425,7 +1495,7 @@ def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeyp
             enabled=False,
         )
     )
-    invalid = store.create(
+    invalid = await store.create(
         ProviderProfile(name="Invalid import", provider_type="not-a-provider")
     )
 
@@ -1435,7 +1505,7 @@ def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeyp
     monkeypatch.setattr(OpenAICompatibleProvider, "health", should_not_run)
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/providers/{profile.id}/health",
         headers=_auth(),
     )
@@ -1456,7 +1526,7 @@ def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeyp
         "key_limit_remaining": None,
         "provider_revision": profile.revision,
     }
-    refreshed = client.post("/api/v1/provider-health/refresh", headers=_auth())
+    refreshed = await client.post("/api/v1/provider-health/refresh", headers=_auth())
     assert refreshed.status_code == 200
     by_id = {item["provider_id"]: item for item in refreshed.json()}
     assert by_id[profile.id]["detail"] == "provider profile is disabled"
@@ -1464,11 +1534,11 @@ def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeyp
     assert "unknown provider type" in by_id[invalid.id]["detail"]
 
 
-def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
+async def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
     store = NebulaStore(tmp_path / "secure.db")
     app = create_app(store, auth_token="test-token")
     client = TestClient(app)
-    preflight = client.options(
+    preflight = await client.options(
         "/api/v1/engagements",
         headers={
             "Origin": "http://tauri.localhost",
@@ -1478,20 +1548,25 @@ def test_tauri_cors_and_audit_resources_are_fail_closed_by_default(tmp_path):
     )
     assert preflight.status_code == 200
     assert preflight.headers["access-control-allow-origin"] == "http://tauri.localhost"
-    assert client.post("/api/v1/runs/nope/events", headers=_auth()).status_code == 405
-    assert client.post("/api/v1/approvals", headers=_auth(), json={}).status_code == 405
     assert (
-        client.patch("/api/v1/tool-calls/nope", headers=_auth(), json={}).status_code
-        == 405
-    )
-    assert client.delete("/api/v1/artifacts/nope", headers=_auth()).status_code == 405
+        await client.post("/api/v1/runs/nope/events", headers=_auth())
+    ).status_code == 405
+    assert (
+        await client.post("/api/v1/approvals", headers=_auth(), json={})
+    ).status_code == 405
+    assert (
+        await client.patch("/api/v1/tool-calls/nope", headers=_auth(), json={})
+    ).status_code == 405
+    assert (
+        await client.delete("/api/v1/artifacts/nope", headers=_auth())
+    ).status_code == 405
 
 
-def test_project_creation_records_explicit_host_consent_without_persisting_request_field(
+async def test_project_creation_records_explicit_host_consent_without_persisting_request_field(
     api,
 ):
     client, store, _ = api
-    created = client.post(
+    created = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={"name": "Host consent project", "host_access_acknowledged": True},
@@ -1499,7 +1574,9 @@ def test_project_creation_records_explicit_host_consent_without_persisting_reque
     assert created.status_code == 201
     project = created.json()
     assert "host_access_acknowledged" not in project
-    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=project["id"])
+    [policy] = await store.list_entities(
+        AutomationProjectPolicy, engagement_id=project["id"]
+    )
     assert policy.execution_mode == "host"
     assert policy.host_access_acknowledged is True
     assert policy.metadata["host_access_source"] == (
@@ -1507,24 +1584,31 @@ def test_project_creation_records_explicit_host_consent_without_persisting_reque
     )
 
 
-def test_project_create_request_id_replays_exact_core_result(api, tmp_path):
+async def test_project_create_request_id_replays_exact_core_result(api, tmp_path):
     client, store, _ = api
     body = {
         "name": "Idempotent project",
         "description": "Original request",
         "request_id": "request-one",
     }
-    first = client.post("/api/v1/engagements", headers=_auth(), json=body)
-    replay = client.post("/api/v1/engagements", headers=_auth(), json=body)
+    first = await client.post("/api/v1/engagements", headers=_auth(), json=body)
+    replay = await client.post("/api/v1/engagements", headers=_auth(), json=body)
     assert first.status_code == 201
     assert replay.status_code == 201
     assert replay.json() == first.json()
     assert "request_id" not in first.json()
     assert (
-        len([p for p in store.list_entities(Engagement) if p.name == body["name"]]) == 1
+        len(
+            [
+                p
+                for p in (await store.list_entities(Engagement))
+                if p.name == body["name"]
+            ]
+        )
+        == 1
     )
 
-    conflict = client.post(
+    conflict = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={**body, "description": "Different request"},
@@ -1539,27 +1623,26 @@ def test_project_create_request_id_replays_exact_core_result(api, tmp_path):
         "host_access_acknowledged": False,
         "request_id": "linked-request-one",
     }
-    linked = client.post("/api/v1/engagements", headers=_auth(), json=linked_body)
+    linked = await client.post("/api/v1/engagements", headers=_auth(), json=linked_body)
     assert linked.status_code == 201, linked.text
     assert linked.json()["workspace_path"] == str(linked_folder.resolve())
     assert (
-        client.post("/api/v1/engagements", headers=_auth(), json=linked_body).json()
-        == linked.json()
-    )
-    [policy] = store.list_entities(
+        await client.post("/api/v1/engagements", headers=_auth(), json=linked_body)
+    ).json() == linked.json()
+    [policy] = await store.list_entities(
         AutomationProjectPolicy, engagement_id=linked.json()["id"]
     )
     assert policy.host_access_acknowledged is False
 
     other_folder = tmp_path / "other"
     other_folder.mkdir()
-    changed_folder = client.post(
+    changed_folder = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={**linked_body, "workspace_path": str(other_folder)},
     )
     assert changed_folder.status_code == 409
-    missing_folder = client.post(
+    missing_folder = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={
@@ -1571,21 +1654,21 @@ def test_project_create_request_id_replays_exact_core_result(api, tmp_path):
     assert missing_folder.status_code == 422
 
 
-def test_typed_crud_revision_and_overview(api):
+async def test_typed_crud_revision_and_overview(api):
     client, store, _ = api
-    created = client.post(
+    created = await client.post(
         "/api/v1/engagements", headers=_auth(), json={"name": "API engagement"}
     )
     assert created.status_code == 201
     engagement = created.json()
     engagement_id = engagement["id"]
-    [runtime_policy] = store.list_entities(
+    [runtime_policy] = await store.list_entities(
         AutomationProjectPolicy, engagement_id=engagement_id
     )
     assert runtime_policy.execution_mode == "host"
     assert runtime_policy.host_access_acknowledged is False
 
-    patched = client.patch(
+    patched = await client.patch(
         f"/api/v1/engagements/{engagement_id}",
         headers=_auth(),
         json={"changes": {"description": "updated"}, "expected_revision": 1},
@@ -1594,47 +1677,44 @@ def test_typed_crud_revision_and_overview(api):
     assert patched.json()["revision"] == 2
     assert patched.json()["description"] == "updated"
 
-    stale = client.patch(
+    stale = await client.patch(
         f"/api/v1/engagements/{engagement_id}",
         headers=_auth(),
         json={"changes": {"description": "stale"}, "expected_revision": 1},
     )
     assert stale.status_code == 409
-    overview = client.get(
+    overview = await client.get(
         f"/api/v1/engagements/{engagement_id}/overview", headers=_auth()
     )
     assert overview.status_code == 200
     assert overview.json()["counts"]["engagements"] == 1
 
     assert (
-        client.delete(
-            f"/api/v1/engagements/{engagement_id}", headers=_auth()
-        ).status_code
-        == 204
-    )
+        await client.delete(f"/api/v1/engagements/{engagement_id}", headers=_auth())
+    ).status_code == 204
     assert (
-        store.list_entities(AutomationProjectPolicy, engagement_id=engagement_id) == []
-    )
+        await store.list_entities(AutomationProjectPolicy, engagement_id=engagement_id)
+    ) == []
     assert (
-        client.get(f"/api/v1/engagements/{engagement_id}", headers=_auth()).status_code
-        == 404
-    )
-    assert store.count(ScopePolicy) == 0
+        await client.get(f"/api/v1/engagements/{engagement_id}", headers=_auth())
+    ).status_code == 404
+    assert (await store.count(ScopePolicy)) == 0
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/engagements/{engagement_id}/overview",
             headers=_auth(),
-        ).status_code
-        == 404
-    )
+        )
+    ).status_code == 404
 
 
-def test_run_event_rest_and_authenticated_websocket_replay(api):
+async def test_run_event_rest_and_authenticated_websocket_replay(api):
     client, store, _ = api
-    engagement = store.create(Engagement(name="Event replay"))
-    run = store.create(AgentRun(engagement_id=engagement.id, objective="Replay events"))
+    engagement = await store.create(Engagement(name="Event replay"))
+    run = await store.create(
+        AgentRun(engagement_id=engagement.id, objective="Replay events")
+    )
     for number in (1, 2):
-        response = client.post(
+        response = await client.post(
             f"/api/v1/runs/{run.id}/events",
             headers=_auth(),
             json={
@@ -1646,41 +1726,47 @@ def test_run_event_rest_and_authenticated_websocket_replay(api):
         assert response.status_code == 201
         assert response.json()["sequence"] == number
 
-    replay = client.get(f"/api/v1/runs/{run.id}/events?after=1", headers=_auth()).json()
+    replay = (
+        await client.get(f"/api/v1/runs/{run.id}/events?after=1", headers=_auth())
+    ).json()
     assert [event["sequence"] for event in replay["events"]] == [2]
 
-    with client.websocket_connect(
+    async with client.websocket_connect(
         f"/api/v1/runs/{run.id}/events/ws?after=0",
         subprotocols=["nebula.events.v1", "nebula.auth.dGVzdC10b2tlbg"],
     ) as websocket:
         assert websocket.accepted_subprotocol == "nebula.events.v1"
-        assert websocket.receive_json()["event"]["sequence"] == 1
-        assert websocket.receive_json()["event"]["sequence"] == 2
-        assert websocket.receive_json() == {
+        assert (await websocket.receive_json())["event"]["sequence"] == 1
+        assert (await websocket.receive_json())["event"]["sequence"] == 2
+        assert (await websocket.receive_json()) == {
             "kind": "replay_complete",
             "after_sequence": 2,
         }
 
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(f"/api/v1/runs/{run.id}/events/ws"):
+        async with client.websocket_connect(f"/api/v1/runs/{run.id}/events/ws"):
             pass
     assert exc_info.value.code == 4401
 
 
-def test_artifact_content_and_openapi_contract(api):
+async def test_artifact_content_and_openapi_contract(api):
     client, store, artifacts = api
-    engagement = client.post(
-        "/api/v1/engagements", headers=_auth(), json={"name": "Artifacts"}
+    engagement = (
+        await client.post(
+            "/api/v1/engagements", headers=_auth(), json={"name": "Artifacts"}
+        )
     ).json()
     artifact = artifacts.put_bytes(
         b"evidence", engagement_id=engagement["id"], filename="proof.txt"
     )
-    store.create(artifact)
-    response = client.get(f"/api/v1/artifacts/{artifact.id}/content", headers=_auth())
+    (await store.create(artifact))
+    response = await client.get(
+        f"/api/v1/artifacts/{artifact.id}/content", headers=_auth()
+    )
     assert response.status_code == 200
     assert response.content == b"evidence"
 
-    schema = client.get("/openapi.json").json()
+    schema = (await client.get("/openapi.json")).json()
     assert "/api/v1/providers" in schema["paths"]
     assert "/api/v1/findings" in schema["paths"]
     request_schema = schema["paths"]["/api/v1/engagements"]["post"]["requestBody"][
@@ -1689,7 +1775,7 @@ def test_artifact_content_and_openapi_contract(api):
     assert request_schema["$ref"].endswith("/EngagementCreateRequest")
 
 
-def test_static_workspace_supports_spa_reload_without_masking_missing_assets(
+async def test_static_workspace_supports_spa_reload_without_masking_missing_assets(
     tmp_path,
 ):
     frontend = tmp_path / "dist"
@@ -1704,21 +1790,21 @@ def test_static_workspace_supports_spa_reload_without_masking_missing_assets(
         )
     )
 
-    assert client.get("/settings").text == "<main>Nebula workspace</main>"
-    assert client.get("/app.js").status_code == 200
-    assert client.get("/missing.js").status_code == 404
-    api_missing = client.get("/api/v1/not-a-route")
+    assert (await client.get("/settings")).text == "<main>Nebula workspace</main>"
+    assert (await client.get("/app.js")).status_code == 200
+    assert (await client.get("/missing.js")).status_code == 404
+    api_missing = await client.get("/api/v1/not-a-route")
     assert api_missing.status_code == 404
     assert "Nebula workspace" not in api_missing.text
 
 
-def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
+async def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
     client, store, _ = api
-    engagement = store.create(Engagement(name="Approval API"))
-    run = store.create(
+    engagement = await store.create(Engagement(name="Approval API"))
+    run = await store.create(
         AgentRun(engagement_id=engagement.id, objective="Approved operation")
     )
-    approval = store.create(
+    approval = await store.create(
         Approval(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -1733,7 +1819,7 @@ def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
         )
     )
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/approvals/{approval.id}/decision",
         headers=_auth(),
         json={
@@ -1750,9 +1836,9 @@ def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
     assert decided["exact_request"]["arguments"] == {"ports": [443]}
     assert decided["decided_by"] == "system"
     assert decided["decided_at"] is not None
-    persisted = store.get(Approval, approval.id)
+    persisted = await store.get(Approval, approval.id)
     assert persisted.status == ApprovalStatus.EDITED
-    events = store.replay_events(run.id)
+    events = await store.replay_events(run.id)
     assert len(events) == 1
     assert events[0].event_type == "approval.resolved"
     assert events[0].actor_id == "system"
@@ -1762,20 +1848,21 @@ def test_approval_decision_is_revisioned_and_recorded_in_run_ledger(api):
         "decided_by": "system",
     }
     assert (
-        client.post(
+        await client.post(
             f"/api/v1/approvals/{approval.id}/decision",
             headers=_auth(),
             json={"decision": "reject"},
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
 
 
-def test_expired_approval_is_durably_expired_instead_of_approved(api):
+async def test_expired_approval_is_durably_expired_instead_of_approved(api):
     client, store, _ = api
-    engagement = store.create(Engagement(name="Expired approval"))
-    run = store.create(AgentRun(engagement_id=engagement.id, objective="Do not run"))
-    approval = store.create(
+    engagement = await store.create(Engagement(name="Expired approval"))
+    run = await store.create(
+        AgentRun(engagement_id=engagement.id, objective="Do not run")
+    )
+    approval = await store.create(
         Approval(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -1787,52 +1874,55 @@ def test_expired_approval_is_durably_expired_instead_of_approved(api):
         )
     )
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/approvals/{approval.id}/decision",
         headers=_auth(),
         json={"decision": "approve"},
     )
 
     assert response.status_code == 410
-    expired = store.get(Approval, approval.id)
+    expired = await store.get(Approval, approval.id)
     assert expired.status == ApprovalStatus.EXPIRED
     assert expired.decided_by == "system"
     assert expired.decided_at is not None
-    events = store.replay_events(run.id)
+    events = await store.replay_events(run.id)
     assert [event.event_type for event in events] == ["approval.expired"]
     assert events[0].actor_id == "system"
 
 
-def test_websocket_header_auth_survives_malformed_optional_auth_protocol(api):
+async def test_websocket_header_auth_survives_malformed_optional_auth_protocol(api):
     client, store, _ = api
-    engagement = store.create(Engagement(name="Empty replay"))
-    run = store.create(AgentRun(engagement_id=engagement.id, objective="No events yet"))
-    with client.websocket_connect(
+    engagement = await store.create(Engagement(name="Empty replay"))
+    run = await store.create(
+        AgentRun(engagement_id=engagement.id, objective="No events yet")
+    )
+    async with client.websocket_connect(
         f"/api/v1/runs/{run.id}/events/ws",
         headers=_auth(),
         subprotocols=["nebula.events.v1", "nebula.auth.not!base64"],
     ) as websocket:
         assert websocket.accepted_subprotocol == "nebula.events.v1"
-        assert websocket.receive_json() == {
+        assert (await websocket.receive_json()) == {
             "kind": "replay_complete",
             "after_sequence": 0,
         }
 
 
-def test_run_event_routes_reject_a_missing_run(api):
+async def test_run_event_routes_reject_a_missing_run(api):
     client, _, _ = api
 
-    assert client.get("/api/v1/runs/missing/events", headers=_auth()).status_code == 404
     assert (
-        client.post(
+        await client.get("/api/v1/runs/missing/events", headers=_auth())
+    ).status_code == 404
+    assert (
+        await client.post(
             "/api/v1/runs/missing/events",
             headers=_auth(),
             json={"event_type": "orphan"},
-        ).status_code
-        == 404
-    )
+        )
+    ).status_code == 404
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
+        async with client.websocket_connect(
             "/api/v1/runs/missing/events/ws",
             headers=_auth(),
             subprotocols=["nebula.events.v1"],
@@ -1841,10 +1931,10 @@ def test_run_event_routes_reject_a_missing_run(api):
     assert exc_info.value.code == 4404
 
 
-def test_websocket_rejects_conflicting_valid_credentials(api):
+async def test_websocket_rejects_conflicting_valid_credentials(api):
     client, _, _ = api
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
+        async with client.websocket_connect(
             "/api/v1/runs/empty/events/ws",
             headers=_auth(),
             subprotocols=[
@@ -1856,7 +1946,7 @@ def test_websocket_rejects_conflicting_valid_credentials(api):
     assert exc_info.value.code == 4401
 
 
-def test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision(api):
+async def test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision(api):
     client, store, _ = api
     engagement = Engagement(id="eng-review", name="Review")
     approval = Approval(
@@ -1873,20 +1963,20 @@ def test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision(api):
         policy_rationale="Operator confirmation required",
         requested_by="chat-assistant",
     )
-    store.create_many([engagement, approval])
+    (await store.create_many([engagement, approval]))
     endpoint = f"/api/v1/approvals/{approval.id}"
-    assert client.get(endpoint).status_code == 401
-    response = client.get(endpoint, headers=_auth())
+    assert (await client.get(endpoint)).status_code == 401
+    response = await client.get(endpoint, headers=_auth())
     assert response.status_code == 200
     assert response.json()["exact_request"] == approval.exact_request
-    decision = client.post(
+    decision = await client.post(
         f"{endpoint}/decision", headers=_auth(), json={"decision": "reject"}
     )
     assert decision.status_code == 200
-    assert client.get(endpoint, headers=_auth()).json()["status"] == "rejected"
+    assert (await client.get(endpoint, headers=_auth())).json()["status"] == "rejected"
 
 
-def test_openrouter_upstream_directory_is_public_cached_and_located(tmp_path):
+async def test_openrouter_upstream_directory_is_public_cached_and_located(tmp_path):
     seen: list[httpx.Request] = []
 
     def directory(request: httpx.Request) -> httpx.Response:
@@ -1927,8 +2017,8 @@ def test_openrouter_upstream_directory_is_public_cached_and_located(tmp_path):
         )
     )
     path = "/api/v1/providers/openrouter/upstream-providers"
-    assert client.get(path).status_code == 401
-    first = client.get(path, headers=_auth())
+    assert (await client.get(path)).status_code == 401
+    first = await client.get(path, headers=_auth())
     assert first.status_code == 200
     assert first.json() == [
         {"slug": "baidu", "name": "Baidu", "headquarters": "CN", "datacenters": []},
@@ -1945,13 +2035,13 @@ def test_openrouter_upstream_directory_is_public_cached_and_located(tmp_path):
             "datacenters": ["US"],
         },
     ]
-    assert client.get(path, headers=_auth()).json() == first.json()
+    assert (await client.get(path, headers=_auth())).json() == first.json()
     assert len(seen) == 1
     assert "authorization" not in seen[0].headers
     assert str(seen[0].url) == "https://openrouter.ai/api/v1/providers"
 
 
-def test_openrouter_upstream_directory_failure_is_reported(tmp_path):
+async def test_openrouter_upstream_directory_failure_is_reported(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -1962,18 +2052,18 @@ def test_openrouter_upstream_directory_failure_is_reported(tmp_path):
             ),
         )
     )
-    response = client.get(
+    response = await client.get(
         "/api/v1/providers/openrouter/upstream-providers", headers=_auth()
     )
     assert response.status_code == 502
     assert "provider directory is unavailable" in response.text
 
 
-def test_companion_stream_closes_with_4404_for_a_missing_session(api):
+async def test_companion_stream_closes_with_4404_for_a_missing_session(api):
     client, _, _ = api
     token = base64.urlsafe_b64encode(b"test-token").decode("ascii").rstrip("=")
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
+        async with client.websocket_connect(
             "/api/v1/browser-companion/missing/tabs/tab-1/stream",
             subprotocols=[f"nebula.auth.{token}"],
         ):
@@ -1981,51 +2071,55 @@ def test_companion_stream_closes_with_4404_for_a_missing_session(api):
     assert exc_info.value.code == 4404
 
 
-def test_paired_device_is_recognised_beyond_the_first_thousand_sessions(api):
+async def test_paired_device_is_recognised_beyond_the_first_thousand_sessions(api):
     from datetime import timedelta
 
     from nebula.v3.domain import PairedDeviceSession, utc_now
 
     client, store, _ = api
     expiry = utc_now() + timedelta(hours=1)
-    store.create_many(
-        [
+    (
+        await store.create_many(
+            [
+                PairedDeviceSession(
+                    id=f"old-{index}",
+                    name="Older device",
+                    token_sha256=hashlib.sha256(f"old-{index}".encode()).hexdigest(),
+                    csrf_sha256="0" * 64,
+                    idle_expires_at=expiry,
+                    absolute_expires_at=expiry,
+                )
+                for index in range(1_000)
+            ]
+        )
+    )
+    (
+        await store.create(
             PairedDeviceSession(
-                id=f"old-{index}",
-                name="Older device",
-                token_sha256=hashlib.sha256(f"old-{index}".encode()).hexdigest(),
+                id="newest",
+                name="Newest phone",
+                token_sha256=hashlib.sha256(b"newest-token").hexdigest(),
                 csrf_sha256="0" * 64,
                 idle_expires_at=expiry,
                 absolute_expires_at=expiry,
             )
-            for index in range(1_000)
-        ]
-    )
-    store.create(
-        PairedDeviceSession(
-            id="newest",
-            name="Newest phone",
-            token_sha256=hashlib.sha256(b"newest-token").hexdigest(),
-            csrf_sha256="0" * 64,
-            idle_expires_at=expiry,
-            absolute_expires_at=expiry,
         )
     )
 
-    response = client.get(
+    response = await client.get(
         "/api/v1/engagements", cookies={"nebula_device": "newest-token"}
     )
 
     assert response.status_code == 200, response.text
 
 
-def test_generic_delete_skips_unreadable_rows_of_unrelated_kinds(api):
+async def test_generic_delete_skips_unreadable_rows_of_unrelated_kinds(api):
     client, store, _ = api
-    engagement = store.create(Engagement(name="Corrupt neighbour"))
-    asset = store.create(
+    engagement = await store.create(Engagement(name="Corrupt neighbour"))
+    asset = await store.create(
         Asset(engagement_id=engagement.id, name="host", asset_type="host")
     )
-    unrelated = store.create(
+    unrelated = await store.create(
         ChatSession(
             engagement_id=engagement.id,
             title="Will be corrupted",
@@ -2033,22 +2127,26 @@ def test_generic_delete_skips_unreadable_rows_of_unrelated_kinds(api):
             model="model-a",
         )
     )
-    with store.database.engine.begin() as connection:
-        connection.exec_driver_sql(
-            "UPDATE entities SET payload = json_set(payload, '$.title', 5) "
-            "WHERE id = ?",
-            (unrelated.id,),
+    async with store.database.engine.begin() as connection:
+        (
+            await connection.exec_driver_sql(
+                "UPDATE entities SET payload = json_set(payload, '$.title', 5) "
+                "WHERE id = ?",
+                (unrelated.id,),
+            )
         )
 
-    response = client.delete(f"/api/v1/assets/{asset.id}", headers=_auth())
+    response = await client.delete(f"/api/v1/assets/{asset.id}", headers=_auth())
 
     assert response.status_code == 204, response.text
-    assert store.count(Asset) == 0
+    assert (await store.count(Asset)) == 0
 
 
-def test_harness_delete_checks_only_entities_that_can_reference_it(api, monkeypatch):
+async def test_harness_delete_checks_only_entities_that_can_reference_it(
+    api, monkeypatch
+):
     client, store, _ = api
-    harness = store.create(
+    harness = await store.create(
         HarnessProfile(
             name="Disposable Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
         )
@@ -2056,7 +2154,7 @@ def test_harness_delete_checks_only_entities_that_can_reference_it(api, monkeypa
     visited = []
     original = store.iter_reference_candidates
 
-    def record(model, references):
+    async def record(model, references):
         visited.append(model.entity_kind)
         assert references == [("harness_profile_id", harness.id, False)]
         return original(model, references)
@@ -2066,7 +2164,7 @@ def test_harness_delete_checks_only_entities_that_can_reference_it(api, monkeypa
 
     monkeypatch.setattr(store, "iter_reference_candidates", record)
     monkeypatch.setattr(store, "iter_readable_entities", reject_full_scan)
-    response = client.delete(
+    response = await client.delete(
         f"/api/v1/harnesses/{harness.id}",
         headers={**_auth(), "If-Match": str(harness.revision)},
     )
@@ -2075,64 +2173,69 @@ def test_harness_delete_checks_only_entities_that_can_reference_it(api, monkeypa
     assert set(visited) == {"runs", "chat_sessions", "harness_sessions"}
 
 
-def test_harness_delete_preserves_profile_when_session_references_it(api):
+async def test_harness_delete_preserves_profile_when_session_references_it(api):
     client, store, _ = api
-    project = store.create(Engagement(name="Saved chat"))
-    harness = store.create(
+    project = await store.create(Engagement(name="Saved chat"))
+    harness = await store.create(
         HarnessProfile(
             name="Grok with history", kind=HarnessKind.GROK_ACP, executable="/bin/true"
         )
     )
-    store.create(
-        HarnessSession(
-            engagement_id=project.id,
-            harness_profile_id=harness.id,
-            model="fixture-model",
+    (
+        await store.create(
+            HarnessSession(
+                engagement_id=project.id,
+                harness_profile_id=harness.id,
+                model="fixture-model",
+            )
         )
     )
 
-    response = client.delete(
+    response = await client.delete(
         f"/api/v1/harnesses/{harness.id}",
         headers={**_auth(), "If-Match": str(harness.revision)},
     )
 
     assert response.status_code == 409, response.text
     assert "harness_sessions.harness_profile_id" in response.text
-    assert store.get(HarnessProfile, harness.id).id == harness.id
+    assert (await store.get(HarnessProfile, harness.id)).id == harness.id
 
 
-def test_run_event_websocket_completes_and_closes_after_a_terminal_run(api):
+async def test_run_event_websocket_completes_and_closes_after_a_terminal_run(api):
     client, store, _ = api
-    engagement = store.create(Engagement(name="Finished mission"))
-    run = store.create(
+    engagement = await store.create(Engagement(name="Finished mission"))
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Already finished",
             status="complete",
         )
     )
-    store.append_event(run.id, "run.completed", {}, idempotency_key="done")
+    (await store.append_event(run.id, "run.completed", {}, idempotency_key="done"))
 
-    with client.websocket_connect(
+    async with client.websocket_connect(
         f"/api/v1/runs/{run.id}/events/ws?after=0",
         headers=_auth(),
         subprotocols=["nebula.events.v1"],
     ) as websocket:
-        assert websocket.receive_json()["event"]["sequence"] == 1
-        assert websocket.receive_json() == {
+        assert (await websocket.receive_json())["event"]["sequence"] == 1
+        assert (await websocket.receive_json()) == {
             "kind": "replay_complete",
             "after_sequence": 1,
         }
-        assert websocket.receive_json() == {"kind": "complete", "after_sequence": 1}
+        assert (await websocket.receive_json()) == {
+            "kind": "complete",
+            "after_sequence": 1,
+        }
         with pytest.raises(WebSocketDisconnect) as exc_info:
-            websocket.receive_json()
+            (await websocket.receive_json())
     assert exc_info.value.code == 1000
 
 
-def _exchange(store, engagement_id: str):
+async def _exchange(store, engagement_id: str):
     from nebula.v3.domain import BrowserTrafficExchange
 
-    return store.create(
+    return await store.create(
         BrowserTrafficExchange(
             engagement_id=engagement_id,
             session_id="session-1",
@@ -2147,14 +2250,14 @@ def _exchange(store, engagement_id: str):
     )
 
 
-def test_resolve_resource_finds_an_existing_browser_exchange(api):
+async def test_resolve_resource_finds_an_existing_browser_exchange(api):
     # The resolve map named a kind no entity declares, so every exchange
     # reference was reported as inaccessible although the row existed.
     client, store, _ = api
-    engagement = store.create(Engagement(name="Exchange resolve"))
-    exchange = _exchange(store, engagement.id)
+    engagement = await store.create(Engagement(name="Exchange resolve"))
+    exchange = await _exchange(store, engagement.id)
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/resources/resolve",
         headers=_auth(),
         json={
@@ -2169,7 +2272,7 @@ def test_resolve_resource_finds_an_existing_browser_exchange(api):
     assert response.json()["ref"]["revision"] == exchange.revision
 
 
-def test_non_ascii_credentials_are_rejected_instead_of_crashing(tmp_path):
+async def test_non_ascii_credentials_are_rejected_instead_of_crashing(tmp_path):
     # Starlette decodes headers as latin-1, and hmac.compare_digest refuses
     # non-ASCII text, so a bad credential became an unhandled 500 (and a
     # pre-accept TypeError on every websocket) instead of the normal 401/403.
@@ -2177,13 +2280,13 @@ def test_non_ascii_credentials_are_rejected_instead_of_crashing(tmp_path):
     app = create_app(store, auth_token="test-token")
     client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
 
-    bearer = client.get(
+    bearer = await client.get(
         "/api/v1/health", headers={b"Authorization": b"Bearer \xc3\xa9"}
     )
     assert bearer.status_code == 401, bearer.text
 
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
+        async with client.websocket_connect(
             "/api/v1/runs/missing/events/ws",
             headers={b"Authorization": b"Bearer \xc3\xa9"},
             subprotocols=["nebula.events.v1"],
@@ -2191,10 +2294,12 @@ def test_non_ascii_credentials_are_rejected_instead_of_crashing(tmp_path):
             pass
     assert exc_info.value.code == 4401
 
-    pairing = client.post(
-        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Phone"}
+    pairing = (
+        await client.post(
+            "/api/v1/auth/pairings", headers=_auth(), json={"name": "Phone"}
+        )
     ).json()
-    redeemed = client.post(
+    redeemed = await client.post(
         "/api/v1/auth/pairings/redeem",
         json={
             "secret": pairing["secret"],
@@ -2205,20 +2310,20 @@ def test_non_ascii_credentials_are_rejected_instead_of_crashing(tmp_path):
     device_id = redeemed.json()["device"]["id"]
     csrf = redeemed.json()["csrf_token"]
 
-    origin = client.delete(
+    origin = await client.delete(
         f"/api/v1/auth/devices/{device_id}",
         headers={"X-Nebula-CSRF": csrf, b"Origin": b"https://127.0.0.1\xc3\xa9"},
     )
     assert origin.status_code == 403, origin.text
-    csrf_header = client.delete(
+    csrf_header = await client.delete(
         f"/api/v1/auth/devices/{device_id}",
         headers={b"X-Nebula-CSRF": b"\xc3\xa9", "Origin": "https://127.0.0.1"},
     )
     assert csrf_header.status_code == 403, csrf_header.text
-    assert client.get("/api/v1/auth/devices").status_code == 200
+    assert (await client.get("/api/v1/auth/devices")).status_code == 200
 
 
-def test_harness_chat_rejects_two_browser_companions_before_persisting(
+async def test_harness_chat_rejects_two_browser_companions_before_persisting(
     api, monkeypatch
 ):
     # The 409 was raised after prepare_chat had already stored the user
@@ -2226,7 +2331,7 @@ def test_harness_chat_rejects_two_browser_companions_before_persisting(
     from nebula.v3.harnesses import HarnessConfigurationError
 
     client, store, _ = api
-    engagement = store.create(Engagement(name="Companions"))
+    engagement = await store.create(Engagement(name="Companions"))
     runtime = client.app.state.harness_runtime_service
     prepared: list[str] = []
 
@@ -2246,7 +2351,7 @@ def test_harness_chat_rejects_two_browser_companions_before_persisting(
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         }
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/completions",
         headers=_auth(),
         json={
@@ -2265,7 +2370,7 @@ def test_harness_chat_rejects_two_browser_companions_before_persisting(
     assert prepared == []
 
 
-def test_harness_turn_event_socket_sends_an_error_frame_on_stream_failure(
+async def test_harness_turn_event_socket_sends_an_error_frame_on_stream_failure(
     api, monkeypatch
 ):
     # Only disconnects were caught, so a runtime failure while following the
@@ -2280,18 +2385,18 @@ def test_harness_turn_event_socket_sends_an_error_frame_on_stream_failure(
 
     monkeypatch.setattr(runtime, "follow_turn", follow_turn)
 
-    with client.websocket_connect(
+    async with client.websocket_connect(
         "/api/v1/harness-turns/turn-1/events/ws",
         headers=_auth(),
         subprotocols=["nebula.events.v1"],
     ) as websocket:
-        frame = websocket.receive_json()
+        frame = await websocket.receive_json()
     assert frame["kind"] == "error"
     assert frame["retryable"] is True
     assert "ledger unavailable" not in json.dumps(frame)
 
 
-def test_browser_assessment_event_socket_completes_when_the_assessment_is_deleted(
+async def test_browser_assessment_event_socket_completes_when_the_assessment_is_deleted(
     api,
 ):
     # The poll loop looked the assessment up every tick; deleting it raised
@@ -2299,8 +2404,8 @@ def test_browser_assessment_event_socket_completes_when_the_assessment_is_delete
     from nebula.v3.domain import BrowserAssessment
 
     client, store, _ = api
-    engagement = store.create(Engagement(name="Assessment stream"))
-    assessment = store.create(
+    engagement = await store.create(Engagement(name="Assessment stream"))
+    assessment = await store.create(
         BrowserAssessment(
             engagement_id=engagement.id,
             name="Login review",
@@ -2316,23 +2421,26 @@ def test_browser_assessment_event_socket_completes_when_the_assessment_is_delete
         )
     )
 
-    with client.websocket_connect(
+    async with client.websocket_connect(
         f"/api/v1/browser-assessments/{assessment.id}/events/ws",
         headers=_auth(),
         subprotocols=["nebula.events.v1"],
     ) as websocket:
-        assert websocket.receive_json() == {
+        assert (await websocket.receive_json()) == {
             "kind": "replay_complete",
             "after_sequence": 0,
         }
-        store.delete(BrowserAssessment, assessment.id)
-        assert websocket.receive_json() == {"kind": "complete", "after_sequence": 0}
+        (await store.delete(BrowserAssessment, assessment.id))
+        assert (await websocket.receive_json()) == {
+            "kind": "complete",
+            "after_sequence": 0,
+        }
         with pytest.raises(WebSocketDisconnect) as exc_info:
-            websocket.receive_json()
+            (await websocket.receive_json())
     assert exc_info.value.code == 4404
 
 
-def test_health_does_not_expose_host_paths(tmp_path):
+async def test_health_does_not_expose_host_paths(tmp_path):
     # /health answers cookie-paired devices too, and it echoed the absolute
     # log directory and settings file path of the operator's home.
     from nebula.v3.diagnostics import DiagnosticManager
@@ -2346,7 +2454,7 @@ def test_health_does_not_expose_host_paths(tmp_path):
                 diagnostic_manager=manager,
             )
         )
-        response = client.get("/api/v1/health", headers=_auth())
+        response = await client.get("/api/v1/health", headers=_auth())
         assert response.status_code == 200, response.text
         body = json.dumps(response.json())
         assert "log_directory" not in response.json()["diagnostics"]
@@ -2356,7 +2464,7 @@ def test_health_does_not_expose_host_paths(tmp_path):
         manager.close()
 
 
-def test_pairing_redeem_reports_a_wrong_code_and_lets_the_phone_retry(tmp_path):
+async def test_pairing_redeem_reports_a_wrong_code_and_lets_the_phone_retry(tmp_path):
     # The offer was popped before the code was checked, so one typo burned
     # the QR and blamed the secret instead of the code.
     from nebula.v3 import api as api_module
@@ -2364,34 +2472,40 @@ def test_pairing_redeem_reports_a_wrong_code_and_lets_the_phone_retry(tmp_path):
     store = NebulaStore(tmp_path / "pairing-retry.db")
     app = create_app(store, auth_token="test-token")
     client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
-    pairing = client.post(
-        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Phone"}
+    pairing = (
+        await client.post(
+            "/api/v1/auth/pairings", headers=_auth(), json={"name": "Phone"}
+        )
     ).json()
     wrong_code = f"{(int(pairing['confirmation_code']) + 1) % 1_000_000:06d}"
 
-    def redeem(code: str):
-        return client.post(
+    async def redeem(code: str):
+        return await client.post(
             "/api/v1/auth/pairings/redeem",
             json={"secret": pairing["secret"], "confirmation_code": code},
         )
 
-    mistyped = redeem(wrong_code)
+    mistyped = await redeem(wrong_code)
     assert mistyped.status_code == 401
     assert mistyped.json()["detail"] == "pairing confirmation code did not match"
-    assert redeem(pairing["confirmation_code"]).status_code == 200
+    assert (await redeem(pairing["confirmation_code"])).status_code == 200
 
-    second = client.post(
-        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Tablet"}
+    second = (
+        await client.post(
+            "/api/v1/auth/pairings", headers=_auth(), json={"name": "Tablet"}
+        )
     ).json()
     pairing = second
     for _ in range(api_module.PAIRING_CONFIRMATION_ATTEMPTS):
-        assert redeem(wrong_code).status_code == 401
-    exhausted = redeem(second["confirmation_code"])
+        assert (await redeem(wrong_code)).status_code == 401
+    exhausted = await redeem(second["confirmation_code"])
     assert exhausted.status_code == 401
     assert exhausted.json()["detail"] == "pairing secret is invalid or expired"
 
 
-def test_diagnostics_settings_write_failure_is_a_retryable_503(tmp_path, monkeypatch):
+async def test_diagnostics_settings_write_failure_is_a_retryable_503(
+    tmp_path, monkeypatch
+):
     # DiagnosticsError was unmapped, so an unwritable settings file became a
     # generic 500 with retryable=false although the service had an error_id.
     from nebula.v3.diagnostics import DiagnosticManager, SETTINGS_SCHEMA
@@ -2411,7 +2525,7 @@ def test_diagnostics_settings_write_failure_is_a_retryable_503(tmp_path, monkeyp
             raise OSError(28, "No space left on device")
 
         monkeypatch.setattr(manager, "_atomic_write_json", refuse)
-        response = client.put(
+        response = await client.put(
             "/api/v1/diagnostics/settings",
             headers=_auth(),
             json={"schema": SETTINGS_SCHEMA, "global_level": "debug"},
@@ -2423,7 +2537,7 @@ def test_diagnostics_settings_write_failure_is_a_retryable_503(tmp_path, monkeyp
         manager.close()
 
 
-def test_action_intents_and_handoffs_list_newest_first_with_offset(api):
+async def test_action_intents_and_handoffs_list_newest_first_with_offset(api):
     from nebula.v3.domain import (
         ActionIntent,
         HandoffEnvelope,
@@ -2432,42 +2546,44 @@ def test_action_intents_and_handoffs_list_newest_first_with_offset(api):
     )
 
     client, store, _ = api
-    project = store.create(Engagement(name="Device actions"))
+    project = await store.create(Engagement(name="Device actions"))
     base = utc_now()
     expires = base + timedelta(hours=1)
     ref = ResourceRef(project_id=project.id, kind=ResourceKind.PROJECT, id=project.id)
-    store.create_many(
-        [
-            ActionIntent(
-                id=f"intent-{index}",
-                engagement_id=project.id,
-                resources=[ref],
-                action_id="share",
-                requester="operator",
-                idempotency_key=f"share-{index}",
-                logical_lease_key=f"lease-{index}",
-                expires_at=expires,
-                created_at=base + timedelta(seconds=index),
-                updated_at=base + timedelta(seconds=index),
-            )
-            for index in range(3)
-        ]
-        + [
-            HandoffEnvelope(
-                id=f"handoff-{index}",
-                engagement_id=project.id,
-                action_id="ask_nebula",
-                origin_device_id="mac",
-                expires_at=expires,
-                created_at=base + timedelta(seconds=index),
-                updated_at=base + timedelta(seconds=index),
-            )
-            for index in range(3)
-        ]
+    (
+        await store.create_many(
+            [
+                ActionIntent(
+                    id=f"intent-{index}",
+                    engagement_id=project.id,
+                    resources=[ref],
+                    action_id="share",
+                    requester="operator",
+                    idempotency_key=f"share-{index}",
+                    logical_lease_key=f"lease-{index}",
+                    expires_at=expires,
+                    created_at=base + timedelta(seconds=index),
+                    updated_at=base + timedelta(seconds=index),
+                )
+                for index in range(3)
+            ]
+            + [
+                HandoffEnvelope(
+                    id=f"handoff-{index}",
+                    engagement_id=project.id,
+                    action_id="ask_nebula",
+                    origin_device_id="mac",
+                    expires_at=expires,
+                    created_at=base + timedelta(seconds=index),
+                    updated_at=base + timedelta(seconds=index),
+                )
+                for index in range(3)
+            ]
+        )
     )
 
-    def ids(path: str, **params) -> list[str]:
-        response = client.get(
+    async def ids(path: str, **params) -> list[str]:
+        response = await client.get(
             f"/api/v1/{path}",
             headers=_auth(),
             params={"project_id": project.id, **params},
@@ -2475,13 +2591,13 @@ def test_action_intents_and_handoffs_list_newest_first_with_offset(api):
         assert response.status_code == 200, response.text
         return [item["id"] for item in response.json()]
 
-    assert ids("action-intents", limit=2) == ["intent-2", "intent-1"]
-    assert ids("action-intents", limit=2, offset=2) == ["intent-0"]
-    assert ids("handoffs", limit=2) == ["handoff-2", "handoff-1"]
-    assert ids("handoffs", limit=2, offset=2) == ["handoff-0"]
+    assert (await ids("action-intents", limit=2)) == ["intent-2", "intent-1"]
+    assert (await ids("action-intents", limit=2, offset=2)) == ["intent-0"]
+    assert (await ids("handoffs", limit=2)) == ["handoff-2", "handoff-1"]
+    assert (await ids("handoffs", limit=2, offset=2)) == ["handoff-0"]
 
 
-def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
+async def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
     from nebula.v3.domain import (
         AutomationProjectPolicy,
         AutomationSession,
@@ -2490,11 +2606,11 @@ def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
     )
 
     client, store, _ = api
-    project = store.create(Engagement(name="VPN project"))
+    project = await store.create(Engagement(name="VPN project"))
     base = utc_now()
 
-    def profile(name: str) -> VpnProfile:
-        return store.create(
+    async def profile(name: str) -> VpnProfile:
+        return await store.create(
             VpnProfile(
                 name=name,
                 filename=f"{name}.ovpn",
@@ -2528,39 +2644,47 @@ def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
             created_at=at,
         )
 
-    policy_bound = profile("policy-bound")
-    session_bound = profile("session-bound")
-    store.create_many(
-        [policy(None, base - timedelta(minutes=1)) for _ in range(1_000)]
-        + [policy(policy_bound.id, base)]
+    policy_bound = await profile("policy-bound")
+    session_bound = await profile("session-bound")
+    (
+        await store.create_many(
+            [policy(None, base - timedelta(minutes=1)) for _ in range(1_000)]
+            + [policy(policy_bound.id, base)]
+        )
     )
-    store.create_many(
-        [
-            automation_session(
-                AutomationSessionStatus.CLOSED,
-                session_bound.id,
-                base - timedelta(minutes=1),
-            )
-            for _ in range(1_000)
-        ]
-        + [automation_session(AutomationSessionStatus.READY, session_bound.id, base)]
+    (
+        await store.create_many(
+            [
+                automation_session(
+                    AutomationSessionStatus.CLOSED,
+                    session_bound.id,
+                    base - timedelta(minutes=1),
+                )
+                for _ in range(1_000)
+            ]
+            + [
+                automation_session(
+                    AutomationSessionStatus.READY, session_bound.id, base
+                )
+            ]
+        )
     )
 
-    def delete(profile: VpnProfile):
-        return client.request(
+    async def delete(profile: VpnProfile):
+        return await client.request(
             "DELETE",
             f"/api/v1/vpn-profiles/{profile.id}",
             headers=_auth(),
             json={"expected_revision": profile.revision},
         )
 
-    blocked_by_policy = delete(policy_bound)
+    blocked_by_policy = await delete(policy_bound)
     assert blocked_by_policy.status_code == 409, blocked_by_policy.text
     assert (
         blocked_by_policy.json()["detail"]
         == "remove this VPN profile from project command policies first"
     )
-    blocked_by_session = delete(session_bound)
+    blocked_by_session = await delete(session_bound)
     assert blocked_by_session.status_code == 409, blocked_by_session.text
     assert (
         blocked_by_session.json()["detail"]
@@ -2568,11 +2692,13 @@ def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
     )
 
 
-def test_generic_engagement_updates_cannot_relink_or_clear_workspace(api, tmp_path):
+async def test_generic_engagement_updates_cannot_relink_or_clear_workspace(
+    api, tmp_path
+):
     client, store, _ = api
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    created = client.post(
+    created = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={"name": "Linked", "workspace_path": str(workspace)},
@@ -2581,45 +2707,47 @@ def test_generic_engagement_updates_cannot_relink_or_clear_workspace(api, tmp_pa
     project = created.json()
     url = f"/api/v1/engagements/{project['id']}"
 
-    patched = client.patch(
+    patched = await client.patch(
         url, headers=_auth(), json={"changes": {"workspace_path": "relative/missing"}}
     )
     assert patched.status_code == 422, patched.text
-    replaced = client.put(
+    replaced = await client.put(
         url, headers=_auth(), json={**project, "workspace_path": str(tmp_path / "gone")}
     )
     assert replaced.status_code == 422, replaced.text
-    assert store.get(Engagement, project["id"]).workspace_path == str(
+    assert (await store.get(Engagement, project["id"])).workspace_path == str(
         workspace.resolve()
     )
 
     moved = tmp_path / "moved"
     moved.mkdir()
     for path in (str(moved), None):
-        patched = client.patch(
+        patched = await client.patch(
             url, headers=_auth(), json={"changes": {"workspace_path": path}}
         )
         assert patched.status_code == 422, patched.text
-        replaced = client.put(
+        replaced = await client.put(
             url, headers=_auth(), json={**project, "workspace_path": path}
         )
         assert replaced.status_code == 422, replaced.text
-        assert store.get(Engagement, project["id"]).workspace_path == str(
+        assert (await store.get(Engagement, project["id"])).workspace_path == str(
             workspace.resolve()
         )
-    renamed = client.patch(url, headers=_auth(), json={"changes": {"name": "Renamed"}})
+    renamed = await client.patch(
+        url, headers=_auth(), json={"changes": {"name": "Renamed"}}
+    )
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["name"] == "Renamed"
     assert renamed.json()["workspace_path"] == str(workspace.resolve())
 
 
-def test_existing_project_relink_requires_dedicated_revision_checked_route(
+async def test_existing_project_relink_requires_dedicated_revision_checked_route(
     api, tmp_path
 ):
     client, store, _ = api
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    created = client.post(
+    created = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={
@@ -2632,41 +2760,41 @@ def test_existing_project_relink_requires_dedicated_revision_checked_route(
     project = created.json()
     url = f"/api/v1/engagements/{project['id']}"
 
-    patched = client.patch(
+    patched = await client.patch(
         url, headers=_auth(), json={"changes": {"workspace_path": "relative/missing"}}
     )
     assert patched.status_code == 422, patched.text
-    replaced = client.put(
+    replaced = await client.put(
         url, headers=_auth(), json={**project, "workspace_path": str(tmp_path / "gone")}
     )
     assert replaced.status_code == 422, replaced.text
-    assert store.get(Engagement, project["id"]).workspace_path == str(
+    assert (await store.get(Engagement, project["id"])).workspace_path == str(
         workspace.resolve()
     )
 
     moved = tmp_path / "moved"
     moved.mkdir()
-    patched = client.patch(
+    patched = await client.patch(
         url,
         headers=_auth(),
         json={"changes": {"workspace_path": str(workspace / ".." / "moved")}},
     )
     assert patched.status_code == 422, patched.text
-    replaced = client.put(
+    replaced = await client.put(
         url,
         headers=_auth(),
         json={**project, "workspace_path": str(moved)},
     )
     assert replaced.status_code == 422, replaced.text
 
-    with_index = store.update(
+    with_index = await store.update(
         Engagement,
         project["id"],
         {"metadata": {"notebook_file_index": str(workspace / "index.db")}},
         expected_revision=project["revision"],
     )
     project["revision"] = with_index.revision
-    relink = client.post(
+    relink = await client.post(
         f"{url}/workspace/relink",
         headers=_auth(),
         json={
@@ -2679,20 +2807,24 @@ def test_existing_project_relink_requires_dedicated_revision_checked_route(
     assert relink.json()["revision"] == project["revision"] + 1
     assert "notebook_file_index" not in relink.json()["metadata"]
     assert workspace.is_dir()
-    [policy] = store.list_entities(AutomationProjectPolicy, engagement_id=project["id"])
+    [policy] = await store.list_entities(
+        AutomationProjectPolicy, engagement_id=project["id"]
+    )
     assert policy.host_access_acknowledged is True
     assert policy.revision == 1
 
-    stale = client.post(
+    stale = await client.post(
         f"{url}/workspace/relink",
         headers=_auth(),
         json={"path": str(workspace), "expected_revision": project["revision"]},
     )
     assert stale.status_code == 409
-    assert store.get(Engagement, project["id"]).workspace_path == str(moved.resolve())
+    assert (await store.get(Engagement, project["id"])).workspace_path == str(
+        moved.resolve()
+    )
 
 
-def test_existing_project_relink_refuses_reusable_harness_session(api, tmp_path):
+async def test_existing_project_relink_refuses_reusable_harness_session(api, tmp_path):
     from nebula.v3.domain import HarnessSession, HarnessSessionStatus
 
     client, store, _ = api
@@ -2700,40 +2832,48 @@ def test_existing_project_relink_refuses_reusable_harness_session(api, tmp_path)
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    created = client.post(
+    created = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={"name": "Linked", "workspace_path": str(first)},
     )
     assert created.status_code == 201, created.text
     project = created.json()
-    store.create(
-        HarnessSession(
-            engagement_id=project["id"],
-            harness_profile_id="fixture",
-            model="fixture",
-            status=HarnessSessionStatus.IDLE,
+    (
+        await store.create(
+            HarnessSession(
+                engagement_id=project["id"],
+                harness_profile_id="fixture",
+                model="fixture",
+                status=HarnessSessionStatus.IDLE,
+            )
         )
     )
 
-    blocked = client.post(
+    blocked = await client.post(
         f"/api/v1/engagements/{project['id']}/workspace/relink",
         headers=_auth(),
         json={"path": str(second), "expected_revision": project["revision"]},
     )
     assert blocked.status_code == 409, blocked.text
     assert "harness session" in blocked.json()["detail"]
-    assert store.get(Engagement, project["id"]).workspace_path == str(first.resolve())
+    assert (await store.get(Engagement, project["id"])).workspace_path == str(
+        first.resolve()
+    )
 
 
-def test_existing_project_relink_waits_for_chat_queue_and_native_hook(api, tmp_path):
+async def test_existing_project_relink_waits_for_chat_queue_and_native_hook(
+    api, tmp_path
+):
     client, store, _ = api
     first = tmp_path / "first"
     second = tmp_path / "second"
     first.mkdir()
     second.mkdir()
-    project = store.create(Engagement(name="Queued project", workspace_path=str(first)))
-    queue = store.create(
+    project = await store.create(
+        Engagement(name="Queued project", workspace_path=str(first))
+    )
+    queue = await store.create(
         ChatQueue(
             engagement_id=project.id,
             session_id="synthetic-chat",
@@ -2743,16 +2883,16 @@ def test_existing_project_relink_waits_for_chat_queue_and_native_hook(api, tmp_p
     url = f"/api/v1/engagements/{project.id}/workspace/relink"
     request = {"path": str(second), "expected_revision": project.revision}
 
-    queued = client.post(url, headers=_auth(), json=request)
+    queued = await client.post(url, headers=_auth(), json=request)
     assert queued.status_code == 409, queued.text
     assert "chat follow-up" in queued.json()["detail"]
-    queue = store.update(
+    queue = await store.update(
         ChatQueue,
         queue.id,
         {"items": [{"id": "follow-up", "status": "cancelled"}]},
         expected_revision=queue.revision,
     )
-    hook = store.create(
+    hook = await store.create(
         NativeHookExecution(
             engagement_id=project.id,
             hook_id="synthetic-hook",
@@ -2762,40 +2902,46 @@ def test_existing_project_relink_waits_for_chat_queue_and_native_hook(api, tmp_p
             started_at=utc_now(),
         )
     )
-    running_hook = client.post(url, headers=_auth(), json=request)
+    running_hook = await client.post(url, headers=_auth(), json=request)
     assert running_hook.status_code == 409, running_hook.text
     assert "native hook" in running_hook.json()["detail"]
-    store.update(
-        NativeHookExecution,
-        hook.id,
-        {"status": "complete", "completed_at": utc_now()},
-        expected_revision=hook.revision,
-    )
-    store.create(
-        ChatTurn(
-            engagement_id=project.id,
-            session_id="synthetic-chat",
-            provider_profile_id="synthetic-provider",
-            model="synthetic-model",
-            status=ChatTurnStatus.INTERRUPTED,
+    (
+        await store.update(
+            NativeHookExecution,
+            hook.id,
+            {"status": "complete", "completed_at": utc_now()},
+            expected_revision=hook.revision,
         )
     )
-    store.create(
-        ChatGoal(
-            engagement_id=project.id,
-            session_id="synthetic-chat",
-            objective="Continue in the linked chat",
-            completion_criteria=["Linked chat takes ownership"],
-            status=ChatGoalStatus.PAUSED,
-            metadata={"handoff_target_session_id": "linked-chat"},
+    (
+        await store.create(
+            ChatTurn(
+                engagement_id=project.id,
+                session_id="synthetic-chat",
+                provider_profile_id="synthetic-provider",
+                model="synthetic-model",
+                status=ChatTurnStatus.INTERRUPTED,
+            )
         )
     )
-    relinked = client.post(url, headers=_auth(), json=request)
+    (
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id="synthetic-chat",
+                objective="Continue in the linked chat",
+                completion_criteria=["Linked chat takes ownership"],
+                status=ChatGoalStatus.PAUSED,
+                metadata={"handoff_target_session_id": "linked-chat"},
+            )
+        )
+    )
+    relinked = await client.post(url, headers=_auth(), json=request)
     assert relinked.status_code == 200, relinked.text
     assert relinked.json()["workspace_path"] == str(second.resolve())
 
 
-def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(api):
+async def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(api):
     from nebula.v3.domain import (
         HarnessInteraction,
         HarnessInteractionKind,
@@ -2805,20 +2951,22 @@ def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(api):
     )
 
     client, store, _ = api
-    engagement = store.create(Engagement(name="Long harness project"))
-    session = store.create(
+    engagement = await store.create(Engagement(name="Long harness project"))
+    session = await store.create(
         HarnessSession(
             engagement_id=engagement.id, harness_profile_id="harness-1", model="m"
         )
     )
     older, newer = (
-        store.create(
-            HarnessTurn(
-                engagement_id=engagement.id,
-                harness_session_id=session.id,
-                origin=HarnessTurnOrigin.MISSION,
-                run_id="mission-run",
-                prompt=prompt,
+        (
+            await store.create(
+                HarnessTurn(
+                    engagement_id=engagement.id,
+                    harness_session_id=session.id,
+                    origin=HarnessTurnOrigin.MISSION,
+                    run_id="mission-run",
+                    prompt=prompt,
+                )
             )
         )
         for prompt in ("older", "newer")
@@ -2837,46 +2985,54 @@ def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(api):
             created_at=at,
         )
 
-    store.create_many(
-        [
-            interaction(older, index, base - timedelta(minutes=1))
-            for index in range(1_000)
-        ]
+    (
+        await store.create_many(
+            [
+                interaction(older, index, base - timedelta(minutes=1))
+                for index in range(1_000)
+            ]
+        )
     )
-    pending = store.create(interaction(newer, 0, base))
+    pending = await store.create(interaction(newer, 0, base))
     url = f"/api/v1/harness-turns/{newer.id}/interactions"
 
-    response = client.get(url, headers=_auth())
+    response = await client.get(url, headers=_auth())
 
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()] == [pending.id]
-    filtered = client.get(url, headers=_auth(), params={"status": "pending"})
+    filtered = await client.get(url, headers=_auth(), params={"status": "pending"})
     assert [item["id"] for item in filtered.json()] == [pending.id]
-    assert client.get(url, headers=_auth(), params={"status": "answered"}).json() == []
+    assert (
+        await client.get(url, headers=_auth(), params={"status": "answered"})
+    ).json() == []
 
 
-def test_live_paired_devices_are_listed_past_a_thousand_revoked_pairings(api):
+async def test_live_paired_devices_are_listed_past_a_thousand_revoked_pairings(api):
     from nebula.v3.domain import PairedDeviceSession
 
     client, store, _ = api
     now = utc_now()
     expiry = now + timedelta(days=1)
-    store.create_many(
-        [
-            PairedDeviceSession(
-                id=f"revoked-{index}",
-                name="Revoked phone",
-                token_sha256=hashlib.sha256(f"revoked-{index}".encode()).hexdigest(),
-                csrf_sha256="0" * 64,
-                idle_expires_at=expiry,
-                absolute_expires_at=expiry,
-                revoked_at=now,
-                created_at=now - timedelta(minutes=1),
-            )
-            for index in range(1_000)
-        ]
+    (
+        await store.create_many(
+            [
+                PairedDeviceSession(
+                    id=f"revoked-{index}",
+                    name="Revoked phone",
+                    token_sha256=hashlib.sha256(
+                        f"revoked-{index}".encode()
+                    ).hexdigest(),
+                    csrf_sha256="0" * 64,
+                    idle_expires_at=expiry,
+                    absolute_expires_at=expiry,
+                    revoked_at=now,
+                    created_at=now - timedelta(minutes=1),
+                )
+                for index in range(1_000)
+            ]
+        )
     )
-    live = store.create(
+    live = await store.create(
         PairedDeviceSession(
             id="live-phone",
             name="Live phone",
@@ -2887,46 +3043,50 @@ def test_live_paired_devices_are_listed_past_a_thousand_revoked_pairings(api):
         )
     )
 
-    response = client.get("/api/v1/auth/devices", headers=_auth())
+    response = await client.get("/api/v1/auth/devices", headers=_auth())
 
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()] == [live.id]
 
 
-def test_session_activity_covers_conversations_beyond_the_first_page(api):
+async def test_session_activity_covers_conversations_beyond_the_first_page(api):
     client, store, _ = api
-    store.create(Engagement(id="busy-project", name="Busy project"))
-    provider = store.create(
+    (await store.create(Engagement(id="busy-project", name="Busy project")))
+    provider = await store.create(
         ProviderProfile(
             id="busy-provider", name="OpenRouter", provider_type="openrouter"
         )
     )
     base = utc_now()
-    store.create_many(
-        [
-            ChatSession(
-                id=f"chat-{index:03d}",
+    (
+        await store.create_many(
+            [
+                ChatSession(
+                    id=f"chat-{index:03d}",
+                    engagement_id="busy-project",
+                    title=f"Chat {index}",
+                    provider_profile_id=provider.id,
+                    model="model",
+                    created_at=base + timedelta(seconds=index),
+                    updated_at=base + timedelta(seconds=index),
+                )
+                for index in range(101)
+            ]
+        )
+    )
+    (
+        await store.create(
+            ChatTurn(
                 engagement_id="busy-project",
-                title=f"Chat {index}",
+                session_id="chat-100",
                 provider_profile_id=provider.id,
                 model="model",
-                created_at=base + timedelta(seconds=index),
-                updated_at=base + timedelta(seconds=index),
+                status=ChatTurnStatus.WAITING_APPROVAL,
             )
-            for index in range(101)
-        ]
-    )
-    store.create(
-        ChatTurn(
-            engagement_id="busy-project",
-            session_id="chat-100",
-            provider_profile_id=provider.id,
-            model="model",
-            status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
 
-    response = client.get(
+    response = await client.get(
         "/api/v1/chat/session-activity",
         headers=_auth(),
         params={"engagement_id": "busy-project"},
@@ -2939,7 +3099,7 @@ def test_session_activity_covers_conversations_beyond_the_first_page(api):
     assert states["chat-000"] == "idle"
 
 
-def test_chat_attention_lists_pending_operator_actions_across_projects_only(api):
+async def test_chat_attention_lists_pending_operator_actions_across_projects_only(api):
     from nebula.v3.domain import (
         ChatBackend,
         EngagementStatus,
@@ -2953,21 +3113,23 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
 
     client, store, _ = api
     now = utc_now()
-    first = store.create(Engagement(id="attention-first", name="First project"))
-    second = store.create(Engagement(id="attention-second", name="Second project"))
-    archived = store.create(
+    first = await store.create(Engagement(id="attention-first", name="First project"))
+    second = await store.create(
+        Engagement(id="attention-second", name="Second project")
+    )
+    archived = await store.create(
         Engagement(
             id="attention-archived",
             name="Archived project",
             status=EngagementStatus.ARCHIVED,
         )
     )
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             id="attention-provider", name="Provider", provider_type="openrouter"
         )
     )
-    provider_session = store.create(
+    provider_session = await store.create(
         ChatSession(
             id="attention-provider-chat",
             engagement_id=first.id,
@@ -2976,7 +3138,7 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             model="model",
         )
     )
-    provider_turn = store.create(
+    provider_turn = await store.create(
         ChatTurn(
             id="attention-provider-turn",
             engagement_id=first.id,
@@ -2986,7 +3148,7 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
-    approval = store.create(
+    approval = await store.create(
         Approval(
             id="attention-approval",
             engagement_id=first.id,
@@ -3001,7 +3163,7 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             requested_at=now - timedelta(minutes=1),
         )
     )
-    harness_session = store.create(
+    harness_session = await store.create(
         HarnessSession(
             id="attention-harness-session",
             engagement_id=second.id,
@@ -3009,7 +3171,7 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             model="model",
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             id="attention-harness-chat",
             engagement_id=second.id,
@@ -3020,7 +3182,7 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             model="model",
         )
     )
-    chat_turn = store.create(
+    chat_turn = await store.create(
         ChatTurn(
             id="attention-harness-chat-turn",
             engagement_id=second.id,
@@ -3031,7 +3193,7 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
-    harness_turn = store.create(
+    harness_turn = await store.create(
         HarnessTurn(
             id="attention-harness-turn",
             engagement_id=second.id,
@@ -3043,7 +3205,7 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             prompt="Question",
         )
     )
-    interaction = store.create(
+    interaction = await store.create(
         HarnessInteraction(
             id="attention-question",
             engagement_id=second.id,
@@ -3057,27 +3219,31 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             created_at=now,
         )
     )
-    store.create(
-        Approval(
-            id="attention-mission",
-            engagement_id=second.id,
-            run_id="mission",
-            risk_class=RiskClass.ACTIVE_SCAN,
-            exact_request={},
-            policy_rationale="mission",
-            requested_by="mission",
+    (
+        await store.create(
+            Approval(
+                id="attention-mission",
+                engagement_id=second.id,
+                run_id="mission",
+                risk_class=RiskClass.ACTIVE_SCAN,
+                exact_request={},
+                policy_rationale="mission",
+                requested_by="mission",
+            )
         )
     )
-    store.create(
-        ChatSession(
-            id="attention-archived-chat",
-            engagement_id=archived.id,
-            title="Archived chat",
-            provider_profile_id=provider.id,
-            model="model",
+    (
+        await store.create(
+            ChatSession(
+                id="attention-archived-chat",
+                engagement_id=archived.id,
+                title="Archived chat",
+                provider_profile_id=provider.id,
+                model="model",
+            )
         )
     )
-    archived_turn = store.create(
+    archived_turn = await store.create(
         ChatTurn(
             id="attention-archived-turn",
             engagement_id=archived.id,
@@ -3087,24 +3253,26 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
             status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
-    store.create(
-        Approval(
-            id="attention-archived-approval",
-            engagement_id=archived.id,
-            run_id=archived_turn.id,
-            origin=ToolCallOrigin.CHAT,
-            chat_session_id="attention-archived-chat",
-            chat_turn_id=archived_turn.id,
-            risk_class=RiskClass.ACTIVE_SCAN,
-            exact_request={},
-            policy_rationale="review",
-            requested_by="chat-assistant",
+    (
+        await store.create(
+            Approval(
+                id="attention-archived-approval",
+                engagement_id=archived.id,
+                run_id=archived_turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id="attention-archived-chat",
+                chat_turn_id=archived_turn.id,
+                risk_class=RiskClass.ACTIVE_SCAN,
+                exact_request={},
+                policy_rationale="review",
+                requested_by="chat-assistant",
+            )
         )
     )
 
     url = "/api/v1/chat/attention"
-    assert client.get(url).status_code in {401, 403}
-    response = client.get(url, headers=_auth())
+    assert (await client.get(url)).status_code in {401, 403}
+    response = await client.get(url, headers=_auth())
     assert response.status_code == 200, response.text
     assert response.json() == [
         {
@@ -3127,24 +3295,28 @@ def test_chat_attention_lists_pending_operator_actions_across_projects_only(api)
         },
     ]
 
-    store.update(
-        Approval,
-        approval.id,
-        {"status": ApprovalStatus.APPROVED, "decided_at": utc_now()},
+    (
+        await store.update(
+            Approval,
+            approval.id,
+            {"status": ApprovalStatus.APPROVED, "decided_at": utc_now()},
+        )
     )
-    store.update(
-        HarnessInteraction,
-        interaction.id,
-        {"status": "answered", "resolved_at": utc_now()},
+    (
+        await store.update(
+            HarnessInteraction,
+            interaction.id,
+            {"status": "answered", "resolved_at": utc_now()},
+        )
     )
-    assert client.get(url, headers=_auth()).json() == []
+    assert (await client.get(url, headers=_auth())).json() == []
 
 
-def test_terminal_output_page_always_advances_past_a_multibyte_character(api):
+async def test_terminal_output_page_always_advances_past_a_multibyte_character(api):
     from nebula.v3.terminal_history import CapturedTerminalCommand
 
     client, store, _ = api
-    project = store.create(Engagement(name="Terminal paging"))
+    project = await store.create(Engagement(name="Terminal paging"))
     history = client.app.state.terminal_command_history
     output = "a☃b\n".encode()
     now = utc_now()
@@ -3169,21 +3341,23 @@ def test_terminal_output_page_always_advances_past_a_multibyte_character(api):
     url = f"/api/v1/engagements/{project.id}/terminal/commands/{record.id}/output"
     snowman = output.index("☃".encode())
 
-    page = client.get(url, headers=_auth(), params={"offset": snowman, "limit": 1})
+    page = await client.get(
+        url, headers=_auth(), params={"offset": snowman, "limit": 1}
+    )
 
     assert page.status_code == 200, page.text
     assert page.content == "☃".encode()
     assert page.headers["X-Nebula-Output-Next"] == str(snowman + len("☃".encode()))
 
 
-def test_tool_call_artifacts_are_listed_past_a_thousand_older_ones(api):
+async def test_tool_call_artifacts_are_listed_past_a_thousand_older_ones(api):
     from nebula.v3.domain import Artifact
     from nebula.v3.domain import ToolCall as ToolCallEntity
 
     client, store, _ = api
-    engagement = store.create(Engagement(name="Artifact-heavy project"))
-    run = store.create(AgentRun(engagement_id=engagement.id, objective="Collect"))
-    call = store.create(
+    engagement = await store.create(Engagement(name="Artifact-heavy project"))
+    run = await store.create(AgentRun(engagement_id=engagement.id, objective="Collect"))
+    call = await store.create(
         ToolCallEntity(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -3203,15 +3377,22 @@ def test_tool_call_artifacts_are_listed_past_a_thousand_older_ones(api):
             created_at=at,
         )
 
-    store.create_many(
-        [
-            artifact(index, "older-call", base - timedelta(minutes=1))
-            for index in range(1_000)
-        ]
+    (
+        await store.create_many(
+            [
+                artifact(index, "older-call", base - timedelta(minutes=1))
+                for index in range(1_000)
+            ]
+        )
     )
-    newest = store.create(artifact(0, call.id, base))
+    newest = await store.create(artifact(0, call.id, base))
 
-    response = client.get(f"/api/v1/tool-calls/{call.id}/artifacts", headers=_auth())
+    response = await client.get(
+        f"/api/v1/tool-calls/{call.id}/artifacts", headers=_auth()
+    )
 
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()] == [newest.id]
+
+
+pytestmark = pytest.mark.anyio

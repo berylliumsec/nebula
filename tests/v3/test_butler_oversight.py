@@ -1,13 +1,17 @@
 """Focused durability and ownership checks for Core's Butler Watch foundation."""
 
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import timedelta
 from pathlib import Path
 
+import asyncio
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.chat as chat_module
 import nebula.v3.butler_oversight as oversight
@@ -55,50 +59,54 @@ from nebula.v3.tools import ToolInvocation, ToolNotPermitted
 from tests.v3.test_chat import FakeProvider
 
 
-def _setup(tmp_path, *, projects=("project",)):
+async def _setup(tmp_path, *, projects=("project",)):
     path = tmp_path / "butler.db"
     store = NebulaStore(path)
     for project_id in projects:
-        store.create(Engagement(id=project_id, name=project_id))
-        store.create(
-            ProviderProfile(
-                id=f"provider-{project_id}",
-                name="Provider",
-                provider_type="openrouter",
+        (await store.create(Engagement(id=project_id, name=project_id)))
+        (
+            await store.create(
+                ProviderProfile(
+                    id=f"provider-{project_id}",
+                    name="Provider",
+                    provider_type="openrouter",
+                )
             )
         )
-        store.create(
-            ChatSession(
-                id=f"session-{project_id}",
-                engagement_id=project_id,
-                title="Goal chat",
-                provider_profile_id=f"provider-{project_id}",
-                model="model",
+        (
+            await store.create(
+                ChatSession(
+                    id=f"session-{project_id}",
+                    engagement_id=project_id,
+                    title="Goal chat",
+                    provider_profile_id=f"provider-{project_id}",
+                    model="model",
+                )
             )
         )
     return path, store, ChatGoalService(store)
 
 
-def _start(goals: ChatGoalService, project_id="project"):
+async def _start(goals: ChatGoalService, project_id="project"):
     session_id = f"session-{project_id}"
-    draft = goals.create(
+    draft = await goals.create(
         session_id,
         GoalCreate(
             objective=f"Research {project_id}", completion_criteria=["Evidence"]
         ),
     )
-    return goals.write(
+    return await goals.write(
         session_id, GoalWrite(expected_revision=draft.revision, action="start")
     )
 
 
-def _events(store: NebulaStore, project_id="project"):
-    return store.replay_operation_events(project_stream_id(project_id))
+async def _events(store: NebulaStore, project_id="project"):
+    return await store.replay_operation_events(project_stream_id(project_id))
 
 
-def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path):
-    _, store, _ = _setup(tmp_path)
-    session = store.create(
+async def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path):
+    _, store, _ = await _setup(tmp_path)
+    session = await store.create(
         ChatSession(
             id="session-recovery",
             engagement_id="project",
@@ -107,7 +115,7 @@ def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path)
             model="model",
         )
     )
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             engagement_id="project",
             session_id=session.id,
@@ -117,16 +125,18 @@ def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path)
             metadata={"butler_recovery_source_goal_id": "source-goal"},
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id="project",
-            session_id=session.id,
-            sequence=1,
-            role=ChatRole.ASSISTANT,
-            content="The source goal can resume after checking its revision.",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id="project",
+                session_id=session.id,
+                sequence=1,
+                role=ChatRole.ASSISTANT,
+                content="The source goal can resume after checking its revision.",
+            )
         )
     )
-    case = store.create(
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id="project",
             trigger="periodic",
@@ -139,19 +149,23 @@ def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path)
             recovery_goal_ids=[goal.id],
         )
     )
-    ButlerRecoveryAgent(
-        store,
-        provider_factory=lambda _: None,
-        harness_runtime=None,
-        artifact_store=None,
-        work=None,
-        memory=None,
-    )._record_model_turn(
-        case.id, ChatBackend.HARNESS, "profile", "model", "saved-harness-turn"
+    (
+        await ButlerRecoveryAgent(
+            store,
+            provider_factory=lambda _: None,
+            harness_runtime=None,
+            artifact_store=None,
+            work=None,
+            memory=None,
+        )._record_model_turn(
+            case.id, ChatBackend.HARNESS, "profile", "model", "saved-harness-turn"
+        )
     )
     app = FastAPI()
     app.include_router(butler_router(ButlerOversightService(store)), prefix="/api/v1")
-    body = TestClient(app).get("/api/v1/engagements/project/butler/overview").json()
+    body = (
+        await TestClient(app).get("/api/v1/engagements/project/butler/overview")
+    ).json()
     saved = next(item for item in body["recovery_cases"] if item["id"] == case.id)
     assert saved["model_turn_id"] == "saved-harness-turn"
     assert saved["recovery_goals"][0]["source_goal_id"] == "source-goal"
@@ -161,8 +175,8 @@ def test_scheduled_check_overview_links_saved_turn_and_recovery_report(tmp_path)
     )
 
 
-def _turn(store: NebulaStore, goal: ChatGoal, turn_id: str) -> ChatTurn:
-    return store.create(
+async def _turn(store: NebulaStore, goal: ChatGoal, turn_id: str) -> ChatTurn:
+    return await store.create(
         ChatTurn(
             id=turn_id,
             engagement_id=goal.engagement_id,
@@ -189,58 +203,59 @@ def _attention(machine: str = "Lab.EXAMPLE.") -> GoalAttentionReport:
     )
 
 
-def test_goal_transitions_commit_watch_and_project_events_then_close_after_replay(
+async def test_goal_transitions_commit_watch_and_project_events_then_close_after_replay(
     tmp_path,
 ):
-    _, store, goals = _setup(tmp_path)
+    _, store, goals = await _setup(tmp_path)
     signals = []
     store.on_project_oversight_change(
         lambda project_id: signals.append((project_id, len(_events(store, project_id))))
     )
-    running = _start(goals)
+    running = await _start(goals)
 
-    watch = store.get(ButlerGoalWatch, watch_id(running.id))
+    watch = await store.get(ButlerGoalWatch, watch_id(running.id))
     assert watch.status == ChatGoalStatus.RUNNING
     assert watch.progress_due_at is not None
-    assert [(item.sequence, item.event_type) for item in _events(store)] == [
+    assert [(item.sequence, item.event_type) for item in (await _events(store))] == [
         (1, "goal.started")
     ]
     assert signals == [("project", 1)]
 
-    paused = goals.write(
+    paused = await goals.write(
         "session-project", GoalWrite(expected_revision=running.revision, action="pause")
     )
-    assert store.get(ButlerGoalWatch, watch.id).progress_due_at is None
-    resumed = goals.write(
+    assert (await store.get(ButlerGoalWatch, watch.id)).progress_due_at is None
+    resumed = await goals.write(
         "session-project", GoalWrite(expected_revision=paused.revision, action="resume")
     )
-    resumed_watch = store.get(ButlerGoalWatch, watch.id)
+    resumed_watch = await store.get(ButlerGoalWatch, watch.id)
     assert resumed_watch.progress_due_at is not None
     assert resumed_watch.deadline_generation == 2
-    cancelled = goals.write(
+    cancelled = await goals.write(
         "session-project",
         GoalWrite(expected_revision=resumed.revision, action="cancel"),
     )
     assert cancelled.status == ChatGoalStatus.CANCELLED
-    assert store.get(ButlerGoalWatch, watch.id).closed_at is None
-    assert [event.event_type for event in _events(store)] == [
+    assert (await store.get(ButlerGoalWatch, watch.id)).closed_at is None
+    assert [event.event_type for event in (await _events(store))] == [
         "goal.started",
         "goal.paused",
         "goal.resumed",
         "goal.cancelled",
     ]
     worker = ButlerOversightService(store)
-    assert worker.replay_project("project")
-    assert store.get(ButlerGoalWatch, watch.id).closed_at is not None
+    assert await worker.replay_project("project")
+    assert (await store.get(ButlerGoalWatch, watch.id)).closed_at is not None
     assert (
-        store.get(ButlerProjectState, project_state_id("project")).last_event_sequence
-        == 4
-    )
+        await store.get(ButlerProjectState, project_state_id("project"))
+    ).last_event_sequence == 4
 
 
-def test_child_joins_watch_on_start_and_parent_pause_cascades_atomically(tmp_path):
-    _, store, goals = _setup(tmp_path)
-    draft = goals.create(
+async def test_child_joins_watch_on_start_and_parent_pause_cascades_atomically(
+    tmp_path,
+):
+    _, store, goals = await _setup(tmp_path)
+    draft = await goals.create(
         "session-project",
         GoalCreate(
             objective="Lead research",
@@ -248,40 +263,45 @@ def test_child_joins_watch_on_start_and_parent_pause_cascades_atomically(tmp_pat
             child_budget=1,
         ),
     )
-    parent = goals.write(
+    parent = await goals.write(
         "session-project", GoalWrite(expected_revision=draft.revision, action="start")
     )
-    child = goals.start_child(
+    child = await goals.start_child(
         "session-project",
         GoalCreate(objective="Check hypothesis", completion_criteria=["Result"]),
     )
-    assert store.find_entity(ButlerGoalWatch, "goal_id", child.id) is None
-    child_running = goals.write(
+    assert (await store.find_entity(ButlerGoalWatch, "goal_id", child.id)) is None
+    child_running = await goals.write(
         child.session_id, GoalWrite(expected_revision=child.revision, action="start")
     )
     assert (
-        store.get(ButlerGoalWatch, watch_id(child.id)).status == ChatGoalStatus.RUNNING
-    )
-    assert _events(store)[-1].payload["actor_role"] == "subagent"
+        await store.get(ButlerGoalWatch, watch_id(child.id))
+    ).status == ChatGoalStatus.RUNNING
+    assert (await _events(store))[-1].payload["actor_role"] == "subagent"
 
-    parent = store.get(ChatGoal, parent.id)
-    goals.write(
-        "session-project", GoalWrite(expected_revision=parent.revision, action="pause")
+    parent = await store.get(ChatGoal, parent.id)
+    (
+        await goals.write(
+            "session-project",
+            GoalWrite(expected_revision=parent.revision, action="pause"),
+        )
     )
-    assert store.get(ChatGoal, child_running.id).status == ChatGoalStatus.PAUSED
-    assert store.get(ButlerGoalWatch, watch_id(child.id)).progress_due_at is None
-    assert [event.sequence for event in _events(store)] == [1, 2, 3, 4]
-    assert [event.event_type for event in _events(store)][-2:] == [
+    assert (await store.get(ChatGoal, child_running.id)).status == ChatGoalStatus.PAUSED
+    assert (
+        await store.get(ButlerGoalWatch, watch_id(child.id))
+    ).progress_due_at is None
+    assert [event.sequence for event in (await _events(store))] == [1, 2, 3, 4]
+    assert [event.event_type for event in (await _events(store))][-2:] == [
         "goal.paused",
         "goal.paused",
     ]
 
 
-def test_event_failure_rolls_back_goal_and_watch_and_does_not_wake(
+async def test_event_failure_rolls_back_goal_and_watch_and_does_not_wake(
     tmp_path, monkeypatch
 ):
-    _, store, goals = _setup(tmp_path)
-    draft = goals.create(
+    _, store, goals = await _setup(tmp_path)
+    draft = await goals.create(
         "session-project",
         GoalCreate(objective="Research", completion_criteria=["Evidence"]),
     )
@@ -293,44 +313,47 @@ def test_event_failure_rolls_back_goal_and_watch_and_does_not_wake(
 
     monkeypatch.setattr(oversight, "_append_project_event", fail_append)
     with pytest.raises(RuntimeError, match="event storage unavailable"):
-        goals.write(
-            "session-project",
-            GoalWrite(expected_revision=draft.revision, action="start"),
+        (
+            await goals.write(
+                "session-project",
+                GoalWrite(expected_revision=draft.revision, action="start"),
+            )
         )
-    assert store.get(ChatGoal, draft.id).status == ChatGoalStatus.DRAFT
-    assert store.find_entity(ButlerGoalWatch, "goal_id", draft.id) is None
-    assert _events(store) == []
+    assert (await store.get(ChatGoal, draft.id)).status == ChatGoalStatus.DRAFT
+    assert (await store.find_entity(ButlerGoalWatch, "goal_id", draft.id)) is None
+    assert (await _events(store)) == []
     assert signals == []
 
 
-def test_restart_restores_missing_watches_and_replays_unseen_events(tmp_path):
-    path, store, goals = _setup(tmp_path)
-    running = _start(goals)
+async def test_restart_restores_missing_watches_and_replays_unseen_events(tmp_path):
+    path, store, goals = await _setup(tmp_path)
+    running = await _start(goals)
     first = ButlerOversightService(store)
-    assert first.replay_project("project")
-    paused = goals.write(
+    assert await first.replay_project("project")
+    paused = await goals.write(
         "session-project", GoalWrite(expected_revision=running.revision, action="pause")
     )
     assert paused.status == ChatGoalStatus.PAUSED
 
     restarted_store = NebulaStore(path)
     restarted = ButlerOversightService(restarted_store)
-    assert restarted.replay_project("project") is False  # first lease is still held
-    restarted_store.update(
-        ButlerProjectState,
-        project_state_id("project"),
-        {"lease_expires_at": utc_now() - timedelta(seconds=1)},
-    )
-    assert restarted.replay_project("project")
     assert (
-        restarted_store.get(
-            ButlerProjectState, project_state_id("project")
-        ).last_event_sequence
-        == 2
+        await restarted.replay_project("project")
+    ) is False  # first lease is still held
+    (
+        await restarted_store.update(
+            ButlerProjectState,
+            project_state_id("project"),
+            {"lease_expires_at": utc_now() - timedelta(seconds=1)},
+        )
     )
+    assert await restarted.replay_project("project")
+    assert (
+        await restarted_store.get(ButlerProjectState, project_state_id("project"))
+    ).last_event_sequence == 2
 
     # Upgrade/recovery case: a goal row predates Watch and has no transition event.
-    legacy = restarted_store.create(
+    legacy = await restarted_store.create(
         ChatGoal(
             id="legacy-goal",
             engagement_id="project",
@@ -340,84 +363,92 @@ def test_restart_restores_missing_watches_and_replays_unseen_events(tmp_path):
             status=ChatGoalStatus.RUNNING,
         )
     )
-    restarted.reconcile_watches()
-    recovered = restarted_store.get(ButlerGoalWatch, watch_id(legacy.id))
+    (await restarted.reconcile_watches())
+    recovered = await restarted_store.get(ButlerGoalWatch, watch_id(legacy.id))
     assert recovered.status == ChatGoalStatus.RUNNING
     assert recovered.progress_due_at is not None
     assert "restored" in recovered.coverage_reason
-    assert _events(restarted_store)[-1].event_type == "goal.watch_recovered"
-    restarted.reconcile_watches()
-    assert len(_events(restarted_store)) == 3
+    assert (await _events(restarted_store))[-1].event_type == "goal.watch_recovered"
+    (await restarted.reconcile_watches())
+    assert len((await _events(restarted_store))) == 3
 
 
-def test_expired_worker_cannot_emit_deadline_after_takeover(tmp_path):
-    _, store, goals = _setup(tmp_path)
-    running = _start(goals)
+async def test_expired_worker_cannot_emit_deadline_after_takeover(tmp_path):
+    _, store, goals = await _setup(tmp_path)
+    running = await _start(goals)
     old_worker = ButlerOversightService(store)
     new_worker = ButlerOversightService(store)
-    assert old_worker.replay_project("project")
-    store.update(
-        ButlerGoalWatch,
-        watch_id(running.id),
-        {"progress_due_at": utc_now() - timedelta(seconds=1)},
+    assert await old_worker.replay_project("project")
+    (
+        await store.update(
+            ButlerGoalWatch,
+            watch_id(running.id),
+            {"progress_due_at": utc_now() - timedelta(seconds=1)},
+        )
     )
-    assert new_worker.replay_project("project") is False
-    store.update(
-        ButlerProjectState,
-        project_state_id("project"),
-        {"lease_expires_at": utc_now() - timedelta(seconds=1)},
+    assert (await new_worker.replay_project("project")) is False
+    (
+        await store.update(
+            ButlerProjectState,
+            project_state_id("project"),
+            {"lease_expires_at": utc_now() - timedelta(seconds=1)},
+        )
     )
-    assert new_worker.replay_project("project")
-    assert old_worker.fire_due_deadlines("project") == 0
-    assert new_worker.fire_due_deadlines("project") == 1
-    assert new_worker.fire_due_deadlines("project") == 0
-    assert [event.event_type for event in _events(store)].count(
+    assert await new_worker.replay_project("project")
+    assert (await old_worker.fire_due_deadlines("project")) == 0
+    assert (await new_worker.fire_due_deadlines("project")) == 1
+    assert (await new_worker.fire_due_deadlines("project")) == 0
+    assert [event.event_type for event in (await _events(store))].count(
         "goal.progress_overdue"
     ) == 1
-    assert new_worker.replay_project("project")
+    assert await new_worker.replay_project("project")
     assert (
-        store.get(ButlerProjectState, project_state_id("project")).last_event_sequence
-        == 3
-    )
+        await store.get(ButlerProjectState, project_state_id("project"))
+    ).last_event_sequence == 3
 
 
-def test_overdue_checkpoint_is_a_durable_incident_until_progress_report(tmp_path):
-    path, store, goals = _setup(tmp_path)
-    goal = _start(goals)
+async def test_overdue_checkpoint_is_a_durable_incident_until_progress_report(tmp_path):
+    path, store, goals = await _setup(tmp_path)
+    goal = await _start(goals)
     worker = ButlerOversightService(store)
-    assert worker.replay_project("project")
-    store.update(
-        ButlerGoalWatch,
-        watch_id(goal.id),
-        {"progress_due_at": utc_now() - timedelta(seconds=1)},
+    assert await worker.replay_project("project")
+    (
+        await store.update(
+            ButlerGoalWatch,
+            watch_id(goal.id),
+            {"progress_due_at": utc_now() - timedelta(seconds=1)},
+        )
     )
-    assert worker.fire_due_deadlines("project") == 1
-    assert worker.fire_due_deadlines("project") == 0
-    incidents = store.find_entities(
+    assert (await worker.fire_due_deadlines("project")) == 1
+    assert (await worker.fire_due_deadlines("project")) == 0
+    incidents = await store.find_entities(
         ButlerIncident, {"source": "goal_checkpoint"}, engagement_id="project", limit=10
     )
     assert len(incidents) == 1
     assert incidents[0].status == "open"
     assert incidents[0].verification_state == "core_observed"
-    assert [event.event_type for event in _events(store)][-2:] == [
+    assert [event.event_type for event in (await _events(store))][-2:] == [
         "goal.progress_overdue",
         "incident.opened",
     ]
 
-    paused = goals.write(
+    paused = await goals.write(
         goal.session_id, GoalWrite(expected_revision=goal.revision, action="pause")
     )
-    assert store.get(ButlerIncident, incidents[0].id).status == "open"
-    resumed = goals.write(
+    assert (await store.get(ButlerIncident, incidents[0].id)).status == "open"
+    resumed = await goals.write(
         goal.session_id, GoalWrite(expected_revision=paused.revision, action="resume")
     )
-    blocked = goals.write(
+    blocked = await goals.write(
         goal.session_id,
         GoalWrite(expected_revision=resumed.revision, action="block", reason="Waiting"),
     )
-    assert store.get(ButlerIncident, incidents[0].id).status == "open"
-    goals.write(
-        goal.session_id, GoalWrite(expected_revision=blocked.revision, action="resume")
+    assert (await store.get(ButlerIncident, incidents[0].id)).status == "open"
+    (
+        await goals.write(
+            goal.session_id,
+            GoalWrite(expected_revision=blocked.revision, action="resume"),
+        )
     )
 
     restarted_store = NebulaStore(path)
@@ -426,81 +457,87 @@ def test_overdue_checkpoint_is_a_durable_incident_until_progress_report(tmp_path
         butler_router(ButlerOversightService(restarted_store)), prefix="/api/v1"
     )
     client = TestClient(app)
-    overview = client.get("/api/v1/engagements/project/butler/overview").json()
+    overview = (await client.get("/api/v1/engagements/project/butler/overview")).json()
     assert overview["summary"]["open_incidents"] == 1
     assert overview["incidents"][0]["id"] == incidents[0].id
-    turn = _turn(restarted_store, goal, "turn-after-overdue")
-    ingest_agent_report(
-        restarted_store,
-        turn_id=turn.id,
-        idempotency_key="progress-after-overdue",
-        body=GoalProgressReport(
-            what_changed="Checked the second input path.",
-            evidence_gained=["The probe completed."],
-            criterion_advanced="Documented the result.",
-            next_step="Continue with the remaining path.",
-        ),
-        source="provider_tool",
+    turn = await _turn(restarted_store, goal, "turn-after-overdue")
+    (
+        await ingest_agent_report(
+            restarted_store,
+            turn_id=turn.id,
+            idempotency_key="progress-after-overdue",
+            body=GoalProgressReport(
+                what_changed="Checked the second input path.",
+                evidence_gained=["The probe completed."],
+                criterion_advanced="Documented the result.",
+                next_step="Continue with the remaining path.",
+            ),
+            source="provider_tool",
+        )
     )
-    assert restarted_store.get(ButlerIncident, incidents[0].id).status == "resolved"
     assert (
-        client.get("/api/v1/engagements/project/butler/overview").json()["summary"][
-            "open_incidents"
-        ]
-        == 0
-    )
+        await restarted_store.get(ButlerIncident, incidents[0].id)
+    ).status == "resolved"
+    assert (await client.get("/api/v1/engagements/project/butler/overview")).json()[
+        "summary"
+    ]["open_incidents"] == 0
 
 
-def test_concurrent_goal_starts_get_one_ordered_project_stream(tmp_path):
-    _, store, goals = _setup(tmp_path)
-    first = goals.create(
+async def test_concurrent_goal_starts_get_one_ordered_project_stream(tmp_path):
+    _, store, goals = await _setup(tmp_path)
+    first = await goals.create(
         "session-project",
         GoalCreate(objective="First", completion_criteria=["Evidence"]),
     )
-    store.create(
-        ChatSession(
-            id="session-second",
-            engagement_id="project",
-            title="Second goal chat",
-            provider_profile_id="provider-project",
-            model="model",
+    (
+        await store.create(
+            ChatSession(
+                id="session-second",
+                engagement_id="project",
+                title="Second goal chat",
+                provider_profile_id="provider-project",
+                model="model",
+            )
         )
     )
-    second = goals.create(
+    second = await goals.create(
         "session-second",
         GoalCreate(objective="Second", completion_criteria=["Evidence"]),
     )
 
-    def start(session_id, revision):
-        return goals.write(
+    async def start(session_id, revision):
+        return await goals.write(
             session_id, GoalWrite(expected_revision=revision, action="start")
         )
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(
-            executor.map(
-                lambda item: start(*item),
-                [
-                    ("session-project", first.revision),
-                    ("session-second", second.revision),
-                ],
+    results = list(
+        (
+            await asyncio.gather(
+                *(
+                    (lambda item: start(*item))(_item)
+                    for _item in [
+                        ("session-project", first.revision),
+                        ("session-second", second.revision),
+                    ]
+                )
             )
         )
+    )
     assert len(results) == 2
-    events = _events(store)
+    events = await _events(store)
     assert [item.sequence for item in events] == [1, 2]
     assert {item.payload["goal_id"] for item in events} == {first.id, second.id}
 
 
-def test_project_overview_and_event_pages_do_not_expose_other_project(tmp_path):
-    _, store, goals = _setup(tmp_path, projects=("alpha", "beta"))
-    alpha = _start(goals, "alpha")
-    beta = _start(goals, "beta")
+async def test_project_overview_and_event_pages_do_not_expose_other_project(tmp_path):
+    _, store, goals = await _setup(tmp_path, projects=("alpha", "beta"))
+    alpha = await _start(goals, "alpha")
+    beta = await _start(goals, "beta")
     app = FastAPI()
     app.include_router(butler_router(ButlerOversightService(store)), prefix="/api/v1")
     client = TestClient(app)
 
-    overview = client.get("/api/v1/engagements/alpha/butler/overview").json()
+    overview = (await client.get("/api/v1/engagements/alpha/butler/overview")).json()
     assert overview["authority"] == "watch"
     assert overview["capabilities"]["incidents"] is True
     assert overview["watched_goals"][0]["goal_id"] == alpha.id
@@ -511,7 +548,7 @@ def test_project_overview_and_event_pages_do_not_expose_other_project(tmp_path):
     )
     assert beta.id not in str(overview)
 
-    page = client.get("/api/v1/engagements/alpha/butler/events").json()
+    page = (await client.get("/api/v1/engagements/alpha/butler/events")).json()
     assert [event["payload"]["goal_id"] for event in page["events"]] == [alpha.id]
     assert page["events"][0]["payload"]["project_id"] == "alpha"
 
@@ -540,13 +577,13 @@ def test_event_packet_rejects_foreign_or_oversize_evidence():
         )
 
 
-def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempotent(
+async def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempotent(
     tmp_path,
 ):
-    _, store, goals = _setup(tmp_path)
-    goal = _start(goals)
-    turn = _turn(store, goal, "turn-progress")
-    before = store.get(ButlerGoalWatch, watch_id(goal.id))
+    _, store, goals = await _setup(tmp_path)
+    goal = await _start(goals)
+    turn = await _turn(store, goal, "turn-progress")
+    before = await store.get(ButlerGoalWatch, watch_id(goal.id))
     body = GoalProgressReport(
         what_changed="Ruled out the first hypothesis.",
         evidence_gained=["The repeatable probe returned no matching response."],
@@ -555,7 +592,7 @@ def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempotent(
         next_checkpoint_at=utc_now() + timedelta(hours=8),
         evidence_refs=[ReportEvidenceRef(kind="chat_turn", id=turn.id)],
     )
-    report, incident = ingest_agent_report(
+    report, incident = await ingest_agent_report(
         store,
         turn_id=turn.id,
         idempotency_key="checkpoint-1",
@@ -569,7 +606,7 @@ def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempotent(
     assert report.evidence_refs == [
         {"kind": "chat_turn", "id": turn.id, "project_id": "project"}
     ]
-    after = store.get(ButlerGoalWatch, watch_id(goal.id))
+    after = await store.get(ButlerGoalWatch, watch_id(goal.id))
     assert after.deadline_generation == before.deadline_generation + 1
     assert after.last_progress_at is not None
     assert (
@@ -578,11 +615,11 @@ def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempotent(
         <= timedelta(hours=2)
     )
     assert after.report_capability == "validated"
-    assert _events(store)[-1].event_type == "agent.progress_reported"
-    assert _events(store)[-1].payload["verification_state"] == "agent_reported"
+    assert (await _events(store))[-1].event_type == "agent.progress_reported"
+    assert (await _events(store))[-1].payload["verification_state"] == "agent_reported"
 
-    sequence = len(_events(store))
-    same, _ = ingest_agent_report(
+    sequence = len((await _events(store)))
+    same, _ = await ingest_agent_report(
         store,
         turn_id=turn.id,
         idempotency_key="checkpoint-1",
@@ -590,46 +627,50 @@ def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempotent(
         source="provider_tool",
     )
     assert same.id == report.id
-    assert len(_events(store)) == sequence
-    assert store.get(ButlerGoalWatch, watch_id(goal.id)).revision == after.revision
+    assert len((await _events(store))) == sequence
+    assert (
+        await store.get(ButlerGoalWatch, watch_id(goal.id))
+    ).revision == after.revision
     with pytest.raises(ConflictError, match="different content"):
-        ingest_agent_report(
-            store,
-            turn_id=turn.id,
-            idempotency_key="checkpoint-1",
-            body=body.model_copy(update={"next_step": "Different action"}),
-            source="provider_tool",
+        (
+            await ingest_agent_report(
+                store,
+                turn_id=turn.id,
+                idempotency_key="checkpoint-1",
+                body=body.model_copy(update={"next_step": "Different action"}),
+                source="provider_tool",
+            )
         )
 
 
-def test_two_goal_agents_share_one_agent_reported_machine_incident(tmp_path):
-    path, store, goals = _setup(tmp_path)
-    draft = goals.create(
+async def test_two_goal_agents_share_one_agent_reported_machine_incident(tmp_path):
+    path, store, goals = await _setup(tmp_path)
+    draft = await goals.create(
         "session-project",
         GoalCreate(
             objective="Lead research", completion_criteria=["Evidence"], child_budget=1
         ),
     )
-    parent = goals.write(
+    parent = await goals.write(
         "session-project", GoalWrite(expected_revision=draft.revision, action="start")
     )
-    child = goals.start_child(
+    child = await goals.start_child(
         "session-project",
         GoalCreate(objective="Check host", completion_criteria=["Reach host"]),
     )
-    child = goals.write(
+    child = await goals.write(
         child.session_id, GoalWrite(expected_revision=child.revision, action="start")
     )
-    parent_turn = _turn(store, parent, "turn-parent")
-    child_turn = _turn(store, child, "turn-child")
-    first, opened = ingest_agent_report(
+    parent_turn = await _turn(store, parent, "turn-parent")
+    child_turn = await _turn(store, child, "turn-child")
+    first, opened = await ingest_agent_report(
         store,
         turn_id=parent_turn.id,
         idempotency_key="parent-observation",
         body=_attention("Lab.EXAMPLE."),
         source="provider_tool",
     )
-    second, updated = ingest_agent_report(
+    second, updated = await ingest_agent_report(
         store,
         turn_id=child_turn.id,
         idempotency_key="child-observation",
@@ -650,13 +691,17 @@ def test_two_goal_agents_share_one_agent_reported_machine_incident(tmp_path):
     assert set(updated.goal_ids) == {parent.id, child.id}
     assert set(updated.session_ids) == {parent.session_id, child.session_id}
     assert {item["id"] for item in updated.evidence_refs} == {first.id, second.id}
-    assert store.count_entities(ButlerIncident, engagement_id="project") == 1
+    assert (await store.count_entities(ButlerIncident, engagement_id="project")) == 1
     assert second.actor_role == "subagent"
-    assert [event.event_type for event in _events(store)].count("incident.opened") == 1
-    assert [event.event_type for event in _events(store)].count("incident.updated") == 1
+    assert [event.event_type for event in (await _events(store))].count(
+        "incident.opened"
+    ) == 1
+    assert [event.event_type for event in (await _events(store))].count(
+        "incident.updated"
+    ) == 1
 
     restarted = NebulaStore(path)
-    duplicate, incident = ingest_agent_report(
+    duplicate, incident = await ingest_agent_report(
         restarted,
         turn_id=child_turn.id,
         idempotency_key="child-observation",
@@ -666,7 +711,9 @@ def test_two_goal_agents_share_one_agent_reported_machine_incident(tmp_path):
     assert duplicate.id == second.id
     assert incident is not None and incident.id == opened.id
     assert incident.evidence_summary == updated.evidence_summary
-    assert restarted.count_entities(ButlerIncident, engagement_id="project") == 1
+    assert (
+        await restarted.count_entities(ButlerIncident, engagement_id="project")
+    ) == 1
     with pytest.raises(ValueError, match="evidence summaries"):
         ButlerIncident(
             engagement_id="project",
@@ -678,30 +725,32 @@ def test_two_goal_agents_share_one_agent_reported_machine_incident(tmp_path):
         )
 
 
-def test_concurrent_agent_reports_deduplicate_machine_incident(tmp_path):
-    _, store, goals = _setup(tmp_path)
-    first_goal = _start(goals)
-    store.create(
-        ChatSession(
-            id="session-peer",
-            engagement_id="project",
-            title="Peer work",
-            provider_profile_id="provider-project",
-            model="model",
+async def test_concurrent_agent_reports_deduplicate_machine_incident(tmp_path):
+    _, store, goals = await _setup(tmp_path)
+    first_goal = await _start(goals)
+    (
+        await store.create(
+            ChatSession(
+                id="session-peer",
+                engagement_id="project",
+                title="Peer work",
+                provider_profile_id="provider-project",
+                model="model",
+            )
         )
     )
-    peer_draft = goals.create(
+    peer_draft = await goals.create(
         "session-peer",
         GoalCreate(objective="Check shared host", completion_criteria=["Reach host"]),
     )
-    peer_goal = goals.write(
+    peer_goal = await goals.write(
         "session-peer", GoalWrite(expected_revision=peer_draft.revision, action="start")
     )
-    first_turn = _turn(store, first_goal, "concurrent-turn-first")
-    peer_turn = _turn(store, peer_goal, "concurrent-turn-peer")
+    first_turn = await _turn(store, first_goal, "concurrent-turn-first")
+    peer_turn = await _turn(store, peer_goal, "concurrent-turn-peer")
 
-    def report(turn_id: str):
-        return ingest_agent_report(
+    async def report(turn_id: str):
+        return await ingest_agent_report(
             store,
             turn_id=turn_id,
             idempotency_key=f"machine-report-{turn_id}",
@@ -709,19 +758,28 @@ def test_concurrent_agent_reports_deduplicate_machine_incident(tmp_path):
             source="provider_tool",
         )
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(report, [first_turn.id, peer_turn.id]))
+    results = list(
+        (
+            await asyncio.gather(
+                *(report(_item) for _item in [first_turn.id, peer_turn.id])
+            )
+        )
+    )
     assert len({incident.id for _, incident in results if incident is not None}) == 1
-    assert store.count_entities(ButlerIncident, engagement_id="project") == 1
-    assert [event.event_type for event in _events(store)].count("incident.opened") == 1
-    assert [event.event_type for event in _events(store)].count("incident.updated") == 1
+    assert (await store.count_entities(ButlerIncident, engagement_id="project")) == 1
+    assert [event.event_type for event in (await _events(store))].count(
+        "incident.opened"
+    ) == 1
+    assert [event.event_type for event in (await _events(store))].count(
+        "incident.updated"
+    ) == 1
 
 
-def test_report_identity_and_evidence_are_bound_to_core_project(tmp_path):
-    _, store, goals = _setup(tmp_path, projects=("alpha", "beta"))
-    goal = _start(goals, "alpha")
-    turn = _turn(store, goal, "turn-alpha")
-    foreign = store.create(
+async def test_report_identity_and_evidence_are_bound_to_core_project(tmp_path):
+    _, store, goals = await _setup(tmp_path, projects=("alpha", "beta"))
+    goal = await _start(goals, "alpha")
+    turn = await _turn(store, goal, "turn-alpha")
+    foreign = await store.create(
         Artifact(
             id="foreign-artifact",
             engagement_id="beta",
@@ -737,33 +795,39 @@ def test_report_identity_and_evidence_are_bound_to_core_project(tmp_path):
         next_step="Review the result.",
         evidence_refs=[ReportEvidenceRef(kind="artifact", id=foreign.id)],
     )
-    before = len(_events(store, "alpha"))
+    before = len((await _events(store, "alpha")))
     with pytest.raises(ConflictError, match="another project"):
-        ingest_agent_report(
-            store,
-            turn_id=turn.id,
-            idempotency_key="foreign-evidence",
-            body=body,
-            source="provider_tool",
+        (
+            await ingest_agent_report(
+                store,
+                turn_id=turn.id,
+                idempotency_key="foreign-evidence",
+                body=body,
+                source="provider_tool",
+            )
         )
-    assert store.count_entities(ButlerAgentReport, engagement_id="alpha") == 0
-    assert len(_events(store, "alpha")) == before
+    assert (await store.count_entities(ButlerAgentReport, engagement_id="alpha")) == 0
+    assert len((await _events(store, "alpha"))) == before
     with pytest.raises(ConflictError, match="does not match"):
-        ingest_agent_report(
-            store,
-            turn_id=turn.id,
-            idempotency_key="forged-project",
-            body=body.model_copy(update={"evidence_refs": []}),
-            source="provider_tool",
-            expected_project_id="beta",
+        (
+            await ingest_agent_report(
+                store,
+                turn_id=turn.id,
+                idempotency_key="forged-project",
+                body=body.model_copy(update={"evidence_refs": []}),
+                source="provider_tool",
+                expected_project_id="beta",
+            )
         )
 
 
-def test_acknowledgment_is_project_scoped_idempotent_and_survives_new_report(tmp_path):
-    path, store, goals = _setup(tmp_path, projects=("alpha", "beta"))
-    goal = _start(goals, "alpha")
-    turn = _turn(store, goal, "turn-alert")
-    _, opened = ingest_agent_report(
+async def test_acknowledgment_is_project_scoped_idempotent_and_survives_new_report(
+    tmp_path,
+):
+    path, store, goals = await _setup(tmp_path, projects=("alpha", "beta"))
+    goal = await _start(goals, "alpha")
+    turn = await _turn(store, goal, "turn-alert")
+    _, opened = await ingest_agent_report(
         store,
         turn_id=turn.id,
         idempotency_key="alert-1",
@@ -772,31 +836,35 @@ def test_acknowledgment_is_project_scoped_idempotent_and_survives_new_report(tmp
     )
     assert opened is not None
     with pytest.raises(NotFoundError):
-        acknowledge_incident(
-            store,
-            engagement_id="beta",
-            record_id=opened.id,
-            expected_revision=opened.revision,
+        (
+            await acknowledge_incident(
+                store,
+                engagement_id="beta",
+                record_id=opened.id,
+                expected_revision=opened.revision,
+            )
         )
     app = FastAPI()
     app.include_router(butler_router(ButlerOversightService(store)), prefix="/api/v1")
     client = TestClient(app)
     route = f"/api/v1/engagements/alpha/butler/incidents/{opened.id}/acknowledge"
-    response = client.post(route, json={"expected_revision": opened.revision})
+    response = await client.post(route, json={"expected_revision": opened.revision})
     assert response.status_code == 200
     acknowledged = response.json()
     assert acknowledged["status"] == "acknowledged"
     assert acknowledged["acknowledged_at"] is not None
-    sequence = len(_events(store, "alpha"))
-    duplicate = client.post(route, json={"expected_revision": opened.revision})
+    sequence = len((await _events(store, "alpha")))
+    duplicate = await client.post(route, json={"expected_revision": opened.revision})
     assert duplicate.status_code == 200
     assert duplicate.json()["revision"] == acknowledged["revision"]
-    assert len(_events(store, "alpha")) == sequence
+    assert len((await _events(store, "alpha"))) == sequence
 
     reopened_store = NebulaStore(path)
-    assert reopened_store.get(ButlerIncident, opened.id).status == "acknowledged"
-    _turn(reopened_store, goal, "turn-alert-2")
-    _, updated = ingest_agent_report(
+    assert (
+        await reopened_store.get(ButlerIncident, opened.id)
+    ).status == "acknowledged"
+    (await _turn(reopened_store, goal, "turn-alert-2"))
+    _, updated = await ingest_agent_report(
         reopened_store,
         turn_id="turn-alert-2",
         idempotency_key="alert-2",
@@ -809,10 +877,10 @@ def test_acknowledgment_is_project_scoped_idempotent_and_survives_new_report(tmp
     assert len(updated.evidence_refs) == 2
 
 
-def test_report_tool_rejects_non_agent_invocation_and_binds_saved_turn(tmp_path):
-    _, store, goals = _setup(tmp_path)
-    goal = _start(goals)
-    turn = _turn(store, goal, "turn-tool")
+async def test_report_tool_rejects_non_agent_invocation_and_binds_saved_turn(tmp_path):
+    _, store, goals = await _setup(tmp_path)
+    goal = await _start(goals)
+    turn = await _turn(store, goal, "turn-tool")
     assert set(report_specs()) == {"report_progress", "report_attention"}
     scope = ScopePolicy(id="scope", engagement_id="project")
     invocation = ToolInvocation(
@@ -828,47 +896,49 @@ def test_report_tool_rejects_non_agent_invocation_and_binds_saved_turn(tmp_path)
         requested_by="chat-assistant",
     )
     broker = ButlerReportBroker(store)
-    accepted = asyncio.run(broker.execute(invocation, scope))
+    accepted = await broker.execute(invocation, scope)
     assert accepted.output["accepted"] is True
     assert accepted.output["incident_id"] is not None
     with pytest.raises(ToolNotPermitted):
-        asyncio.run(
-            broker.execute(
+        (
+            await broker.execute(
                 invocation.model_copy(update={"requested_by": "operator"}), scope
             )
         )
     with pytest.raises(ConflictError, match="does not match"):
-        asyncio.run(
-            broker.execute(
+        (
+            await broker.execute(
                 invocation.model_copy(update={"engagement_id": "other"}), scope
             )
         )
-    store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE})
+    (await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE}))
     with pytest.raises(ConflictError, match="active tool turn"):
-        asyncio.run(
-            broker.execute(
+        (
+            await broker.execute(
                 invocation.model_copy(update={"idempotency_key": "late-report"}), scope
             )
         )
 
 
-def test_provider_goal_turn_offers_core_reports_and_ingests_machine_alert(
+async def test_provider_goal_turn_offers_core_reports_and_ingests_machine_alert(
     tmp_path, monkeypatch
 ):
-    _, store, goals = _setup(tmp_path)
-    goal = _start(goals)
-    profile = store.get(ProviderProfile, "provider-project")
+    _, store, goals = await _setup(tmp_path)
+    goal = await _start(goals)
+    profile = await store.get(ProviderProfile, "provider-project")
     capabilities = profile.capabilities.model_dump(mode="python")
     capabilities["tool_calling"] = True
-    store.update(
-        ProviderProfile,
-        profile.id,
-        {
-            "capabilities": capabilities,
-            "capability_verifications": {
-                "model": {"model": "model", "status": "verified"}
+    (
+        await store.update(
+            ProviderProfile,
+            profile.id,
+            {
+                "capabilities": capabilities,
+                "capability_verifications": {
+                    "model": {"model": "model", "status": "verified"}
+                },
             },
-        },
+        )
     )
     provider = FakeProvider(profile.id, local=True)
     provider.config.default_model = "model"
@@ -883,7 +953,7 @@ def test_provider_goal_turn_offers_core_reports_and_ingests_machine_alert(
     skill_path.write_text("Read [the note](references/note.md).", encoding="utf-8")
     resource_path.write_text("Evidence goes here.", encoding="utf-8")
     chat = ChatService(store, workspace_resolver=lambda _: workspace)
-    prepared = chat.prepare(
+    prepared = await chat.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id="project",
@@ -906,34 +976,34 @@ def test_provider_goal_turn_offers_core_reports_and_ingests_machine_alert(
     )
     # Preparation persists the turn as queued; the real scheduler moves it
     # to routing before any agent tool call can execute.
-    store.update(ChatTurn, prepared.turn.id, {"status": ChatTurnStatus.ROUTING})
-    result = asyncio.run(
-        prepared.tool_components.broker.execute(
-            ToolInvocation(
-                engagement_id="project",
-                run_id=prepared.turn.id,
-                origin=ToolCallOrigin.CHAT,
-                chat_session_id=goal.session_id,
-                chat_turn_id=prepared.turn.id,
-                tool_name="report_attention",
-                arguments=_attention().model_dump(mode="json"),
-                workspace=workspace,
-                idempotency_key="real-path-report",
-                requested_by="chat-assistant",
-            ),
-            prepared.tool_components.scope,
-        )
+    (await store.update(ChatTurn, prepared.turn.id, {"status": ChatTurnStatus.ROUTING}))
+    result = await prepared.tool_components.broker.execute(
+        ToolInvocation(
+            engagement_id="project",
+            run_id=prepared.turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=goal.session_id,
+            chat_turn_id=prepared.turn.id,
+            tool_name="report_attention",
+            arguments=_attention().model_dump(mode="json"),
+            workspace=workspace,
+            idempotency_key="real-path-report",
+            requested_by="chat-assistant",
+        ),
+        prepared.tool_components.scope,
     )
     assert result.output["incident_id"] is not None
-    assert store.count_entities(ButlerIncident, engagement_id="project") == 1
+    assert (await store.count_entities(ButlerIncident, engagement_id="project")) == 1
 
 
-def test_overview_pages_watches_and_prioritizes_open_incidents(tmp_path, monkeypatch):
-    _, store, goals = _setup(tmp_path)
-    first = _start(goals)
+async def test_overview_pages_watches_and_prioritizes_open_incidents(
+    tmp_path, monkeypatch
+):
+    _, store, goals = await _setup(tmp_path)
+    first = await _start(goals)
     monkeypatch.setattr(oversight, "OVERVIEW_PAGE_SIZE", 2)
     for index in range(2):
-        goal = store.create(
+        goal = await store.create(
             ChatGoal(
                 id=f"extra-goal-{index}",
                 engagement_id="project",
@@ -943,33 +1013,37 @@ def test_overview_pages_watches_and_prioritizes_open_incidents(tmp_path, monkeyp
                 status=ChatGoalStatus.RUNNING,
             )
         )
-        store.create(
-            ButlerGoalWatch(
-                id=watch_id(goal.id),
-                engagement_id="project",
-                goal_id=goal.id,
-                session_id=goal.session_id,
-                status=goal.status,
-                coverage_reason="Lifecycle only",
+        (
+            await store.create(
+                ButlerGoalWatch(
+                    id=watch_id(goal.id),
+                    engagement_id="project",
+                    goal_id=goal.id,
+                    session_id=goal.session_id,
+                    status=goal.status,
+                    coverage_reason="Lifecycle only",
+                )
             )
         )
     for index, status in enumerate(("acknowledged", "open", "open")):
-        store.create(
-            ButlerIncident(
-                id=f"incident-{index}",
-                engagement_id="project",
-                incident_key=f"machine:host-{index}",
-                status=status,
-                source="agent_report",
-                verification_state="agent_reported",
-                summary=f"Host {index} unreachable",
+        (
+            await store.create(
+                ButlerIncident(
+                    id=f"incident-{index}",
+                    engagement_id="project",
+                    incident_key=f"machine:host-{index}",
+                    status=status,
+                    source="agent_report",
+                    verification_state="agent_reported",
+                    summary=f"Host {index} unreachable",
+                )
             )
         )
     app = FastAPI()
     app.include_router(butler_router(ButlerOversightService(store)), prefix="/api/v1")
     client = TestClient(app)
     route = "/api/v1/engagements/project/butler/overview"
-    first_page = client.get(route).json()
+    first_page = (await client.get(route)).json()
     assert first_page["summary"] == {
         "watched_goals": 3,
         "open_incidents": 2,
@@ -988,10 +1062,13 @@ def test_overview_pages_watches_and_prioritizes_open_incidents(tmp_path, monkeyp
     assert {incident["status"] for incident in first_page["incidents"]} == {"open"}
     assert first_page["next_watch_offset"] == 2
     assert first_page["next_incident_offset"] == 2
-    second_page = client.get(
-        route, params={"watch_offset": 2, "incident_offset": 2}
+    second_page = (
+        await client.get(route, params={"watch_offset": 2, "incident_offset": 2})
     ).json()
     assert [item["goal_id"] for item in second_page["watched_goals"]] == [first.id]
     assert [item["status"] for item in second_page["incidents"]] == ["acknowledged"]
     assert second_page["next_watch_offset"] is None
     assert second_page["next_incident_offset"] is None
+
+
+pytestmark = pytest.mark.anyio

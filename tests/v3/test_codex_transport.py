@@ -1,6 +1,10 @@
 """Codex app-server transport limits, stderr, error notices and server requests."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import base64
@@ -147,7 +151,7 @@ def _turn_completed(status: str = "completed", error: Any = None) -> dict[str, A
 # CODEX-2: message size limits ------------------------------------------------
 
 
-def test_codex_stdio_turn_survives_an_image_echo_over_the_mcp_limit(tmp_path):
+async def test_codex_stdio_turn_survives_an_image_echo_over_the_mcp_limit(tmp_path):
     # Codex echoes the user's input, image data URL included, in item/started
     # and item/completed for the userMessage item.
     profile = _fake_app_server(
@@ -193,7 +197,7 @@ def test_codex_stdio_turn_survives_an_image_echo_over_the_mcp_limit(tmp_path):
         finally:
             await rpc.close()
 
-    asyncio.run(asyncio.wait_for(scenario(), 60))
+    (await asyncio.wait_for(scenario(), 60))
 
 
 class _ChunkedStdout:
@@ -212,7 +216,7 @@ class _ChunkedStdout:
 
 
 @pytest.mark.parametrize("chunk", [1, 7, 64, 65_536])
-def test_codex_rpc_drops_one_oversized_line_and_keeps_reading(monkeypatch, chunk):
+async def test_codex_rpc_drops_one_oversized_line_and_keeps_reading(monkeypatch, chunk):
     monkeypatch.setattr(_CodexRpc, "max_message_bytes", 128, raising=False)
     frames = [
         {"method": "first", "params": {}},
@@ -250,13 +254,15 @@ def test_codex_rpc_drops_one_oversized_line_and_keeps_reading(monkeypatch, chunk
         assert isinstance(received[-1], HarnessTransportError)
         assert "transport closed" in str(received[-1])
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
     "transport", [HarnessTransport.WEBSOCKET, HarnessTransport.UNIX]
 )
-def test_codex_endpoint_connections_accept_frames_over_one_mib(tmp_path, transport):
+async def test_codex_endpoint_connections_accept_frames_over_one_mib(
+    tmp_path, transport
+):
     import websockets
 
     blob = "B" * (1536 * 1024)
@@ -300,10 +306,10 @@ def test_codex_endpoint_connections_accept_frames_over_one_mib(tmp_path, transpo
             server.close()
             await server.wait_closed()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_resume_does_not_ask_for_the_thread_history(tmp_path):
+async def test_codex_resume_does_not_ask_for_the_thread_history(tmp_path):
     class ResumeRpc:
         def __init__(self) -> None:
             self.events: asyncio.Queue[Any] = asyncio.Queue()
@@ -352,7 +358,7 @@ def test_codex_resume_does_not_ask_for_the_thread_history(tmp_path):
             )
         )
 
-    asyncio.run(scenario())
+    (await scenario())
     resume = [params for method, params in rpc.calls if method == "thread/resume"]
     assert len(resume) == 1
     # Nebula never reads thread.turns; the full history can exceed any bound.
@@ -508,7 +514,7 @@ def test_codex_terminal_interaction_shows_the_stdin_sent():
 # CODEX-12: the stderr Codex printed before it died --------------------------------
 
 
-def test_codex_transport_closed_error_carries_the_redacted_stderr_tail():
+async def test_codex_transport_closed_error_carries_the_redacted_stderr_tail():
     script = (
         "import sys\n"
         "sys.stdin.readline()\n"
@@ -547,10 +553,10 @@ def test_codex_transport_closed_error_carries_the_redacted_stderr_tail():
         # must fit whole instead of being cut before its last line.
         assert len(detail) <= 1_000
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_transport_failed_error_carries_the_stderr_tail():
+async def test_codex_transport_failed_error_carries_the_stderr_tail():
     class FailingStdout:
         async def read(self, _size: int = -1) -> bytes:
             raise OSError("pipe read failed")
@@ -568,7 +574,7 @@ def test_codex_transport_failed_error_carries_the_stderr_tail():
         assert str(failure).startswith("Codex app-server transport failed: OSError")
         assert "panicked at core/src/codex.rs:12" in str(failure)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # CODEX-13: server requests Nebula does not implement --------------------------------
@@ -611,7 +617,7 @@ def test_codex_unknown_server_requests_get_method_not_found():
     assert events[-1].message == "Done."
 
 
-def test_codex_method_not_found_reply_reaches_the_app_server(tmp_path):
+async def test_codex_method_not_found_reply_reaches_the_app_server(tmp_path):
     profile = _fake_app_server(
         tmp_path,
         """
@@ -647,4 +653,7 @@ def test_codex_method_not_found_reply_reaches_the_app_server(tmp_path):
         assert "currentTime/read" in reply["error"]["message"]
         assert "result" not in reply
 
-    asyncio.run(asyncio.wait_for(scenario(), 15))
+    (await asyncio.wait_for(scenario(), 15))
+
+
+pytestmark = pytest.mark.anyio

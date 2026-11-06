@@ -1,11 +1,14 @@
 """Inventory and finding changes retain project, revision and attribution owners."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -23,19 +26,19 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError
 
 
-def test_butler_records_discovery_is_project_scoped_and_bounded(tmp_path):
+async def test_butler_records_discovery_is_project_scoped_and_bounded(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    foreign_asset = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    foreign_asset = await store.create(
         Asset(engagement_id=other.id, name="Foreign inventory")
     )
-    foreign_finding = store.create(
+    foreign_finding = await store.create(
         Finding(engagement_id=other.id, title="Foreign finding")
     )
     for index in range(52):
-        store.create(Asset(engagement_id=project.id, name=f"Host {index}"))
-    finding = store.create(
+        (await store.create(Asset(engagement_id=project.id, name=f"Host {index}")))
+    finding = await store.create(
         Finding(
             engagement_id=project.id,
             title="Bounded finding",
@@ -106,15 +109,17 @@ def test_butler_records_discovery_is_project_scoped_and_bounded(tmp_path):
                 & schema["properties"].keys()
             )
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_records_create_retry_and_revision_edit_use_core_validation(tmp_path):
+async def test_butler_records_create_retry_and_revision_edit_use_core_validation(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    foreign = store.create(Asset(engagement_id=other.id, name="Foreign"))
-    evidence = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    foreign = await store.create(Asset(engagement_id=other.id, name="Foreign"))
+    evidence = await store.create(
         Evidence(
             engagement_id=project.id, title="Synthetic evidence", evidence_type="manual"
         )
@@ -148,10 +153,9 @@ def test_butler_records_create_retry_and_revision_edit_use_core_validation(tmp_p
             "resource": "assets",
         }
         asset_id = asset["result"]["id"]
-        assert (
-            client.get(f"/api/v1/assets/{asset_id}").json()["name"]
-            == "Inventory fixture"
-        )
+        assert (await client.get(f"/api/v1/assets/{asset_id}")).json()[
+            "name"
+        ] == "Inventory fixture"
         retry = await invoke("nebula.assets.create", asset_args)
         assert retry["replayed"] is True and retry["result"]["id"] == asset_id
         with pytest.raises(ValueError, match="different record content"):
@@ -167,7 +171,7 @@ def test_butler_records_create_retry_and_revision_edit_use_core_validation(tmp_p
         }
         created = await invoke("nebula.findings.create", finding_args)
         finding_id = created["result"]["id"]
-        initial = client.get(f"/api/v1/findings/{finding_id}").json()
+        initial = (await client.get(f"/api/v1/findings/{finding_id}")).json()
         assert initial["status"] == "candidate" and initial["cve_ids"] == [
             "CVE-2026-12345"
         ]
@@ -185,7 +189,7 @@ def test_butler_records_create_retry_and_revision_edit_use_core_validation(tmp_p
                     "asset_ids": [foreign.id],
                 },
             )
-        assert len(store.list_entities(Finding, engagement_id=project.id)) == 1
+        assert len((await store.list_entities(Finding, engagement_id=project.id))) == 1
         saved = await invoke(
             "nebula.findings.update",
             {
@@ -200,7 +204,7 @@ def test_butler_records_create_retry_and_revision_edit_use_core_validation(tmp_p
             saved["read_back"] is True
             and saved["result"]["revision"] > initial["revision"]
         )
-        observed = client.get(f"/api/v1/findings/{finding_id}").json()
+        observed = (await client.get(f"/api/v1/findings/{finding_id}")).json()
         assert observed["title"] == "Reviewed candidate fixture" and observed[
             "cwe_ids"
         ] == ["CWE-79"]
@@ -216,21 +220,21 @@ def test_butler_records_create_retry_and_revision_edit_use_core_validation(tmp_p
                     "title": "Stale title",
                 },
             )
-        assert client.get(f"/api/v1/findings/{finding_id}").json() == observed
+        assert (await client.get(f"/api/v1/findings/{finding_id}")).json() == observed
         with pytest.raises(ValueError, match="current fields differ"):
             await invoke("nebula.findings.create", finding_args)
-        assert len(store.list_entities(Finding, engagement_id=project.id)) == 1
+        assert len((await store.list_entities(Finding, engagement_id=project.id))) == 1
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_records_cannot_forge_verification_or_change_an_archived_project(
+async def test_butler_records_cannot_forge_verification_or_change_an_archived_project(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    operator = store.create(OperatorProfile(display_name="Fixture operator"))
-    evidence = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    operator = await store.create(OperatorProfile(display_name="Fixture operator"))
+    evidence = await store.create(
         Evidence(
             engagement_id=project.id, title="Operator evidence", evidence_type="manual"
         )
@@ -243,7 +247,7 @@ def test_butler_records_cannot_forge_verification_or_change_an_archived_project(
         verifier_id=operator.id,
         verified_at=utc_now(),
     )
-    ResourceRelationService(store).create_legacy_entity(confirmed)
+    (await ResourceRelationService(store).create_legacy_entity(confirmed))
     capabilities = ButlerCapabilities(
         store, ArtifactStore(tmp_path / "artifacts"), project.id
     )
@@ -276,13 +280,15 @@ def test_butler_records_cannot_forge_verification_or_change_an_archived_project(
             )
         assert rejected.value.reason == "invalid_action_arguments"
         assert getattr(rejected.value, "_nebula_before_execution") is True
-        assert store.get(Finding, confirmed.id) == confirmed
-        assert len(store.list_entities(Finding, engagement_id=project.id)) == 1
-        store.update(
-            Engagement,
-            project.id,
-            {"status": "archived"},
-            expected_revision=project.revision,
+        assert (await store.get(Finding, confirmed.id)) == confirmed
+        assert len((await store.list_entities(Finding, engagement_id=project.id))) == 1
+        (
+            await store.update(
+                Engagement,
+                project.id,
+                {"status": "archived"},
+                expected_revision=project.revision,
+            )
         )
         with pytest.raises(ValueError, match="restore"):
             await capabilities.invoke(
@@ -295,6 +301,9 @@ def test_butler_records_cannot_forge_verification_or_change_an_archived_project(
                 },
                 change=True,
             )
-        assert store.list_entities(Asset, engagement_id=project.id) == []
+        assert (await store.list_entities(Asset, engagement_id=project.id)) == []
 
-    asyncio.run(journey())
+    (await journey())
+
+
+pytestmark = pytest.mark.anyio

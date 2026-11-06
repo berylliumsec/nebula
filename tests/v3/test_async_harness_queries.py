@@ -1,6 +1,11 @@
 """Prove title lookups stop at indexed rows as matching history grows."""
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import timedelta
 
 from sqlalchemy import event, insert
@@ -172,11 +177,14 @@ async def _exercise(database):
         await database.dispose()
 
 
-def test_sqlite_harness_lookup_work_does_not_scan_matching_history(tmp_path):
-    asyncio.run(_exercise(Database(tmp_path / "seeks.db")))
+async def test_sqlite_harness_lookup_work_does_not_scan_matching_history(tmp_path):
+    (await _exercise(Database(tmp_path / "seeks.db")))
 
 
-def test_postgresql_harness_lookup_work_does_not_scan_matching_history(postgresql_url):
-    asyncio.run(
-        _exercise(Database(postgresql_url, pool_settings=PoolSettings(5, 12, 2)))
-    )
+async def test_postgresql_harness_lookup_work_does_not_scan_matching_history(
+    postgresql_url,
+):
+    (await _exercise(Database(postgresql_url, pool_settings=PoolSettings(5, 12, 2))))
+
+
+pytestmark = pytest.mark.anyio

@@ -6,6 +6,11 @@ with an observation the model sees on its next turn, the way Codex, Cline,
 pi-mono and the AI SDK answer them, instead of failing the specialist turn.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 
 import pytest
@@ -172,7 +177,7 @@ def warnings(monkeypatch):
     return recorded
 
 
-def test_prose_beside_routing_calls_runs_the_calls_and_keeps_it_as_commentary(
+async def test_prose_beside_routing_calls_runs_the_calls_and_keeps_it_as_commentary(
     tmp_path, warnings
 ):
     provider = ScriptedProvider(
@@ -185,7 +190,7 @@ def test_prose_beside_routing_calls_runs_the_calls_and_keeps_it_as_commentary(
     )
     broker = RecordingBroker()
 
-    result = asyncio.run(_specialist(tmp_path, provider, broker).run(_context()))
+    result = await _specialist(tmp_path, provider, broker).run(_context())
 
     assert [invocation.tool_name for invocation in broker.calls] == ["nmap.tcp"]
     assert result.outcome is SpecialistOutcome.CONTINUE
@@ -224,13 +229,13 @@ def test_reply_without_a_routing_action_asks_the_model_again(tmp_path, warnings,
     assert "missions.routing.no_action" in {item["event"] for item in warnings}
 
 
-def test_finish_with_extra_arguments_is_accepted_as_a_finish(tmp_path, warnings):
+async def test_finish_with_extra_arguments_is_accepted_as_a_finish(tmp_path, warnings):
     provider = ScriptedProvider(
         [{"calls": [_call("call-1", FINISH, {**DONE, "findings": ["none"]})]}]
     )
     broker = RecordingBroker()
 
-    result = asyncio.run(_specialist(tmp_path, provider, broker).run(_context()))
+    result = await _specialist(tmp_path, provider, broker).run(_context())
 
     assert result.outcome is SpecialistOutcome.COMPLETE
     assert result.summary == "The service is mapped"
@@ -425,7 +430,7 @@ def test_reused_call_id_for_the_same_call_never_duplicates_its_effect(tmp_path):
     assert len(set(ids)) == 4
 
 
-def test_a_repeated_id_inside_one_batch_runs_the_same_call_once(tmp_path):
+async def test_a_repeated_id_inside_one_batch_runs_the_same_call_once(tmp_path):
     provider = ScriptedProvider(
         [
             {
@@ -439,7 +444,7 @@ def test_a_repeated_id_inside_one_batch_runs_the_same_call_once(tmp_path):
     )
     broker = RecordingBroker()
 
-    result = asyncio.run(_specialist(tmp_path, provider, broker).run(_context()))
+    result = await _specialist(tmp_path, provider, broker).run(_context())
 
     assert [invocation.tool_name for invocation in broker.calls] == [
         "nmap.tcp",
@@ -454,7 +459,7 @@ def test_a_repeated_id_inside_one_batch_runs_the_same_call_once(tmp_path):
     assert len({record["model_call_id"] for record in records}) == 3
 
 
-def test_a_routing_deviation_does_not_push_an_older_tool_failure_out_of_view(
+async def test_a_routing_deviation_does_not_push_an_older_tool_failure_out_of_view(
     tmp_path,
 ):
     def turn(call_id, status, routing_error=None):
@@ -479,8 +484,8 @@ def test_a_routing_deviation_does_not_push_an_older_tool_failure_out_of_view(
     ]
     provider = ScriptedProvider([{"calls": [_call("call-11", FINISH, DONE)]}])
 
-    asyncio.run(
-        _specialist(tmp_path, provider, RecordingBroker()).run(
+    (
+        await _specialist(tmp_path, provider, RecordingBroker()).run(
             _context(prior_turns=prior)
         )
     )
@@ -491,7 +496,7 @@ def test_a_routing_deviation_does_not_push_an_older_tool_failure_out_of_view(
     assert replayed[-1] == "call-10"
 
 
-def test_mission_feeds_a_routing_deviation_back_instead_of_failing(tmp_path):
+async def test_mission_feeds_a_routing_deviation_back_instead_of_failing(tmp_path):
     task = PlannedTask(
         id="scan",
         role=SpecialistRole.NETWORK_SERVICE,
@@ -528,16 +533,17 @@ def test_mission_feeds_a_routing_deviation_back_instead_of_failing(tmp_path):
         },
     )
 
-    state = asyncio.run(
-        runtime.start(
-            engagement_id="engagement-1",
-            objective="Map the exposed service",
-            # No retries: any specialist error would fail the task outright.
-            budget=RunBudget(max_retries=0),
-        )
+    state = await runtime.start(
+        engagement_id="engagement-1",
+        objective="Map the exposed service",
+        # No retries: any specialist error would fail the task outright.
+        budget=RunBudget(max_retries=0),
     )
 
     assert state["task_status"] == {task.id: TaskStatus.COMPLETE.value}
     replayed = provider.requests[1].tool_results
     assert [(item.name, item.is_error) for item in replayed] == [("shell.exec", True)]
     assert broker.calls == []
+
+
+pytestmark = pytest.mark.anyio

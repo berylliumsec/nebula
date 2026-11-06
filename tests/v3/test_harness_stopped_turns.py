@@ -1,6 +1,11 @@
 """Stopped or interrupted harness chat turns end cleanly and keep their partial answer."""
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import gc
@@ -10,7 +15,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.credentials import CredentialStore
@@ -106,7 +111,7 @@ class OperatorStopRpc(ScriptedRpc):
                 await asyncio.sleep(0.3)
                 running = [
                     turn
-                    for turn in self.store.list_entities(HarnessTurn, limit=100)
+                    for turn in (await self.store.list_entities(HarnessTurn, limit=100))
                     if turn.status == HarnessTurnStatus.RUNNING
                 ]
                 # The same call POST /harness-turns/{id}/stop makes.
@@ -199,10 +204,10 @@ class DiagnosticRecorder:
         self.records.append((level, event_code))
 
 
-def build_runtime(tmp_path: Path, kind: HarnessKind, adapter: HarnessAdapter):
+async def build_runtime(tmp_path: Path, kind: HarnessKind, adapter: HarnessAdapter):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = await store.create(
         HarnessProfile(
             id="harness-a",
             name="Fixture",
@@ -241,22 +246,22 @@ def sse_frames(text: str) -> list[dict[str, Any]]:
     ]
 
 
-def assistant_messages(store: NebulaStore) -> list[ChatMessage]:
+async def assistant_messages(store: NebulaStore) -> list[ChatMessage]:
     return [
         message
-        for message in store.list_entities(ChatMessage, limit=50)
+        for message in (await store.list_entities(ChatMessage, limit=50))
         if message.role == ChatRole.ASSISTANT
     ]
 
 
-def wait_for_assistant(store: NebulaStore) -> list[ChatMessage]:
+async def wait_for_assistant(store: NebulaStore) -> list[ChatMessage]:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        messages = assistant_messages(store)
+        messages = await assistant_messages(store)
         if messages:
             return messages
         time.sleep(0.02)
-    return assistant_messages(store)
+    return await assistant_messages(store)
 
 
 def assert_clean_stop(frames: list[dict[str, Any]], recorder: DiagnosticRecorder):
@@ -267,7 +272,7 @@ def assert_clean_stop(frames: list[dict[str, Any]], recorder: DiagnosticRecorder
     assert ("error", "harnesses.stream.failed") not in recorder.records
 
 
-def test_codex_interrupted_turn_ends_stream_cleanly_and_keeps_partial_answer(
+async def test_codex_interrupted_turn_ends_stream_cleanly_and_keeps_partial_answer(
     tmp_path,
 ):
     adapter = CodexAdapter(
@@ -278,7 +283,7 @@ def test_codex_interrupted_turn_ends_stream_cleanly_and_keeps_partial_answer(
             ]
         )
     )
-    store, engagement, profile, runtime = build_runtime(
+    store, engagement, profile, runtime = await build_runtime(
         tmp_path, HarnessKind.CODEX_APP_SERVER, adapter
     )
     recorder = DiagnosticRecorder()
@@ -288,24 +293,24 @@ def test_codex_interrupted_turn_ends_stream_cleanly_and_keeps_partial_answer(
         harness_runtime_service=runtime,
         diagnostic_manager=recorder,  # type: ignore[arg-type]
     )
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers=HEADERS,
             json=chat_body(engagement, profile),
         )
         frames = sse_frames(response.text)
         assert_clean_stop(frames, recorder)
-        chat_turn = store.get(ChatTurn, frames[-1]["turn_id"])
+        chat_turn = await store.get(ChatTurn, frames[-1]["turn_id"])
         assert chat_turn.status.value == "interrupted"
-        [message] = assistant_messages(store)
+        [message] = await assistant_messages(store)
         assert message.content == "Partial findings: port 22 open"
         assert message.finish_reason == "interrupted"
         assert message.metadata["interrupted"] is True
         assert message.metadata["harness_turn_id"] == chat_turn.harness_turn_id
 
         # A viewer that attaches later gets the same clean terminal frame.
-        follow = client.get(
+        follow = await client.get(
             f"/api/v1/chat/turns/{chat_turn.id}/events", headers=HEADERS
         )
         followed = sse_frames(follow.text)
@@ -313,10 +318,12 @@ def test_codex_interrupted_turn_ends_stream_cleanly_and_keeps_partial_answer(
         assert "error" not in [frame["type"] for frame in followed]
 
 
-def test_operator_stop_while_stream_is_attached_ends_with_cancelled_frame(tmp_path):
+async def test_operator_stop_while_stream_is_attached_ends_with_cancelled_frame(
+    tmp_path,
+):
     holder: dict[str, Any] = {}
     adapter = CodexAdapter(lambda: holder["rpc"]())
-    store, engagement, profile, runtime = build_runtime(
+    store, engagement, profile, runtime = await build_runtime(
         tmp_path, HarnessKind.CODEX_APP_SERVER, adapter
     )
     holder["rpc"] = lambda: OperatorStopRpc(runtime, store)
@@ -327,8 +334,8 @@ def test_operator_stop_while_stream_is_attached_ends_with_cancelled_frame(tmp_pa
         harness_runtime_service=runtime,
         diagnostic_manager=recorder,  # type: ignore[arg-type]
     )
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers=HEADERS,
             json=chat_body(engagement, profile),
@@ -336,13 +343,15 @@ def test_operator_stop_while_stream_is_attached_ends_with_cancelled_frame(tmp_pa
         frames = sse_frames(response.text)
         assert_clean_stop(frames, recorder)
         assert frames[-1]["detail"] == "Stopped by operator"
-        assert store.get(ChatTurn, frames[-1]["turn_id"]).status.value == "cancelled"
-        [message] = wait_for_assistant(store)
+        assert (
+            await store.get(ChatTurn, frames[-1]["turn_id"])
+        ).status.value == "cancelled"
+        [message] = await wait_for_assistant(store)
         assert message.content == "Partial findings so far"
         assert message.finish_reason == "interrupted"
 
 
-def test_codex_goal_interruption_keeps_answers_of_completed_goal_turns(tmp_path):
+async def test_codex_goal_interruption_keeps_answers_of_completed_goal_turns(tmp_path):
     goal = {
         "threadId": THREAD,
         "objective": "Audit the VPN appliance",
@@ -372,19 +381,19 @@ def test_codex_goal_interruption_keeps_answers_of_completed_goal_turns(tmp_path)
         turn_completed("interrupted", turn_id="turn-2"),
     ]
     adapter = CodexAdapter(lambda: ScriptedRpc(script))
-    store, engagement, profile, runtime = build_runtime(
+    store, engagement, profile, runtime = await build_runtime(
         tmp_path, HarnessKind.CODEX_APP_SERVER, adapter
     )
     app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers=HEADERS,
             json=chat_body(engagement, profile),
         )
         frames = sse_frames(response.text)
         assert frames[-1]["type"] == "cancelled"
-        [message] = assistant_messages(store)
+        [message] = await assistant_messages(store)
         assert message.content == (
             "Stage 1: enumerated 12 hosts, 3 expose SSH.\n\nStage 2: scanning"
         )
@@ -393,15 +402,15 @@ def test_codex_goal_interruption_keeps_answers_of_completed_goal_turns(tmp_path)
         assert "Stage 1" not in json.dumps(interrupted)
 
 
-def test_agent_cancelled_turn_is_not_an_internal_error_for_non_streamed_requests(
+async def test_agent_cancelled_turn_is_not_an_internal_error_for_non_streamed_requests(
     tmp_path,
 ):
-    store, engagement, profile, runtime = build_runtime(
+    store, engagement, profile, runtime = await build_runtime(
         tmp_path, HarnessKind.GROK_ACP, ScriptedAdapter("interrupted")
     )
     app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers=HEADERS,
             json=chat_body(engagement, profile, stream=False),
@@ -409,18 +418,18 @@ def test_agent_cancelled_turn_is_not_an_internal_error_for_non_streamed_requests
         assert response.status_code == 409
         assert INTERNAL_ERROR not in response.text
         assert "stopped" in response.json()["detail"].lower()
-        [message] = assistant_messages(store)
+        [message] = await assistant_messages(store)
         assert message.content == "Working on it"
 
 
-def test_core_restart_interruption_still_reports_its_error_to_followers(tmp_path):
+async def test_core_restart_interruption_still_reports_its_error_to_followers(tmp_path):
     """Only a stop the harness itself reported settles as stopped; an uncertain
     outcome after a Core restart keeps its explanatory error frame."""
 
-    store, engagement, profile, runtime = build_runtime(
+    store, engagement, profile, runtime = await build_runtime(
         tmp_path, HarnessKind.GROK_ACP, ScriptedAdapter("interrupted")
     )
-    _, chat_turn, harness_turn = runtime.prepare_chat(
+    _, chat_turn, harness_turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -429,28 +438,32 @@ def test_core_restart_interruption_still_reports_its_error_to_followers(tmp_path
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    store.update(
-        HarnessTurn,
-        harness_turn.id,
-        {
-            "status": HarnessTurnStatus.INTERRUPTED,
-            "error": "Nebula Core restarted while the harness outcome was uncertain",
-        },
-        expected_revision=harness_turn.revision,
+    (
+        await store.update(
+            HarnessTurn,
+            harness_turn.id,
+            {
+                "status": HarnessTurnStatus.INTERRUPTED,
+                "error": "Nebula Core restarted while the harness outcome was uncertain",
+            },
+            expected_revision=harness_turn.revision,
+        )
     )
-    latest = store.get(ChatTurn, chat_turn.id)
-    store.update(
-        ChatTurn,
-        chat_turn.id,
-        {
-            "status": "interrupted",
-            "error": "Nebula Core restarted while the harness outcome was uncertain",
-        },
-        expected_revision=latest.revision,
+    latest = await store.get(ChatTurn, chat_turn.id)
+    (
+        await store.update(
+            ChatTurn,
+            chat_turn.id,
+            {
+                "status": "interrupted",
+                "error": "Nebula Core restarted while the harness outcome was uncertain",
+            },
+            expected_revision=latest.revision,
+        )
     )
     app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
-    with TestClient(app) as client:
-        follow = client.get(
+    async with TestClient(app) as client:
+        follow = await client.get(
             f"/api/v1/chat/turns/{chat_turn.id}/events", headers=HEADERS
         )
         frames = sse_frames(follow.text)
@@ -460,7 +473,7 @@ def test_core_restart_interruption_still_reports_its_error_to_followers(tmp_path
         }
 
 
-def test_turns_ended_by_the_vendor_leave_no_unretrieved_task(tmp_path):
+async def test_turns_ended_by_the_vendor_leave_no_unretrieved_task(tmp_path):
     for terminal in ("interrupted", "error"):
         seen: list[BaseException | None] = []
 
@@ -469,10 +482,10 @@ def test_turns_ended_by_the_vendor_leave_no_unretrieved_task(tmp_path):
             loop.set_exception_handler(
                 lambda _loop, context: seen.append(context.get("exception"))
             )
-            store, engagement, profile, runtime = build_runtime(
+            store, engagement, profile, runtime = await build_runtime(
                 tmp_path / terminal, HarnessKind.GROK_ACP, ScriptedAdapter(terminal)
             )
-            _, _, turn = runtime.prepare_chat(
+            _, _, turn = await runtime.prepare_chat(
                 engagement_id=engagement.id,
                 profile_id=profile.id,
                 model=None,
@@ -488,7 +501,7 @@ def test_turns_ended_by_the_vendor_leave_no_unretrieved_task(tmp_path):
             await runtime.shutdown()
 
         (tmp_path / terminal).mkdir()
-        asyncio.run(scenario())
+        (await scenario())
         assert seen == [], terminal
 
 
@@ -497,7 +510,7 @@ async def _events(*events: HarnessEvent) -> AsyncIterator[HarnessEvent]:
         yield event
 
 
-def test_coalescer_retrieves_its_finished_read_when_closed_early():
+async def test_coalescer_retrieves_its_finished_read_when_closed_early():
     from nebula.v3.harnesses import _coalesce_activity_deltas
 
     seen: list[BaseException | None] = []
@@ -517,5 +530,8 @@ def test_coalescer_retrieves_its_finished_read_when_closed_early():
         gc.collect()
         await asyncio.sleep(0)
 
-    asyncio.run(scenario())
+    (await scenario())
     assert seen == []
+
+
+pytestmark = pytest.mark.anyio
