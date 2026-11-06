@@ -15770,39 +15770,11 @@ def _register_crud_routes(
                     for item in entities
                 ]
             if model is HarnessSession and entities:
-
-                def all_entities(related_model: type[Entity]) -> list[Entity]:
-                    items: list[Entity] = []
-                    while True:
-                        batch = store.list_entities(
-                            related_model,
-                            engagement_id=engagement_id,
-                            offset=len(items),
-                            limit=1_000,
-                        )
-                        items.extend(batch)
-                        if len(batch) < 1_000:
-                            return items
-
-                chat_titles = {
-                    item.harness_session_id: item.title
-                    for item in all_entities(ChatSession)
-                    if isinstance(item, ChatSession) and item.harness_session_id
-                }
-                run_titles = {
-                    item.harness_session_id: str(
-                        item.metadata.get("name") or item.objective
+                chat_titles, run_titles, first_turns = (
+                    store.harness_session_title_sources(
+                        [item.id for item in entities], engagement_id=engagement_id
                     )
-                    for item in all_entities(AgentRun)
-                    if isinstance(item, AgentRun) and item.harness_session_id
-                }
-                first_turns: dict[str, HarnessTurn] = {}
-                turns = all_entities(HarnessTurn)
-                for candidate_turn in sorted(turns, key=lambda item: item.created_at):
-                    if isinstance(candidate_turn, HarnessTurn):
-                        first_turns.setdefault(
-                            candidate_turn.harness_session_id, candidate_turn
-                        )
+                )
 
                 named_sessions: list[Entity] = []
                 for entity in entities:

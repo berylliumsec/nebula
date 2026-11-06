@@ -468,3 +468,87 @@ def test_postgresql_upgrade_downgrade_and_immutable_operation_events():
     _exercise_migration_cycle(database_url)
     _exercise_chat_session_lookup_cycle(database_url)
     _exercise_event_owner_retention_cycle(database_url)
+
+
+@pytest.mark.skipif(
+    not os.getenv("NEBULA_TEST_POSTGRES_URL"),
+    reason="NEBULA_TEST_POSTGRES_URL is required for PostgreSQL migration coverage",
+)
+def test_postgresql_harness_session_title_lookup_backfills_legacy_links():
+    engine = create_engine(os.environ["NEBULA_TEST_POSTGRES_URL"], future=True)
+    previous = "0027_chat_turn_status_lookup"
+    current = "0028_harness_session_title_lookup"
+    ids = ["title-chat", "title-run", "title-turn", "title-number", "title-other"]
+    try:
+        if "alembic_version" in inspect(engine).get_table_names():
+            _run_migration(engine, command.downgrade, "base")
+        _run_migration(engine, command.upgrade, previous)
+        entities = Table("entities", MetaData(), autoload_with=engine)
+        with engine.begin() as connection:
+            connection.execute(
+                entities.insert(),
+                [
+                    _legacy_row(
+                        ids[0],
+                        "chat_sessions",
+                        "project",
+                        {"harness_session_id": "session-1"},
+                    ),
+                    _legacy_row(
+                        ids[1], "runs", "project", {"harness_session_id": "session-1"}
+                    ),
+                    _legacy_row(
+                        ids[2],
+                        "harness_turns",
+                        "project",
+                        {"harness_session_id": "session-1"},
+                    ),
+                    _legacy_row(
+                        ids[3], "harness_turns", "project", {"harness_session_id": 7}
+                    ),
+                    _legacy_row(
+                        ids[4], "assets", "project", {"harness_session_id": "session-1"}
+                    ),
+                ],
+            )
+            before = dict(
+                connection.execute(
+                    select(entities.c.id, entities.c.payload).where(
+                        entities.c.id.in_(ids)
+                    )
+                ).all()
+            )
+        _run_migration(engine, command.upgrade, current)
+        migrated = Table("entities", MetaData(), autoload_with=engine)
+        with engine.connect() as connection:
+            projected = dict(
+                connection.execute(
+                    select(migrated.c.id, migrated.c.harness_session_id).where(
+                        migrated.c.id.in_(ids)
+                    )
+                ).all()
+            )
+            after = dict(
+                connection.execute(
+                    select(migrated.c.id, migrated.c.payload).where(
+                        migrated.c.id.in_(ids)
+                    )
+                ).all()
+            )
+        assert projected == {
+            ids[0]: "session-1",
+            ids[1]: "session-1",
+            ids[2]: "session-1",
+            ids[3]: None,
+            ids[4]: None,
+        }
+        assert after == before
+        assert "ix_entities_kind_harness_session_created" in {
+            item["name"] for item in inspect(engine).get_indexes("entities")
+        }
+        _run_migration(engine, command.downgrade, previous)
+        assert "harness_session_id" not in {
+            item["name"] for item in inspect(engine).get_columns("entities")
+        }
+    finally:
+        engine.dispose()

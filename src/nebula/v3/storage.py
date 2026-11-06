@@ -78,6 +78,7 @@ from .domain import (
     Engagement,
     Entity,
     HarnessInteraction,
+    HarnessTurn,
     McpServerProfile,
     OperationEvent,
     RunBackend,
@@ -260,6 +261,8 @@ def _entity_lookup_fields(entity: Entity) -> dict[str, Any]:
     """Return every denormalized lookup field maintained for an entity row."""
 
     fields = {**_automation_lookup_fields(entity), **_chat_lookup_fields(entity)}
+    if isinstance(entity, (ChatSession, AgentRun, HarnessTurn)):
+        fields["harness_session_id"] = entity.harness_session_id
     if isinstance(entity, ChatTurn):
         recovery_visible = (
             entity.status == ChatTurnStatus.INTERRUPTED
@@ -1466,6 +1469,67 @@ class NebulaStore:
         statement = statement.order_by(*order).offset(offset).limit(limit)
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
+
+    def harness_session_title_sources(
+        self,
+        session_ids: Sequence[str],
+        *,
+        engagement_id: str | None = None,
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, HarnessTurn]]:
+        """Read only the latest chat/run and first turn for listed sessions."""
+
+        ids = sorted(set(session_ids))
+        chat_titles: dict[str, str] = {}
+        run_titles: dict[str, str] = {}
+        first_turns: dict[str, HarnessTurn] = {}
+        if not ids:
+            return chat_titles, run_titles, first_turns
+
+        with self.database.session() as session:
+            # Keep SQLite's bind count bounded when the API requests 1,000 rows.
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                for model, newest_first in (
+                    (ChatSession, True),
+                    (AgentRun, True),
+                    (HarnessTurn, False),
+                ):
+                    order = _entity_order(newest_first)
+                    ranked = select(
+                        EntityRow.id.label("entity_id"),
+                        func.row_number()
+                        .over(
+                            partition_by=EntityRow.harness_session_id,
+                            order_by=order,
+                        )
+                        .label("position"),
+                    ).where(
+                        EntityRow.kind == model.entity_kind,
+                        EntityRow.harness_session_id.in_(chunk),
+                    )
+                    if engagement_id is not None:
+                        ranked = ranked.where(EntityRow.engagement_id == engagement_id)
+                    if model is ChatSession:
+                        ranked = ranked.where(not_temporary_chat_session())
+                    selected = ranked.subquery()
+                    statement = (
+                        select(EntityRow)
+                        .join(selected, EntityRow.id == selected.c.entity_id)
+                        .where(selected.c.position == 1)
+                    )
+                    for row in session.scalars(statement):
+                        item = _row_to_entity(row, model)
+                        if isinstance(item, ChatSession):
+                            if item.harness_session_id:
+                                chat_titles[item.harness_session_id] = item.title
+                        elif isinstance(item, AgentRun):
+                            if item.harness_session_id:
+                                run_titles[item.harness_session_id] = str(
+                                    item.metadata.get("name") or item.objective
+                                )
+                        elif isinstance(item, HarnessTurn):
+                            first_turns[item.harness_session_id] = item
+        return chat_titles, run_titles, first_turns
 
     @staticmethod
     def _entity_statement(

@@ -1,27 +1,22 @@
 {
-  "change_digest": "0ca4d5085247ebeb91f7fe435163684f48bfd2c08bec16a685f06cddb48161be",
-  "reviewed_by": "Codex; independent fresh-context validation of the terminal selection feedback fault",
-  "reason": "The full-screen paired terminal client lacked a transient navigation state after Enter or a command shortcut, so its picker vanished and the old chat could still say Ready while Core catalog, detail, history, and status reads were pending. Focused TUI tests cover immediate feedback, the picker/input boundary, cancellation and error cleanup. A paired TLS LAN Core test holds real project and chat reads to verify LOADING on the visible terminal screen and its removal when the selected chat is ready. Product guidance, destination discovery, index digest, and Chroma synchronization are checked for the new loading explanation.",
-  "exclusions": "The client-only transient status does not change Core routes, durable session state, browser UI, or native runtime. Browser Playwright profiles and native tests are not applicable to the Python terminal display. The LAN Core uses only synthetic projects and paired credentials; no production Core is restarted or changed.",
+  "change_digest": "953e9bd1ea020a59b9dc4a6e620260dc01a608e18f3560439e6d3f072a175b52",
+  "reviewed_by": "Codex; independent fresh-context root-cause validation before repair",
+  "reason": "A harness-session list page now resolves chat/run titles and first turns only for the returned session IDs through a backfilled, indexed projection. Focused Python tests cover title precedence, project scoping, pagination under unrelated history, projection updates, SQLite migration roundtrip, PostgreSQL backfill, and an authenticated non-loopback LAN Core refresh. The catalogued advanced-session-binding browser journey covers the visible resume selector in desktop Chromium, mobile Chromium, mobile WebKit, and a real-Core fixture.",
+  "exclusions": "No UI source, provider call, harness execution, or native runtime changed. Frontend unit and native tests are not relevant to the server-side list query; the selected Playwright journey verifies the unchanged UI consumption of display names. Full Python and browser suites are excluded by the focused-test policy. Synthetic LAN fixtures do not use operator data or live providers. The PostgreSQL migration test is selected for CI's isolated database-migrations job; it skips locally without a PostgreSQL service. The legacy harness chat/mission integration test blocks during its synthetic completion before reaching the list route on this Mac; the selected route-level and LAN Core tests exercise the changed listing directly.",
   "expected_tests": {
-    "python": 8,
-    "frontend": 1,
+    "python": 5,
+    "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
   "python": [
-    "tests/test_terminal_tui.py::test_tui_searches_and_selects_a_menu_without_opaque_ids",
-    "tests/test_terminal_tui.py::test_tui_selection_loading_stays_visible_until_next_view_is_ready",
-    "tests/test_terminal_tui.py::test_tui_loading_clears_when_a_picker_needs_input_or_fails",
-    "tests/v3/test_terminal_core.py::test_paired_tui_shows_loading_while_selected_project_and_chat_open",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_settings_assistant_tools.py::test_catalog_covers_settings_destinations_without_secrets"
+    "tests/v3/test_harness_session_title_lookup.py",
+    "tests/v3/test_harness_session_title_migration.py",
+    "tests/v3/test_migrations.py::test_postgresql_harness_session_title_lookup_backfills_legacy_links"
   ],
-  "frontend": [
-    "ui/src/settingsCatalog.terminal.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:advanced-session-binding"
+  ]
 }
