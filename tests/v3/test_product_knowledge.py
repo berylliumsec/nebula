@@ -838,6 +838,16 @@ def test_product_search_finds_terminal_animation_and_reduced_motion(monkeypatch)
     assert any("NEBULA_CHAT_REDUCED_MOTION" in str(item["text"]) for item in matches)
 
 
+def test_product_search_finds_full_width_terminal_and_split_pane_help(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "nebula-chat full terminal pane width split pane Shift-Command-D"
+    )
+    content = "\n".join(str(item["text"]) for item in matches)
+    assert "fill the available terminal pane" in content
+    assert "Shift-Command-D" in content
+
+
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):
     index = ChromaKnowledgeIndex(tmp_path / "chroma")
     first = index.sync_product_knowledge()

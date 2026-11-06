@@ -1,36 +1,24 @@
 {
-  "change_digest": "fda9da19727f1abb5cea412a3e6af38216781b36fd92f04577da487480c6df45",
-  "reviewed_by": "Codex; David approved the Figma layout; independent fresh-context root-cause validation before repair",
-  "reason": "The paired terminal client gains a bounded reading layout, separated two-line conversation states, and an activity indicator that animates only during local reads or confirmed active turns. Forty-one focused Python cases cover presentation, real PTY geometry and spinner frames, retryable picker failure, stream/queue/wait/reconnect lifecycle, three authenticated TLS LAN Core journeys, and product-knowledge digest/sync. One frontend catalog test verifies discoverability of animation and reduced motion.",
-  "exclusions": "The changed interface is the Python prompt_toolkit terminal, not a browser page; desktop/mobile Playwright and touch checks do not exercise this surface. Native runtime tests are unrelated. The selected Python LAN fixture uses synthetic paired projects and an inert provider; no operator data or live agent is touched. The full Python and frontend suites are excluded by the focused-test policy.",
+  "change_digest": "031c161f933b175794eaf7da39661f26260a44dbbef02abd11930cac597bc561",
+  "reviewed_by": "Codex; independent fresh-context subagent validated terminal split and fixed reading-width cap before repair",
+  "reason": "The terminal transcript, activity strip and composer now fill the available pane on wide and narrow terminals. Seven focused Python cases cover wide PTY geometry, narrow resize, Markdown/source rendering, a paired TLS LAN Core journey, the bundled product-help digest, full-width guidance discovery, and Chroma sync.",
+  "exclusions": "The changed surface is the Python prompt_toolkit terminal. Browser/mobile Playwright, frontend and native tests do not exercise its PTY geometry. The selected paired LAN Core fixture uses synthetic data and an inert provider; no operator conversation is touched. Full suites are outside the focused-test policy.",
   "expected_tests": {
-    "python": 41,
-    "frontend": 1,
+    "python": 7,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_tui.py",
-    "tests/test_terminal_pty.py",
-    "tests/test_terminal_shell.py::test_stream_reports_acceptance_and_tool_progress_before_answer",
-    "tests/test_terminal_shell.py::test_busy_text_queues_once_with_readback_and_does_not_submit",
-    "tests/test_terminal_shell.py::test_reconnect_state_failure_never_repeats_post",
-    "tests/test_terminal_shell.py::test_capacity_queued_acceptance_is_followed_without_a_new_submission",
-    "tests/test_terminal_shell.py::test_approval_pause_does_not_reconnect_as_a_network_failure",
-    "tests/test_terminal_shell.py::test_auth_expiry_during_reconnect_does_not_crash_detach",
-    "tests/test_terminal_shell.py::test_cancelling_a_menu_leaves_the_attached_turn_running",
-    "tests/test_terminal_shell.py::test_main_prompt_interrupt_stops_detached_selected_turn",
+    "tests/test_terminal_pty.py::test_full_screen_wide_layout_fills_pane_beside_rail",
+    "tests/test_terminal_pty.py::test_full_screen_progress_paste_and_narrow_resize",
+    "tests/test_terminal_tui.py::test_tui_renders_saved_and_streamed_markdown_with_source_view",
     "tests/v3/test_terminal_core.py::test_paired_full_screen_tui_shows_progress_and_saved_answer",
-    "tests/v3/test_terminal_core.py::test_paired_tui_shows_loading_while_selected_project_and_chat_open",
-    "tests/v3/test_terminal_core.py::test_paired_tui_marks_other_conversations_running_waiting_and_idle",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_terminal_animation_and_reduced_motion",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_full_width_terminal_and_split_pane_help",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [
-    "ui/src/settingsCatalog.terminal.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": []
 }
