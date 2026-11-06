@@ -7,7 +7,7 @@ from .async_utils import MaybeAsync
 from .async_utils import resolve_workspace
 
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 

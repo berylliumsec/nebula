@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager
 from collections.abc import Iterator
 import os
 import secrets

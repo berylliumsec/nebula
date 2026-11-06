@@ -10,18 +10,16 @@ from .query_predicates import visible_harness_chat_title
 
 import asyncio
 
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Collection,
     Iterable,
-    Iterator,
     Mapping,
     Sequence,
     TypeVar,

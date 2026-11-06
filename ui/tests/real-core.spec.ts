@@ -15107,13 +15107,25 @@ test("assistant upgrade saved harness chat switches to provider in the same prod
     const beforeResume = await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json();
     expect(beforeResume).toMatchObject({id: "saved-harness-goal", status: "blocked", blocked_reason: "Fixture hold"});
     await expect(page.getByRole("status").filter({hasText: "Next runtime:"})).toHaveCount(0);
-    if (await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches)) await page.locator(".chat-composer").hover();
-    const openGoal = page.getByRole("button", {name: "Open goal", exact: true});
-    if (await openGoal.isVisible()) await openGoal.click();
-    else await clickAssistantSettings(page);
     const goalPanel = page.getByRole("region", {name: "Conversation goal"});
-    await expect(goalPanel).toBeVisible();
-    await goalPanel.getByRole("button", {name: "Resume", exact: true}).click();
+    const pointerFine = await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
+    if (pointerFine) await page.locator(".chat-composer").hover();
+    if (!await goalPanel.isVisible()) {
+      const openGoal = page.getByRole("button", {name: "Open goal", exact: true});
+      const rail = page.getByRole("region", {name: "Goal", exact: true});
+      if (await openGoal.isVisible()) await openGoal.click();
+      else if (await rail.isVisible()) {
+        if (pointerFine) await page.locator(".chat-studio-rail").hover();
+        await rail.getByRole("button", {name: "View full goal and evidence gates", exact: true}).click();
+      }
+    }
+    await expect(goalPanel).toBeVisible({timeout: 15_000});
+    const expand = goalPanel.getByRole("button", {name: "Expand goal controls", exact: true});
+    if (await expand.isVisible()) await expand.click();
+    await expect(goalPanel.getByText("Continue the same goal", {exact: true}).first()).toBeVisible();
+    const resume = goalPanel.getByRole("button", {name: "Resume", exact: true});
+    await expect(resume).toBeEnabled();
+    await resume.click();
     await expect(page.getByText("Provider continuation saved in the same chat.").first()).toBeVisible({timeout: 30_000});
     await expect.poll(async () => (await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json()).status).toBe("paused");
     const goal = await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json();

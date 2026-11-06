@@ -7,7 +7,6 @@ from .async_utils import resolve_workspace
 from copy import deepcopy
 
 import json
-import asyncio
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass

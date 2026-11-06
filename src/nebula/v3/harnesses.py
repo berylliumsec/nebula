@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from .async_utils import MaybeAsync
 
-from typing import AsyncIterator
-
 from .async_utils import async_done_callback, call_async
 
 from .async_utils import resolve_workspace
@@ -16304,13 +16302,9 @@ class HarnessRuntimeService:
         available_names: list[str] = []
         try:
             if name == "subagent.capabilities":
-                from .read_workers import read_in_worker
-
                 offered = await self._gateway_capabilities_offer(session)
             else:
                 if name in {"work.agents", "agent.list"}:
-                    from .read_workers import read_in_worker
-
                     offered, available_names = await self._gateway_offered_tool(
                         session, name
                     )
@@ -16442,8 +16436,6 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         if name == "subagent.capabilities":
-            from .read_workers import read_in_worker
-
             return await self._gateway_capabilities_read(session, arguments)
         turn = await self._active_gateway_turn(session.id)
         planner_target = (
@@ -16773,7 +16765,6 @@ class HarnessRuntimeService:
         if name in _GATEWAY_WORK_SCHEMAS:
             if name == "work.agents":
                 # Its roster is a database read; keep it off the MCP event loop.
-                from .read_workers import read_in_worker
 
                 return await self._gateway_work_call(turn, name, arguments)
             return await self._gateway_work_call(turn, name, arguments)
@@ -16857,8 +16848,6 @@ class HarnessRuntimeService:
         """
 
         if name == "subagent.capabilities":
-            from .read_workers import read_in_worker
-
             return await self._gateway_capabilities_read(session, arguments)
         service = self.provider_subagents
         if (
@@ -17127,8 +17116,6 @@ class HarnessRuntimeService:
         """
 
         if name == "agent.list":
-            from .read_workers import read_in_worker
-
             return await self._gateway_agent_list_call(session, turn, arguments)
         service, call, invocation = await self._prepare_gateway_agent_message(
             session, turn, name, arguments

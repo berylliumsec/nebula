@@ -85,7 +85,6 @@ from .domain import (
 from .harnesses import HarnessRuntimeService, _session_native_capabilities
 from .mcp import usable_mcp_tools
 from .native_hooks import discover_native_hooks
-from .read_workers import read_in_worker
 from .settings_assistant_tools import model_choices
 from .storage import NebulaStore, NotFoundError
 from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService, WorkSettingPatch

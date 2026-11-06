@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
 
 import asyncio
 import fcntl
@@ -45,12 +44,14 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from .database_pool import ConnectionBudget, PoolSettings, connection_budget
+from .query_predicates import visible_harness_chat_title
 
 from .domain import utc_now
 from .performance import PerformanceTelemetry, install_sql_timing
 
 CURRENT_SCHEMA_VERSION = 5
 SCRATCH_PROJECT_BOOTSTRAP_KEY = "scratch_project_v1"
+
 
 class Base(DeclarativeBase):
     pass
@@ -238,8 +239,6 @@ class EntityRow(Base):
 
 
 # Keep ORM metadata aligned with the additive lookup migrations.
-from .query_predicates import visible_harness_chat_title
-
 Index(
     "ix_entities_harness_title_project",
     EntityRow.kind,
@@ -814,7 +813,7 @@ class Database:
                     try:
                         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
-                    except BlockingIOError:
+                    except BlockingIOError:  # diagnostic-expected: another bootstrap owns the lock; retry cooperatively and let cancellation close the descriptor.
                         await asyncio.sleep(0.05)
             async with self.engine.connect() as connection:
                 postgres = self.engine.dialect.name == "postgresql"
@@ -988,7 +987,9 @@ class Database:
             self._active_session.reset(owner)
             # Shield cleanup from a second cancellation, and wait for it before
             # disposal can proceed. Each session belongs only to its caller.
-            close = asyncio.create_task(session.close())
+            close = asyncio.create_task(
+                session.close()
+            )  # diagnostic-expected: owned cleanup is shielded and awaited below, including after cancellation; close failures propagate.
             try:
                 await asyncio.shield(close)
             except asyncio.CancelledError:

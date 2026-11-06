@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from .async_utils import MaybeAsync
 
-from typing import AsyncIterator
-
 from .database import DatabaseBusyError
 
 from .async_utils import async_done_callback, call_async
@@ -143,7 +141,6 @@ from .domain import (
     ChatContentBlock,
     ChatBackend,
     ChatMessage,
-    ChatQueue,
     ChatRole,
     ChatSchedule,
     ChatSession,

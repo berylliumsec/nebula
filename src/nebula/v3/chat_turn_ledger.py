@@ -11,7 +11,7 @@ import json
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 from sqlalchemy import func, select, text

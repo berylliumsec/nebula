@@ -21,7 +21,7 @@ import shutil
 import socket
 import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO

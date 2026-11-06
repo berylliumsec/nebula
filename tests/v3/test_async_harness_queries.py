@@ -15,7 +15,7 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.storage import NebulaStore
-from tests.v3.test_async_postgresql import postgresql_url
+from tests.v3.test_async_postgresql import postgresql_url as postgresql_url
 
 
 def _row(entity):

@@ -359,6 +359,7 @@ class CpuWorkerPool:
                 if job.on_start is not None:
                     from .async_utils import call_async
 
+                    # diagnostic-expected: this owned task is immediately awaited; its explicit submitting context and separate session owner must be preserved.
                     await asyncio.create_task(
                         call_async(job.on_start), context=job.context
                     )

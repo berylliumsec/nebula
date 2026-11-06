@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
-from collections.abc import Iterator
 from typing import Any
 
 from .domain import McpServerProfile

@@ -12,7 +12,7 @@ from nebula.v3.database import Database
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.domain import Engagement
 from nebula.v3.storage import NebulaStore
-from tests.v3.test_async_postgresql import postgresql_url
+from tests.v3.test_async_postgresql import postgresql_url as postgresql_url
 
 
 def _rehearse(location, settings=None):

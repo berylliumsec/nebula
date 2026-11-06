@@ -30,8 +30,7 @@ from .diagnostics import record_caught_exception, record_diagnostic
 import asyncio
 import inspect
 import threading
-import time
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Any

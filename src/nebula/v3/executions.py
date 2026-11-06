@@ -23,7 +23,6 @@ import json
 import os
 import shutil
 import socket
-from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any

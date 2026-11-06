@@ -228,7 +228,6 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database, DatabaseBusyError
-from .read_workers import read_in_worker
 from .work import (
     WorkAgentActivity,
     WorkCheckIn,

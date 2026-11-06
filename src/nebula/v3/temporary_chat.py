@@ -12,7 +12,6 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .domain import ChatBackend, ChatSession, Engagement, HarnessSession, utc_now
-from .read_workers import read_in_worker
 from .storage import NotFoundError
 
 logger = logging.getLogger(__name__)

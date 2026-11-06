@@ -21,7 +21,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .automation_runtime import AutomationRuntimeManager, ContainerRuntimeSession

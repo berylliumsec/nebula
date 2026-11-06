@@ -6,7 +6,6 @@ from .async_utils import call_async
 
 from .async_utils import async_take
 
-from itertools import islice
 from typing import Any
 
 from .domain import McpServerProfile, McpTransport, RiskClass

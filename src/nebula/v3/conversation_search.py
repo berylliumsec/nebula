@@ -14,7 +14,6 @@ Core restart may run it again.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any

@@ -13,7 +13,6 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from .butler_instructions import read_butler_instructions
 from .harnesses import HarnessConfigurationError
-from .read_workers import read_in_worker
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,

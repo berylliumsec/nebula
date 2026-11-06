@@ -1560,6 +1560,7 @@ class Osc633CommandParser:
             try:
                 policy = await call_async(self.policy_provider)
             except Exception as exc:
+                # diagnostic-expected: current_policy rethrows this on the parser worker, whose existing failure path records and classifies the capture.
                 failure = exc
 
         def current_policy():

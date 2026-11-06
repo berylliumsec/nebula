@@ -6,7 +6,6 @@ from .async_utils import async_take
 
 import json
 import re
-from itertools import islice
 from typing import Any
 from urllib.parse import unquote
 

@@ -14,7 +14,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Iterable, Sequence
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, Field, ValidationError

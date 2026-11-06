@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .async_utils import resolve_workspace
 
-import asyncio
 from typing import Any
 
 from .domain import (

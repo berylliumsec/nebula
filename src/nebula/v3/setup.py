@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator
-
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,

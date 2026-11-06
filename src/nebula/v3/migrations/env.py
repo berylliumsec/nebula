@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 import os
-import sqlite3
 from logging.config import fileConfig
 
 from alembic import context

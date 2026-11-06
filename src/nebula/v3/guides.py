@@ -13,7 +13,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field

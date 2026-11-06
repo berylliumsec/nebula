@@ -6,8 +6,8 @@ from typing import AsyncIterator
 
 from .diagnostics import record_caught_exception
 
-from contextlib import contextmanager, asynccontextmanager
-from typing import Any, Iterator
+from contextlib import asynccontextmanager
+from typing import Any
 
 from sqlalchemy import and_, delete, exists, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection

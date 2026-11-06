@@ -75,8 +75,11 @@ statements, eligible-chat partial-index usage, bounded PostgreSQL buffer work,
 and SQLite VM work that does not grow with matching history. Observed SQLite VM
 steps were 783 for the small fixture and 593 for the large fixture.
 
-Static type checking currently reports the same ten unrelated diagnostics found
-in the baseline. The changed runtime compiles, and undefined-name checks pass.
+The required default type check passes for all 246 runtime source files. The
+additional `--check-untyped-defs` experiment reports the same ten diagnostics as
+the baseline. Compilation, full Ruff checks, formatting, and the diagnostic
+blind-spot audit pass. Owned cleanup tasks and deferred parser failures retain
+their existing error propagation and have explicit audit classifications.
 The remaining repository test and diagnostic callers still need an async API
 audit before this conversion is ready for review.
 
@@ -159,15 +162,23 @@ The owned Core and its temporary data were removed after the check.
 
 The committed real-Core switching journey covers the same conversation through
 an approval boundary, refresh, deferred activation, explicit goal resume, and
-provider continuation. Its selected desktop/compact Chromium and mobile
-Chromium/WebKit runs remain **unexecuted**: Playwright's browser download was
-denied with HTTP 403 by environment policy. HTTP checks do not substitute for
-these browser journeys.
+provider continuation. Local desktop/compact Chromium and mobile Chromium/WebKit
+runs remain unavailable: Playwright's browser download was denied with HTTP 403
+by environment policy. PR CI can install its selected browsers. Its first desktop
+run passed deferred activation and durable-goal assertions, then exposed a test
+that opened Assistant settings instead of revealing the full goal panel. That
+test control path is corrected; final browser acceptance is still pending.
+HTTP checks do not substitute for these browser journeys.
 
 Focused browser collection finds 24 cases: 16 mocked runtime/compaction cases
 across desktop, compact and mobile engines, plus eight real-Core switching cases
 across the selected desktop and mobile boundary widths. These cases are selected
 for PR CI; collection is not an execution result.
+
+The first CI Python run passed 95 cases and skipped eight PostgreSQL cases because
+the selected job had no database service. PostgreSQL coverage was already passing
+locally. The selected CI job now provisions its own service for those eight cases
+and rejects missing configuration, without expanding the 103-case selection.
 
 The product-knowledge rebuild was also denied while fetching the ONNX embedding
 model. No replacement vectors or stale-digest workaround were introduced.
