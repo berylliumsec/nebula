@@ -1831,6 +1831,40 @@ class NebulaStore:
                 for row in rows
             ]
 
+    async def iter_chat_turn_recovery_candidates(self) -> AsyncIterator[ChatTurn]:
+        """Hydrate only interrupted turns whose recovery may still be pending.
+
+        Read IDs and sort keys from the covering status index before loading
+        payloads. Missing projections are legacy candidates too; the caller
+        must recheck the hydrated status and recovery fields. Keep the two
+        status seeks separate and sort their small result in Python so SQLite
+        does not choose a historical scan just to satisfy ORDER BY.
+        """
+
+        lookup = select(
+            EntityRow.id,
+            type_coerce(EntityRow.created_at, String).label("sort_created_at"),
+        ).where(EntityRow.kind == ChatTurn.entity_kind)
+        async with self.database.session(bulk=True) as session:
+            candidates = list(
+                await session.execute(
+                    lookup.where(
+                        EntityRow.chat_turn_status == ChatTurnStatus.INTERRUPTED.value,
+                        EntityRow.chat_turn_recovery_visible.is_not(False),
+                    )
+                )
+            )
+            candidates.extend(
+                await session.execute(
+                    lookup.where(EntityRow.chat_turn_status.is_(None))
+                )
+            )
+        candidates.sort(key=lambda row: (row.sort_created_at, row.id))
+        ids = list(dict.fromkeys(row.id for row in candidates))
+        statement = select(EntityRow).where(EntityRow.kind == ChatTurn.entity_kind)
+        async for turn in self._iter_readable_ids(ChatTurn, statement, ids, 1000):
+            yield turn
+
     async def chat_session_agent_rows(
         self,
         *,
@@ -2035,6 +2069,16 @@ class NebulaStore:
                     )
                 )
             )
+        async for entity in self._iter_readable_ids(model, statement, ids, page_size):
+            yield entity
+
+    async def _iter_readable_ids(
+        self,
+        model: type[EntityT],
+        statement: Select[tuple[EntityRow]],
+        ids: Sequence[str],
+        page_size: int,
+    ) -> AsyncIterator[EntityT]:
         for start in range(0, len(ids), page_size):
             page = ids[start : start + page_size]
             async with self.database.session(bulk=True) as session:

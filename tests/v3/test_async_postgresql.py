@@ -18,6 +18,7 @@ from nebula.v3.database import Database
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.storage import NebulaStore
 from tests.v3 import test_async_storage as storage_cases
+from tests.v3 import test_recovery_candidate_scan as recovery_cases
 
 
 @pytest.fixture
@@ -69,6 +70,38 @@ async def test_postgresql_storage_contracts(
 
     monkeypatch.setattr(storage_cases, "open_store", store_factory)
     await case(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["load", "legacy", "unreadable", "complete", "routing", "settled", "deleted"],
+)
+async def test_postgresql_recovery_candidate_scan(
+    postgresql_url, tmp_path, monkeypatch, case
+):
+    @asynccontextmanager
+    async def open_store(_):
+        store = NebulaStore(
+            Database(postgresql_url, pool_settings=PoolSettings(5, 12, 2))
+        )
+        try:
+            yield store
+        finally:
+            await store.event_history.close()
+            await store.database.dispose()
+
+    monkeypatch.setattr(recovery_cases, "open_store", open_store)
+    cases = {
+        "load": recovery_cases.test_recovery_scan_loads_only_pending_interrupted_payloads,
+        "legacy": recovery_cases.test_recovery_scan_keeps_rows_with_missing_projections,
+        "unreadable": recovery_cases.test_recovery_scan_skips_unreadable_candidates,
+    }
+    if case in cases:
+        await cases[case](tmp_path, monkeypatch)
+    else:
+        await recovery_cases.test_recovery_scan_rechecks_after_id_selection(
+            tmp_path, monkeypatch, case
+        )
 
 
 async def test_postgresql_budget_discovery_and_slow_query_leave_loop_responsive(

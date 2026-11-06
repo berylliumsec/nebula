@@ -1,0 +1,3352 @@
+{
+  "schema": "nebula.recovery-candidate-benchmark/v1",
+  "date": "2026-11-06",
+  "baseline_commit": "beeca9a8e9e73c8485beedb15bee6546fed48d8b",
+  "last_reported_live_commit": "831d0d0c646a31c184bca7c868034034484c9308",
+  "live_verification": "Unavailable; operator explicitly substituted a disposable environment. Live span caller attribution remains unconfirmed.",
+  "benchmark_sha256": "4538847e36f05d802d4843c09714fb1e7ac4de20c5016db4ef167dc5427ba85d",
+  "method": "Same Python 3.12 interpreter; sequential baseline/candidate processes; 620 interrupted turns with false recovery flags; fixed fixture digest; five full recovery_tick invocations per dialect/workload; 5ms heartbeat. All other recovery_tick jobs run against empty synthetic work tables. The 15-second scheduler sleep is not benchmarked or changed.",
+  "summary": [
+    {
+      "label": "before-sqlite",
+      "mode": "text",
+      "rows": 620,
+      "payload_bytes": 22019920,
+      "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "json_records_decoded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "duration_ms": {
+        "min": 113.11,
+        "median": 130.198,
+        "max": 313.519
+      },
+      "max_loop_lag_ms": 256.897
+    },
+    {
+      "label": "before-sqlite",
+      "mode": "structured",
+      "rows": 620,
+      "payload_bytes": 22013720,
+      "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "json_records_decoded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "duration_ms": {
+        "min": 1324.301,
+        "median": 1542.052,
+        "max": 2578.507
+      },
+      "max_loop_lag_ms": 2294.639
+    },
+    {
+      "label": "after-sqlite",
+      "mode": "text",
+      "rows": 620,
+      "payload_bytes": 22019920,
+      "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "json_records_decoded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "duration_ms": {
+        "min": 16.378,
+        "median": 20.995,
+        "max": 40.866
+      },
+      "max_loop_lag_ms": 12.268
+    },
+    {
+      "label": "after-sqlite",
+      "mode": "structured",
+      "rows": 620,
+      "payload_bytes": 22013720,
+      "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "json_records_decoded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "duration_ms": {
+        "min": 13.273,
+        "median": 17.461,
+        "max": 24.413
+      },
+      "max_loop_lag_ms": 1.097
+    },
+    {
+      "label": "before-postgresql",
+      "mode": "text",
+      "rows": 620,
+      "payload_bytes": 22019920,
+      "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "json_records_decoded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "duration_ms": {
+        "min": 209.239,
+        "median": 227.008,
+        "max": 430.762
+      },
+      "max_loop_lag_ms": 239.873
+    },
+    {
+      "label": "before-postgresql",
+      "mode": "structured",
+      "rows": 620,
+      "payload_bytes": 22013720,
+      "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "json_records_decoded": [
+        620,
+        620,
+        620,
+        620,
+        620
+      ],
+      "duration_ms": {
+        "min": 1273.592,
+        "median": 1331.472,
+        "max": 2515.58
+      },
+      "max_loop_lag_ms": 2031.561
+    },
+    {
+      "label": "after-postgresql",
+      "mode": "text",
+      "rows": 620,
+      "payload_bytes": 22019920,
+      "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "json_records_decoded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "duration_ms": {
+        "min": 22.994,
+        "median": 25.455,
+        "max": 143.953
+      },
+      "max_loop_lag_ms": 16.0
+    },
+    {
+      "label": "after-postgresql",
+      "mode": "structured",
+      "rows": 620,
+      "payload_bytes": 22013720,
+      "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+      "passes": 5,
+      "returned_candidates": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "full_records_loaded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "json_records_decoded": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "duration_ms": {
+        "min": 27.659,
+        "median": 30.23,
+        "max": 53.105
+      },
+      "max_loop_lag_ms": 7.414
+    }
+  ],
+  "runs": {
+    "before-sqlite": {
+      "label": "before-sqlite",
+      "postgresql_fingerprints": {
+        "interrupted_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "interrupted_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        },
+        "waiting_callback_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "waiting_callback_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        }
+      },
+      "scenarios": [
+        {
+          "mode": "text",
+          "rows": 620,
+          "payload_bytes": 22019920,
+          "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+          "dialect": "sqlite",
+          "sql_shapes": {
+            "1f45a141ddf3": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id",
+            "6722d006916c": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.id IN (__[POSTCOMPILE_id_1])",
+            "df6c1812415c": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_status = ? AND entities.tool_call_origin = ? ORDER BY entities.created_at, entities.id",
+            "5581474382e7": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?)) OR (SELECT JSON_EXTRACT(entities.payload, ?) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?) IN (__[POSTCOMPILE_param_1]))",
+            "80940238a93a": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND JSON_EXTRACT(entities.payload, ?) = ? ORDER BY entities.created_at, entities.id",
+            "be860480f11d": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 162.463,
+              "max_loop_lag_ms": 92.376,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 54.27365700370501,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 31.406803999743715,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.075,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 26.268,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.537,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.362,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.299,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.395,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.616,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.566,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 113.11,
+              "max_loop_lag_ms": 66.38,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 43.98135199767239,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 17.75226899962945,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.89,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 21.581,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.567,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.383,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.265,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.29,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.397,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.328,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 313.519,
+              "max_loop_lag_ms": 256.897,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 54.799619998220805,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 193.7602220023109,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.725,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 22.277,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.67,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.913,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.452,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.295,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 1.322,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.474,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 130.198,
+              "max_loop_lag_ms": 71.0,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 42.50397899750169,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 24.490980998734813,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.755,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 21.348,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.693,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.385,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.347,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.312,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.515,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.487,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 125.606,
+              "max_loop_lag_ms": 78.9,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 54.55240500145919,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 17.30774499878862,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.039,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 20.476,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.57,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.556,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.487,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.899,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.698,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.473,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 9.875,
+              "max_loop_lag_ms": 3.802,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "be860480f11d",
+                  "ms": 2.581,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "mode": "structured",
+          "rows": 620,
+          "payload_bytes": 22013720,
+          "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+          "dialect": "sqlite",
+          "sql_shapes": {
+            "1f45a141ddf3": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id",
+            "6722d006916c": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.id IN (__[POSTCOMPILE_id_1])",
+            "df6c1812415c": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_status = ? AND entities.tool_call_origin = ? ORDER BY entities.created_at, entities.id",
+            "5581474382e7": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?)) OR (SELECT JSON_EXTRACT(entities.payload, ?) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?) IN (__[POSTCOMPILE_param_1]))",
+            "80940238a93a": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND JSON_EXTRACT(entities.payload, ?) = ? ORDER BY entities.created_at, entities.id",
+            "be860480f11d": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 2578.507,
+              "max_loop_lag_ms": 2294.639,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 836.8601459958427,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 1440.7220030004737,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.379,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 29.029,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.613,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.345,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.392,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.511,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 1.513,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.916,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 1417.84,
+              "max_loop_lag_ms": 1138.887,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 498.0864209992433,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 623.6796109992611,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.113,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 22.269,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.719,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.459,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.651,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.807,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.337,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.377,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 1542.052,
+              "max_loop_lag_ms": 1272.577,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 443.0777170020974,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 820.8601640037614,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 3.754,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 27.431,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.655,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.376,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.335,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.298,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.331,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.647,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 1978.261,
+              "max_loop_lag_ms": 1495.39,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 433.8833159988553,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 1045.6210230022407,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 3.78,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 44.452,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.996,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.294,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.334,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.417,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.342,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.859,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 1324.301,
+              "max_loop_lag_ms": 1048.215,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 371.2429339982464,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 666.1388030015587,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.051,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 23.836,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.723,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.221,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.259,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.332,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.206,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.288,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 6.479,
+              "max_loop_lag_ms": 0.688,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "be860480f11d",
+                  "ms": 1.36,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "storage.py": "bd0a9844c809592ab35d67f504fe90b8aab7cdd89c2231729ef690edbbfbd1ce",
+        "chat.py": "ba89d1177a4c2c0f908c6ff58719af10e3b3819766e97d584b16ca766283bf17"
+      }
+    },
+    "after-sqlite": {
+      "label": "after-sqlite",
+      "postgresql_fingerprints": {
+        "interrupted_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "interrupted_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        },
+        "waiting_callback_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "waiting_callback_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        }
+      },
+      "scenarios": [
+        {
+          "mode": "text",
+          "rows": 620,
+          "payload_bytes": 22019920,
+          "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+          "dialect": "sqlite",
+          "sql_shapes": {
+            "c63507023575": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.chat_turn_recovery_visible IS NOT 0",
+            "3abfb41a23be": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IS NULL",
+            "df6c1812415c": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_status = ? AND entities.tool_call_origin = ? ORDER BY entities.created_at, entities.id",
+            "1f45a141ddf3": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id",
+            "5581474382e7": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?)) OR (SELECT JSON_EXTRACT(entities.payload, ?) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?) IN (__[POSTCOMPILE_param_1]))",
+            "80940238a93a": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND JSON_EXTRACT(entities.payload, ?) = ? ORDER BY entities.created_at, entities.id",
+            "be860480f11d": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 40.866,
+              "max_loop_lag_ms": 12.268,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.655,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 3.299,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.464,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.831,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.303,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.449,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.644,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.352,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 20.995,
+              "max_loop_lag_ms": 1.018,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.416,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.448,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 1.166,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.498,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.68,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.433,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.52,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.419,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 16.378,
+              "max_loop_lag_ms": 1.192,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.691,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.63,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.339,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.323,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.395,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.532,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.394,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.32,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 20.086,
+              "max_loop_lag_ms": 0.881,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.493,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.412,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.399,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.452,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.852,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.733,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.873,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.998,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 21.314,
+              "max_loop_lag_ms": 1.126,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.823,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.347,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 1.676,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.419,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.294,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.367,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.353,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.633,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 8.783,
+              "max_loop_lag_ms": 3.051,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "be860480f11d",
+                  "ms": 1.884,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "mode": "structured",
+          "rows": 620,
+          "payload_bytes": 22013720,
+          "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+          "dialect": "sqlite",
+          "sql_shapes": {
+            "c63507023575": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.chat_turn_recovery_visible IS NOT 0",
+            "3abfb41a23be": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IS NULL",
+            "df6c1812415c": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.tool_call_status = ? AND entities.tool_call_origin = ? ORDER BY entities.created_at, entities.id",
+            "1f45a141ddf3": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id",
+            "5581474382e7": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?)) OR (SELECT JSON_EXTRACT(entities.payload, ?) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = ?) IN (__[POSTCOMPILE_param_1]))",
+            "80940238a93a": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND JSON_EXTRACT(entities.payload, ?) = ? ORDER BY entities.created_at, entities.id",
+            "be860480f11d": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 24.413,
+              "max_loop_lag_ms": 0.651,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.858,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.744,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.631,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.797,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.475,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 1.246,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.802,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.379,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 13.273,
+              "max_loop_lag_ms": 0.899,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.373,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.27,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.442,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.473,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.508,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.272,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.27,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.341,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 19.984,
+              "max_loop_lag_ms": 0.683,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.628,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.272,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.435,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.51,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.548,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.42,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.689,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.41,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 16.31,
+              "max_loop_lag_ms": 0.49,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.408,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.464,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.39,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.516,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.563,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.548,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.311,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.853,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 17.461,
+              "max_loop_lag_ms": 1.097,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "c63507023575",
+                  "ms": 0.629,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "3abfb41a23be",
+                  "ms": 0.492,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.456,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.489,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.638,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "df6c1812415c",
+                  "ms": 0.41,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "5581474382e7",
+                  "ms": 0.459,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "80940238a93a",
+                  "ms": 0.495,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 9.335,
+              "max_loop_lag_ms": 3.201,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "be860480f11d",
+                  "ms": 1.603,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "storage.py": "1c9172c15b564d5a91279930d66c49ccade315e31e54845ed67e16e99b9835f6",
+        "chat.py": "33b1c669aa2c93974b56c548258c9c4def7545d7e9e60d834f7abc05c808f12c"
+      }
+    },
+    "before-postgresql": {
+      "label": "before-postgresql",
+      "postgresql_fingerprints": {
+        "interrupted_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "interrupted_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        },
+        "waiting_callback_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "waiting_callback_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        }
+      },
+      "scenarios": [
+        {
+          "mode": "text",
+          "rows": 620,
+          "payload_bytes": 22019920,
+          "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+          "dialect": "postgresql",
+          "sql_shapes": {
+            "f3bacfe5d393": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "7ece61422b43": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])",
+            "90ecde227f8f": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.tool_call_status = %(tool_call_status_1)s::VARCHAR AND entities.tool_call_origin = %(tool_call_origin_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "6d092328c431": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_1)s::VARCHAR)) OR (SELECT CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_2)s::VARCHAR) IN (__[POSTCOMPILE_param_1]))",
+            "7898712da422": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) = %(param_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "d5581e2a4f04": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 430.762,
+              "max_loop_lag_ms": 239.873,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 56.18301700133088,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 178.01762399835752,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 4.312,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 166.494,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 4.95,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.431,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 4.652,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.805,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 4.0,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.513,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 227.008,
+              "max_loop_lag_ms": 87.204,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 49.39987499892595,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 21.4223979955932,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.674,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 160.608,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.272,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.357,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.625,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.07,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.547,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.397,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 217.228,
+              "max_loop_lag_ms": 81.62,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 53.23357900215342,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 22.32468100078222,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.666,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 144.29,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.445,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.004,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.409,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.335,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.719,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.76,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 209.239,
+              "max_loop_lag_ms": 85.236,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 56.74250800052505,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 18.61416200313215,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.646,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 150.522,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.041,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.498,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.249,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.255,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 2.791,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.125,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 256.177,
+              "max_loop_lag_ms": 84.841,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 51.837151000427184,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 21.017376998088366,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.44,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 163.098,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 2.267,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.835,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.433,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 2.432,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 3.903,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.753,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 12.902,
+              "max_loop_lag_ms": 1.52,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "d5581e2a4f04",
+                  "ms": 6.78,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "mode": "structured",
+          "rows": 620,
+          "payload_bytes": 22013720,
+          "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+          "dialect": "postgresql",
+          "sql_shapes": {
+            "f3bacfe5d393": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "7ece61422b43": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])",
+            "90ecde227f8f": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.tool_call_status = %(tool_call_status_1)s::VARCHAR AND entities.tool_call_origin = %(tool_call_origin_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "6d092328c431": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_1)s::VARCHAR)) OR (SELECT CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_2)s::VARCHAR) IN (__[POSTCOMPILE_param_1]))",
+            "7898712da422": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) = %(param_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "d5581e2a4f04": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 2515.58,
+              "max_loop_lag_ms": 2031.561,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 967.054018000681,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 1027.0537990011235,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.569,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 1082.983,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 2.05,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.623,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.591,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 107.441,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 4.174,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.543,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 1588.767,
+              "max_loop_lag_ms": 1302.705,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 484.8497319994749,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 803.2874359989819,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.984,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 546.01,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 2.434,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.144,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.16,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.035,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.408,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 0.833,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 1273.592,
+              "max_loop_lag_ms": 974.392,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 401.2135570008013,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 557.5502720021177,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.629,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 479.763,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.889,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.68,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.139,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.142,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.34,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.237,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 1331.472,
+              "max_loop_lag_ms": 985.671,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 393.931152001187,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 574.9306269979115,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.501,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 458.383,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 3.8,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.188,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.124,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.198,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.911,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.37,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 1288.23,
+              "max_loop_lag_ms": 965.031,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22013720,
+                "ms": 397.69640500412606,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 552.4261989939987,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 5.483,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 474.954,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.448,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.333,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.036,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.279,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 3.903,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 3.516,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 8.517,
+              "max_loop_lag_ms": 1.954,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "d5581e2a4f04",
+                  "ms": 2.504,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "storage.py": "bd0a9844c809592ab35d67f504fe90b8aab7cdd89c2231729ef690edbbfbd1ce",
+        "chat.py": "ba89d1177a4c2c0f908c6ff58719af10e3b3819766e97d584b16ca766283bf17"
+      }
+    },
+    "after-postgresql": {
+      "label": "after-postgresql",
+      "postgresql_fingerprints": {
+        "interrupted_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "interrupted_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        },
+        "waiting_callback_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "waiting_callback_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        }
+      },
+      "scenarios": [
+        {
+          "mode": "text",
+          "rows": 620,
+          "payload_bytes": 22019920,
+          "fixture_sha256": "312bc5d7ad8cdae42cb2165e43f52c7371f928de5b16bb68c9fe4735a69a5741",
+          "dialect": "postgresql",
+          "sql_shapes": {
+            "96c8a6c21c25": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.chat_turn_recovery_visible IS NOT false",
+            "b7a754d62917": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IS NULL",
+            "90ecde227f8f": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.tool_call_status = %(tool_call_status_1)s::VARCHAR AND entities.tool_call_origin = %(tool_call_origin_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "f3bacfe5d393": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "6d092328c431": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_1)s::VARCHAR)) OR (SELECT CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_2)s::VARCHAR) IN (__[POSTCOMPILE_param_1]))",
+            "7898712da422": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) = %(param_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "d5581e2a4f04": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 55.441,
+              "max_loop_lag_ms": 14.749,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 1.883,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 0.676,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 7.271,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.459,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.729,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.666,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 2.648,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 0.819,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 143.953,
+              "max_loop_lag_ms": 16.0,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 108.877,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 0.694,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 2.0,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.516,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.379,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.882,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.867,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 2.072,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 25.455,
+              "max_loop_lag_ms": 0.663,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 2.882,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 0.617,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.756,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.768,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.025,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.36,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.837,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 0.961,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 23.461,
+              "max_loop_lag_ms": 0.886,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 1.042,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 0.494,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.885,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.811,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.817,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.668,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.197,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 0.743,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 22.994,
+              "max_loop_lag_ms": 1.109,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 1.198,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 0.755,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.878,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.902,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.858,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.925,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.212,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 0.783,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 18.615,
+              "max_loop_lag_ms": 3.954,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "d5581e2a4f04",
+                  "ms": 4.634,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "mode": "structured",
+          "rows": 620,
+          "payload_bytes": 22013720,
+          "fixture_sha256": "0780379920f3bf3f528bcc64d5df05d0a98e7e2874fe89df8e94e6feb055c6d2",
+          "dialect": "postgresql",
+          "sql_shapes": {
+            "96c8a6c21c25": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.chat_turn_recovery_visible IS NOT false",
+            "b7a754d62917": "SELECT entities.id, entities.created_at AS sort_created_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IS NULL",
+            "90ecde227f8f": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.tool_call_status = %(tool_call_status_1)s::VARCHAR AND entities.tool_call_origin = %(tool_call_origin_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "f3bacfe5d393": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "6d092328c431": "SELECT provider_turn_queue.turn_id \nFROM provider_turn_queue \nWHERE provider_turn_queue.state IN (__[POSTCOMPILE_state_1]) AND (NOT (EXISTS (SELECT * \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_1)s::VARCHAR)) OR (SELECT CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) AS anon_1 \nFROM entities \nWHERE entities.id = provider_turn_queue.turn_id AND entities.kind = %(kind_2)s::VARCHAR) IN (__[POSTCOMPILE_param_1]))",
+            "7898712da422": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND CAST((entities.payload ->> %(payload_1)s::TEXT) AS VARCHAR) = %(param_1)s::VARCHAR ORDER BY entities.created_at, entities.id",
+            "d5581e2a4f04": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+          },
+          "measurements": [
+            {
+              "name": "recovery_pass_1",
+              "result_count": 0,
+              "elapsed_ms": 53.105,
+              "max_loop_lag_ms": 2.458,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 2.23,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 1.522,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 4.469,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.437,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 5.188,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 2.289,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 3.526,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 2.244,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_2",
+              "result_count": 0,
+              "elapsed_ms": 30.23,
+              "max_loop_lag_ms": 1.036,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 1.276,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 1.099,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.046,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.516,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.209,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.74,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.977,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.184,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_3",
+              "result_count": 0,
+              "elapsed_ms": 28.821,
+              "max_loop_lag_ms": 0.925,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 1.151,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 0.704,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.955,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.991,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.275,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.385,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.761,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 4.741,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_4",
+              "result_count": 0,
+              "elapsed_ms": 27.659,
+              "max_loop_lag_ms": 0.695,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 1.269,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 0.664,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.938,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.808,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 1.962,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.412,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.964,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 2.728,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "recovery_pass_5",
+              "result_count": 0,
+              "elapsed_ms": 39.217,
+              "max_loop_lag_ms": 7.414,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "96c8a6c21c25",
+                  "ms": 3.818,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "b7a754d62917",
+                  "ms": 1.07,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 0.998,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.938,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 0.837,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "90ecde227f8f",
+                  "ms": 1.365,
+                  "payload_selected": false
+                },
+                {
+                  "hash": "6d092328c431",
+                  "ms": 1.514,
+                  "payload_selected": true
+                },
+                {
+                  "hash": "7898712da422",
+                  "ms": 1.612,
+                  "payload_selected": true
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 16.485,
+              "max_loop_lag_ms": 2.736,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "d5581e2a4f04",
+                  "ms": 6.624,
+                  "payload_selected": false
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "source_sha256": {
+        "storage.py": "1c9172c15b564d5a91279930d66c49ccade315e31e54845ed67e16e99b9835f6",
+        "chat.py": "33b1c669aa2c93974b56c548258c9c4def7545d7e9e60d834f7abc05c808f12c"
+      }
+    }
+  },
+  "postgresql_plans": {
+    "pending": [
+      "Index Only Scan using ix_entities_project_chat_turn_status on entities  (cost=0.28..96.68 rows=1 width=23) (actual time=0.158..0.159 rows=0 loops=1)",
+      "  Index Cond: ((kind = 'chat_turns'::text) AND (chat_turn_status = 'interrupted'::text))",
+      "  Filter: (chat_turn_recovery_visible IS NOT FALSE)",
+      "  Rows Removed by Filter: 620",
+      "  Heap Fetches: 0",
+      "  Buffers: shared hit=21",
+      "Planning:",
+      "  Buffers: shared hit=63",
+      "Planning Time: 0.436 ms",
+      "Execution Time: 0.185 ms"
+    ],
+    "legacy": [
+      "Index Only Scan using ix_entities_chat_turn_status on entities  (cost=0.28..4.29 rows=1 width=23) (actual time=0.014..0.015 rows=0 loops=1)",
+      "  Index Cond: ((kind = 'chat_turns'::text) AND (chat_turn_status IS NULL))",
+      "  Heap Fetches: 0",
+      "  Buffers: shared hit=2",
+      "Planning:",
+      "  Buffers: shared hit=2",
+      "Planning Time: 0.127 ms",
+      "Execution Time: 0.034 ms"
+    ],
+    "fixture_rows_and_payload_bytes": [
+      620,
+      22013720
+    ]
+  },
+  "lan": {
+    "origin": "https://172.26.91.248:39965",
+    "turn_status": "complete",
+    "assistant_messages": 1,
+    "api_reload_matches": true,
+    "unauthenticated_status": 401,
+    "browser": "Chromium 154.0.8037.57; desktop 1440x1000",
+    "queue_etag_and_write": true,
+    "browser_origin": "https://127.0.0.1:39965",
+    "build": {
+      "schema": "nebula.web-build/v1",
+      "commit": "beeca9a8e9e73c8485beedb15bee6546fed48d8b",
+      "builtAt": "2026-11-06T22:44:50.330Z",
+      "dirty": true,
+      "assets": {
+        "assets/index-CwcLU0vv.js": "ca80e8b2c8c63c6d60d05d1fb45af0bdd1d303655546b718f651d234ff423a09",
+        "assets/ChromeContext-CHkiLm4p.js": "3999a1b8af96c23265b98e5db45d1e8de10d37a01d5e46b79d1a26dc3ef595d1",
+        "assets/CodeEditorPanel-_cXH16y8.js": "2f371954e4d7b85701a9f706430428cc66b5809830341a807535caf03ff8231f",
+        "assets/CodeMirrorSurface-CGmGCacf.js": "e7ace9f703380bc998fbde766f9cdac4680f2a97f2cb621bc8c9dc0523093128",
+        "assets/ContainerTerminalPanel-eOzbO9eR.js": "904ae156a0def8018a6f859ff483de1c6fd40d4d36b2ecf754c82fa45193d652",
+        "assets/EditorMarkdownPreview-D8clZJ7J.js": "0f684df9f50df9f7677d1dfa8dd79910553dbea379ec823210e9c81a4d6a5b9e",
+        "assets/EditorWorkspaceSearch-BG-VTQlr.js": "7961ecd7d658ba8d5eb14fd3f5db88c87d9375a136274274b36c10d2807dd2ea",
+        "assets/FindingsPage-DGCRAy-_.js": "d34d9ff57a672a6dc9c35aacf1951fa2e86ba9ed08969096d82fd9e32ead91fd",
+        "assets/GraphView-BfGphF-O.js": "79cc1e2fdc4656784f04172d0e38add2e67c60de3ee085ced6771a13d3a0daac",
+        "assets/IconAction-CqfVkWoy.js": "099caa45cfb97be632fc26bf47e722f4f07897719a52305921782504a79c2bfb",
+        "assets/InlineValidationNotice--Meq1FXo.js": "1ac75e5dcc17821cf8fcf83af0fe78126d5f9de3e566b1d36855b22ab80d389b",
+        "assets/LibraryPage-CKfE1bl1.js": "c185f6ad52da0f92a5f091ecd798b87016a3716c3c407e413ab0d4c274ee263a",
+        "assets/PageHeader-Dp_xhTii.js": "c5fada775224053809bb4dc11a98e0ebeb4a18486f5f82364789d5c72e27ee12",
+        "assets/ProjectPage-Cs90iA24.js": "40575ff399ac05a62a8e7f966f82ef6031778b3073adfb4185a9f4c96d864e0b",
+        "assets/ReportsPage-D-OA4Yga.js": "be992b9713fa0dd12f66f330bfa9e23f34a7f5665d66b197b3d59d74e893df5e",
+        "assets/ResourceRelationsPanel-DREszkzY.js": "4f339cbd228748c8d8f025af04504d290f6f912ace162fc1b2da072241c3087a",
+        "assets/SessionsPage-CljqGWax.js": "8fcd55ec2c10852b5aa7ebd22c4b805f107fb25b03c4a3214ab0ab0e25d103f7",
+        "assets/SettingsPage-CDpnnDcb.js": "b10b1b35fcd660312f8b1d49ef6ffa0a2d0cb8968b251a9470918e0c6b0e279d",
+        "assets/ShowMeHow-tVyeC6_n.js": "e278eb734f803004c49005605cffc01e988045af10911eb4696e7b77deaa75e6",
+        "assets/StorageActions-_T1HLyRt.js": "3d15b05a919b6933b0d48ea8ba1eaae6ec3b6b08a9b60aa9319ff6f894053925",
+        "assets/StoragePage-CkyKC55m.js": "01cd6ac3a0499a8742771cade79723152b7d4b06f292589cff28e5b99c1c2e53",
+        "assets/ThemeContext-DloPnvxB.js": "d886d5402718282dfd3950a08254ad7c7903101737747b4277d9b131f6dcc90f",
+        "assets/ValueView-Bxt9_PHU.js": "de44fdcbe4ed7bae96af27036aa8e0a6bb2f22e0498d0aa8ea5de963f7ba1f83",
+        "assets/WorkPage-DrcPZS6h.js": "8a005cbe44f8a3433da10af082f0e0b6184bd3382a419af5f10ec3a0db974537",
+        "assets/chunk-62JRHF6Z-HYYjBoQD.js": "95511fa718da5667cae90e0aa29df57ed06bcc47d5d5461359743ac5dadb60b0",
+        "assets/clike-0UEdDywI.js": "bf9ae9a3ff3362cdbf0bd3e5d0467d8408ac089c6dae9015e3dff69040b8934b",
+        "assets/core-IUlRufS4.js": "a402b9a4e4193c0d4a68bff691e5796210c58d54b3fe812b3bebc75499ae6641",
+        "assets/diagnostics-D9IIgfzq.js": "3b21824124012e08b76aeb40fff3e1bd72acadbe6839701789f34a7123f23dbe",
+        "assets/dist-B0r_eAn6.js": "17227e962a535be8e67f5ffb79ade42a60bee018b061d7786498915eaeedec6c",
+        "assets/dist-BLxAfwHY.js": "c2b9b1c09d9f4a658bd8b3924eb1aceabeca2ac3af0acecd9c714894a24d6b4b",
+        "assets/dist-BOEEFdO2.js": "b30d2a0e28c2ad4f56123c68c43500f413035ee136cdfb22a8017f1294168d7f",
+        "assets/dist-BPNsF_F6.js": "e00bfd72beaa83edbbb8b4b1011803d89a0572c293ba6ca989c0a77425bd0105",
+        "assets/dist-BVf5fM3i.js": "2ac6a88a607252d512d0e992aae4e497b0e110f1f63279a78935af86f5364e2d",
+        "assets/dist-BsFqZG7m.js": "3ad7c6c23b2122cacc192fc23e57f6ddbbe43c39266fb9decb3fad7b184fefba",
+        "assets/dist-C_K7FvCI.js": "731bb77c65172c5234ae75c66a8f32d2b6b31f490953dadf4d614bbad811c284",
+        "assets/dist-CaIPd2pl.js": "7119634be3a677e8c0fd2b1e61902d302d7183830e9114103db8d6abfccf2163",
+        "assets/dist-PaG5p-Re.js": "7f4b0072a6f3f066e5f6447a32faaf7efa55ec069f9c8e2f65b1a42b104cf592",
+        "assets/dist-wJYgKNwR.js": "6edab5c8bb4e83603970bb94174fc9e9094c9153a6d53f649f6776e5e6159a88",
+        "assets/go-zaFg-XIf.js": "8cfc3cf1c8c7437a20ca8feef3946fa9303feffe0419bca337b558c18c772085",
+        "assets/lib-VOxA9hzQ.js": "764b1914b26f28cdbb9f80f113897bbc84fd87322fd55a81c4a2388407e581ec",
+        "assets/ruby-DsYpTuWg.js": "eb96db756c43f19ed0f57e3861b351b8f210a29d06b10fc1f9b657e129434ebe",
+        "assets/rust-B2xrr2_0.js": "d6acaf5c049805680ca146323db229f673754f5ebdfc413f44799f569dac6b3e",
+        "assets/selection-B97O3VrN.js": "520cf4586637c9d045d0cc8e89be68918463bc52f0fc94d0448b3332b4971d30",
+        "assets/shell-Du5Qg9im.js": "470f9ee2ac0631ccef1d5db9db6ac0582e0eacb67b39f3be9104c91f0cb46a1d",
+        "assets/structured-result-DcaXyr_m.js": "9df2fa74a98eb1d3f4e0a130419770870d99814cbc7f01b0c6e936d50cf4a947",
+        "assets/toml-LvoKBwCs.js": "2aa78a098cca1811b381dc61ebac67194ca813c77033122621f5223c75a8af67",
+        "assets/useCanonicalResourceSelection-Bj4dXN9d.js": "d783672d2c65b11517bef8d13b159f17fd65d1d75e0b70bba121834c8d8920ec",
+        "assets/yaml-DjjjKWKb.js": "cb0c4389b9f792b84879ef68b4ea3c84854abd52d9145e7b515290cbfd28383a",
+        "assets/ContainerTerminalPanel-CA1_r1UQ.css": "5782ef655ca9098d6c36e9aa54005ea04262dfefbe2cabb31686ceacd812cf90",
+        "assets/ProjectPage-CDoVgu9x.css": "db92ccdd91e0afd6777508840e6c0a1ee9214f3ae9daea96621cf4f4449d56f4",
+        "assets/SessionsPage-SiuI0h-C.css": "584b4331c75de4a4f6294157244e4e900aae0751a9b75fdac1560916391984b1",
+        "assets/SettingsPage-C1C53qDq.css": "df2ed230e2f50b611ecca5604458254c23fcd507c38a3c62da1419f38e78213c",
+        "assets/WorkPage-B5NUcxut.css": "89f632e8ee06942f9224495148b96eacb37ce99eddb675fb8a3942c69b8a1fbc",
+        "assets/geist-cyrillic-ext-wght-normal-DjL33-gN.woff2": "2317fa4bb293c9c0b110e18315d529235c47a0ddd3338cea3d8c7955e927899e",
+        "assets/geist-cyrillic-wght-normal-BEAKL7Jp.woff2": "6894439694946a589d157ece003086960a6a4013d74a813dab7602efdb3d8c09",
+        "assets/geist-latin-ext-wght-normal-DC-KSUi6.woff2": "824f485b5d26e2f2da3c2b236132ece1bc8e4e43373452950bb0e40548b4313f",
+        "assets/geist-latin-wght-normal-BgDaEnEv.woff2": "19f9c92546aa300c312235e3125af1b81394d8db9a4bc4a425cd5b641d2d54e1",
+        "assets/geist-mono-cyrillic-ext-wght-normal-X_5orZeX.woff2": "cd8800999070b729e1cc0bf7a48da6c3ac096a044251171b9a7574b56d96d4b4",
+        "assets/geist-mono-cyrillic-wght-normal-DiZS0aHC.woff2": "4866787fc952dbdbd591d6923d67bc21c2d894b93f34ab69d0cdf25d47bfb2df",
+        "assets/geist-mono-latin-ext-wght-normal-Bwz-egvJ.woff2": "1a189eb997c3e2ece68373e387afaec9e8617424186c4b1ab3cff7c54ba6223b",
+        "assets/geist-mono-latin-wght-normal-XN7g48iV.woff2": "684ad5b531f81d43c1e8c7038262d5db7cdc1f68006e04d6c7769efa8d33c8cc",
+        "assets/geist-mono-symbols2-wght-normal-CO5SzqOn.woff2": "5bb66d8319ba1602bb2eb67dce8d79c2b4687be8ce183a0574433e949b3c60ad",
+        "assets/geist-mono-vietnamese-wght-normal-DadHysG0.woff2": "d39b60889a94a527a7f73c7988a2d6efb6c081614aef683b0b386c02d74c2175",
+        "assets/geist-vietnamese-wght-normal-6IgcOCM7.woff2": "8fa40e5d248247735eb97a0bd593b8852440430600d6ba01364c31fe0abc1fe1",
+        "assets/index-DNFFICgy.css": "20d09e0427ef271a891149ada831e6494e619bff3a3e94f19aa7adb20d779bc6",
+        "assets/selection-BaCRHCjS.css": "65b10c89242ee3c6d87df6ffa0a8878021eec6ec15419535a916b3313d1cf303",
+        "assets/storage-QYcJf56z.css": "e415192fb6b2bc8dfeca789cb012ca18690f12a119c5e548531b0a8cd37d08fc",
+        "index.html": "b64297f529f1b6f1fc48f328530c0b816ac1be70ba3df137af79b6237a68415f",
+        "manifest.webmanifest": "2720aa7d7bbe0dbb2c6e727e78b61fcc8178a126929b7284fc923e9c090c7c82",
+        "nebula-icon-180.png": "4e06509277d8b7e063def7dbdc834c1a891716f0c1ffcf33e2f6cadb4f988931",
+        "nebula-icon-192.png": "1f9d66181505735d5f34b942271ffe690d141de3c363211515c4a2bc16270edb",
+        "nebula-icon-512.png": "aaafe8e60eaec69ad3dd9f3a25efdd9f3267c5940133c362b6e88e8b0c6dbf89",
+        "nebula-icon.svg": "454b6a2f9ef4d7ca509cd5b165894ea6d4eecf4bc63a0a2b7c6a39e185115e41",
+        "nebula-logo.svg": "01d6843dbcf3e745dfce27234280793eb866d78bfad4f3ea22642f77b3d49b00",
+        "sw.js": "396009541f7641b5737b2f6beb36e0f280e167a15510149731dc1fbb99ef4969"
+      }
+    }
+  },
+  "independent_diagnosis": {
+    "sqlite": {
+      "postgresql_fingerprints": {
+        "interrupted_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "interrupted_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        },
+        "waiting_callback_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "waiting_callback_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        }
+      },
+      "scenarios": [
+        {
+          "mode": "text",
+          "rows": 620,
+          "payload_bytes": 22019920,
+          "dialect": "sqlite",
+          "measurements": [
+            {
+              "name": "current_scan_1",
+              "result_count": 0,
+              "elapsed_ms": 208.93,
+              "max_loop_lag_ms": 129.284,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 73.70480799949064,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 41.748690000019906,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.512,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 66.649,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 47.382,
+              "max_loop_lag_ms": 9.492,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "be860480f11d",
+                  "ms": 2.914,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+                }
+              ]
+            },
+            {
+              "name": "current_scan_2",
+              "result_count": 0,
+              "elapsed_ms": 190.39,
+              "max_loop_lag_ms": 92.96,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 58.860096000955764,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 32.77819500038959,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.863,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 83.849,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "mode": "structured",
+          "rows": 620,
+          "payload_bytes": 22016200,
+          "dialect": "sqlite",
+          "measurements": [
+            {
+              "name": "current_scan_1",
+              "result_count": 0,
+              "elapsed_ms": 2038.69,
+              "max_loop_lag_ms": 1721.828,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22016200,
+                "ms": 773.8725300000624,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 933.9155279989768,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 1.838,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 30.438,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 10.473,
+              "max_loop_lag_ms": 3.409,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "be860480f11d",
+                  "ms": 1.664,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+                }
+              ]
+            },
+            {
+              "name": "current_scan_2",
+              "result_count": 0,
+              "elapsed_ms": 1481.91,
+              "max_loop_lag_ms": 1148.949,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22016200,
+                "ms": 473.7914800018075,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 665.4890469987436,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "1f45a141ddf3",
+                  "ms": 0.937,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "6722d006916c",
+                  "ms": 38.11,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = ? AND entities.chat_turn_status = ? AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "postgresql": {
+      "postgresql_fingerprints": {
+        "interrupted_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "interrupted_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        },
+        "waiting_callback_ids": {
+          "hash": "f3bacfe5d393",
+          "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+        },
+        "waiting_callback_payload_page": {
+          "hash": "7ece61422b43",
+          "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+        }
+      },
+      "scenarios": [
+        {
+          "mode": "text",
+          "rows": 620,
+          "payload_bytes": 22019920,
+          "dialect": "postgresql",
+          "measurements": [
+            {
+              "name": "current_scan_1",
+              "result_count": 0,
+              "elapsed_ms": 395.959,
+              "max_loop_lag_ms": 289.807,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 54.701435000993115,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 220.77296899982457,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 3.156,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 149.304,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 21.703,
+              "max_loop_lag_ms": 9.41,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "d5581e2a4f04",
+                  "ms": 3.655,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+                }
+              ]
+            },
+            {
+              "name": "current_scan_2",
+              "result_count": 0,
+              "elapsed_ms": 192.2,
+              "max_loop_lag_ms": 115.691,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22019920,
+                "ms": 75.77268899973433,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 21.930306000001565,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.399,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 140.562,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "mode": "structured",
+          "rows": 620,
+          "payload_bytes": 22016200,
+          "dialect": "postgresql",
+          "measurements": [
+            {
+              "name": "current_scan_1",
+              "result_count": 0,
+              "elapsed_ms": 1541.842,
+              "max_loop_lag_ms": 1194.56,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22016200,
+                "ms": 533.0987800006142,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 646.4723050005432,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.603,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 592.441,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            },
+            {
+              "name": "projection_control",
+              "result_count": 0,
+              "elapsed_ms": 11.531,
+              "max_loop_lag_ms": 4.188,
+              "json_decode": {},
+              "entity_validation": {},
+              "statements": [
+                {
+                  "hash": "d5581e2a4f04",
+                  "ms": 2.68,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id, entities.engagement_id, entities.created_at AS sort_created_at, entities.chat_session_id, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status IN (__[POSTCOMPILE_chat_turn_status_1])"
+                }
+              ]
+            },
+            {
+              "name": "current_scan_2",
+              "result_count": 0,
+              "elapsed_ms": 1420.118,
+              "max_loop_lag_ms": 1079.94,
+              "json_decode": {
+                "rows": 620,
+                "bytes": 22016200,
+                "ms": 454.17576900001677,
+                "loop_thread_rows": 620
+              },
+              "entity_validation": {
+                "rows": 620,
+                "ms": 610.2639449999288,
+                "loop_thread_rows": 620
+              },
+              "statements": [
+                {
+                  "hash": "f3bacfe5d393",
+                  "ms": 2.45,
+                  "payload_selected": false,
+                  "sql": "SELECT entities.id \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR ORDER BY entities.created_at, entities.id"
+                },
+                {
+                  "hash": "7ece61422b43",
+                  "ms": 523.494,
+                  "payload_selected": true,
+                  "sql": "SELECT entities.id, entities.kind, entities.engagement_id, entities.revision, entities.payload, entities.automation_run_id, entities.automation_session_id, entities.automation_status, entities.automation_expires_at, entities.chat_session_id, entities.harness_session_id, entities.runtime_switch_status, entities.chat_turn_status, entities.chat_turn_recovery_visible, entities.chat_turn_core_resume_pending, entities.artifact_tool_call_id, entities.tool_call_status, entities.tool_call_origin, entities.tool_call_harness_turn_id, entities.created_at, entities.updated_at \nFROM entities \nWHERE entities.kind = %(kind_1)s::VARCHAR AND entities.chat_turn_status = %(chat_turn_status_1)s::VARCHAR AND entities.id IN (__[POSTCOMPILE_id_1])"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
