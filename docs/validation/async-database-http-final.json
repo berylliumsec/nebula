@@ -1,5 +1,5 @@
 {
-  "status": "The ten-run uvloop matrix passes at 8384824. Final runtime source rechecks pending after caller repairs. Historical failed experiments remain in async-database-http.json.",
+  "status": "Performance acceptance passed. Five final-runtime candidate rechecks match the recorded runtime/harness hashes; both mixed-load connection limits exceed the 20% target with no material low-load regression, no errors/exhaustion/leaks and exact completions. Earlier failed experiments remain in async-database-http.json.",
   "reports": [
     {
       "label": "baseline-low-equal",
@@ -12068,5 +12068,5827 @@
       }
     }
   ],
-  "final_runtime_rechecks": []
+  "final_runtime_rechecks": [
+    {
+      "label": "candidate-low-equal",
+      "pool_size": 15,
+      "offered_groups_per_second": 1.0,
+      "offered_requests_per_kind": 30,
+      "elapsed_seconds": 29.237807493002038,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 30,
+          "p50_ms": 192.135,
+          "p95_ms": 249.091,
+          "max_ms": 299.336
+        },
+        "admission": {
+          "n": 30,
+          "p50_ms": 103.955,
+          "p95_ms": 149.176,
+          "max_ms": 153.589
+        },
+        "first_token": {
+          "n": 30,
+          "p50_ms": 137.703,
+          "p95_ms": 188.972,
+          "max_ms": 190.492
+        },
+        "listing": {
+          "n": 30,
+          "p50_ms": 29.694,
+          "p95_ms": 56.54,
+          "max_ms": 63.028
+        },
+        "auth": {
+          "n": 30,
+          "p50_ms": 17.512,
+          "p95_ms": 30.39,
+          "max_ms": 44.476
+        },
+        "tool": {
+          "n": 30,
+          "p50_ms": 54.859,
+          "p95_ms": 89.852,
+          "max_ms": 102.784
+        },
+        "issue_lag": {
+          "n": 30,
+          "p50_ms": 1.529,
+          "p95_ms": 2.595,
+          "max_ms": 2.686
+        }
+      },
+      "error_count": 0,
+      "rejections": {
+        "chat": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "listing": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "auth": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "tool": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        }
+      },
+      "errors": [],
+      "final_observation": {
+        "host": {
+          "cpu_capacity": 4.0,
+          "cpu_ratio": 0.15,
+          "memory_available_ratio": 0.4714832305908203,
+          "busy": false,
+          "reason": null,
+          "measurements_available": true,
+          "sample_age_seconds": 0.001
+        },
+        "host_waiters": 0,
+        "host_starts_in_epoch": 1,
+        "host_epoch": 34405.739150279,
+        "pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 15
+          },
+          "configured_size": 15,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 4,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "load_average": "0.75 0.48 0.44 1/197 72605",
+        "event_loop": "uvloop.Loop"
+      },
+      "database_telemetry": {
+        "schema": "nebula.performance/v1",
+        "database_pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 15
+          },
+          "configured_size": 15,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 4,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "uptime_seconds": 29.308,
+        "limits": {
+          "operations": 513,
+          "samples_per_operation": 128,
+          "slow_records": 64,
+          "slow_ms": 250
+        },
+        "overflow_measurements": 0,
+        "operations": [
+          {
+            "operation": "db.session",
+            "count": 1900,
+            "errors": 30,
+            "cancelled": 0,
+            "total_ms": 6633.191,
+            "mean_ms": 3.491,
+            "max_ms": 30.751,
+            "sample_count": 128,
+            "p50_ms": 2.79,
+            "p95_ms": 11.117
+          },
+          {
+            "operation": "http.stream POST /api/v1/chat/completions",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 6045.41,
+            "mean_ms": 201.514,
+            "max_ms": 295.345,
+            "sample_count": 30,
+            "p50_ms": 187.875,
+            "p95_ms": 246.03
+          },
+          {
+            "operation": "http.response POST /api/v1/chat/completions",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2292.967,
+            "mean_ms": 76.432,
+            "max_ms": 127.253,
+            "sample_count": 30,
+            "p50_ms": 74.439,
+            "p95_ms": 110.733
+          },
+          {
+            "operation": "db.pool.acquire",
+            "count": 1990,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1649.174,
+            "mean_ms": 0.829,
+            "max_ms": 11.606,
+            "sample_count": 128,
+            "p50_ms": 0.643,
+            "p95_ms": 3.182
+          },
+          {
+            "operation": "db.commit",
+            "count": 1870,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1473.781,
+            "mean_ms": 0.788,
+            "max_ms": 9.817,
+            "sample_count": 128,
+            "p50_ms": 0.651,
+            "p95_ms": 3.048
+          },
+          {
+            "operation": "http.response POST /fixture/tool",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1467.029,
+            "mean_ms": 48.901,
+            "max_ms": 90.82,
+            "sample_count": 30,
+            "p50_ms": 47.112,
+            "p95_ms": 74.959
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "count": 1140,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1421.252,
+            "mean_ms": 1.247,
+            "max_ms": 29.424,
+            "sample_count": 128,
+            "p50_ms": 1.129,
+            "p95_ms": 3.976
+          },
+          {
+            "operation": "http.response GET /api/v1/harness-sessions",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 776.867,
+            "mean_ms": 25.896,
+            "max_ms": 54.816,
+            "sample_count": 30,
+            "p50_ms": 23.241,
+            "p95_ms": 46.889
+          },
+          {
+            "operation": "http.response GET /api/v1/auth/devices",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 323.617,
+            "mean_ms": 10.787,
+            "max_ms": 28.799,
+            "sample_count": 30,
+            "p50_ms": 9.18,
+            "p95_ms": 18.433
+          },
+          {
+            "operation": "db.execute.insert.626e6d826387",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 231.748,
+            "mean_ms": 1.287,
+            "max_ms": 5.453,
+            "sample_count": 128,
+            "p50_ms": 0.827,
+            "p95_ms": 3.501
+          },
+          {
+            "operation": "db.execute.select.9271f9b230ab",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 210.45,
+            "mean_ms": 1.169,
+            "max_ms": 6.415,
+            "sample_count": 128,
+            "p50_ms": 1.028,
+            "p95_ms": 2.395
+          },
+          {
+            "operation": "db.execute.select.a1c15d509d70",
+            "count": 150,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 177.34,
+            "mean_ms": 1.182,
+            "max_ms": 10.648,
+            "sample_count": 128,
+            "p50_ms": 0.698,
+            "p95_ms": 3.341
+          },
+          {
+            "operation": "db.execute.other.ed5cf8d308a9",
+            "count": 90,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 147.552,
+            "mean_ms": 1.639,
+            "max_ms": 5.042,
+            "sample_count": 90,
+            "p50_ms": 1.382,
+            "p95_ms": 4.239
+          },
+          {
+            "operation": "http.response GET /fixture/observation",
+            "count": 29,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 132.724,
+            "mean_ms": 4.577,
+            "max_ms": 17.423,
+            "sample_count": 29,
+            "p50_ms": 3.462,
+            "p95_ms": 8.702
+          },
+          {
+            "operation": "db.execute.update.9cf21fbdf863",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 131.352,
+            "mean_ms": 1.095,
+            "max_ms": 5.655,
+            "sample_count": 120,
+            "p50_ms": 0.95,
+            "p95_ms": 1.819
+          },
+          {
+            "operation": "db.execute.select.93472c72b02e",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 109.82,
+            "mean_ms": 3.661,
+            "max_ms": 8.181,
+            "sample_count": 30,
+            "p50_ms": 3.412,
+            "p95_ms": 5.48
+          },
+          {
+            "operation": "db.execute.select.560e41bd5995",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 109.441,
+            "mean_ms": 3.648,
+            "max_ms": 7.284,
+            "sample_count": 30,
+            "p50_ms": 3.578,
+            "p95_ms": 6.061
+          },
+          {
+            "operation": "db.execute.insert.fe03c233ed5d",
+            "count": 90,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 101.732,
+            "mean_ms": 1.13,
+            "max_ms": 8.459,
+            "sample_count": 90,
+            "p50_ms": 0.813,
+            "p95_ms": 2.957
+          },
+          {
+            "operation": "db.execute.select.f06666d70a42",
+            "count": 58,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 98.065,
+            "mean_ms": 1.691,
+            "max_ms": 15.033,
+            "sample_count": 58,
+            "p50_ms": 1.098,
+            "p95_ms": 4.794
+          },
+          {
+            "operation": "db.execute.insert.568be50f71fa",
+            "count": 90,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 96.464,
+            "mean_ms": 1.072,
+            "max_ms": 4.225,
+            "sample_count": 90,
+            "p50_ms": 0.91,
+            "p95_ms": 2.388
+          },
+          {
+            "operation": "db.execute.select.e71712579582",
+            "count": 90,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 92.313,
+            "mean_ms": 1.026,
+            "max_ms": 3.938,
+            "sample_count": 90,
+            "p50_ms": 0.818,
+            "p95_ms": 2.314
+          },
+          {
+            "operation": "db.execute.select.3eaf4b98016c",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 86.186,
+            "mean_ms": 2.873,
+            "max_ms": 5.985,
+            "sample_count": 30,
+            "p50_ms": 2.524,
+            "p95_ms": 5.197
+          },
+          {
+            "operation": "db.execute.update.40545b68a54c",
+            "count": 60,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 80.744,
+            "mean_ms": 1.346,
+            "max_ms": 5.5,
+            "sample_count": 60,
+            "p50_ms": 1.114,
+            "p95_ms": 2.833
+          },
+          {
+            "operation": "db.execute.select.953e1010aaec",
+            "count": 90,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 79.825,
+            "mean_ms": 0.887,
+            "max_ms": 3.171,
+            "sample_count": 90,
+            "p50_ms": 0.772,
+            "p95_ms": 1.639
+          },
+          {
+            "operation": "db.execute.select.20cf1fbf3ace",
+            "count": 60,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 78.236,
+            "mean_ms": 1.304,
+            "max_ms": 14.601,
+            "sample_count": 60,
+            "p50_ms": 0.923,
+            "p95_ms": 2.098
+          },
+          {
+            "operation": "db.execute.select.161c35b451ad",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 73.302,
+            "mean_ms": 2.443,
+            "max_ms": 7.363,
+            "sample_count": 30,
+            "p50_ms": 1.983,
+            "p95_ms": 6.907
+          },
+          {
+            "operation": "db.execute.select.750d5dc51539",
+            "count": 60,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 69.251,
+            "mean_ms": 1.154,
+            "max_ms": 6.29,
+            "sample_count": 60,
+            "p50_ms": 0.815,
+            "p95_ms": 3.17
+          },
+          {
+            "operation": "db.execute.update.c3ee72866fa7",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 68.828,
+            "mean_ms": 2.294,
+            "max_ms": 6.332,
+            "sample_count": 30,
+            "p50_ms": 1.874,
+            "p95_ms": 5.8
+          },
+          {
+            "operation": "db.execute.update.d1f5e90eda95",
+            "count": 60,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 66.271,
+            "mean_ms": 1.105,
+            "max_ms": 2.015,
+            "sample_count": 60,
+            "p50_ms": 1.036,
+            "p95_ms": 1.684
+          },
+          {
+            "operation": "db.execute.select.f1c67325f2f7",
+            "count": 60,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 65.77,
+            "mean_ms": 1.096,
+            "max_ms": 4.435,
+            "sample_count": 60,
+            "p50_ms": 0.862,
+            "p95_ms": 2.311
+          },
+          {
+            "operation": "db.execute.select.959d77184a7c",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 60.567,
+            "mean_ms": 2.019,
+            "max_ms": 4.825,
+            "sample_count": 30,
+            "p50_ms": 1.667,
+            "p95_ms": 4.128
+          },
+          {
+            "operation": "db.execute.select.7894dc23c98e",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 54.588,
+            "mean_ms": 1.82,
+            "max_ms": 5.222,
+            "sample_count": 30,
+            "p50_ms": 1.459,
+            "p95_ms": 3.988
+          },
+          {
+            "operation": "db.execute.select.9e53e2d6a45b",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 53.466,
+            "mean_ms": 1.782,
+            "max_ms": 3.205,
+            "sample_count": 30,
+            "p50_ms": 1.575,
+            "p95_ms": 2.966
+          },
+          {
+            "operation": "db.execute.select.ee1909126afd",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 41.35,
+            "mean_ms": 1.378,
+            "max_ms": 7.966,
+            "sample_count": 30,
+            "p50_ms": 1.004,
+            "p95_ms": 3.488
+          },
+          {
+            "operation": "db.execute.select.2fadbafbae34",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 37.51,
+            "mean_ms": 1.25,
+            "max_ms": 3.006,
+            "sample_count": 30,
+            "p50_ms": 1.093,
+            "p95_ms": 2.568
+          },
+          {
+            "operation": "db.execute.select.2233c62cb18b",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 32.031,
+            "mean_ms": 1.068,
+            "max_ms": 2.267,
+            "sample_count": 30,
+            "p50_ms": 0.934,
+            "p95_ms": 2.234
+          },
+          {
+            "operation": "db.execute.select.f193d67edbb7",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 28.728,
+            "mean_ms": 0.958,
+            "max_ms": 1.545,
+            "sample_count": 30,
+            "p50_ms": 0.893,
+            "p95_ms": 1.381
+          },
+          {
+            "operation": "db.execute.select.10b36e0f6787",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 27.435,
+            "mean_ms": 0.915,
+            "max_ms": 3.166,
+            "sample_count": 30,
+            "p50_ms": 0.748,
+            "p95_ms": 1.351
+          },
+          {
+            "operation": "db.execute.select.8218f64df255",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 26.44,
+            "mean_ms": 0.881,
+            "max_ms": 1.759,
+            "sample_count": 30,
+            "p50_ms": 0.763,
+            "p95_ms": 1.313
+          },
+          {
+            "operation": "db.execute.insert.6edc6e99cb2b",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 23.645,
+            "mean_ms": 0.788,
+            "max_ms": 7.627,
+            "sample_count": 30,
+            "p50_ms": 0.457,
+            "p95_ms": 1.407
+          },
+          {
+            "operation": "db.execute.update.65baed7597c3",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 22.111,
+            "mean_ms": 0.737,
+            "max_ms": 2.739,
+            "sample_count": 30,
+            "p50_ms": 0.504,
+            "p95_ms": 2.623
+          },
+          {
+            "operation": "db.execute.select.e51c084f8476",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 18.537,
+            "mean_ms": 0.618,
+            "max_ms": 1.313,
+            "sample_count": 30,
+            "p50_ms": 0.533,
+            "p95_ms": 1.021
+          },
+          {
+            "operation": "runtime.event_loop_lag",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4.0,
+            "mean_ms": 0.133,
+            "max_ms": 1.0,
+            "sample_count": 30,
+            "p50_ms": 0.0,
+            "p95_ms": 1.0
+          },
+          {
+            "operation": "db.execute.select.f3bacfe5d393",
+            "count": 3,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3.025,
+            "mean_ms": 1.008,
+            "max_ms": 1.389,
+            "sample_count": 3,
+            "p50_ms": 0.877,
+            "p95_ms": 1.389
+          },
+          {
+            "operation": "db.execute.select.f3d63e6b509a",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2.761,
+            "mean_ms": 1.38,
+            "max_ms": 1.457,
+            "sample_count": 2,
+            "p50_ms": 1.304,
+            "p95_ms": 1.457
+          },
+          {
+            "operation": "http.response POST /fixture/measure",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2.05,
+            "mean_ms": 2.05,
+            "max_ms": 2.05,
+            "sample_count": 1,
+            "p50_ms": 2.05,
+            "p95_ms": 2.05
+          },
+          {
+            "operation": "db.execute.select.90ecde227f8f",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.548,
+            "mean_ms": 0.774,
+            "max_ms": 0.811,
+            "sample_count": 2,
+            "p50_ms": 0.737,
+            "p95_ms": 0.811
+          },
+          {
+            "operation": "db.execute.select.7898712da422",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.32,
+            "mean_ms": 0.66,
+            "max_ms": 0.776,
+            "sample_count": 2,
+            "p50_ms": 0.544,
+            "p95_ms": 0.776
+          },
+          {
+            "operation": "db.execute.select.06d2c090c02d",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.308,
+            "mean_ms": 1.308,
+            "max_ms": 1.308,
+            "sample_count": 1,
+            "p50_ms": 1.308,
+            "p95_ms": 1.308
+          },
+          {
+            "operation": "db.execute.select.36dece1ac07b",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.098,
+            "mean_ms": 1.098,
+            "max_ms": 1.098,
+            "sample_count": 1,
+            "p50_ms": 1.098,
+            "p95_ms": 1.098
+          },
+          {
+            "operation": "db.execute.select.6d092328c431",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.038,
+            "mean_ms": 1.038,
+            "max_ms": 1.038,
+            "sample_count": 1,
+            "p50_ms": 1.038,
+            "p95_ms": 1.038
+          },
+          {
+            "operation": "db.bulk.wait",
+            "count": 191,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 0.526,
+            "mean_ms": 0.003,
+            "max_ms": 0.006,
+            "sample_count": 128,
+            "p50_ms": 0.003,
+            "p95_ms": 0.004
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 0.32,
+            "mean_ms": 0.011,
+            "max_ms": 0.038,
+            "sample_count": 30,
+            "p50_ms": 0.01,
+            "p95_ms": 0.015
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 0.099,
+            "mean_ms": 0.003,
+            "max_ms": 0.008,
+            "sample_count": 30,
+            "p50_ms": 0.003,
+            "p95_ms": 0.004
+          }
+        ],
+        "recent_slow": []
+      },
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "worker_exit_code": 0,
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+        "runtime_source_sha256": "c7447924aa7ad4fa2a118758ae2e6fac5eaaf3f04927060730dc2279945b411b",
+        "harness_sha256": "cfeba02a16650bab1062456c11de1480fa49dccecea6a1540a631dd5c9c58496",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system",
+        "event_loop": "uvloop.Loop"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "stored_chat_turns": {
+        "complete": 31
+      },
+      "stored_tool_calls": {
+        "complete": 31
+      }
+    },
+    {
+      "label": "candidate-mixed-equal",
+      "pool_size": 15,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 29.287510950001888,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 3794.52,
+          "p95_ms": 13018.991,
+          "max_ms": 14410.789
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 2998.822,
+          "p95_ms": 12920.86,
+          "max_ms": 14317.981
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 3320.163,
+          "p95_ms": 12958.898,
+          "max_ms": 14354.815
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 111.931,
+          "p95_ms": 360.992,
+          "max_ms": 584.354
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 62.522,
+          "p95_ms": 273.698,
+          "max_ms": 526.416
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 233.519,
+          "p95_ms": 594.943,
+          "max_ms": 821.715
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.833,
+          "p95_ms": 2.134,
+          "max_ms": 178.068
+        }
+      },
+      "error_count": 0,
+      "rejections": {
+        "chat": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "listing": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "auth": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "tool": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        }
+      },
+      "errors": [],
+      "final_observation": {
+        "host": {
+          "cpu_capacity": 4.0,
+          "cpu_ratio": 0.1900390625,
+          "memory_available_ratio": 0.4687798023223877,
+          "busy": false,
+          "reason": null,
+          "measurements_available": true,
+          "sample_age_seconds": 0.001
+        },
+        "host_waiters": 0,
+        "host_starts_in_epoch": 1,
+        "host_epoch": 34444.697493073,
+        "pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 15
+          },
+          "configured_size": 15,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 15,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "load_average": "0.95 0.57 0.47 1/208 72707",
+        "event_loop": "uvloop.Loop"
+      },
+      "database_telemetry": {
+        "schema": "nebula.performance/v1",
+        "database_pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 15
+          },
+          "configured_size": 15,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 15,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "uptime_seconds": 30.065,
+        "limits": {
+          "operations": 513,
+          "samples_per_operation": 128,
+          "slow_records": 64,
+          "slow_ms": 250
+        },
+        "overflow_measurements": 0,
+        "operations": [
+          {
+            "operation": "http.stream POST /api/v1/chat/completions",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 569821.532,
+            "mean_ms": 4748.513,
+            "max_ms": 14408.457,
+            "sample_count": 120,
+            "p50_ms": 3780.366,
+            "p95_ms": 13015.931
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 357113.874,
+            "mean_ms": 2975.949,
+            "max_ms": 12193.364,
+            "sample_count": 120,
+            "p50_ms": 1974.605,
+            "p95_ms": 10790.003
+          },
+          {
+            "operation": "db.session",
+            "count": 7677,
+            "errors": 120,
+            "cancelled": 0,
+            "total_ms": 108335.574,
+            "mean_ms": 14.112,
+            "max_ms": 462.971,
+            "sample_count": 128,
+            "p50_ms": 2.004,
+            "p95_ms": 7.633
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 83259.897,
+            "mean_ms": 693.832,
+            "max_ms": 2356.185,
+            "sample_count": 120,
+            "p50_ms": 0.011,
+            "p95_ms": 2047.677
+          },
+          {
+            "operation": "http.response POST /api/v1/chat/completions",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 51782.788,
+            "mean_ms": 431.523,
+            "max_ms": 1152.717,
+            "sample_count": 120,
+            "p50_ms": 436.45,
+            "p95_ms": 931.807
+          },
+          {
+            "operation": "db.pool.acquire",
+            "count": 8037,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 44897.214,
+            "mean_ms": 5.586,
+            "max_ms": 390.053,
+            "sample_count": 128,
+            "p50_ms": 0.51,
+            "p95_ms": 1.102
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "count": 4732,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 32644.932,
+            "mean_ms": 6.899,
+            "max_ms": 397.719,
+            "sample_count": 128,
+            "p50_ms": 0.931,
+            "p95_ms": 2.056
+          },
+          {
+            "operation": "db.commit",
+            "count": 7557,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 28901.024,
+            "mean_ms": 3.824,
+            "max_ms": 346.241,
+            "sample_count": 128,
+            "p50_ms": 0.434,
+            "p95_ms": 1.751
+          },
+          {
+            "operation": "http.response POST /fixture/tool",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 23683.772,
+            "mean_ms": 197.365,
+            "max_ms": 709.438,
+            "sample_count": 120,
+            "p50_ms": 205.038,
+            "p95_ms": 376.111
+          },
+          {
+            "operation": "http.response GET /api/v1/harness-sessions",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 9938.443,
+            "mean_ms": 82.82,
+            "max_ms": 220.233,
+            "sample_count": 120,
+            "p50_ms": 84.003,
+            "p95_ms": 170.146
+          },
+          {
+            "operation": "db.execute.select.9271f9b230ab",
+            "count": 720,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 5425.448,
+            "mean_ms": 7.535,
+            "max_ms": 397.049,
+            "sample_count": 128,
+            "p50_ms": 1.09,
+            "p95_ms": 3.004
+          },
+          {
+            "operation": "db.execute.insert.626e6d826387",
+            "count": 720,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4699.788,
+            "mean_ms": 6.527,
+            "max_ms": 386.572,
+            "sample_count": 128,
+            "p50_ms": 1.055,
+            "p95_ms": 5.441
+          },
+          {
+            "operation": "http.response GET /api/v1/auth/devices",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4518.581,
+            "mean_ms": 37.655,
+            "max_ms": 203.365,
+            "sample_count": 120,
+            "p50_ms": 33.847,
+            "p95_ms": 83.708
+          },
+          {
+            "operation": "db.execute.select.a1c15d509d70",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4208.694,
+            "mean_ms": 7.014,
+            "max_ms": 344.377,
+            "sample_count": 128,
+            "p50_ms": 0.766,
+            "p95_ms": 4.099
+          },
+          {
+            "operation": "db.execute.other.ed5cf8d308a9",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3145.895,
+            "mean_ms": 8.739,
+            "max_ms": 37.855,
+            "sample_count": 128,
+            "p50_ms": 7.621,
+            "p95_ms": 16.041
+          },
+          {
+            "operation": "db.execute.update.9cf21fbdf863",
+            "count": 566,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2456.069,
+            "mean_ms": 4.339,
+            "max_ms": 334.179,
+            "sample_count": 128,
+            "p50_ms": 1.124,
+            "p95_ms": 2.25
+          },
+          {
+            "operation": "db.execute.insert.fe03c233ed5d",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2189.979,
+            "mean_ms": 6.083,
+            "max_ms": 338.151,
+            "sample_count": 128,
+            "p50_ms": 3.97,
+            "p95_ms": 9.594
+          },
+          {
+            "operation": "db.execute.select.2fadbafbae34",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1916.86,
+            "mean_ms": 15.974,
+            "max_ms": 307.507,
+            "sample_count": 120,
+            "p50_ms": 8.96,
+            "p95_ms": 40.299
+          },
+          {
+            "operation": "db.execute.select.953e1010aaec",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1887.14,
+            "mean_ms": 5.242,
+            "max_ms": 158.232,
+            "sample_count": 128,
+            "p50_ms": 4.332,
+            "p95_ms": 9.227
+          },
+          {
+            "operation": "db.execute.select.750d5dc51539",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1774.225,
+            "mean_ms": 7.393,
+            "max_ms": 33.801,
+            "sample_count": 128,
+            "p50_ms": 6.328,
+            "p95_ms": 15.327
+          },
+          {
+            "operation": "db.execute.select.e71712579582",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1709.758,
+            "mean_ms": 4.749,
+            "max_ms": 22.305,
+            "sample_count": 128,
+            "p50_ms": 4.042,
+            "p95_ms": 9.467
+          },
+          {
+            "operation": "db.execute.select.10b36e0f6787",
+            "count": 226,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1676.266,
+            "mean_ms": 7.417,
+            "max_ms": 24.585,
+            "sample_count": 128,
+            "p50_ms": 3.385,
+            "p95_ms": 15.532
+          },
+          {
+            "operation": "db.execute.insert.568be50f71fa",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1597.379,
+            "mean_ms": 4.437,
+            "max_ms": 19.425,
+            "sample_count": 128,
+            "p50_ms": 1.252,
+            "p95_ms": 7.902
+          },
+          {
+            "operation": "db.execute.select.20cf1fbf3ace",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1527.001,
+            "mean_ms": 6.363,
+            "max_ms": 29.007,
+            "sample_count": 128,
+            "p50_ms": 1.425,
+            "p95_ms": 13.468
+          },
+          {
+            "operation": "db.execute.update.d1f5e90eda95",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1406.227,
+            "mean_ms": 5.859,
+            "max_ms": 384.965,
+            "sample_count": 128,
+            "p50_ms": 1.646,
+            "p95_ms": 9.052
+          },
+          {
+            "operation": "db.execute.update.40545b68a54c",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1298.197,
+            "mean_ms": 5.409,
+            "max_ms": 64.417,
+            "sample_count": 128,
+            "p50_ms": 5.053,
+            "p95_ms": 10.648
+          },
+          {
+            "operation": "db.execute.update.c3ee72866fa7",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1285.569,
+            "mean_ms": 10.713,
+            "max_ms": 396.725,
+            "sample_count": 120,
+            "p50_ms": 6.566,
+            "p95_ms": 15.77
+          },
+          {
+            "operation": "db.execute.select.93472c72b02e",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1263.89,
+            "mean_ms": 10.532,
+            "max_ms": 32.729,
+            "sample_count": 120,
+            "p50_ms": 10.481,
+            "p95_ms": 19.106
+          },
+          {
+            "operation": "db.execute.select.3eaf4b98016c",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1247.179,
+            "mean_ms": 10.393,
+            "max_ms": 55.276,
+            "sample_count": 120,
+            "p50_ms": 9.571,
+            "p95_ms": 20.532
+          },
+          {
+            "operation": "db.execute.select.560e41bd5995",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1238.753,
+            "mean_ms": 10.323,
+            "max_ms": 33.839,
+            "sample_count": 120,
+            "p50_ms": 10.375,
+            "p95_ms": 19.814
+          },
+          {
+            "operation": "db.execute.select.f1c67325f2f7",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1206.182,
+            "mean_ms": 5.026,
+            "max_ms": 20.263,
+            "sample_count": 128,
+            "p50_ms": 4.815,
+            "p95_ms": 12.474
+          },
+          {
+            "operation": "db.execute.select.ee1909126afd",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1146.218,
+            "mean_ms": 9.552,
+            "max_ms": 395.647,
+            "sample_count": 120,
+            "p50_ms": 4.697,
+            "p95_ms": 14.779
+          },
+          {
+            "operation": "db.execute.select.959d77184a7c",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1053.303,
+            "mean_ms": 8.778,
+            "max_ms": 23.274,
+            "sample_count": 120,
+            "p50_ms": 9.205,
+            "p95_ms": 15.162
+          },
+          {
+            "operation": "db.execute.select.7894dc23c98e",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1036.468,
+            "mean_ms": 8.637,
+            "max_ms": 56.247,
+            "sample_count": 120,
+            "p50_ms": 7.884,
+            "p95_ms": 16.048
+          },
+          {
+            "operation": "db.execute.insert.6edc6e99cb2b",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 873.295,
+            "mean_ms": 7.277,
+            "max_ms": 337.716,
+            "sample_count": 120,
+            "p50_ms": 4.618,
+            "p95_ms": 8.706
+          },
+          {
+            "operation": "db.execute.select.f193d67edbb7",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 854.608,
+            "mean_ms": 7.122,
+            "max_ms": 52.716,
+            "sample_count": 120,
+            "p50_ms": 5.417,
+            "p95_ms": 14.734
+          },
+          {
+            "operation": "db.execute.select.2233c62cb18b",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 769.324,
+            "mean_ms": 6.411,
+            "max_ms": 26.821,
+            "sample_count": 120,
+            "p50_ms": 5.924,
+            "p95_ms": 14.373
+          },
+          {
+            "operation": "db.execute.select.8218f64df255",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 715.462,
+            "mean_ms": 5.962,
+            "max_ms": 35.241,
+            "sample_count": 120,
+            "p50_ms": 4.79,
+            "p95_ms": 14.199
+          },
+          {
+            "operation": "db.execute.select.161c35b451ad",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 662.874,
+            "mean_ms": 5.524,
+            "max_ms": 13.139,
+            "sample_count": 120,
+            "p50_ms": 5.397,
+            "p95_ms": 10.546
+          },
+          {
+            "operation": "db.execute.select.9e53e2d6a45b",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 625.88,
+            "mean_ms": 5.216,
+            "max_ms": 14.889,
+            "sample_count": 120,
+            "p50_ms": 5.071,
+            "p95_ms": 9.773
+          },
+          {
+            "operation": "db.bulk.wait",
+            "count": 741,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 567.356,
+            "mean_ms": 0.766,
+            "max_ms": 75.474,
+            "sample_count": 128,
+            "p50_ms": 0.003,
+            "p95_ms": 0.004
+          },
+          {
+            "operation": "db.execute.update.65baed7597c3",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 404.004,
+            "mean_ms": 3.367,
+            "max_ms": 22.376,
+            "sample_count": 120,
+            "p50_ms": 2.24,
+            "p95_ms": 8.375
+          },
+          {
+            "operation": "db.execute.select.e51c084f8476",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 359.495,
+            "mean_ms": 2.996,
+            "max_ms": 8.805,
+            "sample_count": 120,
+            "p50_ms": 2.247,
+            "p95_ms": 7.196
+          },
+          {
+            "operation": "db.execute.select.f06666d70a42",
+            "count": 56,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 316.478,
+            "mean_ms": 5.651,
+            "max_ms": 33.938,
+            "sample_count": 56,
+            "p50_ms": 1.951,
+            "p95_ms": 18.834
+          },
+          {
+            "operation": "runtime.event_loop_lag",
+            "count": 30,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 298.0,
+            "mean_ms": 9.933,
+            "max_ms": 224.0,
+            "sample_count": 30,
+            "p50_ms": 0.0,
+            "p95_ms": 28.0
+          },
+          {
+            "operation": "http.response GET /fixture/observation",
+            "count": 29,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 240.677,
+            "mean_ms": 8.299,
+            "max_ms": 43.661,
+            "sample_count": 29,
+            "p50_ms": 2.605,
+            "p95_ms": 40.518
+          },
+          {
+            "operation": "db.execute.select.f3d63e6b509a",
+            "count": 3,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 34.996,
+            "mean_ms": 11.665,
+            "max_ms": 32.815,
+            "sample_count": 3,
+            "p50_ms": 1.096,
+            "p95_ms": 32.815
+          },
+          {
+            "operation": "db.execute.select.f3bacfe5d393",
+            "count": 6,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 21.546,
+            "mean_ms": 3.591,
+            "max_ms": 10.47,
+            "sample_count": 6,
+            "p50_ms": 0.829,
+            "p95_ms": 10.47
+          },
+          {
+            "operation": "db.execute.select.90ecde227f8f",
+            "count": 4,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 11.933,
+            "mean_ms": 2.983,
+            "max_ms": 6.426,
+            "sample_count": 4,
+            "p50_ms": 0.76,
+            "p95_ms": 6.426
+          },
+          {
+            "operation": "db.execute.select.6d092328c431",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 9.14,
+            "mean_ms": 4.57,
+            "max_ms": 7.718,
+            "sample_count": 2,
+            "p50_ms": 1.421,
+            "p95_ms": 7.718
+          },
+          {
+            "operation": "db.execute.select.7898712da422",
+            "count": 4,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 7.857,
+            "mean_ms": 1.964,
+            "max_ms": 4.269,
+            "sample_count": 4,
+            "p50_ms": 0.707,
+            "p95_ms": 4.269
+          },
+          {
+            "operation": "db.execute.select.36dece1ac07b",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 6.692,
+            "mean_ms": 3.346,
+            "max_ms": 5.656,
+            "sample_count": 2,
+            "p50_ms": 1.035,
+            "p95_ms": 5.656
+          },
+          {
+            "operation": "db.execute.select.06d2c090c02d",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 6.235,
+            "mean_ms": 3.118,
+            "max_ms": 5.395,
+            "sample_count": 2,
+            "p50_ms": 0.84,
+            "p95_ms": 5.395
+          },
+          {
+            "operation": "http.response POST /fixture/measure",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.305,
+            "mean_ms": 1.305,
+            "max_ms": 1.305,
+            "sample_count": 1,
+            "p50_ms": 1.305,
+            "p95_ms": 1.305
+          }
+        ],
+        "recent_slow": [
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2028.637,
+            "uptime_seconds": 29.171,
+            "outcome": "ok",
+            "request_id": "req_46587f3b7083481ba6030ecc027fd060"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.445,
+            "uptime_seconds": 28.376,
+            "outcome": "ok",
+            "request_id": "req_6c187b67b92441d1808eb97e4411f4d5"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.472,
+            "uptime_seconds": 27.995,
+            "outcome": "ok",
+            "request_id": "req_da3f56fc88b443e9b24012e2f3de433c"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2028.697,
+            "uptime_seconds": 27.604,
+            "outcome": "ok",
+            "request_id": "req_17c49220b1ca44fc8cb7cf96d1262998"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2044.758,
+            "uptime_seconds": 27.479,
+            "outcome": "ok",
+            "request_id": "req_f23a67de42694c9e8e01a60ed18f84c5"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2026.402,
+            "uptime_seconds": 27.315,
+            "outcome": "ok",
+            "request_id": "req_16e208ca72624de9967eb16bc458a2f2"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 12193.364,
+            "uptime_seconds": 27.142,
+            "outcome": "ok",
+            "request_id": "req_46587f3b7083481ba6030ecc027fd060"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2029.657,
+            "uptime_seconds": 27.023,
+            "outcome": "ok",
+            "request_id": "req_8410545defdb45b1ad8c90ea7637ad21"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 11493.064,
+            "uptime_seconds": 26.352,
+            "outcome": "ok",
+            "request_id": "req_6c187b67b92441d1808eb97e4411f4d5"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.431,
+            "uptime_seconds": 26.212,
+            "outcome": "ok",
+            "request_id": "req_3e6d00b6fd7542038470150681cb2cdc"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 11195.634,
+            "uptime_seconds": 25.972,
+            "outcome": "ok",
+            "request_id": "req_da3f56fc88b443e9b24012e2f3de433c"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2028.064,
+            "uptime_seconds": 25.843,
+            "outcome": "ok",
+            "request_id": "req_e5c35148416c40519737555200053752"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 10868.691,
+            "uptime_seconds": 25.575,
+            "outcome": "ok",
+            "request_id": "req_17c49220b1ca44fc8cb7cf96d1262998"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 10816.573,
+            "uptime_seconds": 25.434,
+            "outcome": "ok",
+            "request_id": "req_f23a67de42694c9e8e01a60ed18f84c5"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2026.392,
+            "uptime_seconds": 25.42,
+            "outcome": "ok",
+            "request_id": "req_033aa0d2e6e24c7899546e55e824859b"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2028.233,
+            "uptime_seconds": 25.299,
+            "outcome": "ok",
+            "request_id": "req_076d0653963f44f1945834a0ae85dc4e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 10857.258,
+            "uptime_seconds": 25.289,
+            "outcome": "ok",
+            "request_id": "req_16e208ca72624de9967eb16bc458a2f2"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2022.235,
+            "uptime_seconds": 25.176,
+            "outcome": "ok",
+            "request_id": "req_359aa7a8960a4f829c33d9a63a82baf2"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 10790.003,
+            "uptime_seconds": 24.993,
+            "outcome": "ok",
+            "request_id": "req_8410545defdb45b1ad8c90ea7637ad21"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.46,
+            "uptime_seconds": 24.852,
+            "outcome": "ok",
+            "request_id": "req_dedfa7d44f7449c5817926b20cb0590c"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 10119.79,
+            "uptime_seconds": 24.188,
+            "outcome": "ok",
+            "request_id": "req_3e6d00b6fd7542038470150681cb2cdc"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2027.29,
+            "uptime_seconds": 24.085,
+            "outcome": "ok",
+            "request_id": "req_2ca40424aba648fa96cd68fd607dae20"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 9829.768,
+            "uptime_seconds": 23.815,
+            "outcome": "ok",
+            "request_id": "req_e5c35148416c40519737555200053752"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2356.185,
+            "uptime_seconds": 23.703,
+            "outcome": "ok",
+            "request_id": "req_54dc6d70f6a748c1874866e3223d37ba"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 9563.22,
+            "uptime_seconds": 23.393,
+            "outcome": "ok",
+            "request_id": "req_033aa0d2e6e24c7899546e55e824859b"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2031.259,
+            "uptime_seconds": 23.293,
+            "outcome": "ok",
+            "request_id": "req_9ea07d03a3be471bb61981da83386539"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 9574.257,
+            "uptime_seconds": 23.271,
+            "outcome": "ok",
+            "request_id": "req_076d0653963f44f1945834a0ae85dc4e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 9557.58,
+            "uptime_seconds": 23.154,
+            "outcome": "ok",
+            "request_id": "req_359aa7a8960a4f829c33d9a63a82baf2"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2032.033,
+            "uptime_seconds": 23.14,
+            "outcome": "ok",
+            "request_id": "req_06838eaead004db39f667569a89edb69"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2044.082,
+            "uptime_seconds": 23.023,
+            "outcome": "ok",
+            "request_id": "req_89d79176314a4272a2de9c0d85736f0b"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 9253.759,
+            "uptime_seconds": 22.828,
+            "outcome": "ok",
+            "request_id": "req_dedfa7d44f7449c5817926b20cb0590c"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2187.776,
+            "uptime_seconds": 22.702,
+            "outcome": "ok",
+            "request_id": "req_b5b2ed97957f49f79351532d68e834db"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 8544.539,
+            "uptime_seconds": 22.058,
+            "outcome": "ok",
+            "request_id": "req_2ca40424aba648fa96cd68fd607dae20"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2022.871,
+            "uptime_seconds": 21.947,
+            "outcome": "ok",
+            "request_id": "req_f2cd5ff7d65c4acfb8cbd772be366088"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 337.286,
+            "uptime_seconds": 21.693,
+            "outcome": "ok",
+            "source": "nebula/v3/storage.py:1510:get"
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "duration_ms": 335.472,
+            "uptime_seconds": 21.691,
+            "outcome": "ok"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 338.852,
+            "uptime_seconds": 21.691,
+            "outcome": "ok",
+            "request_id": "req_54dc6d70f6a748c1874866e3223d37ba",
+            "source": "nebula/v3/storage.py:882:transaction"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 336.655,
+            "uptime_seconds": 21.69,
+            "outcome": "ok",
+            "source": "nebula/v3/storage.py:1510:get"
+          },
+          {
+            "operation": "db.execute.update.9cf21fbdf863",
+            "duration_ms": 334.179,
+            "uptime_seconds": 21.689,
+            "outcome": "ok",
+            "request_id": "req_54dc6d70f6a748c1874866e3223d37ba"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 7912.434,
+            "uptime_seconds": 21.347,
+            "outcome": "ok",
+            "request_id": "req_54dc6d70f6a748c1874866e3223d37ba"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 7904.191,
+            "uptime_seconds": 21.262,
+            "outcome": "ok",
+            "request_id": "req_9ea07d03a3be471bb61981da83386539"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2034.23,
+            "uptime_seconds": 21.194,
+            "outcome": "ok",
+            "request_id": "req_a84a920995d744cd999c2774ec132a82"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2036.473,
+            "uptime_seconds": 21.113,
+            "outcome": "ok",
+            "request_id": "req_63d4b8f70ada4f2cb567ab96c6ff8b48"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 7817.809,
+            "uptime_seconds": 21.107,
+            "outcome": "ok",
+            "request_id": "req_06838eaead004db39f667569a89edb69"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 7759.36,
+            "uptime_seconds": 20.979,
+            "outcome": "ok",
+            "request_id": "req_89d79176314a4272a2de9c0d85736f0b"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2027.635,
+            "uptime_seconds": 20.964,
+            "outcome": "ok",
+            "request_id": "req_c365de0d7f3d40b0b343f061c7ad77e6"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2038.49,
+            "uptime_seconds": 20.862,
+            "outcome": "ok",
+            "request_id": "req_e76e100d14e2431eb1e8b458df4f87ae"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 7401.778,
+            "uptime_seconds": 20.514,
+            "outcome": "ok",
+            "request_id": "req_b5b2ed97957f49f79351532d68e834db"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.286,
+            "uptime_seconds": 20.396,
+            "outcome": "ok",
+            "request_id": "req_f9214f9d72214f04a11f42a12bf9657e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 6922.226,
+            "uptime_seconds": 19.924,
+            "outcome": "ok",
+            "request_id": "req_f2cd5ff7d65c4acfb8cbd772be366088"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.711,
+            "uptime_seconds": 19.769,
+            "outcome": "ok",
+            "request_id": "req_6bb828a97bb2448f8779e973f64c6073"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 6314.775,
+            "uptime_seconds": 19.16,
+            "outcome": "ok",
+            "request_id": "req_a84a920995d744cd999c2774ec132a82"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 6360.021,
+            "uptime_seconds": 19.076,
+            "outcome": "ok",
+            "request_id": "req_63d4b8f70ada4f2cb567ab96c6ff8b48"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2027.148,
+            "uptime_seconds": 19.01,
+            "outcome": "ok",
+            "request_id": "req_7ec7d7fc912041f784c128a7e78620ca"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 6347.089,
+            "uptime_seconds": 18.937,
+            "outcome": "ok",
+            "request_id": "req_c365de0d7f3d40b0b343f061c7ad77e6"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.884,
+            "uptime_seconds": 18.917,
+            "outcome": "ok",
+            "request_id": "req_1a30d337f112438fa8b4a1b34105b12a"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 6367.877,
+            "uptime_seconds": 18.824,
+            "outcome": "ok",
+            "request_id": "req_e76e100d14e2431eb1e8b458df4f87ae"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2031.521,
+            "uptime_seconds": 18.786,
+            "outcome": "ok",
+            "request_id": "req_12747b2c263c4c94a5a721181cb79d52"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2050.252,
+            "uptime_seconds": 18.696,
+            "outcome": "ok",
+            "request_id": "req_81c33d6201df48c88c5f5e7e4bcee94e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 6016.041,
+            "uptime_seconds": 18.373,
+            "outcome": "ok",
+            "request_id": "req_f9214f9d72214f04a11f42a12bf9657e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2027.708,
+            "uptime_seconds": 18.269,
+            "outcome": "ok",
+            "request_id": "req_df83ab31c8a64a2d816b518e8b8c0f61"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 5523.097,
+            "uptime_seconds": 17.746,
+            "outcome": "ok",
+            "request_id": "req_6bb828a97bb2448f8779e973f64c6073"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2026.266,
+            "uptime_seconds": 17.634,
+            "outcome": "ok",
+            "request_id": "req_b57f5beb37564083bebea4292c5687f6"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 4887.844,
+            "uptime_seconds": 16.983,
+            "outcome": "ok",
+            "request_id": "req_7ec7d7fc912041f784c128a7e78620ca"
+          }
+        ]
+      },
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "worker_exit_code": 0,
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+        "runtime_source_sha256": "c7447924aa7ad4fa2a118758ae2e6fac5eaaf3f04927060730dc2279945b411b",
+        "harness_sha256": "cfeba02a16650bab1062456c11de1480fa49dccecea6a1540a631dd5c9c58496",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system",
+        "event_loop": "uvloop.Loop"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      }
+    },
+    {
+      "label": "candidate-mixed-max",
+      "pool_size": 40,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 34.646598974999506,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 5829.265,
+          "p95_ms": 18350.723,
+          "max_ms": 19791.41
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 5393.524,
+          "p95_ms": 18236.445,
+          "max_ms": 19651.722
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 5523.398,
+          "p95_ms": 18277.58,
+          "max_ms": 19702.619
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 43.026,
+          "p95_ms": 130.227,
+          "max_ms": 422.969
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 25.402,
+          "p95_ms": 97.933,
+          "max_ms": 389.739
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 80.072,
+          "p95_ms": 229.263,
+          "max_ms": 549.433
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.731,
+          "p95_ms": 1.876,
+          "max_ms": 26.684
+        }
+      },
+      "error_count": 0,
+      "rejections": {
+        "chat": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "listing": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "auth": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "tool": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        }
+      },
+      "errors": [],
+      "final_observation": {
+        "host": {
+          "cpu_capacity": 4.0,
+          "cpu_ratio": 0.22890625,
+          "memory_available_ratio": 0.4688282012939453,
+          "busy": false,
+          "reason": null,
+          "measurements_available": true,
+          "sample_age_seconds": 0.001
+        },
+        "host_waiters": 0,
+        "host_starts_in_epoch": 3,
+        "host_epoch": 34488.322961063,
+        "pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 40
+          },
+          "configured_size": 40,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 13,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "load_average": "1.14 0.68 0.52 1/207 72826",
+        "event_loop": "uvloop.Loop"
+      },
+      "database_telemetry": {
+        "schema": "nebula.performance/v1",
+        "database_pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 40
+          },
+          "configured_size": 40,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 13,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "uptime_seconds": 34.725,
+        "limits": {
+          "operations": 513,
+          "samples_per_operation": 128,
+          "slow_records": 64,
+          "slow_ms": 250
+        },
+        "overflow_measurements": 0,
+        "operations": [
+          {
+            "operation": "http.stream POST /api/v1/chat/completions",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 944466.99,
+            "mean_ms": 7870.558,
+            "max_ms": 19785.453,
+            "sample_count": 120,
+            "p50_ms": 5833.943,
+            "p95_ms": 18347.073
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 727953.515,
+            "mean_ms": 6066.279,
+            "max_ms": 17370.308,
+            "sample_count": 120,
+            "p50_ms": 4094.425,
+            "p95_ms": 15847.932
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 169715.918,
+            "mean_ms": 1414.299,
+            "max_ms": 2308.94,
+            "sample_count": 120,
+            "p50_ms": 1086.952,
+            "p95_ms": 2063.461
+          },
+          {
+            "operation": "db.session",
+            "count": 7986,
+            "errors": 121,
+            "cancelled": 0,
+            "total_ms": 51570.429,
+            "mean_ms": 6.458,
+            "max_ms": 377.638,
+            "sample_count": 128,
+            "p50_ms": 2.813,
+            "p95_ms": 9.824
+          },
+          {
+            "operation": "http.response POST /api/v1/chat/completions",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 18252.326,
+            "mean_ms": 152.103,
+            "max_ms": 675.385,
+            "sample_count": 120,
+            "p50_ms": 113.663,
+            "p95_ms": 336.784
+          },
+          {
+            "operation": "db.pool.acquire",
+            "count": 8346,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 15066.756,
+            "mean_ms": 1.805,
+            "max_ms": 352.704,
+            "sample_count": 128,
+            "p50_ms": 0.672,
+            "p95_ms": 3.158
+          },
+          {
+            "operation": "db.commit",
+            "count": 7865,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 13956.319,
+            "mean_ms": 1.774,
+            "max_ms": 352.656,
+            "sample_count": 128,
+            "p50_ms": 0.619,
+            "p95_ms": 2.153
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "count": 5004,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 13547.05,
+            "mean_ms": 2.707,
+            "max_ms": 352.546,
+            "sample_count": 128,
+            "p50_ms": 1.167,
+            "p95_ms": 5.36
+          },
+          {
+            "operation": "http.response POST /fixture/tool",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 10155.79,
+            "mean_ms": 84.632,
+            "max_ms": 530.439,
+            "sample_count": 120,
+            "p50_ms": 69.184,
+            "p95_ms": 168.896
+          },
+          {
+            "operation": "http.response GET /api/v1/harness-sessions",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 5153.141,
+            "mean_ms": 42.943,
+            "max_ms": 402.384,
+            "sample_count": 120,
+            "p50_ms": 33.099,
+            "p95_ms": 69.733
+          },
+          {
+            "operation": "http.response GET /api/v1/auth/devices",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2516.863,
+            "mean_ms": 20.974,
+            "max_ms": 366.168,
+            "sample_count": 120,
+            "p50_ms": 13.791,
+            "p95_ms": 30.634
+          },
+          {
+            "operation": "db.execute.insert.626e6d826387",
+            "count": 720,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1933.617,
+            "mean_ms": 2.686,
+            "max_ms": 352.67,
+            "sample_count": 128,
+            "p50_ms": 2.067,
+            "p95_ms": 7.837
+          },
+          {
+            "operation": "db.execute.select.9271f9b230ab",
+            "count": 720,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1881.978,
+            "mean_ms": 2.614,
+            "max_ms": 21.697,
+            "sample_count": 128,
+            "p50_ms": 1.275,
+            "p95_ms": 4.372
+          },
+          {
+            "operation": "db.execute.select.a1c15d509d70",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1356.469,
+            "mean_ms": 2.261,
+            "max_ms": 13.8,
+            "sample_count": 128,
+            "p50_ms": 0.809,
+            "p95_ms": 4.874
+          },
+          {
+            "operation": "db.execute.update.9cf21fbdf863",
+            "count": 701,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1337.615,
+            "mean_ms": 1.908,
+            "max_ms": 25.359,
+            "sample_count": 128,
+            "p50_ms": 1.386,
+            "p95_ms": 4.573
+          },
+          {
+            "operation": "db.execute.other.ed5cf8d308a9",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1234.501,
+            "mean_ms": 3.429,
+            "max_ms": 49.515,
+            "sample_count": 128,
+            "p50_ms": 2.986,
+            "p95_ms": 9.256
+          },
+          {
+            "operation": "db.execute.select.10b36e0f6787",
+            "count": 255,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1100.631,
+            "mean_ms": 4.316,
+            "max_ms": 288.497,
+            "sample_count": 128,
+            "p50_ms": 2.314,
+            "p95_ms": 11.525
+          },
+          {
+            "operation": "db.execute.select.560e41bd5995",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 941.234,
+            "mean_ms": 7.844,
+            "max_ms": 285.433,
+            "sample_count": 120,
+            "p50_ms": 4.864,
+            "p95_ms": 11.295
+          },
+          {
+            "operation": "db.execute.select.3eaf4b98016c",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 940.717,
+            "mean_ms": 7.839,
+            "max_ms": 356.006,
+            "sample_count": 120,
+            "p50_ms": 4.103,
+            "p95_ms": 10.419
+          },
+          {
+            "operation": "db.execute.select.e71712579582",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 779.451,
+            "mean_ms": 2.165,
+            "max_ms": 27.621,
+            "sample_count": 128,
+            "p50_ms": 1.919,
+            "p95_ms": 6.475
+          },
+          {
+            "operation": "db.execute.update.d1f5e90eda95",
+            "count": 241,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 752.483,
+            "mean_ms": 3.122,
+            "max_ms": 282.417,
+            "sample_count": 128,
+            "p50_ms": 1.225,
+            "p95_ms": 6.23
+          },
+          {
+            "operation": "db.execute.insert.568be50f71fa",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 689.369,
+            "mean_ms": 1.915,
+            "max_ms": 12.983,
+            "sample_count": 128,
+            "p50_ms": 1.08,
+            "p95_ms": 6.382
+          },
+          {
+            "operation": "db.execute.select.953e1010aaec",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 687.121,
+            "mean_ms": 1.909,
+            "max_ms": 18.283,
+            "sample_count": 128,
+            "p50_ms": 1.682,
+            "p95_ms": 5.304
+          },
+          {
+            "operation": "db.execute.insert.fe03c233ed5d",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 658.505,
+            "mean_ms": 1.829,
+            "max_ms": 10.708,
+            "sample_count": 128,
+            "p50_ms": 1.711,
+            "p95_ms": 5.486
+          },
+          {
+            "operation": "db.execute.select.93472c72b02e",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 640.622,
+            "mean_ms": 5.339,
+            "max_ms": 12.902,
+            "sample_count": 120,
+            "p50_ms": 4.631,
+            "p95_ms": 11.064
+          },
+          {
+            "operation": "db.execute.select.750d5dc51539",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 630.278,
+            "mean_ms": 2.626,
+            "max_ms": 18.977,
+            "sample_count": 128,
+            "p50_ms": 1.204,
+            "p95_ms": 8.565
+          },
+          {
+            "operation": "db.execute.select.20cf1fbf3ace",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 574.338,
+            "mean_ms": 2.393,
+            "max_ms": 10.893,
+            "sample_count": 128,
+            "p50_ms": 1.065,
+            "p95_ms": 4.983
+          },
+          {
+            "operation": "db.execute.update.40545b68a54c",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 530.678,
+            "mean_ms": 2.211,
+            "max_ms": 12.669,
+            "sample_count": 128,
+            "p50_ms": 1.71,
+            "p95_ms": 5.58
+          },
+          {
+            "operation": "db.execute.select.7894dc23c98e",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 453.214,
+            "mean_ms": 3.777,
+            "max_ms": 16.751,
+            "sample_count": 120,
+            "p50_ms": 2.734,
+            "p95_ms": 9.296
+          },
+          {
+            "operation": "db.execute.select.f1c67325f2f7",
+            "count": 240,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 450.2,
+            "mean_ms": 1.876,
+            "max_ms": 9.318,
+            "sample_count": 128,
+            "p50_ms": 1.47,
+            "p95_ms": 4.904
+          },
+          {
+            "operation": "db.execute.select.959d77184a7c",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 446.649,
+            "mean_ms": 3.722,
+            "max_ms": 18.548,
+            "sample_count": 120,
+            "p50_ms": 2.716,
+            "p95_ms": 9.447
+          },
+          {
+            "operation": "db.execute.update.c3ee72866fa7",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 425.2,
+            "mean_ms": 3.543,
+            "max_ms": 14.736,
+            "sample_count": 120,
+            "p50_ms": 2.498,
+            "p95_ms": 9.888
+          },
+          {
+            "operation": "db.execute.select.2fadbafbae34",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 397.079,
+            "mean_ms": 3.309,
+            "max_ms": 43.762,
+            "sample_count": 120,
+            "p50_ms": 2.104,
+            "p95_ms": 9.415
+          },
+          {
+            "operation": "db.execute.select.9e53e2d6a45b",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 374.582,
+            "mean_ms": 3.122,
+            "max_ms": 26.668,
+            "sample_count": 120,
+            "p50_ms": 2.495,
+            "p95_ms": 6.127
+          },
+          {
+            "operation": "db.execute.select.161c35b451ad",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 365.378,
+            "mean_ms": 3.045,
+            "max_ms": 6.947,
+            "sample_count": 120,
+            "p50_ms": 2.749,
+            "p95_ms": 6.12
+          },
+          {
+            "operation": "db.execute.select.2233c62cb18b",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 327.759,
+            "mean_ms": 2.731,
+            "max_ms": 19.051,
+            "sample_count": 120,
+            "p50_ms": 1.752,
+            "p95_ms": 7.182
+          },
+          {
+            "operation": "db.execute.select.f193d67edbb7",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 297.878,
+            "mean_ms": 2.482,
+            "max_ms": 12.019,
+            "sample_count": 120,
+            "p50_ms": 1.848,
+            "p95_ms": 6.36
+          },
+          {
+            "operation": "db.execute.select.ee1909126afd",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 291.036,
+            "mean_ms": 2.425,
+            "max_ms": 10.8,
+            "sample_count": 120,
+            "p50_ms": 1.417,
+            "p95_ms": 7.018
+          },
+          {
+            "operation": "db.execute.select.8218f64df255",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 266.248,
+            "mean_ms": 2.219,
+            "max_ms": 21.349,
+            "sample_count": 120,
+            "p50_ms": 1.28,
+            "p95_ms": 5.631
+          },
+          {
+            "operation": "runtime.event_loop_lag",
+            "count": 35,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 227.0,
+            "mean_ms": 6.486,
+            "max_ms": 219.0,
+            "sample_count": 35,
+            "p50_ms": 0.0,
+            "p95_ms": 2.0
+          },
+          {
+            "operation": "db.execute.select.f06666d70a42",
+            "count": 67,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 206.197,
+            "mean_ms": 3.078,
+            "max_ms": 23.233,
+            "sample_count": 67,
+            "p50_ms": 1.885,
+            "p95_ms": 11.774
+          },
+          {
+            "operation": "db.execute.insert.6edc6e99cb2b",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 198.195,
+            "mean_ms": 1.652,
+            "max_ms": 8.153,
+            "sample_count": 120,
+            "p50_ms": 1.076,
+            "p95_ms": 4.531
+          },
+          {
+            "operation": "db.execute.update.65baed7597c3",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 171.791,
+            "mean_ms": 1.432,
+            "max_ms": 8.601,
+            "sample_count": 120,
+            "p50_ms": 0.804,
+            "p95_ms": 4.088
+          },
+          {
+            "operation": "db.execute.select.e51c084f8476",
+            "count": 120,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 165.167,
+            "mean_ms": 1.376,
+            "max_ms": 7.736,
+            "sample_count": 120,
+            "p50_ms": 0.785,
+            "p95_ms": 3.548
+          },
+          {
+            "operation": "http.response GET /fixture/observation",
+            "count": 34,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 151.047,
+            "mean_ms": 4.443,
+            "max_ms": 24.094,
+            "sample_count": 34,
+            "p50_ms": 2.336,
+            "p95_ms": 18.963
+          },
+          {
+            "operation": "db.bulk.wait",
+            "count": 741,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 67.732,
+            "mean_ms": 0.091,
+            "max_ms": 23.285,
+            "sample_count": 128,
+            "p50_ms": 0.003,
+            "p95_ms": 0.004
+          },
+          {
+            "operation": "db.execute.select.f3bacfe5d393",
+            "count": 6,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 32.64,
+            "mean_ms": 5.44,
+            "max_ms": 12.835,
+            "sample_count": 6,
+            "p50_ms": 0.871,
+            "p95_ms": 12.835
+          },
+          {
+            "operation": "db.execute.select.36dece1ac07b",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 17.869,
+            "mean_ms": 8.934,
+            "max_ms": 16.548,
+            "sample_count": 2,
+            "p50_ms": 1.321,
+            "p95_ms": 16.548
+          },
+          {
+            "operation": "db.execute.select.90ecde227f8f",
+            "count": 4,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 14.825,
+            "mean_ms": 3.706,
+            "max_ms": 7.541,
+            "sample_count": 4,
+            "p50_ms": 0.906,
+            "p95_ms": 7.541
+          },
+          {
+            "operation": "db.execute.select.7898712da422",
+            "count": 4,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 12.9,
+            "mean_ms": 3.225,
+            "max_ms": 5.653,
+            "sample_count": 4,
+            "p50_ms": 0.981,
+            "p95_ms": 5.653
+          },
+          {
+            "operation": "db.execute.select.06d2c090c02d",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 12.503,
+            "mean_ms": 6.251,
+            "max_ms": 11.555,
+            "sample_count": 2,
+            "p50_ms": 0.948,
+            "p95_ms": 11.555
+          },
+          {
+            "operation": "db.execute.select.6d092328c431",
+            "count": 2,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 9.462,
+            "mean_ms": 4.731,
+            "max_ms": 7.828,
+            "sample_count": 2,
+            "p50_ms": 1.634,
+            "p95_ms": 7.828
+          },
+          {
+            "operation": "db.execute.select.f3d63e6b509a",
+            "count": 3,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 5.281,
+            "mean_ms": 1.76,
+            "max_ms": 2.14,
+            "sample_count": 3,
+            "p50_ms": 1.846,
+            "p95_ms": 2.14
+          },
+          {
+            "operation": "http.response POST /fixture/measure",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.477,
+            "mean_ms": 1.477,
+            "max_ms": 1.477,
+            "sample_count": 1,
+            "p50_ms": 1.477,
+            "p95_ms": 1.477
+          }
+        ],
+        "recent_slow": [
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2029.018,
+            "uptime_seconds": 34.481,
+            "outcome": "ok",
+            "request_id": "req_4a5513d492044ff798181f814dfeaad8"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2032.353,
+            "uptime_seconds": 34.377,
+            "outcome": "ok",
+            "request_id": "req_2c5c928ef2524adca1d0bbf47304fc17"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2045.897,
+            "uptime_seconds": 33.76,
+            "outcome": "ok",
+            "request_id": "req_18e5e86c3ec642f1ba2870fac6b5e2bc"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.896,
+            "uptime_seconds": 33.594,
+            "outcome": "ok",
+            "request_id": "req_4814d36bff284bde9234af9828727103"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2157.237,
+            "uptime_seconds": 33.189,
+            "outcome": "ok",
+            "request_id": "req_4cda7d7065e6442c9535fe43e024d342"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2022.009,
+            "uptime_seconds": 32.745,
+            "outcome": "ok",
+            "request_id": "req_821549742e5f4f8b936f0663b698557e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 17370.308,
+            "uptime_seconds": 32.452,
+            "outcome": "ok",
+            "request_id": "req_4a5513d492044ff798181f814dfeaad8"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 17298.618,
+            "uptime_seconds": 32.344,
+            "outcome": "ok",
+            "request_id": "req_2c5c928ef2524adca1d0bbf47304fc17"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.175,
+            "uptime_seconds": 32.327,
+            "outcome": "ok",
+            "request_id": "req_dec2a61e8390446ebd1b97384aeec60e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2032.391,
+            "uptime_seconds": 32.176,
+            "outcome": "ok",
+            "request_id": "req_43494542539944a19993b7a54aae40cd"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 16703.487,
+            "uptime_seconds": 31.714,
+            "outcome": "ok",
+            "request_id": "req_18e5e86c3ec642f1ba2870fac6b5e2bc"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2049.69,
+            "uptime_seconds": 31.605,
+            "outcome": "ok",
+            "request_id": "req_eef16538f94e40dd93f90eb605cec568"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 16602.681,
+            "uptime_seconds": 31.569,
+            "outcome": "ok",
+            "request_id": "req_4814d36bff284bde9234af9828727103"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2308.94,
+            "uptime_seconds": 31.457,
+            "outcome": "ok",
+            "request_id": "req_b052e720fb6941dea9a3c284e0fce0b1"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 16107.804,
+            "uptime_seconds": 31.032,
+            "outcome": "ok",
+            "request_id": "req_4cda7d7065e6442c9535fe43e024d342"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2038.776,
+            "uptime_seconds": 30.882,
+            "outcome": "ok",
+            "request_id": "req_e3268ff04d1a4e378fecc58f1d2fd4ac"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 15847.932,
+            "uptime_seconds": 30.723,
+            "outcome": "ok",
+            "request_id": "req_821549742e5f4f8b936f0663b698557e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2063.461,
+            "uptime_seconds": 30.592,
+            "outcome": "ok",
+            "request_id": "req_2b1b00eb6501470db98b32a61542eba0"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 15486.729,
+            "uptime_seconds": 30.304,
+            "outcome": "ok",
+            "request_id": "req_dec2a61e8390446ebd1b97384aeec60e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2044.058,
+            "uptime_seconds": 30.179,
+            "outcome": "ok",
+            "request_id": "req_72bc484aef4740de88eb42a74a8e677a"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 16005.941,
+            "uptime_seconds": 30.144,
+            "outcome": "ok",
+            "request_id": "req_43494542539944a19993b7a54aae40cd"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2044.08,
+            "uptime_seconds": 30.024,
+            "outcome": "ok",
+            "request_id": "req_b9cd0b551ff14833a06b5f9965c84441"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 15551.357,
+            "uptime_seconds": 29.556,
+            "outcome": "ok",
+            "request_id": "req_eef16538f94e40dd93f90eb605cec568"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 278.323,
+            "uptime_seconds": 29.444,
+            "outcome": "ok",
+            "request_id": "req_b052e720fb6941dea9a3c284e0fce0b1",
+            "source": "nebula/v3/storage.py:882:transaction"
+          },
+          {
+            "operation": "db.commit",
+            "duration_ms": 271.337,
+            "uptime_seconds": 29.444,
+            "outcome": "ok",
+            "request_id": "req_b052e720fb6941dea9a3c284e0fce0b1",
+            "source": "nebula/v3/storage.py:882:transaction"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 15199.035,
+            "uptime_seconds": 29.148,
+            "outcome": "ok",
+            "request_id": "req_b052e720fb6941dea9a3c284e0fce0b1"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2056.991,
+            "uptime_seconds": 29.111,
+            "outcome": "ok",
+            "request_id": "req_8b09a7e73fe64a40b348a6cc219c0fb3"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2080.737,
+            "uptime_seconds": 28.88,
+            "outcome": "ok",
+            "request_id": "req_c338c39e401e439aa09cb06fbd28fcef"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 15014.562,
+            "uptime_seconds": 28.843,
+            "outcome": "ok",
+            "request_id": "req_e3268ff04d1a4e378fecc58f1d2fd4ac"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 14806.966,
+            "uptime_seconds": 28.528,
+            "outcome": "ok",
+            "request_id": "req_2b1b00eb6501470db98b32a61542eba0"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2043.035,
+            "uptime_seconds": 28.517,
+            "outcome": "ok",
+            "request_id": "req_5e763b7300ba4ad2a9ee3e027fe3f3a7"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.897,
+            "uptime_seconds": 28.354,
+            "outcome": "ok",
+            "request_id": "req_99d6ff3146264ac5b2e4835d1496cfa7"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 14530.678,
+            "uptime_seconds": 28.135,
+            "outcome": "ok",
+            "request_id": "req_72bc484aef4740de88eb42a74a8e677a"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 14455.289,
+            "uptime_seconds": 27.98,
+            "outcome": "ok",
+            "request_id": "req_b9cd0b551ff14833a06b5f9965c84441"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2113.668,
+            "uptime_seconds": 27.881,
+            "outcome": "ok",
+            "request_id": "req_b274eef3d8e94c1bbeb799eb1ad31c0e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2048.385,
+            "uptime_seconds": 27.679,
+            "outcome": "ok",
+            "request_id": "req_c581210ae52848ca88df9ecc7e0cbae2"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 13632.605,
+            "uptime_seconds": 27.054,
+            "outcome": "ok",
+            "request_id": "req_8b09a7e73fe64a40b348a6cc219c0fb3"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2063.323,
+            "uptime_seconds": 26.858,
+            "outcome": "ok",
+            "request_id": "req_e19aafd87a87497f89208c35f454bdf5"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 13500.942,
+            "uptime_seconds": 26.799,
+            "outcome": "ok",
+            "request_id": "req_c338c39e401e439aa09cb06fbd28fcef"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2021.567,
+            "uptime_seconds": 26.616,
+            "outcome": "ok",
+            "request_id": "req_4ea1588844d44a72ab9595386d5d800f"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 13309.526,
+            "uptime_seconds": 26.474,
+            "outcome": "ok",
+            "request_id": "req_5e763b7300ba4ad2a9ee3e027fe3f3a7"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2020.721,
+            "uptime_seconds": 26.372,
+            "outcome": "ok",
+            "request_id": "req_bc1240858a2b4ba68681728b3a9e4c18"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 13287.906,
+            "uptime_seconds": 26.329,
+            "outcome": "ok",
+            "request_id": "req_99d6ff3146264ac5b2e4835d1496cfa7"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2019.449,
+            "uptime_seconds": 26.216,
+            "outcome": "ok",
+            "request_id": "req_54b9bde4bddc4cb2bdda8e5c23f62a99"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 12811.086,
+            "uptime_seconds": 25.767,
+            "outcome": "ok",
+            "request_id": "req_b274eef3d8e94c1bbeb799eb1ad31c0e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2019.122,
+            "uptime_seconds": 25.664,
+            "outcome": "ok",
+            "request_id": "req_8dbfe08ed46f482bac32e2eff07d9a41"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 12904.574,
+            "uptime_seconds": 25.631,
+            "outcome": "ok",
+            "request_id": "req_c581210ae52848ca88df9ecc7e0cbae2"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2026.782,
+            "uptime_seconds": 25.524,
+            "outcome": "ok",
+            "request_id": "req_d621c7e553f84b90bd31b0b0910e3be9"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 12168.315,
+            "uptime_seconds": 24.794,
+            "outcome": "ok",
+            "request_id": "req_e19aafd87a87497f89208c35f454bdf5"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2025.481,
+            "uptime_seconds": 24.688,
+            "outcome": "ok",
+            "request_id": "req_061607caa1834aa4b7ab87748631bdb2"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 12062.293,
+            "uptime_seconds": 24.594,
+            "outcome": "ok",
+            "request_id": "req_4ea1588844d44a72ab9595386d5d800f"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2018.669,
+            "uptime_seconds": 24.491,
+            "outcome": "ok",
+            "request_id": "req_38ae5a4818fc458ea8df2733e3be7e55"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 12051.315,
+            "uptime_seconds": 24.351,
+            "outcome": "ok",
+            "request_id": "req_bc1240858a2b4ba68681728b3a9e4c18"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2016.552,
+            "uptime_seconds": 24.252,
+            "outcome": "ok",
+            "request_id": "req_e8a4488444bb4b31bad4cd3a00970b08"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 12007.68,
+            "uptime_seconds": 24.197,
+            "outcome": "ok",
+            "request_id": "req_54b9bde4bddc4cb2bdda8e5c23f62a99"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2020.712,
+            "uptime_seconds": 24.096,
+            "outcome": "ok",
+            "request_id": "req_96c25aab795c4dd48f49aba5115939b7"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 11646.712,
+            "uptime_seconds": 23.645,
+            "outcome": "ok",
+            "request_id": "req_8dbfe08ed46f482bac32e2eff07d9a41"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2021.988,
+            "uptime_seconds": 23.52,
+            "outcome": "ok",
+            "request_id": "req_b44f15588d2744678fb8dd672b23d388"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 11625.63,
+            "uptime_seconds": 23.498,
+            "outcome": "ok",
+            "request_id": "req_d621c7e553f84b90bd31b0b0910e3be9"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.474,
+            "uptime_seconds": 23.399,
+            "outcome": "ok",
+            "request_id": "req_04a5d5d3e14242da9ed2b29bc3fa3a21"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 10947.846,
+            "uptime_seconds": 22.663,
+            "outcome": "ok",
+            "request_id": "req_061607caa1834aa4b7ab87748631bdb2"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2022.453,
+            "uptime_seconds": 22.559,
+            "outcome": "ok",
+            "request_id": "req_9e4e4964630c4cff88568804412cb319"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 10882.868,
+            "uptime_seconds": 22.473,
+            "outcome": "ok",
+            "request_id": "req_38ae5a4818fc458ea8df2733e3be7e55"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.097,
+            "uptime_seconds": 22.363,
+            "outcome": "ok",
+            "request_id": "req_68ee235e0cfe46068b01f8d891348d0c"
+          }
+        ]
+      },
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "worker_exit_code": 0,
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+        "runtime_source_sha256": "c7447924aa7ad4fa2a118758ae2e6fac5eaaf3f04927060730dc2279945b411b",
+        "harness_sha256": "cfeba02a16650bab1062456c11de1480fa49dccecea6a1540a631dd5c9c58496",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system",
+        "event_loop": "uvloop.Loop"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      }
+    },
+    {
+      "label": "candidate-overload-max",
+      "pool_size": 40,
+      "offered_groups_per_second": 16.0,
+      "offered_requests_per_kind": 180,
+      "elapsed_seconds": 62.51018843000202,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 180,
+          "p50_ms": 24182.218,
+          "p95_ms": 48833.103,
+          "max_ms": 53954.357
+        },
+        "admission": {
+          "n": 180,
+          "p50_ms": 24080.34,
+          "p95_ms": 48731.24,
+          "max_ms": 53855.27
+        },
+        "first_token": {
+          "n": 180,
+          "p50_ms": 24120.285,
+          "p95_ms": 48775.097,
+          "max_ms": 53892.616
+        },
+        "listing": {
+          "n": 180,
+          "p50_ms": 2664.335,
+          "p95_ms": 4534.977,
+          "max_ms": 5440.532
+        },
+        "auth": {
+          "n": 180,
+          "p50_ms": 288.809,
+          "p95_ms": 979.313,
+          "max_ms": 2524.317
+        },
+        "tool": {
+          "n": 180,
+          "p50_ms": 726.086,
+          "p95_ms": 1231.442,
+          "max_ms": 2798.7
+        },
+        "issue_lag": {
+          "n": 180,
+          "p50_ms": 0.832,
+          "p95_ms": 1.816,
+          "max_ms": 40.282
+        }
+      },
+      "error_count": 0,
+      "rejections": {
+        "chat": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "listing": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "auth": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "tool": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        }
+      },
+      "errors": [],
+      "final_observation": {
+        "host": {
+          "cpu_capacity": 4.0,
+          "cpu_ratio": 0.22294921875,
+          "memory_available_ratio": 0.4627251625061035,
+          "busy": false,
+          "reason": null,
+          "measurements_available": true,
+          "sample_age_seconds": 0.0
+        },
+        "host_waiters": 0,
+        "host_starts_in_epoch": 2,
+        "host_epoch": 34559.47960093,
+        "pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 40
+          },
+          "configured_size": 40,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 40,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "load_average": "1.11 0.78 0.56 2/233 73142",
+        "event_loop": "uvloop.Loop"
+      },
+      "database_telemetry": {
+        "schema": "nebula.performance/v1",
+        "database_pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 40
+          },
+          "configured_size": 40,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 40,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "uptime_seconds": 62.651,
+        "limits": {
+          "operations": 513,
+          "samples_per_operation": 128,
+          "slow_records": 64,
+          "slow_ms": 250
+        },
+        "overflow_measurements": 0,
+        "operations": [
+          {
+            "operation": "http.stream POST /api/v1/chat/completions",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4833298.021,
+            "mean_ms": 26851.656,
+            "max_ms": 53804.827,
+            "sample_count": 128,
+            "p50_ms": 32354.539,
+            "p95_ms": 50452.215
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3594493.736,
+            "mean_ms": 19969.41,
+            "max_ms": 46098.948,
+            "sample_count": 128,
+            "p50_ms": 24019.256,
+            "p95_ms": 44038.344
+          },
+          {
+            "operation": "http.response POST /api/v1/chat/completions",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 856013.556,
+            "mean_ms": 4755.631,
+            "max_ms": 8962.071,
+            "sample_count": 128,
+            "p50_ms": 5143.99,
+            "p95_ms": 7363.186
+          },
+          {
+            "operation": "db.bulk.wait",
+            "count": 1122,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 476784.178,
+            "mean_ms": 424.941,
+            "max_ms": 4505.717,
+            "sample_count": 128,
+            "p50_ms": 0.003,
+            "p95_ms": 0.004
+          },
+          {
+            "operation": "http.response GET /api/v1/harness-sessions",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 426337.197,
+            "mean_ms": 2368.54,
+            "max_ms": 5363.234,
+            "sample_count": 128,
+            "p50_ms": 3159.498,
+            "p95_ms": 4515.413
+          },
+          {
+            "operation": "db.session",
+            "count": 11844,
+            "errors": 180,
+            "cancelled": 0,
+            "total_ms": 418112.642,
+            "mean_ms": 35.302,
+            "max_ms": 2560.329,
+            "sample_count": 128,
+            "p50_ms": 2.268,
+            "p95_ms": 8.089
+          },
+          {
+            "operation": "db.pool.acquire",
+            "count": 12384,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 391843.177,
+            "mean_ms": 31.641,
+            "max_ms": 2666.668,
+            "sample_count": 128,
+            "p50_ms": 0.619,
+            "p95_ms": 1.455
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 241607.785,
+            "mean_ms": 1342.265,
+            "max_ms": 2438.422,
+            "sample_count": 128,
+            "p50_ms": 2022.548,
+            "p95_ms": 2039.596
+          },
+          {
+            "operation": "db.execute.select.2fadbafbae34",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 220809.997,
+            "mean_ms": 1226.722,
+            "max_ms": 2484.928,
+            "sample_count": 128,
+            "p50_ms": 1336.66,
+            "p95_ms": 2142.342
+          },
+          {
+            "operation": "http.response POST /fixture/tool",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 113314.084,
+            "mean_ms": 629.523,
+            "max_ms": 2739.106,
+            "sample_count": 128,
+            "p50_ms": 550.947,
+            "p95_ms": 1504.529
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "count": 7376,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 57200.211,
+            "mean_ms": 7.755,
+            "max_ms": 464.268,
+            "sample_count": 128,
+            "p50_ms": 0.936,
+            "p95_ms": 2.203
+          },
+          {
+            "operation": "db.commit",
+            "count": 11664,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 54410.718,
+            "mean_ms": 4.665,
+            "max_ms": 392.982,
+            "sample_count": 128,
+            "p50_ms": 0.457,
+            "p95_ms": 2.075
+          },
+          {
+            "operation": "http.response GET /api/v1/auth/devices",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 43077.651,
+            "mean_ms": 239.32,
+            "max_ms": 2421.913,
+            "sample_count": 128,
+            "p50_ms": 187.283,
+            "p95_ms": 835.355
+          },
+          {
+            "operation": "db.execute.other.ed5cf8d308a9",
+            "count": 540,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 14915.05,
+            "mean_ms": 27.62,
+            "max_ms": 402.421,
+            "sample_count": 128,
+            "p50_ms": 20.726,
+            "p95_ms": 35.032
+          },
+          {
+            "operation": "db.execute.insert.626e6d826387",
+            "count": 1080,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 12051.016,
+            "mean_ms": 11.158,
+            "max_ms": 361.608,
+            "sample_count": 128,
+            "p50_ms": 0.683,
+            "p95_ms": 1.999
+          },
+          {
+            "operation": "db.execute.select.9271f9b230ab",
+            "count": 1080,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 10435.578,
+            "mean_ms": 9.663,
+            "max_ms": 464.304,
+            "sample_count": 128,
+            "p50_ms": 0.969,
+            "p95_ms": 2.83
+          },
+          {
+            "operation": "db.execute.select.e71712579582",
+            "count": 540,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 7993.587,
+            "mean_ms": 14.803,
+            "max_ms": 363.704,
+            "sample_count": 128,
+            "p50_ms": 10.426,
+            "p95_ms": 18.248
+          },
+          {
+            "operation": "db.execute.select.953e1010aaec",
+            "count": 540,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 7325.067,
+            "mean_ms": 13.565,
+            "max_ms": 349.631,
+            "sample_count": 128,
+            "p50_ms": 9.742,
+            "p95_ms": 20.632
+          },
+          {
+            "operation": "db.execute.insert.fe03c233ed5d",
+            "count": 540,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 6776.713,
+            "mean_ms": 12.549,
+            "max_ms": 58.521,
+            "sample_count": 128,
+            "p50_ms": 9.778,
+            "p95_ms": 18.049
+          },
+          {
+            "operation": "db.execute.select.a1c15d509d70",
+            "count": 900,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 5409.743,
+            "mean_ms": 6.011,
+            "max_ms": 464.238,
+            "sample_count": 128,
+            "p50_ms": 0.681,
+            "p95_ms": 2.957
+          },
+          {
+            "operation": "db.execute.select.560e41bd5995",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 5249.589,
+            "mean_ms": 29.164,
+            "max_ms": 375.961,
+            "sample_count": 128,
+            "p50_ms": 22.675,
+            "p95_ms": 43.292
+          },
+          {
+            "operation": "db.execute.select.f1c67325f2f7",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4841.269,
+            "mean_ms": 13.448,
+            "max_ms": 387.758,
+            "sample_count": 128,
+            "p50_ms": 10.293,
+            "p95_ms": 22.247
+          },
+          {
+            "operation": "db.execute.select.959d77184a7c",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4821.878,
+            "mean_ms": 26.788,
+            "max_ms": 398.775,
+            "sample_count": 128,
+            "p50_ms": 21.689,
+            "p95_ms": 35.934
+          },
+          {
+            "operation": "db.execute.select.7894dc23c98e",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4659.913,
+            "mean_ms": 25.888,
+            "max_ms": 361.771,
+            "sample_count": 128,
+            "p50_ms": 22.697,
+            "p95_ms": 34.476
+          },
+          {
+            "operation": "db.execute.update.40545b68a54c",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4609.334,
+            "mean_ms": 12.804,
+            "max_ms": 45.55,
+            "sample_count": 128,
+            "p50_ms": 11.08,
+            "p95_ms": 22.551
+          },
+          {
+            "operation": "db.execute.select.750d5dc51539",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3915.248,
+            "mean_ms": 10.876,
+            "max_ms": 73.334,
+            "sample_count": 128,
+            "p50_ms": 0.793,
+            "p95_ms": 2.777
+          },
+          {
+            "operation": "db.execute.select.93472c72b02e",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3344.317,
+            "mean_ms": 18.58,
+            "max_ms": 55.184,
+            "sample_count": 128,
+            "p50_ms": 15.966,
+            "p95_ms": 35.45
+          },
+          {
+            "operation": "db.execute.select.10b36e0f6787",
+            "count": 346,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3340.195,
+            "mean_ms": 9.654,
+            "max_ms": 360.679,
+            "sample_count": 128,
+            "p50_ms": 1.655,
+            "p95_ms": 5.219
+          },
+          {
+            "operation": "db.execute.insert.568be50f71fa",
+            "count": 540,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3307.542,
+            "mean_ms": 6.125,
+            "max_ms": 396.588,
+            "sample_count": 128,
+            "p50_ms": 0.897,
+            "p95_ms": 1.841
+          },
+          {
+            "operation": "db.execute.select.3eaf4b98016c",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3266.023,
+            "mean_ms": 18.145,
+            "max_ms": 44.032,
+            "sample_count": 128,
+            "p50_ms": 15.965,
+            "p95_ms": 31.093
+          },
+          {
+            "operation": "db.execute.update.9cf21fbdf863",
+            "count": 988,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2538.385,
+            "mean_ms": 2.569,
+            "max_ms": 26.652,
+            "sample_count": 128,
+            "p50_ms": 0.987,
+            "p95_ms": 1.875
+          },
+          {
+            "operation": "db.execute.insert.6edc6e99cb2b",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1823.815,
+            "mean_ms": 10.132,
+            "max_ms": 309.735,
+            "sample_count": 128,
+            "p50_ms": 6.771,
+            "p95_ms": 19.429
+          },
+          {
+            "operation": "db.execute.select.161c35b451ad",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1775.826,
+            "mean_ms": 9.866,
+            "max_ms": 32.718,
+            "sample_count": 128,
+            "p50_ms": 7.686,
+            "p95_ms": 19.205
+          },
+          {
+            "operation": "db.execute.select.9e53e2d6a45b",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1732.321,
+            "mean_ms": 9.624,
+            "max_ms": 60.318,
+            "sample_count": 128,
+            "p50_ms": 7.42,
+            "p95_ms": 17.95
+          },
+          {
+            "operation": "db.execute.select.20cf1fbf3ace",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1316.733,
+            "mean_ms": 3.658,
+            "max_ms": 30.794,
+            "sample_count": 128,
+            "p50_ms": 0.906,
+            "p95_ms": 2.007
+          },
+          {
+            "operation": "db.execute.update.d1f5e90eda95",
+            "count": 360,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1078.331,
+            "mean_ms": 2.995,
+            "max_ms": 24.936,
+            "sample_count": 128,
+            "p50_ms": 1.014,
+            "p95_ms": 2.233
+          },
+          {
+            "operation": "http.response GET /fixture/observation",
+            "count": 60,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1078.061,
+            "mean_ms": 17.968,
+            "max_ms": 380.25,
+            "sample_count": 60,
+            "p50_ms": 3.805,
+            "p95_ms": 54.66
+          },
+          {
+            "operation": "db.execute.update.c3ee72866fa7",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 933.134,
+            "mean_ms": 5.184,
+            "max_ms": 34.758,
+            "sample_count": 128,
+            "p50_ms": 2.05,
+            "p95_ms": 4.173
+          },
+          {
+            "operation": "db.execute.select.8218f64df255",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 744.919,
+            "mean_ms": 4.138,
+            "max_ms": 36.461,
+            "sample_count": 128,
+            "p50_ms": 0.856,
+            "p95_ms": 3.206
+          },
+          {
+            "operation": "db.execute.select.f06666d70a42",
+            "count": 116,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 711.346,
+            "mean_ms": 6.132,
+            "max_ms": 42.794,
+            "sample_count": 116,
+            "p50_ms": 1.685,
+            "p95_ms": 29.157
+          },
+          {
+            "operation": "db.execute.select.f193d67edbb7",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 698.337,
+            "mean_ms": 3.88,
+            "max_ms": 32.615,
+            "sample_count": 128,
+            "p50_ms": 0.99,
+            "p95_ms": 2.916
+          },
+          {
+            "operation": "db.execute.select.ee1909126afd",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 691.13,
+            "mean_ms": 3.84,
+            "max_ms": 35.855,
+            "sample_count": 128,
+            "p50_ms": 1.068,
+            "p95_ms": 2.94
+          },
+          {
+            "operation": "db.execute.select.2233c62cb18b",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 652.286,
+            "mean_ms": 3.624,
+            "max_ms": 35.001,
+            "sample_count": 128,
+            "p50_ms": 0.996,
+            "p95_ms": 3.85
+          },
+          {
+            "operation": "db.execute.update.65baed7597c3",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 436.236,
+            "mean_ms": 2.424,
+            "max_ms": 27.094,
+            "sample_count": 128,
+            "p50_ms": 0.526,
+            "p95_ms": 1.901
+          },
+          {
+            "operation": "runtime.event_loop_lag",
+            "count": 62,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 419.0,
+            "mean_ms": 6.758,
+            "max_ms": 209.0,
+            "sample_count": 62,
+            "p50_ms": 0.0,
+            "p95_ms": 8.0
+          },
+          {
+            "operation": "db.execute.select.e51c084f8476",
+            "count": 180,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 385.951,
+            "mean_ms": 2.144,
+            "max_ms": 20.781,
+            "sample_count": 128,
+            "p50_ms": 0.594,
+            "p95_ms": 1.53
+          },
+          {
+            "operation": "db.execute.select.f3bacfe5d393",
+            "count": 12,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 87.631,
+            "mean_ms": 7.303,
+            "max_ms": 47.542,
+            "sample_count": 12,
+            "p50_ms": 0.83,
+            "p95_ms": 47.542
+          },
+          {
+            "operation": "db.execute.select.90ecde227f8f",
+            "count": 8,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 41.982,
+            "mean_ms": 5.248,
+            "max_ms": 26.066,
+            "sample_count": 8,
+            "p50_ms": 0.822,
+            "p95_ms": 26.066
+          },
+          {
+            "operation": "db.execute.select.36dece1ac07b",
+            "count": 4,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 30.032,
+            "mean_ms": 7.508,
+            "max_ms": 20.005,
+            "sample_count": 4,
+            "p50_ms": 1.079,
+            "p95_ms": 20.005
+          },
+          {
+            "operation": "db.execute.select.7898712da422",
+            "count": 8,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 25.943,
+            "mean_ms": 3.243,
+            "max_ms": 12.273,
+            "sample_count": 8,
+            "p50_ms": 0.711,
+            "p95_ms": 12.273
+          },
+          {
+            "operation": "db.execute.select.6d092328c431",
+            "count": 4,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 25.935,
+            "mean_ms": 6.484,
+            "max_ms": 18.968,
+            "sample_count": 4,
+            "p50_ms": 2.333,
+            "p95_ms": 18.968
+          },
+          {
+            "operation": "db.execute.select.06d2c090c02d",
+            "count": 4,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 10.166,
+            "mean_ms": 2.541,
+            "max_ms": 6.9,
+            "sample_count": 4,
+            "p50_ms": 1.158,
+            "p95_ms": 6.9
+          },
+          {
+            "operation": "db.execute.select.f3d63e6b509a",
+            "count": 5,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 10.127,
+            "mean_ms": 2.025,
+            "max_ms": 4.727,
+            "sample_count": 5,
+            "p50_ms": 1.358,
+            "p95_ms": 4.727
+          },
+          {
+            "operation": "http.response POST /fixture/measure",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.517,
+            "mean_ms": 1.517,
+            "max_ms": 1.517,
+            "sample_count": 1,
+            "p50_ms": 1.517,
+            "p95_ms": 1.517
+          },
+          {
+            "operation": "db.execute.select.ee8100c27542",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1.223,
+            "mean_ms": 1.223,
+            "max_ms": 1.223,
+            "sample_count": 1,
+            "p50_ms": 1.223,
+            "p95_ms": 1.223
+          }
+        ],
+        "recent_slow": [
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.108,
+            "uptime_seconds": 62.385,
+            "outcome": "ok",
+            "request_id": "req_053231d75cc54b8eaedcab7699afc79c"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2020.882,
+            "uptime_seconds": 61.908,
+            "outcome": "ok",
+            "request_id": "req_046837e75af0436da670f29ca022a2cf"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2022.704,
+            "uptime_seconds": 61.543,
+            "outcome": "ok",
+            "request_id": "req_87200d36f2a245bfb30079701125fa7a"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2026.963,
+            "uptime_seconds": 61.323,
+            "outcome": "ok",
+            "request_id": "req_410173a5efdc45edb8cdc97c03d76de3"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.388,
+            "uptime_seconds": 60.768,
+            "outcome": "ok",
+            "request_id": "req_4023cc99c48e4ac4bcf3df36e37de97a"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2027.461,
+            "uptime_seconds": 60.607,
+            "outcome": "ok",
+            "request_id": "req_c5826000173848eb96c0e095ebf1793a"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 46098.948,
+            "uptime_seconds": 60.36,
+            "outcome": "ok",
+            "request_id": "req_053231d75cc54b8eaedcab7699afc79c"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2018.332,
+            "uptime_seconds": 60.25,
+            "outcome": "ok",
+            "request_id": "req_2a9c6439e43c484aa0971e3d957d40a0"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 45644.39,
+            "uptime_seconds": 59.887,
+            "outcome": "ok",
+            "request_id": "req_046837e75af0436da670f29ca022a2cf"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2019.641,
+            "uptime_seconds": 59.781,
+            "outcome": "ok",
+            "request_id": "req_8c07102264ae431f889bee455e653a5b"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 45297.43,
+            "uptime_seconds": 59.52,
+            "outcome": "ok",
+            "request_id": "req_87200d36f2a245bfb30079701125fa7a"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2020.941,
+            "uptime_seconds": 59.42,
+            "outcome": "ok",
+            "request_id": "req_9bea5e8f1448475a8c9b5fedde6c83ac"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 45082.047,
+            "uptime_seconds": 59.296,
+            "outcome": "ok",
+            "request_id": "req_410173a5efdc45edb8cdc97c03d76de3"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.699,
+            "uptime_seconds": 59.194,
+            "outcome": "ok",
+            "request_id": "req_b864ba363da24fcc84c1faf0dab7bdac"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 44533.334,
+            "uptime_seconds": 58.745,
+            "outcome": "ok",
+            "request_id": "req_4023cc99c48e4ac4bcf3df36e37de97a"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2021.385,
+            "uptime_seconds": 58.646,
+            "outcome": "ok",
+            "request_id": "req_66d88c2cfbb1421dbb2169dcc5eca753"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 44379.876,
+            "uptime_seconds": 58.579,
+            "outcome": "ok",
+            "request_id": "req_c5826000173848eb96c0e095ebf1793a"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2019.401,
+            "uptime_seconds": 58.465,
+            "outcome": "ok",
+            "request_id": "req_030f126c8db24db4911a0da776298e33"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 44038.344,
+            "uptime_seconds": 58.231,
+            "outcome": "ok",
+            "request_id": "req_2a9c6439e43c484aa0971e3d957d40a0"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2018.754,
+            "uptime_seconds": 58.13,
+            "outcome": "ok",
+            "request_id": "req_55d0f892a978471e8817c21dc6cff1b3"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 43570.334,
+            "uptime_seconds": 57.761,
+            "outcome": "ok",
+            "request_id": "req_8c07102264ae431f889bee455e653a5b"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2020.788,
+            "uptime_seconds": 57.648,
+            "outcome": "ok",
+            "request_id": "req_3edd4edeea6b48dba76586259da85574"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 43212.595,
+            "uptime_seconds": 57.399,
+            "outcome": "ok",
+            "request_id": "req_9bea5e8f1448475a8c9b5fedde6c83ac"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.857,
+            "uptime_seconds": 57.289,
+            "outcome": "ok",
+            "request_id": "req_7a602d9a76f541d98738989d2545bba6"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 42993.617,
+            "uptime_seconds": 57.17,
+            "outcome": "ok",
+            "request_id": "req_b864ba363da24fcc84c1faf0dab7bdac"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2329.693,
+            "uptime_seconds": 57.072,
+            "outcome": "ok",
+            "request_id": "req_2ac8012442f047c486d46be094d24a76"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 42462.674,
+            "uptime_seconds": 56.625,
+            "outcome": "ok",
+            "request_id": "req_66d88c2cfbb1421dbb2169dcc5eca753"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2025.489,
+            "uptime_seconds": 56.521,
+            "outcome": "ok",
+            "request_id": "req_0eda26a0da724a0cb2c6cb2371a8b38f"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 42297.535,
+            "uptime_seconds": 56.446,
+            "outcome": "ok",
+            "request_id": "req_030f126c8db24db4911a0da776298e33"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2021.416,
+            "uptime_seconds": 56.35,
+            "outcome": "ok",
+            "request_id": "req_16a4a8b2333f49d6b9c7db1c0ca3225e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 41967.803,
+            "uptime_seconds": 56.112,
+            "outcome": "ok",
+            "request_id": "req_55d0f892a978471e8817c21dc6cff1b3"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 315.687,
+            "uptime_seconds": 56.065,
+            "outcome": "ok",
+            "request_id": "req_517d4ae8ad0b43b4b005e72dc7b077e9",
+            "source": "nebula/v3/storage.py:882:transaction"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 311.793,
+            "uptime_seconds": 56.062,
+            "outcome": "ok",
+            "request_id": "req_517d4ae8ad0b43b4b005e72dc7b077e9",
+            "source": "nebula/v3/chat_turn_ledger.py:523:_rows_after"
+          },
+          {
+            "operation": "db.execute.select.a1c15d509d70",
+            "duration_ms": 310.182,
+            "uptime_seconds": 56.061,
+            "outcome": "ok",
+            "request_id": "req_517d4ae8ad0b43b4b005e72dc7b077e9"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2021.387,
+            "uptime_seconds": 55.697,
+            "outcome": "ok",
+            "request_id": "req_517d4ae8ad0b43b4b005e72dc7b077e9"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 41506.489,
+            "uptime_seconds": 55.627,
+            "outcome": "ok",
+            "request_id": "req_3edd4edeea6b48dba76586259da85574"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2046.973,
+            "uptime_seconds": 55.522,
+            "outcome": "ok",
+            "request_id": "req_845963a3ba1c441abc36a3b0db941a1c"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 41148.765,
+            "uptime_seconds": 55.265,
+            "outcome": "ok",
+            "request_id": "req_7a602d9a76f541d98738989d2545bba6"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2022.612,
+            "uptime_seconds": 55.16,
+            "outcome": "ok",
+            "request_id": "req_2c6c2b3fcf6948369dd94cb8002df7c9"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 40632.689,
+            "uptime_seconds": 54.742,
+            "outcome": "ok",
+            "request_id": "req_2ac8012442f047c486d46be094d24a76"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.833,
+            "uptime_seconds": 54.633,
+            "outcome": "ok",
+            "request_id": "req_2e840b9822d748a7972785e0443e1c93"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 40390.791,
+            "uptime_seconds": 54.495,
+            "outcome": "ok",
+            "request_id": "req_0eda26a0da724a0cb2c6cb2371a8b38f"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2022.062,
+            "uptime_seconds": 54.356,
+            "outcome": "ok",
+            "request_id": "req_88a1636c502e464b8506df8ca3cb467e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 40233.322,
+            "uptime_seconds": 54.328,
+            "outcome": "ok",
+            "request_id": "req_16a4a8b2333f49d6b9c7db1c0ca3225e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.63,
+            "uptime_seconds": 54.173,
+            "outcome": "ok",
+            "request_id": "req_2296d5f17f7f44a3b4a2904ab3cb375e"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 39586.921,
+            "uptime_seconds": 53.675,
+            "outcome": "ok",
+            "request_id": "req_517d4ae8ad0b43b4b005e72dc7b077e9"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2042.882,
+            "uptime_seconds": 53.501,
+            "outcome": "ok",
+            "request_id": "req_f5c5da3be9514597964cd8a473fdbfed"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 39397.049,
+            "uptime_seconds": 53.475,
+            "outcome": "ok",
+            "request_id": "req_845963a3ba1c441abc36a3b0db941a1c"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.73,
+            "uptime_seconds": 53.334,
+            "outcome": "ok",
+            "request_id": "req_e4602b8c4e4c4ba0b9bee60b532f9fc7"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 39061.131,
+            "uptime_seconds": 53.137,
+            "outcome": "ok",
+            "request_id": "req_2c6c2b3fcf6948369dd94cb8002df7c9"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2025.497,
+            "uptime_seconds": 53.001,
+            "outcome": "ok",
+            "request_id": "req_6ea5e3108bf94daabe5cacc090652fa2"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 38535.689,
+            "uptime_seconds": 52.609,
+            "outcome": "ok",
+            "request_id": "req_2e840b9822d748a7972785e0443e1c93"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2039.596,
+            "uptime_seconds": 52.496,
+            "outcome": "ok",
+            "request_id": "req_458517397ede4203a29fe93b0ac47714"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 38286.954,
+            "uptime_seconds": 52.333,
+            "outcome": "ok",
+            "request_id": "req_88a1636c502e464b8506df8ca3cb467e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2024.925,
+            "uptime_seconds": 52.228,
+            "outcome": "ok",
+            "request_id": "req_e6798501316d43bcbc22079b1e03e14f"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 38109.666,
+            "uptime_seconds": 52.149,
+            "outcome": "ok",
+            "request_id": "req_2296d5f17f7f44a3b4a2904ab3cb375e"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.825,
+            "uptime_seconds": 51.988,
+            "outcome": "ok",
+            "request_id": "req_9a08b2f5fe3f4f6caf0693b6497e883a"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 37426.026,
+            "uptime_seconds": 51.458,
+            "outcome": "ok",
+            "request_id": "req_f5c5da3be9514597964cd8a473fdbfed"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2025.313,
+            "uptime_seconds": 51.333,
+            "outcome": "ok",
+            "request_id": "req_ec9350dbcc2f44fbb9ddc8db7c764ff7"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 37278.988,
+            "uptime_seconds": 51.309,
+            "outcome": "ok",
+            "request_id": "req_e4602b8c4e4c4ba0b9bee60b532f9fc7"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2020.837,
+            "uptime_seconds": 51.174,
+            "outcome": "ok",
+            "request_id": "req_ed829ecc30e64b76b3f60c3f188ce9c2"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 36947.746,
+            "uptime_seconds": 50.975,
+            "outcome": "ok",
+            "request_id": "req_6ea5e3108bf94daabe5cacc090652fa2"
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "duration_ms": 2023.334,
+            "uptime_seconds": 50.845,
+            "outcome": "ok",
+            "request_id": "req_f58cde39981f4ad39ad4121b974426d5"
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "duration_ms": 36430.674,
+            "uptime_seconds": 50.456,
+            "outcome": "ok",
+            "request_id": "req_458517397ede4203a29fe93b0ac47714"
+          }
+        ]
+      },
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "worker_exit_code": 0,
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+        "runtime_source_sha256": "c7447924aa7ad4fa2a118758ae2e6fac5eaaf3f04927060730dc2279945b411b",
+        "harness_sha256": "cfeba02a16650bab1062456c11de1480fa49dccecea6a1540a631dd5c9c58496",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system",
+        "event_loop": "uvloop.Loop"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "stored_chat_turns": {
+        "complete": 181
+      },
+      "stored_tool_calls": {
+        "complete": 181
+      }
+    },
+    {
+      "label": "candidate-soak-max",
+      "pool_size": 40,
+      "offered_groups_per_second": 2.0,
+      "offered_requests_per_kind": 600,
+      "elapsed_seconds": 299.6672843480046,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 600,
+          "p50_ms": 185.221,
+          "p95_ms": 256.664,
+          "max_ms": 698.484
+        },
+        "admission": {
+          "n": 600,
+          "p50_ms": 92.342,
+          "p95_ms": 130.814,
+          "max_ms": 533.626
+        },
+        "first_token": {
+          "n": 600,
+          "p50_ms": 129.149,
+          "p95_ms": 174.457,
+          "max_ms": 587.866
+        },
+        "listing": {
+          "n": 600,
+          "p50_ms": 27.738,
+          "p95_ms": 42.392,
+          "max_ms": 443.026
+        },
+        "auth": {
+          "n": 600,
+          "p50_ms": 16.697,
+          "p95_ms": 26.594,
+          "max_ms": 425.455
+        },
+        "tool": {
+          "n": 600,
+          "p50_ms": 49.062,
+          "p95_ms": 77.17,
+          "max_ms": 467.188
+        },
+        "issue_lag": {
+          "n": 600,
+          "p50_ms": 1.045,
+          "p95_ms": 2.136,
+          "max_ms": 4.976
+        }
+      },
+      "error_count": 0,
+      "rejections": {
+        "chat": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "listing": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "auth": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        },
+        "tool": {
+          "count": 0,
+          "statuses": {},
+          "latency": {
+            "n": 0,
+            "p50_ms": null,
+            "p95_ms": null,
+            "max_ms": null
+          }
+        }
+      },
+      "errors": [],
+      "final_observation": {
+        "host": {
+          "cpu_capacity": 4.0,
+          "cpu_ratio": 0.15382991745185223,
+          "memory_available_ratio": 0.4694061279296875,
+          "busy": false,
+          "reason": null,
+          "measurements_available": true,
+          "sample_age_seconds": 0.001
+        },
+        "host_waiters": 0,
+        "host_starts_in_epoch": 2,
+        "host_epoch": 34867.32045928,
+        "pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 40
+          },
+          "configured_size": 40,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 5,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "load_average": "0.09 0.30 0.41 1/198 73995",
+        "event_loop": "uvloop.Loop"
+      },
+      "database_telemetry": {
+        "schema": "nebula.performance/v1",
+        "database_pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 40
+          },
+          "configured_size": 40,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 5,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "uptime_seconds": 299.901,
+        "limits": {
+          "operations": 513,
+          "samples_per_operation": 128,
+          "slow_records": 64,
+          "slow_ms": 250
+        },
+        "overflow_measurements": 0,
+        "operations": [
+          {
+            "operation": "db.session",
+            "count": 37418,
+            "errors": 601,
+            "cancelled": 0,
+            "total_ms": 124994.73,
+            "mean_ms": 3.34,
+            "max_ms": 328.462,
+            "sample_count": 128,
+            "p50_ms": 1.97,
+            "p95_ms": 7.083
+          },
+          {
+            "operation": "http.stream POST /api/v1/chat/completions",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 115532.864,
+            "mean_ms": 192.555,
+            "max_ms": 696.148,
+            "sample_count": 128,
+            "p50_ms": 185.477,
+            "p95_ms": 259.011
+          },
+          {
+            "operation": "http.response POST /api/v1/chat/completions",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 41440.286,
+            "mean_ms": 69.067,
+            "max_ms": 484.932,
+            "sample_count": 128,
+            "p50_ms": 65.086,
+            "p95_ms": 102.794
+          },
+          {
+            "operation": "db.pool.acquire",
+            "count": 39218,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 32054.889,
+            "mean_ms": 0.817,
+            "max_ms": 407.963,
+            "sample_count": 128,
+            "p50_ms": 0.468,
+            "p95_ms": 1.559
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "count": 22804,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 27582.321,
+            "mean_ms": 1.21,
+            "max_ms": 327.348,
+            "sample_count": 128,
+            "p50_ms": 0.821,
+            "p95_ms": 1.99
+          },
+          {
+            "operation": "db.commit",
+            "count": 36817,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 27495.859,
+            "mean_ms": 0.747,
+            "max_ms": 140.531,
+            "sample_count": 128,
+            "p50_ms": 0.406,
+            "p95_ms": 1.265
+          },
+          {
+            "operation": "http.response POST /fixture/tool",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 26513.099,
+            "mean_ms": 44.188,
+            "max_ms": 117.464,
+            "sample_count": 128,
+            "p50_ms": 41.818,
+            "p95_ms": 66.459
+          },
+          {
+            "operation": "http.response GET /api/v1/harness-sessions",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 14646.295,
+            "mean_ms": 24.41,
+            "max_ms": 437.81,
+            "sample_count": 128,
+            "p50_ms": 23.042,
+            "p95_ms": 38.043
+          },
+          {
+            "operation": "http.response GET /api/v1/auth/devices",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 5499.958,
+            "mean_ms": 9.167,
+            "max_ms": 39.969,
+            "sample_count": 128,
+            "p50_ms": 8.814,
+            "p95_ms": 13.031
+          },
+          {
+            "operation": "db.execute.select.9271f9b230ab",
+            "count": 3600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 4375.255,
+            "mean_ms": 1.215,
+            "max_ms": 33.218,
+            "sample_count": 128,
+            "p50_ms": 0.943,
+            "p95_ms": 2.289
+          },
+          {
+            "operation": "db.execute.insert.626e6d826387",
+            "count": 3600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3854.878,
+            "mean_ms": 1.071,
+            "max_ms": 19.604,
+            "sample_count": 128,
+            "p50_ms": 0.713,
+            "p95_ms": 2.13
+          },
+          {
+            "operation": "db.execute.select.a1c15d509d70",
+            "count": 3000,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 3427.22,
+            "mean_ms": 1.142,
+            "max_ms": 12.94,
+            "sample_count": 128,
+            "p50_ms": 0.689,
+            "p95_ms": 3.009
+          },
+          {
+            "operation": "db.execute.update.9cf21fbdf863",
+            "count": 2401,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2790.651,
+            "mean_ms": 1.162,
+            "max_ms": 7.385,
+            "sample_count": 128,
+            "p50_ms": 1.034,
+            "p95_ms": 2.01
+          },
+          {
+            "operation": "db.execute.other.ed5cf8d308a9",
+            "count": 1800,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2501.579,
+            "mean_ms": 1.39,
+            "max_ms": 17.005,
+            "sample_count": 128,
+            "p50_ms": 1.247,
+            "p95_ms": 2.52
+          },
+          {
+            "operation": "db.execute.select.93472c72b02e",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2054.166,
+            "mean_ms": 3.424,
+            "max_ms": 26.156,
+            "sample_count": 128,
+            "p50_ms": 3.203,
+            "p95_ms": 5.002
+          },
+          {
+            "operation": "db.execute.select.560e41bd5995",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1923.962,
+            "mean_ms": 3.207,
+            "max_ms": 21.435,
+            "sample_count": 128,
+            "p50_ms": 3.167,
+            "p95_ms": 4.986
+          },
+          {
+            "operation": "db.execute.insert.568be50f71fa",
+            "count": 1800,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1835.306,
+            "mean_ms": 1.02,
+            "max_ms": 12.341,
+            "sample_count": 128,
+            "p50_ms": 0.838,
+            "p95_ms": 1.686
+          },
+          {
+            "operation": "db.execute.select.3eaf4b98016c",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1813.589,
+            "mean_ms": 3.023,
+            "max_ms": 22.739,
+            "sample_count": 128,
+            "p50_ms": 2.767,
+            "p95_ms": 6.027
+          },
+          {
+            "operation": "db.execute.select.e71712579582",
+            "count": 1800,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1695.345,
+            "mean_ms": 0.942,
+            "max_ms": 23.385,
+            "sample_count": 128,
+            "p50_ms": 0.642,
+            "p95_ms": 1.549
+          },
+          {
+            "operation": "db.execute.select.953e1010aaec",
+            "count": 1800,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1676.626,
+            "mean_ms": 0.931,
+            "max_ms": 7.864,
+            "sample_count": 128,
+            "p50_ms": 0.709,
+            "p95_ms": 2.065
+          },
+          {
+            "operation": "db.execute.insert.fe03c233ed5d",
+            "count": 1800,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1671.97,
+            "mean_ms": 0.929,
+            "max_ms": 12.174,
+            "sample_count": 128,
+            "p50_ms": 0.737,
+            "p95_ms": 1.639
+          },
+          {
+            "operation": "db.execute.update.40545b68a54c",
+            "count": 1200,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1484.038,
+            "mean_ms": 1.237,
+            "max_ms": 23.636,
+            "sample_count": 128,
+            "p50_ms": 1.098,
+            "p95_ms": 2.009
+          },
+          {
+            "operation": "db.execute.update.d1f5e90eda95",
+            "count": 1201,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1482.084,
+            "mean_ms": 1.234,
+            "max_ms": 90.524,
+            "sample_count": 128,
+            "p50_ms": 0.964,
+            "p95_ms": 1.84
+          },
+          {
+            "operation": "db.execute.update.c3ee72866fa7",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1330.154,
+            "mean_ms": 2.217,
+            "max_ms": 9.625,
+            "sample_count": 128,
+            "p50_ms": 1.983,
+            "p95_ms": 5.062
+          },
+          {
+            "operation": "db.execute.select.161c35b451ad",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1315.404,
+            "mean_ms": 2.192,
+            "max_ms": 8.976,
+            "sample_count": 128,
+            "p50_ms": 2.212,
+            "p95_ms": 3.816
+          },
+          {
+            "operation": "db.execute.select.f1c67325f2f7",
+            "count": 1200,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1225.793,
+            "mean_ms": 1.021,
+            "max_ms": 31.142,
+            "sample_count": 128,
+            "p50_ms": 0.783,
+            "p95_ms": 1.523
+          },
+          {
+            "operation": "db.execute.select.20cf1fbf3ace",
+            "count": 1200,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1199.781,
+            "mean_ms": 1.0,
+            "max_ms": 11.558,
+            "sample_count": 128,
+            "p50_ms": 0.873,
+            "p95_ms": 1.374
+          },
+          {
+            "operation": "db.execute.select.959d77184a7c",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1172.601,
+            "mean_ms": 1.954,
+            "max_ms": 15.848,
+            "sample_count": 128,
+            "p50_ms": 1.73,
+            "p95_ms": 3.045
+          },
+          {
+            "operation": "db.execute.select.9e53e2d6a45b",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1106.583,
+            "mean_ms": 1.844,
+            "max_ms": 9.343,
+            "sample_count": 128,
+            "p50_ms": 1.686,
+            "p95_ms": 3.353
+          },
+          {
+            "operation": "http.response GET /fixture/observation",
+            "count": 297,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1092.991,
+            "mean_ms": 3.68,
+            "max_ms": 38.041,
+            "sample_count": 128,
+            "p50_ms": 2.662,
+            "p95_ms": 7.258
+          },
+          {
+            "operation": "db.execute.select.750d5dc51539",
+            "count": 1200,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1034.867,
+            "mean_ms": 0.862,
+            "max_ms": 8.304,
+            "sample_count": 128,
+            "p50_ms": 0.71,
+            "p95_ms": 1.414
+          },
+          {
+            "operation": "db.execute.select.7894dc23c98e",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 1027.34,
+            "mean_ms": 1.712,
+            "max_ms": 12.229,
+            "sample_count": 128,
+            "p50_ms": 1.57,
+            "p95_ms": 2.994
+          },
+          {
+            "operation": "db.execute.select.f06666d70a42",
+            "count": 593,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 868.264,
+            "mean_ms": 1.464,
+            "max_ms": 18.962,
+            "sample_count": 128,
+            "p50_ms": 1.201,
+            "p95_ms": 3.885
+          },
+          {
+            "operation": "db.execute.select.2fadbafbae34",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 811.315,
+            "mean_ms": 1.352,
+            "max_ms": 7.5,
+            "sample_count": 128,
+            "p50_ms": 1.045,
+            "p95_ms": 2.566
+          },
+          {
+            "operation": "db.execute.select.ee1909126afd",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 706.064,
+            "mean_ms": 1.177,
+            "max_ms": 12.016,
+            "sample_count": 128,
+            "p50_ms": 1.015,
+            "p95_ms": 2.322
+          },
+          {
+            "operation": "db.execute.select.2233c62cb18b",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 621.361,
+            "mean_ms": 1.036,
+            "max_ms": 6.702,
+            "sample_count": 128,
+            "p50_ms": 0.928,
+            "p95_ms": 1.519
+          },
+          {
+            "operation": "db.execute.select.f193d67edbb7",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 609.069,
+            "mean_ms": 1.015,
+            "max_ms": 3.772,
+            "sample_count": 128,
+            "p50_ms": 0.958,
+            "p95_ms": 1.955
+          },
+          {
+            "operation": "db.execute.select.8218f64df255",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 601.541,
+            "mean_ms": 1.003,
+            "max_ms": 10.121,
+            "sample_count": 128,
+            "p50_ms": 0.888,
+            "p95_ms": 1.905
+          },
+          {
+            "operation": "db.execute.select.10b36e0f6787",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 503.479,
+            "mean_ms": 0.839,
+            "max_ms": 5.922,
+            "sample_count": 128,
+            "p50_ms": 0.76,
+            "p95_ms": 1.699
+          },
+          {
+            "operation": "db.execute.select.e51c084f8476",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 388.022,
+            "mean_ms": 0.647,
+            "max_ms": 4.405,
+            "sample_count": 128,
+            "p50_ms": 0.58,
+            "p95_ms": 1.094
+          },
+          {
+            "operation": "db.execute.update.65baed7597c3",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 378.038,
+            "mean_ms": 0.63,
+            "max_ms": 11.436,
+            "sample_count": 128,
+            "p50_ms": 0.495,
+            "p95_ms": 1.846
+          },
+          {
+            "operation": "db.execute.insert.6edc6e99cb2b",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 342.982,
+            "mean_ms": 0.572,
+            "max_ms": 5.238,
+            "sample_count": 128,
+            "p50_ms": 0.462,
+            "p95_ms": 1.482
+          },
+          {
+            "operation": "runtime.event_loop_lag",
+            "count": 300,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 209.0,
+            "mean_ms": 0.697,
+            "max_ms": 125.0,
+            "sample_count": 128,
+            "p50_ms": 0.0,
+            "p95_ms": 1.0
+          },
+          {
+            "operation": "db.execute.select.f3bacfe5d393",
+            "count": 57,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 68.053,
+            "mean_ms": 1.194,
+            "max_ms": 6.176,
+            "sample_count": 57,
+            "p50_ms": 0.942,
+            "p95_ms": 3.63
+          },
+          {
+            "operation": "db.execute.select.f3d63e6b509a",
+            "count": 29,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 52.262,
+            "mean_ms": 1.802,
+            "max_ms": 6.034,
+            "sample_count": 29,
+            "p50_ms": 1.502,
+            "p95_ms": 3.448
+          },
+          {
+            "operation": "db.execute.select.90ecde227f8f",
+            "count": 38,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 48.492,
+            "mean_ms": 1.276,
+            "max_ms": 6.707,
+            "sample_count": 38,
+            "p50_ms": 0.869,
+            "p95_ms": 3.558
+          },
+          {
+            "operation": "db.execute.select.7898712da422",
+            "count": 38,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 40.345,
+            "mean_ms": 1.062,
+            "max_ms": 3.451,
+            "sample_count": 38,
+            "p50_ms": 0.865,
+            "p95_ms": 1.962
+          },
+          {
+            "operation": "db.execute.select.36dece1ac07b",
+            "count": 19,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 32.52,
+            "mean_ms": 1.712,
+            "max_ms": 3.799,
+            "sample_count": 19,
+            "p50_ms": 1.357,
+            "p95_ms": 3.799
+          },
+          {
+            "operation": "db.execute.select.06d2c090c02d",
+            "count": 19,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 27.07,
+            "mean_ms": 1.425,
+            "max_ms": 2.955,
+            "sample_count": 19,
+            "p50_ms": 1.028,
+            "p95_ms": 2.955
+          },
+          {
+            "operation": "db.execute.select.6d092328c431",
+            "count": 19,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 25.608,
+            "mean_ms": 1.348,
+            "max_ms": 2.651,
+            "sample_count": 19,
+            "p50_ms": 1.14,
+            "p95_ms": 2.651
+          },
+          {
+            "operation": "db.execute.select.ee8100c27542",
+            "count": 5,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 19.413,
+            "mean_ms": 3.883,
+            "max_ms": 8.364,
+            "sample_count": 5,
+            "p50_ms": 2.675,
+            "p95_ms": 8.364
+          },
+          {
+            "operation": "db.bulk.wait",
+            "count": 3805,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 12.812,
+            "mean_ms": 0.003,
+            "max_ms": 0.245,
+            "sample_count": 128,
+            "p50_ms": 0.003,
+            "p95_ms": 0.004
+          },
+          {
+            "operation": "provider.host_load_wait",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 11.476,
+            "mean_ms": 0.019,
+            "max_ms": 1.55,
+            "sample_count": 128,
+            "p50_ms": 0.009,
+            "p95_ms": 0.014
+          },
+          {
+            "operation": "provider.capacity.shared",
+            "count": 600,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2.405,
+            "mean_ms": 0.004,
+            "max_ms": 0.173,
+            "sample_count": 128,
+            "p50_ms": 0.003,
+            "p95_ms": 0.004
+          },
+          {
+            "operation": "http.response POST /fixture/measure",
+            "count": 1,
+            "errors": 0,
+            "cancelled": 0,
+            "total_ms": 2.049,
+            "mean_ms": 2.049,
+            "max_ms": 2.049,
+            "sample_count": 1,
+            "p50_ms": 2.049,
+            "p95_ms": 2.049
+          }
+        ],
+        "recent_slow": [
+          {
+            "operation": "http.response POST /api/v1/chat/completions",
+            "duration_ms": 484.932,
+            "uptime_seconds": 236.489,
+            "outcome": "ok",
+            "request_id": "req_0183eb78c5c24880b26832da112d6ec3",
+            "phases": [
+              {
+                "operation": "db.session",
+                "count": 11,
+                "total_ms": 51.845
+              },
+              {
+                "operation": "db.pool.acquire",
+                "count": 12,
+                "total_ms": 13.334
+              },
+              {
+                "operation": "db.execute.select.de29831869e8",
+                "count": 6,
+                "total_ms": 12.919
+              },
+              {
+                "operation": "db.commit",
+                "count": 11,
+                "total_ms": 12.893
+              },
+              {
+                "operation": "db.execute.insert.626e6d826387",
+                "count": 4,
+                "total_ms": 4.151
+              },
+              {
+                "operation": "db.execute.select.9271f9b230ab",
+                "count": 1,
+                "total_ms": 2.464
+              },
+              {
+                "operation": "db.execute.select.2fadbafbae34",
+                "count": 1,
+                "total_ms": 2.375
+              },
+              {
+                "operation": "db.execute.select.7894dc23c98e",
+                "count": 1,
+                "total_ms": 2.268
+              },
+              {
+                "operation": "db.execute.select.959d77184a7c",
+                "count": 1,
+                "total_ms": 1.933
+              },
+              {
+                "operation": "db.execute.select.750d5dc51539",
+                "count": 1,
+                "total_ms": 0.939
+              },
+              {
+                "operation": "db.execute.insert.568be50f71fa",
+                "count": 1,
+                "total_ms": 0.904
+              },
+              {
+                "operation": "db.execute.select.10b36e0f6787",
+                "count": 1,
+                "total_ms": 0.732
+              },
+              {
+                "operation": "db.execute.insert.6edc6e99cb2b",
+                "count": 1,
+                "total_ms": 0.474
+              }
+            ],
+            "http_status": 200
+          },
+          {
+            "operation": "http.response GET /api/v1/harness-sessions",
+            "duration_ms": 437.81,
+            "uptime_seconds": 236.444,
+            "outcome": "ok",
+            "request_id": "req_0c5837071fec4ad49834e2ba97261b7a",
+            "phases": [
+              {
+                "operation": "db.pool.acquire",
+                "count": 2,
+                "total_ms": 410.208
+              },
+              {
+                "operation": "db.session",
+                "count": 2,
+                "total_ms": 22.45
+              },
+              {
+                "operation": "db.execute.select.93472c72b02e",
+                "count": 1,
+                "total_ms": 6.348
+              },
+              {
+                "operation": "db.execute.select.3eaf4b98016c",
+                "count": 1,
+                "total_ms": 6.039
+              },
+              {
+                "operation": "db.commit",
+                "count": 2,
+                "total_ms": 3.879
+              },
+              {
+                "operation": "db.execute.select.161c35b451ad",
+                "count": 1,
+                "total_ms": 2.07
+              },
+              {
+                "operation": "db.execute.select.9e53e2d6a45b",
+                "count": 1,
+                "total_ms": 1.434
+              },
+              {
+                "operation": "db.bulk.wait",
+                "count": 1,
+                "total_ms": 0.004
+              }
+            ],
+            "http_status": 200
+          },
+          {
+            "operation": "db.pool.acquire",
+            "duration_ms": 407.963,
+            "uptime_seconds": 236.415,
+            "outcome": "ok",
+            "request_id": "req_0c5837071fec4ad49834e2ba97261b7a",
+            "source": "nebula/v3/storage.py:1603:list_entities"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 328.462,
+            "uptime_seconds": 129.909,
+            "outcome": "ok",
+            "request_id": "req_9430f46a086c4beb9d44e457e2edc776",
+            "source": "nebula/v3/storage.py:1510:get"
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "duration_ms": 327.348,
+            "uptime_seconds": 129.908,
+            "outcome": "ok",
+            "request_id": "req_9430f46a086c4beb9d44e457e2edc776"
+          },
+          {
+            "operation": "db.pool.acquire",
+            "duration_ms": 326.4,
+            "uptime_seconds": 129.908,
+            "outcome": "ok",
+            "source": "nebula/v3/storage.py:1603:list_entities"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 311.684,
+            "uptime_seconds": 25.487,
+            "outcome": "ok",
+            "request_id": "req_509c1efdd752492b81f9f99a4de6f9ef",
+            "source": "nebula/v3/storage.py:1510:get"
+          },
+          {
+            "operation": "db.session",
+            "duration_ms": 312.333,
+            "uptime_seconds": 25.487,
+            "outcome": "ok",
+            "request_id": "req_509c1efdd752492b81f9f99a4de6f9ef",
+            "source": "nebula/v3/storage.py:1510:get"
+          },
+          {
+            "operation": "db.execute.select.de29831869e8",
+            "duration_ms": 309.239,
+            "uptime_seconds": 25.485,
+            "outcome": "ok",
+            "request_id": "req_509c1efdd752492b81f9f99a4de6f9ef"
+          }
+        ]
+      },
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "worker_exit_code": 0,
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+        "runtime_source_sha256": "c7447924aa7ad4fa2a118758ae2e6fac5eaaf3f04927060730dc2279945b411b",
+        "harness_sha256": "cfeba02a16650bab1062456c11de1480fa49dccecea6a1540a631dd5c9c58496",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system",
+        "event_loop": "uvloop.Loop"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "stored_chat_turns": {
+        "complete": 601
+      },
+      "stored_tool_calls": {
+        "complete": 601
+      }
+    }
+  ],
+  "final_comparisons": [
+    {
+      "label": "candidate-low-equal",
+      "p95_improvement_percent": {
+        "admission": 0.56,
+        "first_token": 33.588,
+        "listing": 62.007
+      }
+    },
+    {
+      "label": "candidate-mixed-equal",
+      "p95_improvement_percent": {
+        "admission": 71.764,
+        "first_token": 71.739,
+        "listing": 30.884
+      }
+    },
+    {
+      "label": "candidate-mixed-max",
+      "p95_improvement_percent": {
+        "admission": 69.201,
+        "first_token": 69.176,
+        "listing": 97.764
+      }
+    },
+    {
+      "label": "candidate-overload-max",
+      "p95_improvement_percent": {
+        "admission": 27.127,
+        "first_token": 27.168,
+        "listing": 44.127
+      }
+    },
+    {
+      "label": "candidate-soak-max",
+      "p95_improvement_percent": {
+        "admission": 0.5,
+        "first_token": 31.002,
+        "listing": 65.541
+      }
+    }
+  ]
 }

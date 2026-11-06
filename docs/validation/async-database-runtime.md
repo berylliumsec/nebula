@@ -1,8 +1,8 @@
 # Async database runtime and same-chat runtime switching
 
-Status: final acceptance in progress. Local correctness passes. The final runtime
-must pass the recorded load rechecks, hosted product-index checks, two frozen
-Linux database journeys, and the selected browser matrix before merge.
+Status: runtime acceptance passed at `8eb40dcb`. The final evidence commit keeps
+the same runtime and harness bytes. Its CI prerequisite explicitly installs
+ripgrep so all 217 selected cases execute; verify that final check before merge.
 
 ## Baseline and deployment budget
 
@@ -43,7 +43,12 @@ full suite was requested or run.
 
 The final local run passed **213 cases in 153.94 seconds**, without skips. The
 four selected product-index cases require the model supplied by hosted CI. A
-subsequent rerun of the strengthened mixed-recovery case passed in 6.14 seconds.
+subsequent guarded run of both recovery cases passed in 6.45 seconds.
+The source CI run passed 213 and skipped four ripgrep-dependent workspace tests;
+all four product-index cases passed. The four workspace cases passed locally,
+and final CI explicitly provisions ripgrep. Python 3.12 is the selected runtime;
+3.11/3.13 check-name placeholders do not execute tests.
+
 Runtime and unraisable-coroutine warnings fail the selection. Two Uvicorn
 WebSocket deprecation warnings remain unrelated to database execution.
 
@@ -117,9 +122,27 @@ lag reached 0.894 seconds; that limits interpretation of its instantaneous rate.
 It does not establish overload rejection behavior; focused pool saturation tests
 cover asynchronous waiting and controlled timeout failures.
 
-The complete matrix is in `async-database-http-final.json`. It predates the last
-caller repairs; final-source candidate rechecks remain a merge gate. The unchanged
-baseline/harness provide the comparison, and final runtime hashes must match.
+The complete matrix and five final-runtime rechecks are in
+`async-database-http-final.json`. The final runtime hash is
+`c7447924aa7ad4fa2a118758ae2e6fac5eaaf3f04927060730dc2279945b411b`; the harness hash is
+`cfeba02a16650bab1062456c11de1480fa49dccecea6a1540a631dd5c9c58496`. All five
+rechecks use `8eb40dcb`, the unchanged baseline/harness and the system monitor,
+with no local test/build work during measurement. Every recheck has zero errors,
+rejections, timeouts, connection failures or checked-out connections after
+shutdown, with exact persisted chat/tool counts.
+
+| Final runtime workload | Admission p95 | First-token p95 | Listing p95 | Gain versus baseline (admission / first token / listing) |
+| --- | ---: | ---: | ---: | --- |
+| Low, pool 15 | 149.176 ms | 188.972 ms | 56.540 ms | 0.6% / 33.6% / 62.0% |
+| Saturated mixed, pool 15 | 12,920.860 ms | 12,958.898 ms | 360.992 ms | 71.8% / 71.7% / 30.9% |
+| Saturated mixed, pool 40 | 18,236.445 ms | 18,277.580 ms | 130.227 ms | 69.2% / 69.2% / 97.8% |
+| Overload, pool 40 | 48,731.240 ms | 48,775.097 ms | 4,534.977 ms | 27.1% / 27.2% / 44.1% |
+| Five-minute soak, pool 40 | 130.814 ms | 174.457 ms | 42.392 ms | 0.5% / 31.0% / 65.5% |
+
+The default 20% mixed-load target passes at both connection limits, with no
+material low-load regression. The final overload driver has 1.816 ms p95 issue
+lag (40.282 ms maximum); no request was rejected or omitted from successful
+latency. Pool timeout behavior is covered by the selected saturation tests.
 
 Earlier exploratory closed-loop results and 14 fixed-rate experiments failed the
 chat target. They remain in `async-database-http.json` and are not acceptance
@@ -137,18 +160,25 @@ versus pending selection after refresh, explicit same-goal resume, provider
 continuation, budget pause, transcript preservation and responsive geometry.
 Physical devices were not used.
 
-Current-candidate hosted checks remain required: 217 Python cases on 3.11–3.13,
-three frontend cases and production build, four current product-index/digest/Chroma
-checks (within the Python selection), all 24 browser cases, and two real frozen
-Linux SQLite/PostgreSQL journeys. Hosted jobs install their own browser/model
-boundaries; local downloads were denied and no alternate download route was used.
-Frozen checks cover authentication, concurrent listing, provider completion,
-graceful shutdown, restart transcript preservation and current Chroma guidance.
+Hosted evidence at `8eb40dcb` is recorded in `async-database-ci.json`:
 
-The real Linux PyInstaller build at `8384824` passed its archive audit: 11,918
-members and zero forbidden members. Its SQLite journey passed chat/restart checks
-before an external-verifier import error. The direct-invocation import path is
-repaired; both complete frozen journeys still require a passing rerun.
+- [Source, frontend, migrations and frozen checks](https://github.com/berylliumsec/nebula/actions/runs/42264216920).
+- [All 24 browser cases and the matrix gate](https://github.com/berylliumsec/nebula/actions/runs/42264216951).
+
+Both real frozen Linux SQLite/PostgreSQL journeys pass: authentication, concurrent
+listing, provider completion, shutdown/restart transcript preservation and Chroma
+guidance. Each of four graceful stops reports SIGINT/130, no escalation and no
+remaining owned process group. The regenerated index has 388 passages and source
+digest `50e6d0c57eb5cdbd6d24b3498aa7b260d58e983ccf621fef656a67eab9610679`.
+The four selected index/digest/search/Chroma source tests also pass. The production
+UI build and three frontend cases pass. Each real browser journey retains a
+`harness-provider-switch-lan` attachment with its actual origin, build timestamp,
+profile, viewport and saved outcome; no mocked response substitutes for it.
+
+Hosted jobs install their own browser/model boundaries. Local downloads were
+denied; no alternate download route was used. The earlier verifier import error
+and missing ripgrep prerequisite are repaired. Final CI must run the unchanged
+selected scope without environmental skips before merge.
 
 ## Promotion and rollback
 

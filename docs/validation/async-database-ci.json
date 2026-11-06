@@ -1,0 +1,126 @@
+{
+  "source_commit": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+  "source_ci": {
+    "run_url": "https://github.com/berylliumsec/nebula/actions/runs/42264216920",
+    "python_version": "3.12",
+    "python_selected_passed": 213,
+    "python_omitted": [
+      "3.11",
+      "3.13"
+    ],
+    "frontend_selected_passed": 3,
+    "production_ui_build": "passed",
+    "migrations": "passed",
+    "mypy_source_files": 246,
+    "lint_format_diagnostic_audit": "passed",
+    "product_index_checks": 4,
+    "python_selected_skipped": 4,
+    "skip_reason": "Four ripgrep workspace tests; rg absent in source runner. They passed locally. The final CI receipt installs ripgrep and requires all 217 selected cases.",
+    "product_index_checks_passed": 4
+  },
+  "frozen": {
+    "scope": "two frozen-Core async database journeys: authentication, chat, concurrent listings, restart persistence and current Chroma product guidance",
+    "binary_sha256": "d7ba3aac66a03de47c0ba6453a495bebc5a8c7c9efb5340f310e2e9a90832811",
+    "candidate_commit": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+    "journeys": [
+      {
+        "database": "sqlite",
+        "status": "passed",
+        "build_commit": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+        "pool": {
+          "budget": null,
+          "configured_size": 5,
+          "max_overflow": 0,
+          "checked_out": 0,
+          "peak_checked_out": 5,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "stops": [
+          {
+            "signal": "SIGINT",
+            "returncode": 130,
+            "escalated": false,
+            "owned_group_gone": true
+          },
+          {
+            "signal": "SIGINT",
+            "returncode": 130,
+            "escalated": false,
+            "owned_group_gone": true
+          }
+        ],
+        "restarted_transcript": "one user and one assistant message",
+        "product_source_digest": "50e6d0c57eb5cdbd6d24b3498aa7b260d58e983ccf621fef656a67eab9610679",
+        "product_passages": 388
+      },
+      {
+        "database": "postgresql",
+        "status": "passed",
+        "build_commit": "8eb40dcb87684cb5bbbe0bac63e8d0abc55dd260",
+        "pool": {
+          "budget": {
+            "max_connections": 100,
+            "postgres_reserved": 3,
+            "admin_reserve": 5,
+            "other_connections": 12,
+            "peak_processes": 2,
+            "role_limit": -1,
+            "database_limit": -1,
+            "ceiling": 40,
+            "pool_size": 2
+          },
+          "configured_size": 2,
+          "max_overflow": 0,
+          "checked_out": 1,
+          "peak_checked_out": 2,
+          "waiters": 0,
+          "timeouts": 0,
+          "connection_failures": 0
+        },
+        "stops": [
+          {
+            "signal": "SIGINT",
+            "returncode": 130,
+            "escalated": false,
+            "owned_group_gone": true
+          },
+          {
+            "signal": "SIGINT",
+            "returncode": 130,
+            "escalated": false,
+            "owned_group_gone": true
+          }
+        ],
+        "restarted_transcript": "one user and one assistant message",
+        "product_source_digest": "50e6d0c57eb5cdbd6d24b3498aa7b260d58e983ccf621fef656a67eab9610679",
+        "product_passages": 388
+      }
+    ]
+  },
+  "browser_ci": {
+    "run_url": "https://github.com/berylliumsec/nebula/actions/runs/42264216951",
+    "selected_passed": 24,
+    "gate": "passed",
+    "real_core_journeys": 8,
+    "mocked_cases": 16,
+    "browsers": [
+      "desktop Chromium",
+      "emulated mobile Chromium",
+      "emulated mobile WebKit"
+    ],
+    "desktop_widths": [
+      1440,
+      1024
+    ],
+    "mobile_widths": [
+      320,
+      390,
+      430
+    ],
+    "fixture": "disposable authenticated non-loopback Core serving ui/dist",
+    "evidence_attachment": "harness-provider-switch-lan (origin, production build timestamp, project, viewport, goal/session and saved outcome)",
+    "physical_devices": false
+  }
+}

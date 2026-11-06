@@ -255,6 +255,11 @@ jobs:
       - name: Install UI dependencies for selected Node-backed Python checks
         if: env.RUN_SELECTED == 'true' && (contains(needs.selection.outputs.python, 'tests/test_playwright_impact.py') || contains(needs.selection.outputs.python, 'tests/v3/test_butler_workflow_registry.py'))
         run: npm --prefix ui ci
+      - name: Install ripgrep for selected workspace search checks
+        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/v3/test_workspace.py')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
       - name: Test
         if: env.RUN_SELECTED == 'true'
         env:
