@@ -82,6 +82,10 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
             "Does nebula-chat show feedback while opening a selected conversation?",
             "animate",
         ),
+        (
+            "How do I change several settings in nebula-chat without reopening the menu?",
+            "menu stays open after each change",
+        ),
     ):
         matches = search_product_knowledge(question)
         assert any(expected in str(item["text"]) for item in matches), question
