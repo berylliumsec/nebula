@@ -261,6 +261,8 @@ asyncio.run(main())
         read,
     ):
         read("YOU · REPEATED", rendered=True)
+        # A PTY can yield while prompt_toolkit is still painting later rows.
+        read("Second response with a clear result.", rendered=True)
         rows = read.screen.display
         display = "\n".join(rows)
         assert "◆  YOU" in display
