@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .diagnostics import record_caught_exception
 
+import asyncio
 import base64
 import binascii
 from io import BytesIO
@@ -558,7 +559,7 @@ async def upload_evidence(
 
     (await store.get(Engagement, request.engagement_id))
     finding = await _validate_links(store, request)
-    data = request.decoded_content()
+    data = await asyncio.to_thread(request.decoded_content)
     evidence_id = str(uuid4())
     artifact_metadata: dict[str, Any] = {
         "evidence_id": evidence_id,
@@ -571,7 +572,8 @@ async def upload_evidence(
         artifact_metadata["source_context"] = request.source_context
     if request.edit_recipe is not None:
         artifact_metadata["edit_recipe"] = request.edit_recipe
-    stored = artifact_store.put_bytes_with_status(
+    stored = await asyncio.to_thread(
+        artifact_store.put_bytes_with_status,
         data,
         engagement_id=request.engagement_id,
         filename=request.filename,
@@ -642,7 +644,7 @@ async def upload_evidence(
             caught_error,
             stage="evidence",
         )
-        artifact_store.discard_new_blob(stored)
+        await asyncio.to_thread(artifact_store.discard_new_blob, stored)
         raise
     return evidence
 

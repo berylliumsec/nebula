@@ -7,7 +7,9 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import httpx
 
+from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService, PreparedChat
 from nebula.v3.domain import (
@@ -17,6 +19,8 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    HarnessSession,
+    HarnessTurn,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
@@ -46,6 +50,9 @@ from nebula.v3.tools import (
 )
 from tests.v3.test_chat import FakeProvider
 from tests.v3.test_chat_tool_loop import ScriptedProvider, _response
+from tests.v3.test_async_core import (
+    reject_synchronous_database_waits as reject_synchronous_database_waits,
+)
 
 
 async def _close(store):
@@ -108,8 +115,122 @@ async def test_async_shutdown_restarts_same_turn_without_duplicate_assistant_eff
         )
         try:
             await recovered.startup()
-            assert await recovered.resume_turns_stopped_by_core() == [turn_id]
-            events = [item async for item in recovered.follow_provider_turn(turn_id)]
+            harness = await reopened.create(
+                HarnessSession(
+                    engagement_id=project.id,
+                    harness_profile_id="inert-harness",
+                    model="fixture",
+                )
+            )
+            await reopened.create(
+                HarnessTurn(
+                    engagement_id=project.id,
+                    harness_session_id=harness.id,
+                    origin="analysis",
+                    status="complete",
+                    prompt="Settled fixture",
+                    response="Saved history",
+                )
+            )
+            effects = []
+
+            async def read(arguments):
+                effects.append(arguments["number"])
+                await asyncio.sleep(0.01)
+                return {"number": arguments["number"]}
+
+            registry = ToolRegistry()
+            registry.register(
+                AnalysisTool(
+                    ToolSpec(
+                        name="fixture_read",
+                        description="Read an inert fixture",
+                        input_schema={
+                            "type": "object",
+                            "properties": {"number": {"type": "integer"}},
+                            "required": ["number"],
+                        },
+                        output_schema={"type": "object"},
+                        risk_class=RiskClass.LOCAL_READ,
+                    ),
+                    read,
+                )
+            )
+            broker = ToolBroker(
+                registry=registry,
+                policy_engine=PolicyEngine(),
+                runner=AnalysisOnlyRunner(),
+                ledger=StoreToolLedger(reopened, enforce_run_budget=False),
+                workspace_resolver=lambda _: tmp_path,
+            )
+
+            async def recover():
+                assert await recovered.resume_turns_stopped_by_core() == [turn_id]
+                return [item async for item in recovered.follow_provider_turn(turn_id)]
+
+            async def chat(number):
+                prepared = await recovered.prepare(
+                    ChatCompletionRequest(
+                        provider_id=profile.id,
+                        engagement_id=project.id,
+                        model="model-a",
+                        messages=[
+                            {"role": "user", "content": f"Concurrent fixture {number}"}
+                        ],
+                        include_knowledge=False,
+                    )
+                )
+                assert (await recovered.complete(prepared)).message.content
+
+            async def tool(number):
+                result = await broker.execute(
+                    ToolInvocation(
+                        engagement_id=project.id,
+                        run_id=f"fixture-{number}",
+                        tool_name="fixture_read",
+                        arguments={"number": number},
+                        workspace=tmp_path,
+                        idempotency_key=f"fixture-{number}",
+                    ),
+                    ScopePolicy(engagement_id=project.id),
+                )
+                assert result.output == {"number": number}
+
+            app = create_app(reopened, auth_token="synthetic-recovery-token")
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app),
+                base_url="http://fixture.test",
+                headers={"Authorization": "Bearer synthetic-recovery-token"},
+            ) as client:
+
+                async def listing():
+                    response = await client.get(
+                        "/api/v1/harness-sessions", params={"engagement_id": project.id}
+                    )
+                    assert response.status_code == 200
+                    assert [item["id"] for item in response.json()] == [harness.id]
+
+                async def authenticate():
+                    assert (await client.get("/api/v1/auth/devices")).status_code == 200
+
+                events, *_ = await asyncio.gather(
+                    recover(),
+                    *[
+                        operation
+                        for number in range(12)
+                        for operation in (
+                            chat(number),
+                            tool(number),
+                            listing(),
+                            authenticate(),
+                        )
+                    ],
+                )
+            assert sorted(effects) == list(range(12))
+            assert (
+                len(await reopened.list_entities(ToolCall, engagement_id=project.id))
+                == 12
+            )
             assert any(name == "done" for name, _ in events), events
             assert (
                 await reopened.get(ChatTurn, turn_id)

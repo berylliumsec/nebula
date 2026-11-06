@@ -456,7 +456,7 @@ async def test_butler_activates_and_reads_actual_running_then_disabled_workers(
     from nebula.v3.settings_assistant_api import SettingsAssistantApi
 
     store, artifacts, app = await fixture(tmp_path)
-    butler = ButlerCapabilities(
+    butler = await ButlerCapabilities.create(
         store, artifacts, "project", work=app.state.control_assistant_work
     )
     gateway = SettingsAssistantApi(app, "synthetic-cpu-activation")

@@ -7,7 +7,11 @@ from .async_utils import async_first
 import hashlib
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .control_assistant_work import ControlAssistantWork
+    from .storage import NebulaStore
 
 from jsonschema import Draft202012Validator, ValidationError
 
@@ -93,8 +97,8 @@ async def measured_harness_capacity(
 class ButlerGlobalActions:
     def __init__(
         self,
-        store: Any,
-        work: Any,
+        store: NebulaStore,
+        work: ControlAssistantWork,
         instructions_root: Path,
         case_id: str,
         *,
@@ -204,7 +208,7 @@ class ButlerGlobalActions:
         return {
             "projects": rows,
             "next_offset": offset + 50 if offset + 50 < len(projects) else None,
-            "runtimes": self.work.catalog((await self._case()).engagement_id)[
+            "runtimes": (await self.work.catalog((await self._case()).engagement_id))[
                 "runtimes"
             ],
         }
@@ -217,8 +221,8 @@ class ButlerGlobalActions:
         project = await self._project(project_id)
         return {
             "project": project.model_dump(mode="json"),
-            "work": self.work.overview(project_id),
-            "goals": self.work.goals_overview(project_id),
+            "work": (await self.work.overview(project_id)),
+            "goals": (await self.work.goals_overview(project_id)),
         }
 
     async def goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -226,7 +230,9 @@ class ButlerGlobalActions:
 
     async def _goal_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return self.work.goal_detail(arguments["project_id"], arguments["session_id"])
+        return await self.work.goal_detail(
+            arguments["project_id"], arguments["session_id"]
+        )
 
     async def assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._assistant_defaults_read(arguments)
@@ -235,12 +241,12 @@ class ButlerGlobalActions:
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return self.work.assistant_defaults(arguments["project_id"])
+        return await self.work.assistant_defaults(arguments["project_id"])
 
     async def set_assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         (await self._act(project_id, arguments["expected_authority_revision"]))
-        return self.work.set_assistant_defaults(
+        return await self.work.set_assistant_defaults(
             project_id,
             {
                 "expected_revision": arguments["expected_revision"],
@@ -253,7 +259,9 @@ class ButlerGlobalActions:
 
     async def _chat_settings_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return self.work.chat_settings(arguments["project_id"], arguments["session_id"])
+        return await self.work.chat_settings(
+            arguments["project_id"], arguments["session_id"]
+        )
 
     async def chat_settings_many(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._chat_settings_many_read(arguments)
@@ -262,7 +270,7 @@ class ButlerGlobalActions:
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return self.work.chat_settings_many(
+        return await self.work.chat_settings_many(
             arguments["project_id"], arguments["session_ids"]
         )
 
@@ -272,7 +280,7 @@ class ButlerGlobalActions:
     async def _work_catalog_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         (await self._project(project_id))
-        return self.work.catalog(project_id, arguments.get("operation"))
+        return await self.work.catalog(project_id, arguments.get("operation"))
 
     async def work_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._dispatch_work(arguments, change=False)
@@ -312,7 +320,7 @@ class ButlerGlobalActions:
     async def set_chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         (await self._act(project_id, arguments["expected_authority_revision"]))
-        return self.work.set_chat_settings(
+        return await self.work.set_chat_settings(
             project_id,
             {
                 key: value
@@ -373,7 +381,7 @@ class ButlerGlobalActions:
         existing = await self._existing_goal(project_id, arguments["objective"])
         if existing is not None:
             return {
-                **self.work.goal_detail(project_id, existing.session_id),
+                **(await self.work.goal_detail(project_id, existing.session_id)),
                 "already_exists": True,
             }
         goal_args = {
@@ -447,7 +455,7 @@ class ButlerGlobalActions:
             ):
                 continue
             try:
-                self.work.harness._validate_harness_privacy(
+                await self.work.harness._validate_harness_privacy(
                     project_id,
                     profile,
                     [],
@@ -528,7 +536,7 @@ class ButlerGlobalActions:
                             )
                         )
             result = {
-                **self.work.goal_detail(project_id, existing.session_id),
+                **(await self.work.goal_detail(project_id, existing.session_id)),
                 "already_exists": True,
                 "source_goal_id": source.id,
             }
@@ -607,7 +615,7 @@ class ButlerGlobalActions:
             and project.status != EngagementStatus.ACTIVE
         ):
             raise ValueError("Activate the project before starting or resuming a goal")
-        current = self.work.goal_detail(project_id, arguments["session_id"])
+        current = await self.work.goal_detail(project_id, arguments["session_id"])
         goal = current.get("goal")
         if (
             current.get("kind") != "main"
@@ -628,7 +636,7 @@ class ButlerGlobalActions:
     async def update_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         (await self._act(project_id, arguments["expected_authority_revision"]))
-        current = self.work.goal_detail(project_id, arguments["session_id"])
+        current = await self.work.goal_detail(project_id, arguments["session_id"])
         goal = current.get("goal")
         if (
             current.get("kind") != "main"
@@ -655,7 +663,7 @@ class ButlerGlobalActions:
             raise ValueError("Activate the project before handing off a goal")
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project changed; read its revision again")
-        current = self.work.goal_detail(project_id, arguments["session_id"])
+        current = await self.work.goal_detail(project_id, arguments["session_id"])
         source = current.get("goal")
         if current.get("kind") != "main" or source is None:
             raise ValueError("Handoff requires a listed main goal")
@@ -757,7 +765,7 @@ class ButlerGlobalActions:
                     existing.id, initial_goal
                 )
             else:
-                saved = self.work.goal_detail(existing.id, current.session_id)
+                saved = await self.work.goal_detail(existing.id, current.session_id)
             result["goal"] = saved
             if arguments.get("start_initial_goal", False):
                 goal = saved["goal"]

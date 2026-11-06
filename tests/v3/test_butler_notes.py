@@ -47,7 +47,7 @@ async def test_butler_notes_retains_accepted_execution_note_identity_and_provena
             update={"id": str(uuid4()), "observation_type": "execution_result"}
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id
     )
 
@@ -133,7 +133,7 @@ async def test_butler_notes_discovery_is_bounded_project_owned_and_revision_chec
         )
         for n in range(52)
     ]
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 

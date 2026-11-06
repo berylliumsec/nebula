@@ -1,19 +1,19 @@
-"""Slow entity reads stay in bounded workers with thread-owned Sessions."""
+"""Slow entity reads use bounded admission and task-owned AsyncSessions."""
 
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
+    wait_for_database_gate,
 )
 
 import asyncio
-import threading
 from contextlib import suppress
 
 import anyio.to_thread
 import httpx
 import pytest
 from sqlalchemy import event
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -23,7 +23,7 @@ from nebula.v3.storage import NebulaStore
 
 @pytest.mark.parametrize("worker_tokens", [2, 40])
 @pytest.mark.parametrize("resource", ["artifacts", "tool-artifacts", "chat-sessions"])
-async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
+async def test_slow_listings_use_bounded_admission_and_task_owned_sessions(
     tmp_path, resource, worker_tokens
 ):
     store = NebulaStore(tmp_path / "workers.db")
@@ -72,42 +72,37 @@ async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
         "tool-artifacts": "/api/v1/tool-calls/call/artifacts",
         "chat-sessions": "/api/v1/chat-sessions?engagement_id=project",
     }[resource]
-    release = threading.Event()
-    guard = threading.Lock()
+    release = asyncio.Event()
     active = 0
     maximum = 0
     entered = 0
     sessions = []
-    loop_thread = threading.get_ident()
+    loop_task = asyncio.current_task()
 
-    class TracedSession(Session):
+    class TracedSession(AsyncSession):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.owner_thread = threading.get_ident()
+            self.owner = asyncio.current_task()
             self.finished = False
             sessions.append(self)
 
-        def _check_owner(self):
-            assert threading.get_ident() == self.owner_thread
+        async def scalars(self, *args, **kwargs):
+            assert asyncio.current_task() is self.owner
+            return await super().scalars(*args, **kwargs)
 
-        def scalars(self, *args, **kwargs):
-            self._check_owner()
-            return super().scalars(*args, **kwargs)
+        async def get(self, *args, **kwargs):
+            assert asyncio.current_task() is self.owner
+            return await super().get(*args, **kwargs)
 
-        def get(self, *args, **kwargs):
-            self._check_owner()
-            return super().get(*args, **kwargs)
+        async def commit(self):
+            assert asyncio.current_task() is self.owner
+            return await super().commit()
 
-        def commit(self):
-            self._check_owner()
-            return super().commit()
-
-        def close(self):
-            self._check_owner()
-            super().close()
+        async def close(self):
+            await super().close()
             self.finished = True
 
-    store.database._session_factory = sessionmaker(
+    store.database._session_factory = async_sessionmaker(
         bind=store.database.engine, class_=TracedSession, expire_on_commit=False
     )
 
@@ -115,20 +110,15 @@ async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
         nonlocal active, maximum, entered
         if not statement.startswith("SELECT") or "FROM entities" not in statement:
             return
-        # The unrelated authenticated read is allowed on the loop. Every
-        # listing query, including enrichment, must stay in its worker.
         if parameters and parameters[0] == "paired_device_sessions":
             return
-        assert threading.get_ident() != loop_thread
-        with guard:
-            entered += 1
-            active += 1
-            maximum = max(maximum, active)
+        entered += 1
+        active += 1
+        maximum = max(maximum, active)
         try:
-            assert release.wait(3), "slow reads blocked the request loop"
+            wait_for_database_gate(conn, release)
         finally:
-            with guard:
-                active -= 1
+            active -= 1
 
     event.listen(store.database.engine.sync_engine, "before_cursor_execute", slow_read)
 
@@ -136,7 +126,7 @@ async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
         limiter = anyio.to_thread.current_default_thread_limiter()
         previous = limiter.total_tokens
         limiter.total_tokens = worker_tokens
-        expected_capacity = min(worker_tokens, 4)
+        expected_capacity = min(4, max(1, store.database.pool_size - 1))
         tasks = []
         try:
             async with httpx.AsyncClient(
@@ -177,7 +167,8 @@ async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
                 assert all(response.status_code == 200 for response in responses)
                 assert all(len(response.json()) == 1 for response in responses)
                 assert maximum == expected_capacity
-                assert any(session.owner_thread != loop_thread for session in sessions)
+                assert any(session.owner is not loop_task for session in sessions)
+                assert len({id(session) for session in sessions}) == len(sessions)
                 assert all(session.finished for session in sessions)
         finally:
             release.set()

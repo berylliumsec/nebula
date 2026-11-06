@@ -455,7 +455,7 @@ class FederatedSearch:
 
     async def _repair_stale_projection(self) -> bool:
         repaired = False
-        async with self.store.database.session() as session:
+        async with self.store.database.session(bulk=True) as session:
             entity_signature = (
                 await session.execute(
                     select(
@@ -542,7 +542,7 @@ class FederatedSearch:
         offset = _decode_search_cursor(cursor)
         repaired = await self.repair_stale_projection()
         terms = [term.casefold() for term in query.split() if term]
-        async with self.store.database.session() as session:
+        async with self.store.database.session(bulk=True) as session:
             # Ranking needs these scalar projection fields, not 2,000 ORM
             # identities per request. Keep the same candidate bound and order.
             statement = select(SearchDocumentRow.__table__)

@@ -535,7 +535,7 @@ async def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp
             verification_state="verified",
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         second.id,
@@ -667,7 +667,7 @@ async def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_ru
         )
     )
     memory = _service(tmp_path)
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         project.id,

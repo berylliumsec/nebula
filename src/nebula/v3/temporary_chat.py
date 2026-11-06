@@ -56,7 +56,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
             raise HTTPException(
                 409, "Only temporary conversations can be discarded here"
             )
-        turn = chat_service().pending_turn(chat.id)
+        turn = await chat_service().pending_turn(chat.id)
         if turn:
             if turn.harness_turn_id:
                 await harness_runtime.cancel_turn(

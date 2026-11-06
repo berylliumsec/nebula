@@ -231,3 +231,80 @@ async def test_core_command_selects_server_loop_before_creating_async_resources(
             assert module == "uvloop"
     finally:
         asyncio.set_event_loop_policy(policy)
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled"])
+async def test_registry_callback_returning_its_task_creates_no_new_work(outcome):
+    loop = asyncio.get_running_loop()
+    unhandled = []
+    handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+    registry = {}
+
+    async def operation():
+        if outcome == "failure":
+            raise ValueError("original task failure")
+        if outcome == "cancelled":
+            raise asyncio.CancelledError
+
+    try:
+        task = asyncio.create_task(operation())
+        registry["work"] = task
+        task.add_done_callback(async_done_callback(lambda _done: registry.pop("work")))
+        result = (await asyncio.gather(task, return_exceptions=True))[0]
+        if outcome == "failure":
+            assert isinstance(result, ValueError)
+        if outcome == "cancelled":
+            assert isinstance(result, asyncio.CancelledError)
+        await close_store_resources([])
+        assert registry == {}
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(handler)
+
+
+@pytest.mark.parametrize("result_kind", ["task", "future"])
+async def test_callback_awaitable_persistence_finishes_before_store_disposal(
+    tmp_path, result_kind
+):
+    store = NebulaStore(tmp_path / "callback.db")
+    async with store.database.session() as session:
+        await session.execute(text("CREATE TABLE callback_probe (value INTEGER)"))
+    release = asyncio.Event()
+    started = asyncio.Event()
+    events = []
+    completed = asyncio.get_running_loop().create_future()
+
+    async def persist():
+        started.set()
+        await release.wait()
+        async with store.database.session() as session:
+            await session.execute(text("INSERT INTO callback_probe VALUES (1)"))
+        events.append("persisted")
+        completed.set_result(None)
+
+    persistence = asyncio.create_task(persist())
+    source = asyncio.get_running_loop().create_future()
+    async_done_callback(
+        lambda _done: persistence if result_kind == "task" else completed
+    )(source)
+    await started.wait()
+    original_dispose = store.database.dispose
+
+    async def dispose():
+        async with store.database.session() as session:
+            assert (
+                await session.scalar(text("SELECT count(*) FROM callback_probe")) == 1
+            )
+        events.append("disposed")
+        await original_dispose()
+
+    store.database.dispose = dispose
+    cleanup = asyncio.create_task(close_store_resources([store]))
+    await asyncio.sleep(0)
+    assert not cleanup.done()
+    release.set()
+    await cleanup
+    await persistence
+    assert events == ["persisted", "disposed"]
+    assert store.database.pool_snapshot()["checked_out"] == 0

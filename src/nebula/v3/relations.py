@@ -150,11 +150,13 @@ class ResourceRelationService:
             )
 
     @staticmethod
-    def _validate_endpoint(session, ref: ResourceRef, project_id: str) -> EntityRow:
+    async def _validate_endpoint(
+        session: AsyncSession, ref: ResourceRef, project_id: str
+    ) -> EntityRow:
         expected_kind = RESOURCE_ENTITY_KINDS.get(ref.kind)
         if expected_kind is None:
             raise ValueError(f"{ref.kind.value} is not a durable relation endpoint")
-        row = session.get(EntityRow, ref.id)
+        row = await session.get(EntityRow, ref.id)
         if row is None or row.kind != expected_kind:
             raise NotFoundError(
                 f"relation endpoint not found: {ref.kind.value}/{ref.id}"
@@ -174,8 +176,8 @@ class ResourceRelationService:
     ) -> ResourceRelation:
         self._validate_shape(request.predicate, request.source, request.target)
         async with self.store.database.session() as session:
-            source = self._validate_endpoint(session, request.source, project_id)
-            target = self._validate_endpoint(session, request.target, project_id)
+            source = await self._validate_endpoint(session, request.source, project_id)
+            target = await self._validate_endpoint(session, request.target, project_id)
             now = utc_now()
             row = ResourceRelationRow(
                 id=str(uuid4()),
@@ -262,7 +264,7 @@ class ResourceRelationService:
         if len(desired) != len(request.targets):
             raise ValueError("relation targets must be unique")
         async with self.store.database.session() as session:
-            source = self._validate_endpoint(
+            source = await self._validate_endpoint(
                 session, request.source, request.project_id
             )
             if (
@@ -274,7 +276,7 @@ class ResourceRelationService:
                 )
             for target in request.targets:
                 self._validate_shape(request.predicate, request.source, target)
-                self._validate_endpoint(session, target, request.project_id)
+                await self._validate_endpoint(session, target, request.project_id)
             existing = list(
                 (
                     await session.scalars(
@@ -587,12 +589,12 @@ class ResourceRelationService:
             )
             if key in existing:
                 continue
-            source = self._validate_endpoint(
+            source = await self._validate_endpoint(
                 session,
                 ResourceRef(project_id=project_id, kind=source_kind, id=source_id),
                 project_id,
             )
-            target = self._validate_endpoint(
+            target = await self._validate_endpoint(
                 session,
                 ResourceRef(project_id=project_id, kind=target_kind, id=target_id),
                 project_id,

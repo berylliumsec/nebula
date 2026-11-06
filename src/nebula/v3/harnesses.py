@@ -9037,11 +9037,13 @@ class HarnessRuntimeService:
         self.automation_tool_platform = platform
 
     async def _project_execution_mode(
-        self, engagement_id: str
+        self, engagement_id: str, *, transaction: StoreTransaction | None = None
     ) -> Literal["docker", "host"]:
         if self.automation_tool_platform is None:
             return "docker"
-        return await self.automation_tool_platform.project_execution_mode(engagement_id)
+        return await self.automation_tool_platform.project_execution_mode(
+            engagement_id, transaction=transaction
+        )
 
     async def _project_approval_policy(self, engagement_id: str) -> str:
         # Bounded: a project has one policy (its id derives from the project),
@@ -10075,6 +10077,9 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(_safe_error(exc)) from exc
         snapshot = [item.model_dump(mode="json") for item in profiles]
         session_id = str(uuid4())
+        execution_mode = await self._project_execution_mode(
+            engagement_id, transaction=transaction
+        )
         components, oci_snapshot = (
             (
                 await self._build_oci_components(
@@ -10085,7 +10090,6 @@ class HarnessRuntimeService:
             if tools_enabled
             else (None, None)
         )
-        execution_mode = await self._project_execution_mode(engagement_id)
         if (
             tools_enabled
             and profile.permission_mode == "unrestricted"

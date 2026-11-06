@@ -96,7 +96,7 @@ async def _capabilities(tmp_path):
             model="model-a",
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, selected.id, work=app.state.control_assistant_work
     )
     return store, selected, own_chat, foreign_chat, capabilities
@@ -147,7 +147,7 @@ async def _scheduled_capabilities(tmp_path):
             summary="Global work check",
         )
     )
-    scheduled = ButlerCapabilities(
+    scheduled = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         project.id,
@@ -1737,7 +1737,7 @@ async def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             summary="Global work check",
         )
     )
-    global_butler = ButlerCapabilities(
+    global_butler = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         selected.id,
@@ -2426,7 +2426,7 @@ async def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
             model=parent.model,
         )
     )
-    background = ButlerCapabilities(
+    background = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         selected.id,

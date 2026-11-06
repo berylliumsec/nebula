@@ -352,7 +352,7 @@ async def test_assistant_waits_for_inline_approval_and_receives_actual_result(
             tools_enabled=True,
         )
     )
-    broker = CompanionBroker(store, session.id)
+    broker = await CompanionBroker.create(store, session.id)
     operations = []
 
     async def request(session_id, request, **kwargs):
@@ -478,7 +478,7 @@ async def test_project_never_policy_executes_scoped_companion_change_without_pro
             tools_enabled=True,
         )
     )
-    broker = CompanionBroker(store, session.id)
+    broker = await CompanionBroker.create(store, session.id)
     operations = []
 
     async def request(session_id, request, **kwargs):
@@ -642,7 +642,7 @@ async def test_screenshot_tool_persists_owned_image_and_replays_without_recaptur
         )
     )
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    broker = CompanionBroker(
+    broker = await CompanionBroker.create(
         store, session.id, artifact_store=artifacts, image_supported=True
     )
     image_data = base64.b64encode(b"controlled image bytes").decode()
@@ -1320,7 +1320,7 @@ async def test_detached_browser_is_an_unavailable_resource_to_a_provider_chat(tm
             },
         )
     )
-    broker = CompanionBroker(store, browser.id)
+    broker = await CompanionBroker.create(store, browser.id)
     prepared.tool_components = dataclasses.replace(
         prepared.tool_components,
         broker=broker,
@@ -1408,7 +1408,7 @@ async def test_companion_refusals_before_execution_report_no_side_effects(
             },
         )
     )
-    broker = CompanionBroker(store, browser.id)
+    broker = await CompanionBroker.create(store, browser.id)
     prepared.tool_components = dataclasses.replace(
         prepared.tool_components,
         broker=broker,
@@ -1469,7 +1469,7 @@ async def _provider_chat_with_companion(tmp_path, arguments, *, answer):
             },
         )
     )
-    broker = CompanionBroker(store, browser.id)
+    broker = await CompanionBroker.create(store, browser.id)
     prepared.tool_components = dataclasses.replace(
         prepared.tool_components,
         broker=broker,
@@ -1943,7 +1943,7 @@ async def test_a_closed_browser_session_is_an_unavailable_resource(tmp_path):
     # Building its tools for a later call refuses the same way, with the
     # service's wording kept for the operator's view.
     with pytest.raises(NotFoundError, match="closed") as refused:
-        CompanionBroker(store, browser.id)
+        (await CompanionBroker.create(store, browser.id))
     assert getattr(refused.value, "_nebula_before_execution", False) is True
 
 
@@ -2028,7 +2028,7 @@ async def test_screenshot_refusals_after_the_capture_leave_no_effect(
             tools_enabled=True,
         )
     )
-    broker = CompanionBroker(
+    broker = await CompanionBroker.create(
         store,
         session.id,
         artifact_store=ArtifactStore(tmp_path / "artifacts"),

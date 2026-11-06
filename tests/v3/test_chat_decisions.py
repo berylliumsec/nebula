@@ -151,7 +151,7 @@ async def test_queued_dispatch_uses_current_decisions_and_freezes_revision(tmp_p
     path = "/chat/sessions/s/decisions/d"
 
     async def run():
-        queue = enqueue(service, request, paused=True)
+        queue = await enqueue(service, request, paused=True)
         assert (
             await client.put(
                 path, json={"expected_revision": 0, "text": "First decision"}

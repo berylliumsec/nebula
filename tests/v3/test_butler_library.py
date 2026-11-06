@@ -39,7 +39,7 @@ async def test_butler_library_pages_metadata_and_refuses_stale_global_change(tmp
         )
         for index in range(52)
     ]
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 

@@ -43,7 +43,7 @@ async def administration(tmp_path):
         auth_token="fixture-token",
     )
     gateway = SettingsAssistantApi(app, "fixture-token")
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, project.id, settings_api=gateway
     )
     yield store, project, foreign, platform, diagnostics, gateway, capabilities

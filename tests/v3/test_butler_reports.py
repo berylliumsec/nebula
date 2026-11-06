@@ -66,7 +66,7 @@ async def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tm
         )
         for index in range(52)
     ]
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 
@@ -198,7 +198,7 @@ async def test_butler_report_note_transform_tracks_authoritative_relation_change
         )
     )
     report = await store.create(Report(engagement_id=selected.id, title="Assessment"))
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
     client = TestClient(
@@ -304,7 +304,7 @@ async def test_butler_report_note_transform_requires_linked_current_source_and_r
             signed_off_at=datetime.now(timezone.utc),
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 
@@ -438,7 +438,7 @@ async def test_report_core_api_checks_references_revision_and_finalization(tmp_p
         },
     )
     assert refused.status_code in {400, 422}, refused.text
-    prepared = ButlerCapabilities(
+    prepared = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
     action = (
@@ -637,7 +637,7 @@ async def test_butler_report_delete_requires_current_project_and_core_confirmati
     foreign_draft = await store.create(
         Report(engagement_id=foreign.id, title="Foreign")
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 

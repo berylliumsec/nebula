@@ -64,7 +64,7 @@ async def fixture(tmp_path):
         )
     )
     app = create_app(store, auth_token="synthetic-data-token", artifact_store=artifacts)
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store,
         artifacts,
         project.id,
@@ -322,7 +322,7 @@ async def test_scheduled_butler_cannot_discover_interactive_saved_data_changes(
             summary="Synthetic blocked goal",
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         project.id,

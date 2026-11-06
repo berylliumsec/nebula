@@ -196,7 +196,9 @@ async def serve(args):
         execution_data_root=root / "execution",
     )
     work = app.state.control_assistant_work
-    interactive = ButlerCapabilities(store, artifacts, project.id, work=work)
+    interactive = await ButlerCapabilities.create(
+        store, artifacts, project.id, work=work
+    )
     global_actions = ButlerGlobalActions(
         store, work, root, "read-only-fixture", runtime_local=True
     )

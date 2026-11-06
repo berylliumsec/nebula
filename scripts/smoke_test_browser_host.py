@@ -108,7 +108,7 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                     )
                     # Harness/provider brokers must reach this same host without
                     # environment-variable registration or a second Chromium.
-                    broker = CompanionBroker(store, session["session_id"])
+                    broker = await CompanionBroker.create(store, session["session_id"])
                     assert await broker.service.adapter() is host._adapter
                     async with httpx.AsyncClient() as private_client:
                         denied = await private_client.get(

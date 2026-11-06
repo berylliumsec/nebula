@@ -42,7 +42,7 @@ async def fixture(tmp_path):
         auth_token="inspection-fixture-token",
     )
     gateway = SettingsAssistantApi(app, "inspection-fixture-token")
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, data["project"].id, settings_api=gateway
     )
     return store, artifacts, data, service, gateway, capabilities

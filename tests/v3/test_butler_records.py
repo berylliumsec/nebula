@@ -46,7 +46,7 @@ async def test_butler_records_discovery_is_project_scoped_and_bounded(tmp_path):
             metadata={"private_extension": "not returned"},
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id
     )
 
@@ -124,7 +124,7 @@ async def test_butler_records_create_retry_and_revision_edit_use_core_validation
             engagement_id=project.id, title="Synthetic evidence", evidence_type="manual"
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id
     )
     client = TestClient(
@@ -248,7 +248,7 @@ async def test_butler_records_cannot_forge_verification_or_change_an_archived_pr
         verified_at=utc_now(),
     )
     (await ResourceRelationService(store).create_legacy_entity(confirmed))
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id
     )
 

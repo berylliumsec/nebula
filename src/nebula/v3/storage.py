@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import AsyncIterator
 
 from .diagnostics import record_caught_exception
-from .async_utils import call_async
+from .async_utils import call_async, finish_cleanup
 from .query_predicates import visible_harness_chat_title
 
 import asyncio
@@ -1042,12 +1042,16 @@ class NebulaStore:
         )
         messages = []
         async with self.database.session() as session:
-            for row in await session.scalars(statement):
-                message = _row_to_entity(row, ChatMessage)
-                if not message_is_replaced(message):
-                    messages.append(message)
-                    if len(messages) == limit:
-                        break
+            result = await session.stream_scalars(statement)
+            try:
+                async for row in result:
+                    message = _row_to_entity(row, ChatMessage)
+                    if not message_is_replaced(message):
+                        messages.append(message)
+                        if len(messages) == limit:
+                            break
+            finally:
+                await finish_cleanup(result.close())
         messages.reverse()
         return messages
 
@@ -1068,7 +1072,7 @@ class NebulaStore:
             )
             .order_by(*_entity_order(False))
         )
-        async with self.database.session() as session:
+        async with self.database.session(bulk=True) as session:
             return [
                 chat.id
                 for chat in readable_entities(
@@ -1090,7 +1094,7 @@ class NebulaStore:
                 ),
             )
         )
-        async with self.database.session() as session:
+        async with self.database.session(bulk=True) as session:
             return int((await session.scalar(statement)) or 0)
 
     async def butler_recovery_session_ids(self, session_ids: Iterable[str]) -> set[str]:
@@ -1740,6 +1744,7 @@ class NebulaStore:
         offset: int = 0,
         limit: int | None = None,
         newest_first: bool = False,
+        bulk: bool = True,
     ) -> list[EntityT]:
         """Return the ``model`` rows whose payload matches ``filters``, filtered in SQL.
 
@@ -1775,7 +1780,7 @@ class NebulaStore:
         statement = statement.order_by(*_entity_order(newest_first)).offset(offset)
         if limit is not None:
             statement = statement.limit(limit)
-        async with self.database.session(bulk=True) as session:
+        async with self.database.session(bulk=bulk) as session:
             return [
                 _row_to_entity(row, model) for row in (await session.scalars(statement))
             ]
@@ -3053,7 +3058,7 @@ class NebulaStore:
         )
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
-        async with self.database.session() as session:
+        async with self.database.session(bulk=True) as session:
             counts = {
                 kind: int(count) for kind, count in (await session.execute(statement))
             }
@@ -3161,7 +3166,7 @@ class NebulaStore:
                 RunEventRow.payload[field_name].as_string().in_(list(accepted))
             )
         statement = statement.order_by(RunEventRow.sequence).limit(limit)
-        async with self.database.session() as session:
+        async with self.database.session(bulk=True) as session:
             rows = (await session.scalars(statement)).all()
             return [self._row_to_event(row) for row in rows]
 

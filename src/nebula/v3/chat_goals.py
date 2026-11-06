@@ -5,7 +5,10 @@ from __future__ import annotations
 from .async_utils import MaybeAsync, call_async
 
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Literal
+from typing import Awaitable, Callable, Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .harnesses import HarnessRuntimeService
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -190,7 +193,9 @@ def active_time_changes(goal: ChatGoal, *, working: bool, now: datetime) -> dict
 
 
 class ChatGoalService:
-    def __init__(self, store: NebulaStore, harness_runtime: Any | None = None):
+    def __init__(
+        self, store: NebulaStore, harness_runtime: HarnessRuntimeService | None = None
+    ):
         self.store = store
         self.harness_runtime = harness_runtime
 
@@ -382,7 +387,7 @@ class ChatGoalService:
                         raise ConflictError(
                             "Butler recovery source or scheduled case changed"
                         )
-                harness_session = self.harness_runtime.create_session(
+                harness_session = await self.harness_runtime.create_session(
                     engagement_id=body.engagement_id,
                     profile_id=profile.id,
                     model=body.model,
@@ -1038,7 +1043,7 @@ class ChatGoalService:
                 source = await self.store.get(
                     HarnessSession, parent_session.harness_session_id or ""
                 )
-                harness_session = self.harness_runtime._fork_session(
+                harness_session = await self.harness_runtime._fork_session(
                     source, reason="goal child", transaction=transaction
                 )
             child_session = ChatSession(
@@ -1220,7 +1225,7 @@ def goals_router(
     store: NebulaStore,
     *,
     goal_dispatcher: Callable[[str, str], Awaitable[str | None]] | None = None,
-    harness_runtime: Any | None = None,
+    harness_runtime: HarnessRuntimeService | None = None,
     skill_snapshot_resolver: (
         MaybeAsync[
             [str, list[SkillSelection], list[SkillSnapshot]], list[SkillSnapshot]

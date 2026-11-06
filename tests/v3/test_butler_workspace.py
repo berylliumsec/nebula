@@ -33,7 +33,7 @@ async def _fixture(tmp_path):
     workspace = app.state.workspace_service
     assert runtime.workspace_service is workspace
     assert app.state.harness_runtime_service.workspace_service is workspace
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, selected.id, workspace=workspace
     )
     return store, artifacts, workspace, runtime, selected, foreign, capabilities
@@ -238,7 +238,7 @@ async def test_scheduled_butler_workspace_actions_are_unavailable(tmp_path):
             summary="Synthetic background case",
         )
     )
-    scheduled = ButlerCapabilities(
+    scheduled = await ButlerCapabilities.create(
         store,
         artifacts,
         selected.id,

@@ -260,7 +260,7 @@ class ReportRenderService:
                 and prior.pdf_artifact_id
             ):
                 artifact = await self.store.get(Artifact, prior.pdf_artifact_id)
-                if self.artifact_store.verify(artifact):
+                if await asyncio.to_thread(self.artifact_store.verify, artifact):
                     cached = prior
                     break
         return _PreparedRender(
@@ -278,7 +278,7 @@ class ReportRenderService:
                 "render_not_ready", "report PDF is not ready", status_code=409
             )
         artifact = await self.store.get(Artifact, render.pdf_artifact_id)
-        if not self.artifact_store.verify(artifact):
+        if not await asyncio.to_thread(self.artifact_store.verify, artifact):
             raise ReportRenderError(
                 "render_integrity", "report PDF failed integrity verification"
             )
@@ -486,7 +486,7 @@ class ReportRenderService:
             artifact = await self._owned(
                 Artifact, artifact_id, engagement.id, source="report content"
             )
-            if not self.artifact_store.verify(artifact):
+            if not await asyncio.to_thread(self.artifact_store.verify, artifact):
                 raise ReportRenderError(
                     "artifact_integrity",
                     f"required artifact failed integrity verification: {artifact.id}",

@@ -7,6 +7,7 @@ that may return bounded excerpts from tool or workspace artifacts.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -413,6 +414,30 @@ class ToolOutputService:
             engagement_id=engagement_id, owner_id=owner_id, tool_call_id=tool_call_id
         )
         artifacts = await self._call_artifacts(call)
+        return await asyncio.to_thread(
+            self._search_artifacts,
+            call,
+            artifacts,
+            query=query,
+            mode=mode,
+            case_sensitive=case_sensitive,
+            context_lines=context_lines,
+            match_limit=match_limit,
+            cursor=cursor,
+        )
+
+    def _search_artifacts(
+        self,
+        call: ToolCall,
+        artifacts: list[Artifact],
+        *,
+        query: str,
+        mode: Literal["literal", "regex"],
+        case_sensitive: bool,
+        context_lines: int,
+        match_limit: int,
+        cursor: str | None,
+    ) -> dict[str, Any]:
         start_artifact, start_line = _decode_cursor(cursor)
         # The regex guard bounds one line; the search budget bounds the scan.
         matcher = _Matcher(
@@ -526,6 +551,22 @@ class ToolOutputService:
             owner_id=owner_id,
             artifact_id=artifact_id,
         )
+        return await asyncio.to_thread(
+            self._read_artifact,
+            artifact,
+            starting_line=starting_line,
+            line_count=line_count,
+            continuation_cursor=continuation_cursor,
+        )
+
+    def _read_artifact(
+        self,
+        artifact,
+        *,
+        starting_line,
+        line_count,
+        continuation_cursor,
+    ) -> dict[str, Any]:
         if continuation_cursor is not None:
             if starting_line != 1:
                 raise ToolOutputQueryError(

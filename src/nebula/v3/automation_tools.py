@@ -47,7 +47,7 @@ from .missions import MissionComponents, MissionConfigurationError
 from .native_hooks import NativeHookBlocked, NativeHookError, run_project_tool_hooks
 from .orchestration import SpecialistRole
 from .providers import ModelProvider
-from .storage import NebulaStore
+from .storage import NebulaStore, StoreTransaction
 from .tool_results import (
     ArtifactKind,
     ToolResultReceipt,
@@ -895,9 +895,11 @@ class AutomationToolPlatform:
         self.browser_automation = browser_automation
 
     async def project_execution_mode(
-        self, engagement_id: str
+        self, engagement_id: str, *, transaction: StoreTransaction | None = None
     ) -> Literal["docker", "host"]:
-        return (await self.manager.project_policy(engagement_id)).execution_mode
+        return (
+            await self.manager.project_policy(engagement_id, transaction=transaction)
+        ).execution_mode
 
     async def chat_components(
         self,

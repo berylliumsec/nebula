@@ -526,7 +526,7 @@ async def test_butler_terminal_stop_is_exact_browser_handoff(tmp_path):
     assert [
         item.session_id for item in (await service.list_sessions(project.id)).sessions
     ] == [started.session_id]
-    gateway = ButlerCapabilities(
+    gateway = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "butler-artifacts"),
         project.id,

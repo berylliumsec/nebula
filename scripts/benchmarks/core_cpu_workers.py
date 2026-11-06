@@ -202,7 +202,7 @@ async def serve(args):
         execution_data_root=root / "execution",
     )
 
-    butler = ButlerCapabilities(
+    butler = await ButlerCapabilities.create(
         store, artifacts, project.id, work=app.state.control_assistant_work
     )
 

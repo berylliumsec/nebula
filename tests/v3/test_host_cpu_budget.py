@@ -317,7 +317,7 @@ async def test_corrupt_config_is_visible_without_overwriting_it_or_blocking_core
 async def test_butler_discovers_reads_and_saves_the_host_policy_with_readback(tmp_path):
     store, _, _, app = await fixture(tmp_path)
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    butler = ButlerCapabilities(
+    butler = await ButlerCapabilities.create(
         store, artifacts, "project", work=app.state.control_assistant_work
     )
     gateway = SettingsAssistantApi(app, "synthetic-host-cpu")

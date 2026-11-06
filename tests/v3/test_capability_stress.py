@@ -6,6 +6,7 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
+import inspect
 from contextlib import suppress
 import threading
 
@@ -128,13 +129,22 @@ async def test_slow_saved_state_read_leaves_unrelated_settings_responsive(
     loop_thread = threading.get_ident()
     readers = []
 
-    def hold(*args, **kwargs):
-        readers.append(threading.get_ident())
-        entered.set()
-        # A failing baseline must report loop ownership without deadlocking it.
-        if threading.get_ident() != loop_thread:
+    if inspect.iscoroutinefunction(original):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def hold(*args, **kwargs):
+            readers.append(asyncio.current_task())
+            entered.set()
+            await asyncio.wait_for(release.wait(), timeout=3)
+            return await original(*args, **kwargs)
+    else:
+
+        def hold(*args, **kwargs):
+            readers.append(threading.get_ident())
+            entered.set()
+            assert threading.get_ident() != loop_thread
             assert release.wait(3), "saved state reader was never released"
-        return original(*args, **kwargs)
+            return original(*args, **kwargs)
 
     monkeypatch.setattr(owner, method, hold)
 
@@ -151,9 +161,10 @@ async def test_slow_saved_state_read_leaves_unrelated_settings_responsive(
                         break
                     await asyncio.sleep(0.005)
                 assert entered.is_set()
-                assert loop_thread not in readers, (
-                    "saved state read occupied Core's loop"
-                )
+                if inspect.iscoroutinefunction(original):
+                    assert all(task is not asyncio.current_task() for task in readers)
+                else:
+                    assert loop_thread not in readers
                 fast = await asyncio.wait_for(
                     client.get("/engagements/project/assistant-defaults"), timeout=0.5
                 )

@@ -46,7 +46,7 @@ async def test_butler_evidence_pages_project_records_and_prepares_exact_file_han
             sha256="b" * 64,
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 

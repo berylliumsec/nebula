@@ -46,7 +46,7 @@ async def _fixture(tmp_path):
         data_root=tmp_path / "runtime",
     )
     profile = await NotebookMcpTools(store, notebooks).register_profile(selected.id)
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         selected.id,

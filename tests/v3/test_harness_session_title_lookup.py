@@ -10,8 +10,7 @@ import ipaddress
 import json
 import secrets
 import socket
-import threading
-import time
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -254,18 +253,18 @@ async def test_authenticated_lan_core_lists_same_names_after_refresh(tmp_path):
             create_app(store, auth_token=token), host=address, log_level="error"
         )
     )
-    thread = threading.Thread(
-        target=server.run, kwargs={"sockets": [listener]}, daemon=True
-    )
-    thread.start()
+    serving = asyncio.create_task(server.serve(sockets=[listener]))
     try:
-        deadline = time.monotonic() + 20
-        while not server.started and thread.is_alive() and time.monotonic() < deadline:
-            time.sleep(0.05)
+        for _ in range(400):
+            if server.started or serving.done():
+                break
+            await asyncio.sleep(0.05)
         assert server.started, "Synthetic LAN Core did not start"
-        with httpx.Client(base_url=origin, trust_env=False, timeout=10) as client:
-            assert client.get("/api/v1/harness-sessions").status_code == 401
-            listed = client.get(
+        async with httpx.AsyncClient(
+            base_url=origin, trust_env=False, timeout=10
+        ) as client:
+            assert (await client.get("/api/v1/harness-sessions")).status_code == 401
+            listed = await client.get(
                 "/api/v1/harness-sessions",
                 headers=auth,
                 params={"engagement_id": "project"},
@@ -274,15 +273,17 @@ async def test_authenticated_lan_core_lists_same_names_after_refresh(tmp_path):
             assert [(row["id"], row["display_name"]) for row in listed.json()] == [
                 ("resume", "Synthetic resumed work")
             ]
-        with httpx.Client(base_url=origin, trust_env=False, timeout=10) as client:
-            refreshed = client.get(
+        async with httpx.AsyncClient(
+            base_url=origin, trust_env=False, timeout=10
+        ) as client:
+            refreshed = await client.get(
                 "/api/v1/harness-sessions",
                 headers=auth,
                 params={"engagement_id": "project"},
             )
             assert refreshed.status_code == 200
             assert refreshed.json() == listed.json()
-            empty = client.get(
+            empty = await client.get(
                 "/api/v1/harness-sessions",
                 headers=auth,
                 params={"engagement_id": "project", "offset": 1},
@@ -301,10 +302,10 @@ async def test_authenticated_lan_core_lists_same_names_after_refresh(tmp_path):
         )
     finally:
         server.should_exit = True
-        thread.join(timeout=15)
+        await asyncio.wait_for(serving, timeout=15)
         listener.close()
         (await store.database.dispose())
-        assert not thread.is_alive(), "Synthetic LAN Core did not shut down"
+        assert serving.done(), "Synthetic LAN Core did not shut down"
 
 
 pytestmark = pytest.mark.anyio

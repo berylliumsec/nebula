@@ -3418,11 +3418,8 @@ def create_app(
             )
         return f"device:{device.id}"
 
-    # Admit before dispatching to workers. The default DB pool has 15 total
-    # connections, while AnyIO permits 40 workers; slow lists must leave room
-    # for ordinary authenticated reads that still acquire on the event loop.
-    # Database initialization determines the deployment-safe bulk admission.
-    # Resolve it at acquisition time, after PostgreSQL budget discovery.
+    # Reserve connection capacity for interactive reads using the discovered
+    # deployment budget. Bulk admission is independent of thread-worker limits.
 
     async def require_entity_listing_capacity() -> AsyncIterator[None]:
         async with store.database.bulk():
@@ -3564,7 +3561,11 @@ def create_app(
         return [
             _device_response(device, current_id=current.id if current else None)
             for device in (
-                await store.find_entities(PairedDeviceSession, {"revoked_at": None})
+                # Keep authentication's small control-state read on the capacity
+                # reserved for ordinary requests while bulk catalogs are busy.
+                await store.find_entities(
+                    PairedDeviceSession, {"revoked_at": None}, bulk=False
+                )
             )
         ]
 
@@ -13630,13 +13631,18 @@ def create_app(
                         "acknowledgement"
                     ),
                 )
-            path = artifact_store.path_for(artifact)
-            if not path.is_file():
-                raise NotFoundError(f"artifact content not found: {artifact_id}")
-            if not artifact_store.verify(artifact):
-                raise ArtifactStoreError(
-                    f"artifact content failed integrity verification: {artifact_id}"
-                )
+
+            def verified_path() -> Path:
+                path = artifact_store.path_for(artifact)
+                if not path.is_file():
+                    raise NotFoundError(f"artifact content not found: {artifact_id}")
+                if not artifact_store.verify(artifact):
+                    raise ArtifactStoreError(
+                        f"artifact content failed integrity verification: {artifact_id}"
+                    )
+                return path
+
+            path = await asyncio.to_thread(verified_path)
             return FileResponse(
                 path,
                 media_type=artifact.media_type,

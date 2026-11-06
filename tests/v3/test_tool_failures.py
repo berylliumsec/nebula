@@ -387,7 +387,7 @@ async def test_butler_unknown_operation_guidance_reaches_next_provider_request(
     store, service, prepared, provider = await _prepared(
         tmp_path, responses, RecordingBroker()
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), "project"
     )
     registry = ToolRegistry()

@@ -3,10 +3,10 @@
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
+    wait_for_database_gate,
 )
 
 import asyncio
-import threading
 from collections import Counter
 from contextlib import suppress
 from contextvars import ContextVar
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 from sqlalchemy import event, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -44,11 +44,11 @@ from tests.v3.test_butler_capabilities import _scheduled_capabilities
 from tests.v3.test_harnesses import _runtime
 
 
-async def test_interactive_and_scheduled_read_entry_points_use_worker_owned_sessions(
+async def test_interactive_and_scheduled_reads_use_task_owned_sessions(
     tmp_path, monkeypatch
 ):
     store, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
-    interactive = ButlerCapabilities(
+    interactive = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id, work=scheduled._work
     )
     (
@@ -61,38 +61,34 @@ async def test_interactive_and_scheduled_read_entry_points_use_worker_owned_sess
             )
         )
     )
-    loop_thread = threading.get_ident()
     observed = []
 
-    class OwnedSession(Session):
+    class OwnedSession(AsyncSession):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.owner = threading.get_ident()
+            self.owner = asyncio.current_task()
+            self.finished = False
+            observed.append(self)
 
-        def scalars(self, *args, **kwargs):
-            assert threading.get_ident() == self.owner
-            return super().scalars(*args, **kwargs)
+        async def scalars(self, *args, **kwargs):
+            assert asyncio.current_task() is self.owner
+            return await super().scalars(*args, **kwargs)
 
-        def commit(self):
-            assert threading.get_ident() == self.owner
-            return super().commit()
+        async def get(self, *args, **kwargs):
+            assert asyncio.current_task() is self.owner
+            return await super().get(*args, **kwargs)
 
-        def close(self):
-            assert threading.get_ident() == self.owner
-            return super().close()
+        async def commit(self):
+            assert asyncio.current_task() is self.owner
+            return await super().commit()
 
-    store.database._session_factory = sessionmaker(
+        async def close(self):
+            await super().close()
+            self.finished = True
+
+    store.database._session_factory = async_sessionmaker(
         bind=store.database.engine, class_=OwnedSession, expire_on_commit=False
     )
-    for method in ("find_entities", "list_entities", "iter_readable_entities"):
-        original = getattr(store, method)
-
-        def checked(*args, selected=original, **kwargs):
-            assert threading.get_ident() != loop_thread, selected.__name__
-            observed.append(selected.__name__)
-            return selected(*args, **kwargs)
-
-        monkeypatch.setattr(store, method, checked)
 
     async def exercise():
         for operation in (
@@ -149,27 +145,29 @@ async def test_interactive_and_scheduled_read_entry_points_use_worker_owned_sess
 
     (await exercise())
     assert observed
+    assert all(session.finished for session in observed)
 
 
 async def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp_path):
     store, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
     app = scheduled._work.app
-    release = threading.Event()
-    guard = threading.Lock()
-    entered = 0
-    loop_thread = threading.get_ident()
+    release = asyncio.Event()
+    entered = active = peak = 0
 
     def hold_catalog(conn, cursor, statement, parameters, context, executemany):
-        nonlocal entered
+        nonlocal entered, active, peak
         if (
             not statement.startswith("SELECT")
             or McpServerProfile.entity_kind not in parameters
         ):
             return
-        assert threading.get_ident() != loop_thread
-        with guard:
-            entered += 1
-        assert release.wait(5), "catalog reads blocked Core's request loop"
+        entered += 1
+        active += 1
+        peak = max(peak, active)
+        try:
+            wait_for_database_gate(conn, release)
+        finally:
+            active -= 1
 
     event.listen(
         store.database.engine.sync_engine, "before_cursor_execute", hold_catalog
@@ -214,7 +212,12 @@ async def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp
             for task in tasks[:4]:
                 task.cancel()
             await asyncio.sleep(0.05)
-            assert entered == 4, "cancellation released a still-running reader's slot"
+            assert entered >= 4
+            assert active <= 4 and peak <= 4
+            assert (
+                store.database.pool_snapshot()["checked_out"]
+                <= store.database.pool_size
+            )
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://core.test"
             ) as client:
@@ -233,8 +236,6 @@ async def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp
         finally:
             release.set()
             await asyncio.gather(*tasks, return_exceptions=True)
-            # Drain all four physical workers, including cancelled callers.
-            await asyncio.gather(*(read_in_worker(lambda: None) for _ in range(4)))
 
     try:
         (await exercise())
@@ -382,7 +383,7 @@ async def test_chat_preview_reads_recent_active_messages_in_sequence_order(
         return original(row, model)
 
     monkeypatch.setattr(storage, "_row_to_entity", counted)
-    result = scheduled._work.chat_detail(project.id, chat.id)
+    result = await scheduled._work.chat_detail(project.id, chat.id)
     assert result["recent_messages"] == [
         {"id": item.id, "role": item.role.value, "content": item.content[:2000]}
         for item in expected
@@ -549,19 +550,15 @@ async def test_slow_catalog_and_policy_status_leave_core_responsive(tmp_path, re
         if resource == "scope-candidates"
         else ScopePolicy.entity_kind
     )
-    loop_thread = threading.get_ident()
     entered = 0
-    release = threading.Event()
-    guard = threading.Lock()
+    release = asyncio.Event()
 
     def held(conn, cursor, statement, parameters, context, executemany):
         nonlocal entered
         if not statement.startswith("SELECT") or kind not in parameters:
             return
-        assert threading.get_ident() != loop_thread
-        with guard:
-            entered += 1
-        assert release.wait(5), "status read blocked Core's request loop"
+        entered += 1
+        wait_for_database_gate(conn, release)
 
     event.listen(store.database.engine.sync_engine, "before_cursor_execute", held)
 
@@ -631,15 +628,13 @@ async def test_cleanup_yields_and_only_discards_expired_detached_popups(
     runtime = Mock(cancel_turn=AsyncMock(), close_session=AsyncMock())
     router = temporary_chat_router(store, lambda: ChatService(store), runtime)
     original = store.expired_temporary_chat_ids
-    loop_thread = threading.get_ident()
-    release = threading.Event()
-    entered = threading.Event()
+    release = asyncio.Event()
+    entered = asyncio.Event()
 
     async def held(before):
-        assert threading.get_ident() != loop_thread
         ids = await original(before)
         entered.set()
-        assert release.wait(3)
+        await asyncio.wait_for(release.wait(), timeout=3)
         return ids
 
     monkeypatch.setattr(store, "expired_temporary_chat_ids", held)
@@ -673,7 +668,9 @@ async def test_cleanup_yields_and_only_discards_expired_detached_popups(
 
     (await exercise())
     assert all(
-        (await store.get(ChatSession, name)) for name in ("ordinary", "side", "renewed")
+        await asyncio.gather(
+            *(store.get(ChatSession, name) for name in ("ordinary", "side", "renewed"))
+        )
     )
     with pytest.raises(NotFoundError):
         (await store.get(ChatSession, "expired"))

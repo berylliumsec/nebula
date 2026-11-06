@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import finish_cleanup
+
 from .async_utils import MaybeAsync
 
 from .async_utils import call_async
@@ -33,7 +35,7 @@ from uuid import uuid4
 
 from pydantic import ConfigDict, Field, field_validator
 
-from .artifacts import ArtifactStore
+from .artifacts import ArtifactStore, StoredArtifact
 from .domain import (
     Engagement,
     Evidence,
@@ -326,51 +328,55 @@ class WorkspaceService:
         (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(path)
         descriptor = await self._open_directory(engagement_id, relative)
-        try:
-            rows: list[WorkspaceEntry] = []
-            with os.scandir(descriptor) as entries:
-                for entry in entries:
-                    try:
-                        metadata = entry.stat(follow_symlinks=False)
-                    except OSError:  # diagnostic-expected: a terminal or execution removed the entry while it was being listed
-                        continue
-                    mode = metadata.st_mode
-                    kind: Literal["file", "directory", "symlink", "other"]
-                    if stat.S_ISLNK(mode):
-                        kind = "symlink"
-                    elif stat.S_ISDIR(mode):
-                        kind = "directory"
-                    elif stat.S_ISREG(mode):
-                        kind = "file"
-                    else:
-                        kind = "other"
-                    entry_path = PurePosixPath(*relative, entry.name).as_posix()
-                    rows.append(
-                        WorkspaceEntry(
-                            path=entry_path,
-                            name=entry.name,
-                            kind=kind,
-                            size=metadata.st_size,
-                            modified_at=datetime.fromtimestamp(
-                                metadata.st_mtime, tz=timezone.utc
-                            ),
+
+        def read_entries() -> WorkspaceListing:
+            try:
+                rows: list[WorkspaceEntry] = []
+                with os.scandir(descriptor) as entries:
+                    for entry in entries:
+                        try:
+                            metadata = entry.stat(follow_symlinks=False)
+                        except OSError:  # diagnostic-expected: a terminal or execution removed the entry while it was being listed
+                            continue
+                        mode = metadata.st_mode
+                        kind: Literal["file", "directory", "symlink", "other"]
+                        if stat.S_ISLNK(mode):
+                            kind = "symlink"
+                        elif stat.S_ISDIR(mode):
+                            kind = "directory"
+                        elif stat.S_ISREG(mode):
+                            kind = "file"
+                        else:
+                            kind = "other"
+                        entry_path = PurePosixPath(*relative, entry.name).as_posix()
+                        rows.append(
+                            WorkspaceEntry(
+                                path=entry_path,
+                                name=entry.name,
+                                kind=kind,
+                                size=metadata.st_size,
+                                modified_at=datetime.fromtimestamp(
+                                    metadata.st_mtime, tz=timezone.utc
+                                ),
+                            )
                         )
-                    )
-        finally:
-            os.close(descriptor)
-        rows.sort(
-            key=lambda row: (row.kind != "directory", row.name.casefold(), row.name)
-        )
-        page = rows[offset : offset + limit]
-        next_offset = offset + len(page) if offset + len(page) < len(rows) else None
-        return WorkspaceListing(
-            engagement_id=engagement_id,
-            path=PurePosixPath(*relative).as_posix() if relative else "",
-            entries=page,
-            offset=offset,
-            next_offset=next_offset,
-            total=len(rows),
-        )
+            finally:
+                os.close(descriptor)
+            rows.sort(
+                key=lambda row: (row.kind != "directory", row.name.casefold(), row.name)
+            )
+            page = rows[offset : offset + limit]
+            next_offset = offset + len(page) if offset + len(page) < len(rows) else None
+            return WorkspaceListing(
+                engagement_id=engagement_id,
+                path=PurePosixPath(*relative).as_posix() if relative else "",
+                entries=page,
+                offset=offset,
+                next_offset=next_offset,
+                total=len(rows),
+            )
+
+        return await finish_cleanup(asyncio.to_thread(read_entries))
 
     @staticmethod
     def _directory_identity(metadata: os.stat_result, *, root: bool = False) -> str:
@@ -419,85 +425,93 @@ class WorkspaceService:
                 entry_identity=self._directory_identity(metadata, root=True),
             )
         parent = await self._open_directory(engagement_id, relative[:-1])
-        try:
-            try:
-                metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
-            except FileNotFoundError as exc:
-                raise ExecutionServiceError(
-                    "workspace_path_missing",
-                    "workspace entry does not exist",
-                    status_code=404,
-                ) from exc
-            if stat.S_ISDIR(metadata.st_mode):
-                return WorkspaceEntryState(
-                    engagement_id=engagement_id,
-                    path=normalized,
-                    kind="directory",
-                    size=metadata.st_size,
-                    entry_identity=self._directory_identity(metadata),
-                )
-            if not stat.S_ISREG(metadata.st_mode):
-                raise ExecutionServiceError(
-                    "workspace_path_invalid",
-                    "workspace entry is not a regular file or directory",
-                    status_code=422,
-                )
-            descriptor = os.open(
-                relative[-1],
-                os.O_RDONLY
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_NONBLOCK", 0),
-                dir_fd=parent,
-            )
-            try:
-                before = os.fstat(descriptor)
-                if not stat.S_ISREG(before.st_mode) or (
-                    before.st_dev,
-                    before.st_ino,
-                ) != (metadata.st_dev, metadata.st_ino):
-                    raise ExecutionServiceError(
-                        "workspace_file_changed",
-                        "workspace file changed while reading",
-                        status_code=412,
-                    )
-                digest = hashlib.sha256()
-                size = 0
-                while chunk := os.read(descriptor, 64 * 1024):
-                    digest.update(chunk)
-                    size += len(chunk)
-                after = os.fstat(descriptor)
-                selected = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
 
-                def identity(row: os.stat_result) -> tuple[int, int, int, int, int]:
-                    return (
-                        row.st_dev,
-                        row.st_ino,
-                        row.st_size,
-                        row.st_mtime_ns,
-                        row.st_ctime_ns,
+        def inspect_file() -> WorkspaceEntryState:
+            try:
+                try:
+                    metadata = os.stat(
+                        relative[-1], dir_fd=parent, follow_symlinks=False
+                    )
+                except FileNotFoundError as exc:
+                    raise ExecutionServiceError(
+                        "workspace_path_missing",
+                        "workspace entry does not exist",
+                        status_code=404,
+                    ) from exc
+                if stat.S_ISDIR(metadata.st_mode):
+                    return WorkspaceEntryState(
+                        engagement_id=engagement_id,
+                        path=normalized,
+                        kind="directory",
+                        size=metadata.st_size,
+                        entry_identity=self._directory_identity(metadata),
+                    )
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ExecutionServiceError(
+                        "workspace_path_invalid",
+                        "workspace entry is not a regular file or directory",
+                        status_code=422,
+                    )
+                descriptor = os.open(
+                    relative[-1],
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=parent,
+                )
+                try:
+                    before = os.fstat(descriptor)
+                    if not stat.S_ISREG(before.st_mode) or (
+                        before.st_dev,
+                        before.st_ino,
+                    ) != (metadata.st_dev, metadata.st_ino):
+                        raise ExecutionServiceError(
+                            "workspace_file_changed",
+                            "workspace file changed while reading",
+                            status_code=412,
+                        )
+                    digest = hashlib.sha256()
+                    size = 0
+                    while chunk := os.read(descriptor, 64 * 1024):
+                        digest.update(chunk)
+                        size += len(chunk)
+                    after = os.fstat(descriptor)
+                    selected = os.stat(
+                        relative[-1], dir_fd=parent, follow_symlinks=False
                     )
 
-                if (
-                    identity(before) != identity(after)
-                    or identity(after) != identity(selected)
-                    or size != before.st_size
-                ):
-                    raise ExecutionServiceError(
-                        "workspace_file_changed",
-                        "workspace file changed while reading",
-                        status_code=412,
+                    def identity(row: os.stat_result) -> tuple[int, int, int, int, int]:
+                        return (
+                            row.st_dev,
+                            row.st_ino,
+                            row.st_size,
+                            row.st_mtime_ns,
+                            row.st_ctime_ns,
+                        )
+
+                    if (
+                        identity(before) != identity(after)
+                        or identity(after) != identity(selected)
+                        or size != before.st_size
+                    ):
+                        raise ExecutionServiceError(
+                            "workspace_file_changed",
+                            "workspace file changed while reading",
+                            status_code=412,
+                        )
+                    return WorkspaceEntryState(
+                        engagement_id=engagement_id,
+                        path=normalized,
+                        kind="file",
+                        size=size,
+                        sha256=digest.hexdigest(),
                     )
-                return WorkspaceEntryState(
-                    engagement_id=engagement_id,
-                    path=normalized,
-                    kind="file",
-                    size=size,
-                    sha256=digest.hexdigest(),
-                )
+                finally:
+                    os.close(descriptor)
             finally:
-                os.close(descriptor)
-        finally:
-            os.close(parent)
+                os.close(parent)
+
+        return await finish_cleanup(asyncio.to_thread(inspect_file))
 
     async def tasks(self, engagement_id: str) -> WorkspaceTaskList:
         """Discover declarative project tasks without evaluating project code."""
@@ -638,57 +652,62 @@ class WorkspaceService:
                 )
 
         root = await self._workspace_root(engagement_id)
-        scanned = 0
-        truncated = False
-        pytest_files: list[str] = []
-        for directory, names, files in os.walk(root, followlinks=False):
-            names[:] = [
-                name
-                for name in names
-                if name
-                not in {
-                    ".git",
-                    "node_modules",
-                    ".venv",
-                    "venv",
-                    "dist",
-                    "build",
-                    "__pycache__",
-                }
-                and not (Path(directory) / name).is_symlink()
-            ]
-            for filename in files:
-                scanned += 1
-                if scanned > 5_000:
-                    truncated = True
+
+        def discover_tests() -> tuple[int, bool]:
+            scanned = 0
+            truncated = False
+            pytest_files: list[str] = []
+            for directory, names, files in os.walk(root, followlinks=False):
+                names[:] = [
+                    name
+                    for name in names
+                    if name
+                    not in {
+                        ".git",
+                        "node_modules",
+                        ".venv",
+                        "venv",
+                        "dist",
+                        "build",
+                        "__pycache__",
+                    }
+                    and not (Path(directory) / name).is_symlink()
+                ]
+                for filename in files:
+                    scanned += 1
+                    if scanned > 5_000:
+                        truncated = True
+                        break
+                    candidate = Path(directory) / filename
+                    if candidate.is_symlink():
+                        continue
+                    relative = candidate.relative_to(root).as_posix()
+                    if (
+                        filename.startswith("test_") or filename.endswith("_test.py")
+                    ) and filename.endswith(".py"):
+                        pytest_files.append(relative)
+                if truncated:
                     break
-                candidate = Path(directory) / filename
-                if candidate.is_symlink():
-                    continue
-                relative = candidate.relative_to(root).as_posix()
-                if (
-                    filename.startswith("test_") or filename.endswith("_test.py")
-                ) and filename.endswith(".py"):
-                    pytest_files.append(relative)
-            if truncated:
-                break
-        if pytest_files:
-            add(
-                "pytest: all discovered tests",
-                "python -m pytest",
-                "test",
-                "pytest",
-                f"{len(pytest_files)} test files discovered",
-            )
-            for path in sorted(pytest_files)[:100]:
+            if pytest_files:
                 add(
-                    f"pytest: {path}",
-                    f"python -m pytest {shlex.quote(path)}",
+                    "pytest: all discovered tests",
+                    "python -m pytest",
                     "test",
                     "pytest",
-                    "Run this discovered test file",
-                    path,
+                    f"{len(pytest_files)} test files discovered",
                 )
+                for path in sorted(pytest_files)[:100]:
+                    add(
+                        f"pytest: {path}",
+                        f"python -m pytest {shlex.quote(path)}",
+                        "test",
+                        "pytest",
+                        "Run this discovered test file",
+                        path,
+                    )
+            return scanned, truncated
+
+        scanned, truncated = await asyncio.to_thread(discover_tests)
         if (await self._read_task_manifest(engagement_id, "go.mod")) is not None:
             add(
                 "Go: test workspace",
@@ -868,17 +887,21 @@ class WorkspaceService:
             if exc.status_code == 404:
                 return None
             raise
-        with stream:
-            if metadata.st_size > max_bytes:
+
+        def read_manifest() -> str | None:
+            with stream:
+                if metadata.st_size > max_bytes:
+                    return None
+                payload = stream.read(max_bytes + 1)
+            if len(payload) > max_bytes or b"\0" in payload:
                 return None
-            payload = stream.read(max_bytes + 1)
-        if len(payload) > max_bytes or b"\0" in payload:
-            return None
-        try:
-            return payload.decode("utf-8")
-        except UnicodeDecodeError:
-            # diagnostic-expected: non-UTF-8 optional task manifests are unsupported.
-            return None
+            try:
+                return payload.decode("utf-8")
+            except UnicodeDecodeError:
+                # diagnostic-expected: non-UTF-8 optional task manifests are unsupported.
+                return None
+
+        return await finish_cleanup(asyncio.to_thread(read_manifest))
 
     async def _read_vscode_manifest(
         self, engagement_id: str, path: str
@@ -889,23 +912,27 @@ class WorkspaceService:
             if exc.status_code == 404:
                 return None, None
             raise
-        with stream:
-            if metadata.st_size > MAX_VSCODE_CONFIGURATION_BYTES:
+
+        def read_manifest() -> tuple[str | None, str | None]:
+            with stream:
+                if metadata.st_size > MAX_VSCODE_CONFIGURATION_BYTES:
+                    return None, (
+                        f"{path} exceeds Nebula's {MAX_VSCODE_CONFIGURATION_BYTES // 1024} KiB configuration limit."
+                    )
+                payload = stream.read(MAX_VSCODE_CONFIGURATION_BYTES + 1)
+            if len(payload) > MAX_VSCODE_CONFIGURATION_BYTES:
                 return None, (
                     f"{path} exceeds Nebula's {MAX_VSCODE_CONFIGURATION_BYTES // 1024} KiB configuration limit."
                 )
-            payload = stream.read(MAX_VSCODE_CONFIGURATION_BYTES + 1)
-        if len(payload) > MAX_VSCODE_CONFIGURATION_BYTES:
-            return None, (
-                f"{path} exceeds Nebula's {MAX_VSCODE_CONFIGURATION_BYTES // 1024} KiB configuration limit."
-            )
-        if b"\0" in payload:
-            return None, f"{path} must be a plain-text configuration file."
-        try:
-            return payload.decode("utf-8"), None
-        except UnicodeDecodeError:
-            # diagnostic-expected: the caller renders this exact configuration error.
-            return None, f"{path} must use UTF-8 text."
+            if b"\0" in payload:
+                return None, f"{path} must be a plain-text configuration file."
+            try:
+                return payload.decode("utf-8"), None
+            except UnicodeDecodeError:
+                # diagnostic-expected: the caller renders this exact configuration error.
+                return None, f"{path} must use UTF-8 text."
+
+        return await finish_cleanup(asyncio.to_thread(read_manifest))
 
     async def debug_configurations(
         self, engagement_id: str, active_path: str
@@ -1113,45 +1140,49 @@ class WorkspaceService:
     async def preview(self, engagement_id: str, path: str) -> WorkspacePreview:
         relative = _relative_parts(path, require_value=True)
         stream, metadata = await self._open_regular(engagement_id, relative)
-        try:
-            payload = stream.read(MAX_PREVIEW_BYTES + 1)
-        finally:
-            stream.close()
-        visible = payload[:MAX_PREVIEW_BYTES]
-        if b"\x00" in visible:
-            raise ExecutionServiceError(
-                "unsupported_preview",
-                "binary files cannot be previewed",
-                status_code=415,
+
+        def read_preview() -> WorkspacePreview:
+            try:
+                payload = stream.read(MAX_PREVIEW_BYTES + 1)
+            finally:
+                stream.close()
+            visible = payload[:MAX_PREVIEW_BYTES]
+            if b"\x00" in visible:
+                raise ExecutionServiceError(
+                    "unsupported_preview",
+                    "binary files cannot be previewed",
+                    status_code=415,
+                )
+            # A bounded preview may end inside a multi-byte character. Decode only
+            # complete sequences and report the bytes actually decoded; a partial
+            # trailing sequence is invalid only when the file really ends there.
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+            try:
+                text = decoder.decode(visible, final=len(payload) <= MAX_PREVIEW_BYTES)
+            except UnicodeDecodeError as exc:
+                record_caught_exception(
+                    "workspace",
+                    "workspace.workspace.caught_failure_001",
+                    "A handled workspace operation raised an exception.",
+                    exc,
+                    stage="workspace",
+                )
+                raise ExecutionServiceError(
+                    "unsupported_preview",
+                    "file is not valid UTF-8 plain text",
+                    status_code=415,
+                ) from exc
+            visible = visible[: len(visible) - len(decoder.getstate()[0])]
+            return WorkspacePreview(
+                engagement_id=engagement_id,
+                path=PurePosixPath(*relative).as_posix(),
+                text=text,
+                bytes_returned=len(visible),
+                truncated=metadata.st_size > len(visible),
+                preview_sha256=hashlib.sha256(visible).hexdigest(),
             )
-        # A bounded preview may end inside a multi-byte character. Decode only
-        # complete sequences and report the bytes actually decoded; a partial
-        # trailing sequence is invalid only when the file really ends there.
-        decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
-        try:
-            text = decoder.decode(visible, final=len(payload) <= MAX_PREVIEW_BYTES)
-        except UnicodeDecodeError as exc:
-            record_caught_exception(
-                "workspace",
-                "workspace.workspace.caught_failure_001",
-                "A handled workspace operation raised an exception.",
-                exc,
-                stage="workspace",
-            )
-            raise ExecutionServiceError(
-                "unsupported_preview",
-                "file is not valid UTF-8 plain text",
-                status_code=415,
-            ) from exc
-        visible = visible[: len(visible) - len(decoder.getstate()[0])]
-        return WorkspacePreview(
-            engagement_id=engagement_id,
-            path=PurePosixPath(*relative).as_posix(),
-            text=text,
-            bytes_returned=len(visible),
-            truncated=metadata.st_size > len(visible),
-            preview_sha256=hashlib.sha256(visible).hexdigest(),
-        )
+
+        return await finish_cleanup(asyncio.to_thread(read_preview))
 
     async def search(
         self,
@@ -1175,195 +1206,202 @@ class WorkspaceService:
         relative = _relative_parts(path)
         root = await self._workspace_root(engagement_id)
         descriptor: int | None = await self._open_directory(engagement_id, relative)
-        needle = normalized_query.casefold()
-        matches: list[WorkspaceSearchMatch] = []
-        scanned_files = 0
-        skipped_directories = 0
-        truncated = False
-        ripgrep = (
-            shutil.which("rg")
-            if mode == "text" and os.path.isdir("/proc/self/fd")
-            else None
-        )
-        text_batch: list[tuple[str, int, int, int, int]] = []
 
-        def flush_text_batch() -> None:
-            nonlocal ripgrep, scanned_files, skipped_directories, truncated
-            if not text_batch:
-                return
-            large_descriptors = tuple(
-                item[1]
-                for item in text_batch
-                if item[4] >= RIPGREP_SEARCH_MIN_FILE_BYTES
-            )
-            candidates = (
-                _ripgrep_candidates(ripgrep, large_descriptors, normalized_query)
-                if ripgrep is not None and large_descriptors
+        def search_directory() -> WorkspaceSearchResult:
+            nonlocal descriptor
+            needle = normalized_query.casefold()
+            matches: list[WorkspaceSearchMatch] = []
+            scanned_files = 0
+            skipped_directories = 0
+            truncated = False
+            ripgrep = (
+                shutil.which("rg")
+                if mode == "text" and os.path.isdir("/proc/self/fd")
                 else None
             )
-            if large_descriptors and candidates is None:
-                # Keep the original search semantics when rg is absent, times out,
-                # or cannot safely prefilter this query.
-                ripgrep = None
+            text_batch: list[tuple[str, int, int, int, int]] = []
+
+            def flush_text_batch() -> None:
+                nonlocal ripgrep, scanned_files, skipped_directories, truncated
+                if not text_batch:
+                    return
+                large_descriptors = tuple(
+                    item[1]
+                    for item in text_batch
+                    if item[4] >= RIPGREP_SEARCH_MIN_FILE_BYTES
+                )
+                candidates = (
+                    _ripgrep_candidates(ripgrep, large_descriptors, normalized_query)
+                    if ripgrep is not None and large_descriptors
+                    else None
+                )
+                if large_descriptors and candidates is None:
+                    # Keep the original search semantics when rg is absent, times out,
+                    # or cannot safely prefilter this query.
+                    ripgrep = None
+                try:
+                    for (
+                        entry_path,
+                        file_descriptor,
+                        file_count,
+                        skipped_count,
+                        size,
+                    ) in text_batch:
+                        if (
+                            size >= RIPGREP_SEARCH_MIN_FILE_BYTES
+                            and candidates is not None
+                            and file_descriptor not in candidates
+                        ):
+                            continue
+                        for match in _matching_text_lines(
+                            file_descriptor, entry_path, needle
+                        ):
+                            matches.append(match)
+                            if len(matches) >= limit:
+                                truncated = True
+                                scanned_files = file_count
+                                skipped_directories = skipped_count
+                                return
+                finally:
+                    for _, file_descriptor, _, _, _ in text_batch:
+                        os.close(file_descriptor)
+                    text_batch.clear()
+
+            # Directories wait as relative paths and are opened one at a time when
+            # popped, so the walk never holds one descriptor per pending folder.
+            directory_parts = relative
+            pending: list[tuple[str, ...]] = []
+
             try:
-                for (
-                    entry_path,
-                    file_descriptor,
-                    file_count,
-                    skipped_count,
-                    size,
-                ) in text_batch:
-                    if (
-                        size >= RIPGREP_SEARCH_MIN_FILE_BYTES
-                        and candidates is not None
-                        and file_descriptor not in candidates
-                    ):
-                        continue
-                    for match in _matching_text_lines(
-                        file_descriptor, entry_path, needle
-                    ):
-                        matches.append(match)
-                        if len(matches) >= limit:
-                            truncated = True
-                            scanned_files = file_count
-                            skipped_directories = skipped_count
-                            return
-            finally:
-                for _, file_descriptor, _, _, _ in text_batch:
-                    os.close(file_descriptor)
-                text_batch.clear()
-
-        # Directories wait as relative paths and are opened one at a time when
-        # popped, so the walk never holds one descriptor per pending folder.
-        directory_parts = relative
-        pending: list[tuple[str, ...]] = []
-
-        try:
-            while not truncated:
-                if descriptor is None:
-                    if not pending:
-                        break
-                    directory_parts = pending.pop()
+                while not truncated:
+                    if descriptor is None:
+                        if not pending:
+                            break
+                        directory_parts = pending.pop()
+                        try:
+                            descriptor = _open_directory_chain(root, directory_parts)
+                        except OSError as exc:
+                            if exc.errno in {errno.EMFILE, errno.ENFILE}:
+                                truncated = True
+                                break
+                            # diagnostic-expected: skip raced or unreadable folders.
+                            continue
                     try:
-                        descriptor = _open_directory_chain(root, directory_parts)
+                        with os.scandir(descriptor) as entries:
+                            rows = sorted(
+                                entries, key=lambda entry: entry.name.casefold()
+                            )
+                        for entry in rows:
+                            try:
+                                metadata = os.stat(
+                                    entry.name, dir_fd=descriptor, follow_symlinks=False
+                                )
+                            except OSError:
+                                # diagnostic-expected: an entry can disappear while a live
+                                # Terminal is mutating the same workspace.
+                                continue
+                            entry_parts = (*directory_parts, entry.name)
+                            entry_path = PurePosixPath(*entry_parts).as_posix()
+                            if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(
+                                metadata.st_mode
+                            ):
+                                if entry.name in WORKSPACE_SEARCH_EXCLUDES:
+                                    skipped_directories += 1
+                                    continue
+                                if mode == "files" and needle in entry_path.casefold():
+                                    matches.append(
+                                        WorkspaceSearchMatch(
+                                            path=entry_path,
+                                            kind="directory",
+                                            preview=entry_path,
+                                        )
+                                    )
+                                    if len(matches) >= limit:
+                                        truncated = True
+                                        break
+                                pending.append(entry_parts)
+                                continue
+                            if not stat.S_ISREG(metadata.st_mode):
+                                continue
+                            scanned_files += 1
+                            if scanned_files > MAX_SEARCH_SCANNED_FILES:
+                                truncated = True
+                                break
+                            if mode == "files":
+                                if needle in entry_path.casefold():
+                                    matches.append(
+                                        WorkspaceSearchMatch(
+                                            path=entry_path,
+                                            kind="path",
+                                            preview=entry_path,
+                                        )
+                                    )
+                            elif metadata.st_size <= MAX_SEARCH_FILE_BYTES:
+                                file_descriptor: int | None = None
+                                try:
+                                    file_descriptor = os.open(
+                                        entry.name,
+                                        os.O_RDONLY
+                                        | getattr(os, "O_NOFOLLOW", 0)
+                                        | getattr(os, "O_NONBLOCK", 0),
+                                        dir_fd=descriptor,
+                                    )
+                                    opened = os.fstat(file_descriptor)
+                                    if (
+                                        not stat.S_ISREG(opened.st_mode)
+                                        or opened.st_size > MAX_SEARCH_FILE_BYTES
+                                    ):
+                                        continue
+                                    text_batch.append(
+                                        (
+                                            entry_path,
+                                            file_descriptor,
+                                            scanned_files,
+                                            skipped_directories,
+                                            opened.st_size,
+                                        )
+                                    )
+                                    file_descriptor = None
+                                except OSError:
+                                    # diagnostic-expected: raced or unreadable files are
+                                    # omitted from bounded text search.
+                                    continue
+                                finally:
+                                    if file_descriptor is not None:
+                                        os.close(file_descriptor)
+                                if len(text_batch) >= RIPGREP_SEARCH_BATCH_FILES:
+                                    flush_text_batch()
+                            if truncated:
+                                break
+                            if len(matches) >= limit:
+                                truncated = True
+                                break
                     except OSError as exc:
+                        # diagnostic-expected: a folder that vanished mid-walk is skipped;
+                        # an exhausted descriptor table ends the search as truncated.
                         if exc.errno in {errno.EMFILE, errno.ENFILE}:
                             truncated = True
-                            break
-                        # diagnostic-expected: skip raced or unreadable folders.
-                        continue
-                try:
-                    with os.scandir(descriptor) as entries:
-                        rows = sorted(entries, key=lambda entry: entry.name.casefold())
-                    for entry in rows:
-                        try:
-                            metadata = os.stat(
-                                entry.name, dir_fd=descriptor, follow_symlinks=False
-                            )
-                        except OSError:
-                            # diagnostic-expected: an entry can disappear while a live
-                            # Terminal is mutating the same workspace.
-                            continue
-                        entry_parts = (*directory_parts, entry.name)
-                        entry_path = PurePosixPath(*entry_parts).as_posix()
-                        if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(
-                            metadata.st_mode
-                        ):
-                            if entry.name in WORKSPACE_SEARCH_EXCLUDES:
-                                skipped_directories += 1
-                                continue
-                            if mode == "files" and needle in entry_path.casefold():
-                                matches.append(
-                                    WorkspaceSearchMatch(
-                                        path=entry_path,
-                                        kind="directory",
-                                        preview=entry_path,
-                                    )
-                                )
-                                if len(matches) >= limit:
-                                    truncated = True
-                                    break
-                            pending.append(entry_parts)
-                            continue
-                        if not stat.S_ISREG(metadata.st_mode):
-                            continue
-                        scanned_files += 1
-                        if scanned_files > MAX_SEARCH_SCANNED_FILES:
-                            truncated = True
-                            break
-                        if mode == "files":
-                            if needle in entry_path.casefold():
-                                matches.append(
-                                    WorkspaceSearchMatch(
-                                        path=entry_path,
-                                        kind="path",
-                                        preview=entry_path,
-                                    )
-                                )
-                        elif metadata.st_size <= MAX_SEARCH_FILE_BYTES:
-                            file_descriptor: int | None = None
-                            try:
-                                file_descriptor = os.open(
-                                    entry.name,
-                                    os.O_RDONLY
-                                    | getattr(os, "O_NOFOLLOW", 0)
-                                    | getattr(os, "O_NONBLOCK", 0),
-                                    dir_fd=descriptor,
-                                )
-                                opened = os.fstat(file_descriptor)
-                                if (
-                                    not stat.S_ISREG(opened.st_mode)
-                                    or opened.st_size > MAX_SEARCH_FILE_BYTES
-                                ):
-                                    continue
-                                text_batch.append(
-                                    (
-                                        entry_path,
-                                        file_descriptor,
-                                        scanned_files,
-                                        skipped_directories,
-                                        opened.st_size,
-                                    )
-                                )
-                                file_descriptor = None
-                            except OSError:
-                                # diagnostic-expected: raced or unreadable files are
-                                # omitted from bounded text search.
-                                continue
-                            finally:
-                                if file_descriptor is not None:
-                                    os.close(file_descriptor)
-                            if len(text_batch) >= RIPGREP_SEARCH_BATCH_FILES:
-                                flush_text_batch()
-                        if truncated:
-                            break
-                        if len(matches) >= limit:
-                            truncated = True
-                            break
-                except OSError as exc:
-                    # diagnostic-expected: a folder that vanished mid-walk is skipped;
-                    # an exhausted descriptor table ends the search as truncated.
-                    if exc.errno in {errno.EMFILE, errno.ENFILE}:
-                        truncated = True
-                finally:
+                    finally:
+                        os.close(descriptor)
+                        descriptor = None
+                flush_text_batch()
+            finally:
+                if descriptor is not None:
                     os.close(descriptor)
-                    descriptor = None
-            flush_text_batch()
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
-            for _, file_descriptor, _, _, _ in text_batch:
-                os.close(file_descriptor)
+                for _, file_descriptor, _, _, _ in text_batch:
+                    os.close(file_descriptor)
 
-        return WorkspaceSearchResult(
-            engagement_id=engagement_id,
-            query=normalized_query,
-            mode=mode,
-            matches=matches[:limit],
-            scanned_files=min(scanned_files, MAX_SEARCH_SCANNED_FILES),
-            skipped_directories=skipped_directories,
-            truncated=truncated,
-        )
+            return WorkspaceSearchResult(
+                engagement_id=engagement_id,
+                query=normalized_query,
+                mode=mode,
+                matches=matches[:limit],
+                scanned_files=min(scanned_files, MAX_SEARCH_SCANNED_FILES),
+                skipped_directories=skipped_directories,
+                truncated=truncated,
+            )
+
+        return await finish_cleanup(asyncio.to_thread(search_directory))
 
     async def source_control_status(self, engagement_id: str) -> SourceControlStatus:
         """Return bounded Git status without executing repository-configured helpers."""
@@ -1525,22 +1563,27 @@ class WorkspaceService:
         relative = _relative_parts(request.path, require_value=True)
         stream, _metadata = await self._open_regular(engagement_id, relative)
         path = PurePosixPath(*relative).as_posix()
-        try:
-            stored = self.artifact_store.put_stream_with_status(
-                stream,
-                engagement_id=engagement.id,
-                filename=relative[-1],
-                media_type=mimetypes.guess_type(relative[-1])[0],
-                source="engagement-workspace-promotion",
-                metadata={"workspace_path": path},
-            )
-        finally:
-            stream.close()
-        if not self.artifact_store.verify(stored.artifact):
-            self.artifact_store.discard_new_blob(stored)
-            raise ExecutionServiceError(
-                "artifact_integrity", "promoted file failed hash verification"
-            )
+
+        def promote_file() -> StoredArtifact:
+            try:
+                stored = self.artifact_store.put_stream_with_status(
+                    stream,
+                    engagement_id=engagement.id,
+                    filename=relative[-1],
+                    media_type=mimetypes.guess_type(relative[-1])[0],
+                    source="engagement-workspace-promotion",
+                    metadata={"workspace_path": path},
+                )
+            finally:
+                stream.close()
+            if not self.artifact_store.verify(stored.artifact):
+                self.artifact_store.discard_new_blob(stored)
+                raise ExecutionServiceError(
+                    "artifact_integrity", "promoted file failed hash verification"
+                )
+            return stored
+
+        stored = await finish_cleanup(asyncio.to_thread(promote_file))
         evidence = Evidence(
             engagement_id=engagement.id,
             evidence_type="workspace-file",
@@ -1562,7 +1605,7 @@ class WorkspaceService:
                 caught_error,
                 stage="workspace",
             )
-            self.artifact_store.discard_new_blob(stored)
+            await asyncio.to_thread(self.artifact_store.discard_new_blob, stored)
             raise
         (
             await self.store.append_operation_event(
@@ -1798,15 +1841,20 @@ class WorkspaceService:
                 break
             offset += len(executions)
         root = await self._workspace_root(engagement_id)
-        descriptor = os.open(
-            root,
-            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-        )
-        try:
-            removed = _remove_directory_contents(descriptor)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+
+        def reset_directory() -> int:
+            descriptor = os.open(
+                root,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                removed = _remove_directory_contents(descriptor)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            return removed
+
+        removed = await finish_cleanup(asyncio.to_thread(reset_directory))
         operation_id = str(uuid4())
         (
             await self.store.append_operation_event(
@@ -1879,26 +1927,30 @@ class WorkspaceService:
         (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(request.path, require_value=True)
         parent = await self._open_directory(engagement_id, relative[:-1])
-        try:
-            current = self._directory_identity(
-                os.fstat(parent), root=len(relative) == 1
-            )
-            if not hmac.compare_digest(current, request.expected_parent_identity):
-                raise ExecutionServiceError(
-                    "workspace_directory_changed",
-                    "workspace parent directory changed after it was selected",
-                    status_code=412,
+
+        def create_entry() -> None:
+            try:
+                current = self._directory_identity(
+                    os.fstat(parent), root=len(relative) == 1
                 )
-            os.mkdir(relative[-1], 0o700, dir_fd=parent)
-            os.fsync(parent)
-        except FileExistsError as exc:
-            raise ExecutionServiceError(
-                "workspace_file_exists",
-                "a workspace entry already has that name",
-                status_code=409,
-            ) from exc
-        finally:
-            os.close(parent)
+                if not hmac.compare_digest(current, request.expected_parent_identity):
+                    raise ExecutionServiceError(
+                        "workspace_directory_changed",
+                        "workspace parent directory changed after it was selected",
+                        status_code=412,
+                    )
+                os.mkdir(relative[-1], 0o700, dir_fd=parent)
+                os.fsync(parent)
+            except FileExistsError as exc:
+                raise ExecutionServiceError(
+                    "workspace_file_exists",
+                    "a workspace entry already has that name",
+                    status_code=409,
+                ) from exc
+            finally:
+                os.close(parent)
+
+        await finish_cleanup(asyncio.to_thread(create_entry))
         result = WorkspaceMutationResult(
             engagement_id=engagement_id, path=PurePosixPath(*relative).as_posix()
         )
@@ -1921,44 +1973,48 @@ class WorkspaceService:
                 status_code=422,
             )
         parent = await self._open_directory(engagement_id, relative[:-1])
-        try:
-            metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
-            if request.expected_sha256 is not None:
-                self._require_file_hash(parent, relative[-1], request.expected_sha256)
-            if request.expected_entry_identity is not None:
-                if not stat.S_ISDIR(metadata.st_mode):
-                    raise ExecutionServiceError(
-                        "workspace_path_invalid",
-                        "selected entry is not a directory",
-                        status_code=422,
-                    )
-                self._require_directory_identity(
-                    parent, relative[-1], request.expected_entry_identity
-                )
+
+        def rename_entry() -> None:
             try:
-                os.stat(request.new_name, dir_fd=parent, follow_symlinks=False)
-            except (
-                FileNotFoundError
-            ):  # diagnostic-expected: absence confirms the rename target is available
-                pass
-            else:
-                raise ExecutionServiceError(
-                    "workspace_file_exists",
-                    "a workspace entry already has that name",
-                    status_code=409,
+                metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+                if request.expected_sha256 is not None:
+                    self._require_file_hash(
+                        parent, relative[-1], request.expected_sha256
+                    )
+                if request.expected_entry_identity is not None:
+                    if not stat.S_ISDIR(metadata.st_mode):
+                        raise ExecutionServiceError(
+                            "workspace_path_invalid",
+                            "selected entry is not a directory",
+                            status_code=422,
+                        )
+                    self._require_directory_identity(
+                        parent, relative[-1], request.expected_entry_identity
+                    )
+                try:
+                    os.stat(request.new_name, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:  # diagnostic-expected: absence confirms the rename target is available
+                    pass
+                else:
+                    raise ExecutionServiceError(
+                        "workspace_file_exists",
+                        "a workspace entry already has that name",
+                        status_code=409,
+                    )
+                os.rename(
+                    relative[-1], request.new_name, src_dir_fd=parent, dst_dir_fd=parent
                 )
-            os.rename(
-                relative[-1], request.new_name, src_dir_fd=parent, dst_dir_fd=parent
-            )
-            os.fsync(parent)
-        except FileNotFoundError as exc:
-            raise ExecutionServiceError(
-                "workspace_path_missing",
-                "workspace entry does not exist",
-                status_code=404,
-            ) from exc
-        finally:
-            os.close(parent)
+                os.fsync(parent)
+            except FileNotFoundError as exc:
+                raise ExecutionServiceError(
+                    "workspace_path_missing",
+                    "workspace entry does not exist",
+                    status_code=404,
+                ) from exc
+            finally:
+                os.close(parent)
+
+        await finish_cleanup(asyncio.to_thread(rename_entry))
         path = PurePosixPath(*relative[:-1], request.new_name).as_posix()
         result = WorkspaceMutationResult(
             engagement_id=engagement_id, path=path, previous_path=request.path
@@ -1977,36 +2033,40 @@ class WorkspaceService:
         (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(path, require_value=True)
         parent = await self._open_directory(engagement_id, relative[:-1])
-        try:
-            metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
-            if expected_sha256 is not None:
-                self._require_file_hash(parent, relative[-1], expected_sha256)
-            if expected_entry_identity is not None:
-                self._require_directory_identity(
-                    parent, relative[-1], expected_entry_identity
-                )
-            if stat.S_ISDIR(metadata.st_mode):
-                try:
-                    os.rmdir(relative[-1], dir_fd=parent)
-                except OSError as exc:
-                    if exc.errno == errno.ENOTEMPTY:
-                        raise ExecutionServiceError(
-                            "workspace_directory_not_empty",
-                            "only empty workspace directories can be deleted",
-                            status_code=409,
-                        ) from exc
-                    raise
-            else:
-                os.unlink(relative[-1], dir_fd=parent)
-            os.fsync(parent)
-        except FileNotFoundError as exc:
-            raise ExecutionServiceError(
-                "workspace_path_missing",
-                "workspace entry does not exist",
-                status_code=404,
-            ) from exc
-        finally:
-            os.close(parent)
+
+        def delete_entry() -> None:
+            try:
+                metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
+                if expected_sha256 is not None:
+                    self._require_file_hash(parent, relative[-1], expected_sha256)
+                if expected_entry_identity is not None:
+                    self._require_directory_identity(
+                        parent, relative[-1], expected_entry_identity
+                    )
+                if stat.S_ISDIR(metadata.st_mode):
+                    try:
+                        os.rmdir(relative[-1], dir_fd=parent)
+                    except OSError as exc:
+                        if exc.errno == errno.ENOTEMPTY:
+                            raise ExecutionServiceError(
+                                "workspace_directory_not_empty",
+                                "only empty workspace directories can be deleted",
+                                status_code=409,
+                            ) from exc
+                        raise
+                else:
+                    os.unlink(relative[-1], dir_fd=parent)
+                os.fsync(parent)
+            except FileNotFoundError as exc:
+                raise ExecutionServiceError(
+                    "workspace_path_missing",
+                    "workspace entry does not exist",
+                    status_code=404,
+                ) from exc
+            finally:
+                os.close(parent)
+
+        await finish_cleanup(asyncio.to_thread(delete_entry))
         result = WorkspaceMutationResult(engagement_id=engagement_id, path=path)
         (await self._record_mutation(engagement_id, "deleted", result))
         return result
@@ -2084,77 +2144,85 @@ class WorkspaceService:
         )
 
     async def _workspace_root(self, engagement_id: str) -> Path:
-        root = await self.tool_platform.workspace_for(engagement_id)
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        root: Path = await call_async(self.tool_platform.workspace_for, engagement_id)
+        await asyncio.to_thread(root.mkdir, parents=True, exist_ok=True, mode=0o700)
         return root
 
     async def _open_directory(self, engagement_id: str, parts: tuple[str, ...]) -> int:
         root = await self._workspace_root(engagement_id)
-        descriptor = os.open(
-            root,
-            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-        )
-        try:
-            for part in parts:
-                child = os.open(
-                    part,
-                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-                    dir_fd=descriptor,
+
+        def open_directory() -> int:
+            descriptor = os.open(
+                root,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                for part in parts:
+                    child = os.open(
+                        part,
+                        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=descriptor,
+                    )
+                    os.close(descriptor)
+                    descriptor = child
+                return descriptor
+            except (OSError, ValueError) as exc:
+                record_caught_exception(
+                    "workspace",
+                    "workspace.workspace.caught_failure_006",
+                    "A handled workspace operation raised an exception.",
+                    exc,
+                    stage="workspace",
                 )
                 os.close(descriptor)
-                descriptor = child
-            return descriptor
-        except (OSError, ValueError) as exc:
-            record_caught_exception(
-                "workspace",
-                "workspace.workspace.caught_failure_006",
-                "A handled workspace operation raised an exception.",
-                exc,
-                stage="workspace",
-            )
-            os.close(descriptor)
-            raise ExecutionServiceError(
-                "workspace_path_invalid",
-                "workspace directory is missing, invalid, or a symlink",
-                status_code=404,
-            ) from exc
+                raise ExecutionServiceError(
+                    "workspace_path_invalid",
+                    "workspace directory is missing, invalid, or a symlink",
+                    status_code=404,
+                ) from exc
+
+        return await finish_cleanup(asyncio.to_thread(open_directory))
 
     async def _open_regular(
         self, engagement_id: str, parts: tuple[str, ...]
     ) -> tuple[BinaryIO, os.stat_result]:
         parent = await self._open_directory(engagement_id, parts[:-1])
-        try:
-            descriptor = os.open(
-                parts[-1],
-                os.O_RDONLY
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_NONBLOCK", 0),
-                dir_fd=parent,
-            )
-        except OSError as exc:
-            record_caught_exception(
-                "workspace",
-                "workspace.workspace.caught_failure_007",
-                "A handled workspace operation raised an exception.",
-                exc,
-                stage="workspace",
-            )
-            raise ExecutionServiceError(
-                "workspace_path_invalid",
-                "workspace file is missing, invalid, or a symlink",
-                status_code=404,
-            ) from exc
-        finally:
-            os.close(parent)
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            os.close(descriptor)
-            raise ExecutionServiceError(
-                "workspace_path_invalid",
-                "workspace path is not a regular file",
-                status_code=422,
-            )
-        return os.fdopen(descriptor, "rb"), metadata
+
+        def open_regular() -> tuple[BinaryIO, os.stat_result]:
+            try:
+                descriptor = os.open(
+                    parts[-1],
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=parent,
+                )
+            except OSError as exc:
+                record_caught_exception(
+                    "workspace",
+                    "workspace.workspace.caught_failure_007",
+                    "A handled workspace operation raised an exception.",
+                    exc,
+                    stage="workspace",
+                )
+                raise ExecutionServiceError(
+                    "workspace_path_invalid",
+                    "workspace file is missing, invalid, or a symlink",
+                    status_code=404,
+                ) from exc
+            finally:
+                os.close(parent)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                os.close(descriptor)
+                raise ExecutionServiceError(
+                    "workspace_path_invalid",
+                    "workspace path is not a regular file",
+                    status_code=422,
+                )
+            return os.fdopen(descriptor, "rb"), metadata
+
+        return await finish_cleanup(asyncio.to_thread(open_regular))
 
 
 @dataclass(frozen=True)

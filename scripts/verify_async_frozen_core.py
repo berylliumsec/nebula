@@ -24,6 +24,10 @@ from uuid import uuid4
 import httpx
 from sqlalchemy.engine import make_url
 
+# Match module invocation when this verifier is run directly by CI.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 class ProviderFixture(BaseHTTPRequestHandler):
     def log_message(self, *_args):

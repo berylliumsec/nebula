@@ -356,7 +356,7 @@ async def test_butler_discovers_timeline_through_provider_capability_gateway(tmp
     )
     project = await store.create(Engagement(name="Selected"))
     chat = await _chat(store, project, "Agent A")
-    capability = ButlerCapabilities(
+    capability = await ButlerCapabilities.create(
         store, artifacts, project.id, work=app.state.control_assistant_work
     )
 

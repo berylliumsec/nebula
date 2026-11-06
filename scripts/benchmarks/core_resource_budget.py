@@ -357,7 +357,7 @@ async def serve(args):
         host_load_gate=host_load,
         host_cpu_budget=host_cpu,
     )
-    butler = ButlerCapabilities(
+    butler = await ButlerCapabilities.create(
         store, artifacts, project.id, work=app.state.control_assistant_work
     )
 

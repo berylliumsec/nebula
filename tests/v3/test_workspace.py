@@ -1537,69 +1537,66 @@ async def test_workspace_upload_success_records_no_handled_exceptions(
 async def test_workspace_api_runs_filesystem_operations_off_the_event_loop(
     tmp_path, monkeypatch
 ):
-    from nebula.v3.executions import ExecutionServiceError
-
-    _store, _artifacts, platform, workspace, engagement, client = await _services(
+    store, artifacts, platform, workspace, engagement, client = await _services(
         tmp_path
     )
-    platform.workspace_for(engagement.id)
-    on_loop: dict[str, bool] = {}
+    root = platform.workspace_for(engagement.id)
+    (root / "a.txt").write_text("Synthetic workspace output")
+    (root / "proof.txt").write_text("Synthetic evidence")
+    observed = []
 
-    def stub(name):
+    def guarded(name, function):
         def call(*args, **kwargs):
-            try:
+            with pytest.raises(RuntimeError, match="no running event loop"):
                 asyncio.get_running_loop()
-            except RuntimeError:
-                on_loop[name] = False
-            else:
-                on_loop[name] = True
-            raise ExecutionServiceError("stub_probe", name, status_code=418)
+            observed.append(name)
+            return function(*args, **kwargs)
 
         return call
 
-    for name in ("list", "search", "preview", "rename", "delete", "promote", "reset"):
-        monkeypatch.setattr(workspace, name, stub(name))
+    monkeypatch.setattr(os, "scandir", guarded("scan", os.scandir))
+    monkeypatch.setattr(os, "fsync", guarded("fsync", os.fsync))
+    monkeypatch.setattr(artifacts, "verify", guarded("verify", artifacts.verify))
+    open_regular = workspace._open_regular
 
+    class TracedStream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def read(self, *args):
+            return guarded("read", self.stream.read)(*args)
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+    async def traced_open(*args):
+        stream, metadata = await open_regular(*args)
+        return TracedStream(stream), metadata
+
+    monkeypatch.setattr(workspace, "_open_regular", traced_open)
     base = f"/api/v1/engagements/{engagement.id}/workspace"
-    async with client:
-        responses = {
-            "list": (await client.get(base, headers=AUTH)),
-            "search": (
-                await client.get(f"{base}/search", headers=AUTH, params={"query": "x"})
-            ),
-            "preview": (
-                await client.get(
-                    f"{base}/preview", headers=AUTH, params={"path": "a.txt"}
-                )
-            ),
-            "rename": (
-                await client.patch(
-                    f"{base}/entry",
-                    headers=AUTH,
-                    json={"path": "a.txt", "new_name": "b.txt"},
-                )
-            ),
-            "delete": (
-                await client.delete(
-                    f"{base}/entry", headers=AUTH, params={"path": "a.txt"}
-                )
-            ),
-            "promote": (
-                await client.post(
-                    f"{base}/promote", headers=AUTH, json={"path": "a.txt"}
-                )
-            ),
-            "reset": (
-                await client.post(
-                    f"{base}/reset",
-                    headers=AUTH,
-                    json={"engagement_name": engagement.name},
-                )
-            ),
-        }
-    for name, response in responses.items():
-        assert response.status_code == 418, (name, response.text)
-        assert on_loop[name] is False, f"{name} ran on the event loop"
+    responses = [
+        await client.get(base, headers=AUTH),
+        await client.get(
+            f"{base}/search",
+            headers=AUTH,
+            params={"query": "Synthetic", "mode": "text"},
+        ),
+        await client.get(f"{base}/preview", headers=AUTH, params={"path": "a.txt"}),
+        await client.patch(
+            f"{base}/entry", headers=AUTH, json={"path": "a.txt", "new_name": "b.txt"}
+        ),
+        await client.delete(f"{base}/entry", headers=AUTH, params={"path": "b.txt"}),
+        await client.post(f"{base}/promote", headers=AUTH, json={"path": "proof.txt"}),
+        await client.post(
+            f"{base}/reset", headers=AUTH, json={"engagement_name": engagement.name}
+        ),
+    ]
+    assert all(response.status_code in {200, 201} for response in responses), [
+        (response.status_code, response.text) for response in responses
+    ]
+    assert {"scan", "fsync", "verify", "read"}.issubset(observed)
+    assert store.database.pool_snapshot()["checked_out"] == 0
 
 
 pytestmark = pytest.mark.anyio

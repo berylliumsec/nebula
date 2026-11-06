@@ -39,11 +39,19 @@ def async_done_callback(callback):
 
     def completed(future):
         result = callback(future)
+        # Registry-pop callbacks return the task they just removed. That is
+        # bookkeeping, not additional persistence work (including cancellation).
+        if result is future:
+            return
         if inspect.isawaitable(result):
             loop = asyncio.get_running_loop()
             tasks = _callback_tasks.setdefault(loop, set())
+
+            async def join_result():
+                return await result
+
             task = create_diagnostic_task(
-                result,
+                result if asyncio.iscoroutine(result) else join_result(),
                 feature="runtime",
                 event_code="runtime.persistence_callback",
                 failure_message="A completed task's persistence callback failed.",

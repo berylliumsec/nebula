@@ -83,7 +83,7 @@ async def fixture(tmp_path):
         host_load_gate=HostLoadGate(monitor),
         execution_data_root=tmp_path / "execution",
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, project.id, work=app.state.control_assistant_work
     )
     return store, project, monitor, app, capabilities

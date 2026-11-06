@@ -475,9 +475,9 @@ async def test_conversation_results_are_filtered_in_sql_and_answer_not_modified(
 async def _settle(store, service, request, count):
     """Enqueue ``count`` follow-ups and let Core settle each one as complete."""
 
-    queue = service.get("s")
+    queue = await service.get("s")
     for index in range(count):
-        queue = enqueue(
+        queue = await enqueue(
             service, request, queue.revision if index else 0, f"key-{index}"
         )
         items = [dict(item) for item in queue.items]
@@ -498,7 +498,7 @@ async def _settle(store, service, request, count):
             )
         )
         (await service.step(queue))
-        queue = service.get("s")
+        queue = await service.get("s")
     return queue
 
 
@@ -518,10 +518,10 @@ async def test_settled_follow_ups_are_bounded_and_drop_request_bodies(tmp_path):
     assert all(item["request_digest"] for item in queue.items)
 
     # A replayed enqueue of a retained key is still recognized, not re-added.
-    replay = enqueue(service, request, queue.revision, "key-10")
+    replay = await enqueue(service, request, queue.revision, "key-10")
     assert replay.revision == queue.revision
     with pytest.raises(Exception, match="already used for different content"):
-        enqueue(
+        await enqueue(
             service,
             request.model_copy(update={"include_knowledge": True}),
             queue.revision,
@@ -550,7 +550,7 @@ async def test_worker_skips_a_dormant_queue_until_it_changes(tmp_path, monkeypat
     # Recovery at startup still reads every queue.
     assert [item.id for item in (await service.queues())] == [queue.id]
 
-    enqueue(service, request, queue.revision, "after-dormancy")
+    await enqueue(service, request, queue.revision, "after-dormancy")
     assert [item.id for item in (await service.queues(skip_dormant=True))] == [queue.id]
 
 
@@ -567,7 +567,7 @@ async def test_queue_route_answers_not_modified(tmp_path):
         await client.get("/chat/sessions/s/queue", headers={"If-None-Match": etag})
     ).status_code == 304
 
-    enqueue(service, request, 0, "first", paused=True)
+    await enqueue(service, request, 0, "first", paused=True)
     changed = await client.get(
         "/chat/sessions/s/queue", headers={"If-None-Match": etag}
     )
@@ -577,7 +577,7 @@ async def test_queue_route_answers_not_modified(tmp_path):
 
 async def test_live_queue_is_not_dormant(tmp_path):
     store, service, request = await setup_queue(tmp_path)
-    queue = enqueue(service, request)
+    queue = await enqueue(service, request)
     assert not queue_is_dormant(queue)
     paused = await service.write(
         "s", QueueWrite(action="pause", expected_revision=queue.revision)

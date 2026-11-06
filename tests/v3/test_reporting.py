@@ -179,7 +179,7 @@ async def test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_e
             )
             if detail.json()["status"] in {"completed", "failed", "interrupted"}:
                 break
-            time.sleep(0.02)
+            await asyncio.sleep(0.02)
         assert detail.json()["status"] == "completed"
         pdf = await client.get(
             f"/api/v1/report-renders/{render_id}/pdf", headers=headers
@@ -284,7 +284,7 @@ async def test_pdf_download_route_verifies_off_the_event_loop(tmp_path, monkeypa
             )
             if detail.json()["status"] in {"completed", "failed", "interrupted"}:
                 break
-            time.sleep(0.02)
+            await asyncio.sleep(0.02)
         assert detail.json()["status"] == "completed"
         pdf = await client.get(
             f"/api/v1/report-renders/{render_id}/pdf", headers=headers

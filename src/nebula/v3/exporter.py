@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .diagnostics import record_caught_exception
 
+import asyncio
 import hashlib
 import json
 import os
@@ -481,80 +482,87 @@ async def export_engagement(
             events=[*run_events, *operation_events],
         )
     )
-    for model in ENTITY_MODELS:
-        model_entities = entities_by_model.get(model)
-        if not model_entities:
-            continue
-        entities = sorted(
-            model_entities.values(), key=lambda entity: (entity.created_at, entity.id)
-        )
-        counts[model.entity_kind] = len(entities)
-        payloads[f"entities/{model.entity_kind}.json"] = _json_bytes(
-            [_export_entity(entity) for entity in entities]
-        )
-    artifacts = [
-        artifact
-        for artifact in entities_by_model.get(Artifact, {}).values()
-        if isinstance(artifact, Artifact)
-    ]
-    payloads["events.json"] = _json_bytes(
-        [event.model_dump(mode="json") for event in run_events]
-    )
-    payloads["operation_events.json"] = _json_bytes(
-        [event.model_dump(mode="json") for event in operation_events]
-    )
-    payloads["terminal_commands.json"] = _json_bytes(terminal_records)
 
-    manifest = ExportManifest(
-        engagement_id=engagement_id,
-        exported_at=utc_now().isoformat(),
-        entity_counts=counts,
-        event_count=len(run_events) + len(operation_events),
-        run_event_count=len(run_events),
-        operation_event_count=len(operation_events),
-        terminal_command_count=len(terminal_records),
-        files={
-            name: hashlib.sha256(content).hexdigest()
-            for name, content in payloads.items()
-        },
-    )
-    for artifact in artifacts:
-        if not artifact_store.verify(artifact):
-            raise ExportError(f"artifact failed integrity verification: {artifact.id}")
-        manifest.files[f"blobs/sha256/{artifact.sha256}"] = artifact.sha256
-
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination_path.parent,
-        prefix=f".{destination_path.name}.",
-        suffix=".tmp",
-    )
-    os.close(descriptor)
-    temporary_path = Path(temporary_name)
-    try:
-        with zipfile.ZipFile(
-            temporary_path,
-            mode="w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=6,
-        ) as archive:
-            for name, content in sorted(payloads.items()):
-                archive.writestr(name, content)
-            written: set[str] = set()
-            for artifact in artifacts:
-                name = f"blobs/sha256/{artifact.sha256}"
-                if name in written:
-                    continue
-                archive.write(artifact_store.path_for(artifact), name)
-                written.add(name)
-            archive.writestr(
-                "manifest.json", _json_bytes(manifest.model_dump(mode="json"))
+    def write_bundle() -> ExportManifest:
+        for model in ENTITY_MODELS:
+            model_entities = entities_by_model.get(model)
+            if not model_entities:
+                continue
+            entities = sorted(
+                model_entities.values(),
+                key=lambda entity: (entity.created_at, entity.id),
             )
-        with temporary_path.open("rb") as stream:
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, destination_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    return manifest
+            counts[model.entity_kind] = len(entities)
+            payloads[f"entities/{model.entity_kind}.json"] = _json_bytes(
+                [_export_entity(entity) for entity in entities]
+            )
+        artifacts = [
+            artifact
+            for artifact in entities_by_model.get(Artifact, {}).values()
+            if isinstance(artifact, Artifact)
+        ]
+        payloads["events.json"] = _json_bytes(
+            [event.model_dump(mode="json") for event in run_events]
+        )
+        payloads["operation_events.json"] = _json_bytes(
+            [event.model_dump(mode="json") for event in operation_events]
+        )
+        payloads["terminal_commands.json"] = _json_bytes(terminal_records)
+
+        manifest = ExportManifest(
+            engagement_id=engagement_id,
+            exported_at=utc_now().isoformat(),
+            entity_counts=counts,
+            event_count=len(run_events) + len(operation_events),
+            run_event_count=len(run_events),
+            operation_event_count=len(operation_events),
+            terminal_command_count=len(terminal_records),
+            files={
+                name: hashlib.sha256(content).hexdigest()
+                for name, content in payloads.items()
+            },
+        )
+        for artifact in artifacts:
+            if not artifact_store.verify(artifact):
+                raise ExportError(
+                    f"artifact failed integrity verification: {artifact.id}"
+                )
+            manifest.files[f"blobs/sha256/{artifact.sha256}"] = artifact.sha256
+
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=destination_path.parent,
+            prefix=f".{destination_path.name}.",
+            suffix=".tmp",
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        try:
+            with zipfile.ZipFile(
+                temporary_path,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=6,
+            ) as archive:
+                for name, content in sorted(payloads.items()):
+                    archive.writestr(name, content)
+                written: set[str] = set()
+                for artifact in artifacts:
+                    name = f"blobs/sha256/{artifact.sha256}"
+                    if name in written:
+                        continue
+                    archive.write(artifact_store.path_for(artifact), name)
+                    written.add(name)
+                archive.writestr(
+                    "manifest.json", _json_bytes(manifest.model_dump(mode="json"))
+                )
+            with temporary_path.open("rb") as stream:
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, destination_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        return manifest
+
+    return await asyncio.to_thread(write_bundle)
 
 
 __all__ = ["ExportError", "ExportManifest", "export_engagement"]

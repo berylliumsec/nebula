@@ -76,6 +76,8 @@ async def close_database_handles(monkeypatch, anyio_backend):
 class AsyncTestClient(httpx.AsyncClient):
     """Run HTTP, WebSockets and Core lifespan on the fixture's owning loop."""
 
+    __test__ = False
+
     def __init__(self, app, base_url="http://testserver", **kwargs):
         raise_errors = kwargs.pop("raise_server_exceptions", True)
         self.client_address = kwargs.pop("client", ("testclient", 50000))
@@ -272,3 +274,10 @@ async def inspect_database(database, method, *args, **kwargs):
         return await connection.run_sync(
             lambda sync: getattr(inspect(sync), method)(*args, **kwargs)
         )
+
+
+def wait_for_database_gate(connection, gate, *, timeout=5):
+    """Pause an async driver operation without blocking its loop's greenlet."""
+    connection.connection.dbapi_connection.run_async(
+        lambda _driver: asyncio.wait_for(gate.wait(), timeout=timeout)
+    )

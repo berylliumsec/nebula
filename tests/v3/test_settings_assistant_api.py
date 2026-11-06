@@ -250,7 +250,7 @@ async def test_butler_discovers_and_revision_saves_its_check_interval(tmp_path):
     gateway = SettingsAssistantApi(
         create_app(store, auth_token="test-token"), "test-token"
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id, settings_api=gateway
     )
 
@@ -440,7 +440,7 @@ async def test_settings_api_profile_lifecycle_reads_exact_created_identity(
         create_app(store, auth_token="test-token"), "test-token"
     )
     assert gateway.schema(path=family, method="POST")["request_body"]
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id, settings_api=gateway
     )
 

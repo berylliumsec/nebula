@@ -1,203 +1,165 @@
 # Async database runtime and same-chat runtime switching
 
-Status: **not ready for merge or promotion**. The selected runtime and recovery
-checks pass. Browser acceptance and bundled product-knowledge verification remain
-blocked by this environment's download policy. Chat admission performance has
-regressed in the corrected mixed-load experiments. This receipt must be completed
-before promotion.
+Status: final acceptance in progress. Local correctness passes. The final runtime
+must pass the recorded load rechecks, hosted product-index checks, two frozen
+Linux database journeys, and the selected browser matrix before merge.
 
-## Baseline and boundary
+## Baseline and deployment budget
 
-Implementation starts from `origin/main` at
-`928727eb3a80a4516ff2ad2c30e02855697b56f4`. Baseline performance runs use a separate,
-unchanged worktree at that commit. Both versions use the same Python environment,
-PostgreSQL 16 fixture, hardware, synthetic data, provider delay, and workload.
-The benchmark records a hash of each runtime source tree.
+Implementation and performance baseline:
+`928727eb3a80a4516ff2ad2c30e02855697b56f4`. The clean baseline worktree remains at
+that revision. The branch includes freshly fetched `origin/main` at
+`b93b66844815574e0d3de209b08e59ea6cec1a3f`; its intervening terminal-client and
+documentation changes do not change Core's database/runtime sources.
 
-The branch is being integrated with freshly fetched `origin/main` at
-`b93b66844815574e0d3de209b08e59ea6cec1a3f`. Its two commits after `928727eb` change
-terminal-client behavior and documentation; Core's database/runtime sources match
-the recorded benchmark baseline.
-
-The fixture's deployment allocation is deliberately explicit:
+The owned PostgreSQL 16 fixture declares this allocation:
 
 ```text
 max_connections = 100
 PostgreSQL reserved slots = 3
 additional administrative reserve = 5
-other consumers (including maintenance) = 12
-peak simultaneous Core processes = 2
+other consumers, including maintenance = 12
+peak simultaneous Core processes, including rolling overlap = 2
 per-process ceiling = floor((100 - 3 - 5 - 12) / 2) = 40
 ```
 
-This is a disposable test allocation, not a production default. Runtime pools
-have zero overflow. Equal-limit measurements configure both versions with 15
-reusable connections and zero overflow; maximum-limit measurements use the
-calculated 40. Baseline pool configuration is changed only by the external test
-harness. One-connection SQLite coverage checks nested and shared read admission.
+These values are synthetic test configuration, not production defaults. Startup
+discovers server, login-role and database limits with one bounded connection,
+closes it, and rejects missing/infeasible deployment budgets. Runtime pools use
+zero overflow, pre-ping, and an explicit finite timeout (30 seconds by default).
+A stricter finite pool override is permitted. Current free connections never
+increase the allocation. CLI/maintenance pools consume declared auxiliary capacity.
 
-## Selected correctness evidence
+Bulk reads share `min(4, max(1, configured_size - 1))` admission; a one-connection
+pool serializes work. Point lookups and small authentication control-state reads
+use ordinary admission so held bulk catalogs do not occupy their reserved path.
+All connections remain subject to the same finite pool ceiling.
 
-The diff-bound selection is maintained in `.github/test-selection.json`.
-The current completed selection contains **103 passing Python cases**, including:
+## Focused correctness evidence
 
-- native SQLite and PostgreSQL CRUD, rollback, revision conflicts, stream
-  sequencing, idempotency, connection budgeting, cancellation, and pool waits;
-- real Core lifecycle, bearer authentication, device listing, provider streaming,
-  and settings-assistant read/mutation callbacks;
-- rejection of synchronous SQLAlchemy driver operations and synchronous SQLite
-  connections on the exercised Core event loop;
-- 25 existing storage regressions and 14 existing recovery/tool regressions;
-- interrupted-turn restart, late receipt adoption, competing worker ownership,
-  compaction budget debit, and ordered concurrent tool results;
-- idle/running/paused/blocked goal preservation, pending switches, queued work,
-  goal-claim release, competing switches, stale compaction consent, and explicit
-  repair of legacy split runtime state;
-- frozen-package dependency requirements for SQLAlchemy asyncio, aiosqlite, its
-  SQLite dialect, and greenlet.
-- rollback and re-upgrade on both databases without losing entity revisions,
-  payloads, or ordered events;
-- actual provider continuation of an explicitly resumed, formerly harness-bound
-  blocked goal in the same conversation, stopping at its saved step budget.
-- native auxiliary Butler-memory and browser-action SQLite transactions, writer
-  waits, cancellation cleanup, authoritative revisions and project isolation;
-- preservation of later settings and transcript cursors during pending
-  activation, changed harness privacy/options, dependency revision fencing,
-  and compaction consent surviving the pending write's own revision increment.
+The diff-bound selection is `.github/test-selection.json`: **217 Python cases**,
+three frontend cases, 24 Playwright cases, and two frozen database journeys. No
+full suite was requested or run.
 
-The combined 103-case run passes. The three focused UI API mapping cases also pass. This is focused evidence,
-not a claim that the repository's unchanged synchronous test and diagnostic
-callers have all been migrated or exercised.
+The final local run passed **213 cases in 153.94 seconds**, without skips. The
+four selected product-index cases require the model supplied by hosted CI. A
+subsequent rerun of the strengthened mixed-recovery case passed in 6.14 seconds.
+Runtime and unraisable-coroutine warnings fail the selection. Two Uvicorn
+WebSocket deprecation warnings remain unrelated to database execution.
 
-The harness-list work test grows to 10,000 turns and 10,000 temporary chats,
-including 5,000 turns matching the requested session. It checks three batched SQL
-statements, eligible-chat partial-index usage, bounded PostgreSQL buffer work,
-and SQLite VM work that does not grow with matching history. Observed SQLite VM
-steps were 783 for the small fixture and 593 for the large fixture.
+Coverage includes native SQLite/PostgreSQL transactions, competing revisions,
+ordered events, claims and idempotency, pool saturation, task-owned sessions,
+rollback on cancellation, repeated shutdown cancellation, CLI loop selection,
+login-role limits under startup SET ROLE, and additive migration rollback/re-upgrade.
+Exercised Core paths reject synchronous SQLAlchemy drivers and synchronous SQLite
+connections on the event loop.
 
-The required default type check passes for all 246 runtime source files. The
-additional `--check-untyped-defs` experiment reports the same ten diagnostics as
-the baseline. Compilation, full Ruff checks, formatting, and the diagnostic
-blind-spot audit pass. Owned cleanup tasks and deferred parser failures retain
-their existing error propagation and have explicit audit classifications.
-The remaining repository test and diagnostic callers still need an async API
-audit before this conversion is ready for review.
+Recovery checks preserve committed tool results and one durable turn owner.
+The combined recovery check resumes an interrupted turn alongside 12 foreground
+chats, 12 persisted inert tools, 12 authenticated device reads and 12 indexed
+harness listings. It requires exactly one recovered assistant effect and one
+execution per tool, with all sessions released.
 
-## Performance evidence in progress
+The final caller audit also covers asynchronous factories, settings-assistant and
+scheduled Butler actions, fresh authorization for concurrent audit steps on both
+databases, atomic harness goal creation/forks, lazy execution-policy creation in
+the same transaction, and project/revision validation of evidence relations.
+File verification, output scans, PDF hashing, ZIP creation, evidence validation and
+workspace scans remain off the event loop after async authorization releases its
+session. Actual API responsiveness and ownership replace obsolete thread-owned
+SQLAlchemy-session assertions.
 
-Run `scripts/benchmark_async_database.py` with `NEBULA_TEST_POSTGRES_URL` set to an
-owned disposable database. Each invocation creates and removes one isolated
-schema. Providers and tools are inert. The corrected harness uses a separate
-fixed-arrival HTTP load-generator process and a real TCP Core. It checks the
-exact final chat message, SSE errors, tool output, and durable completion counts.
-It records successful-request latency separately from failures, pool state,
-query/transaction telemetry, loop lag, host admission observations, and resident
-memory. It excludes browser rendering. Measurement-window telemetry is reset
-after setup and warmup. Seeded historical turns are complete.
+Recent-message reads retain 16-row async cursor batches, tombstone truthiness,
+sequence order and bounded hydration, and close the cursor on early exit. Native
+PostgreSQL checks inspect `pg_cursors` after the read in a reused unit of work.
 
-The original closed-loop, in-process ASGI experiment is retained in
-`scripts/benchmarks/async_database_asgi.py`. Its exploratory results follow:
+Harness listing uses three batched indexed top-one lookups rather than ranking
+history. The work tests include 10,000 turns and 10,000 temporary chats, with
+5,000 turns matching the requested session. They check the eligible-chat partial
+index, bounded PostgreSQL buffers and SQLite VM work (783 small-fixture steps,
+593 large-fixture steps), pagination, title precedence and project isolation.
 
-Completed comparisons so far:
+Ruff, compilation, the diagnostic blind-spot audit and the default mypy check of
+246 source files pass. The historical extra `--check-untyped-defs` experiment
+reported the same ten diagnostics as the baseline.
 
-| Workload | Pool ceiling | Baseline p95 first token | Candidate p95 first token | Baseline p95 listing | Candidate p95 listing |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Low load, 60 chats | 15 | 246.521 ms | 186.240 ms | 111.244 ms | 50.523 ms |
-| Closed-loop mixed load, 180 chats | 15 | 6622.927 ms | 4555.526 ms | 865.773 ms | 381.028 ms |
-| Closed-loop mixed load, 180 chats | 40 | 9597.375 ms | 8413.454 ms | 951.578 ms | 397.298 ms |
+## Fixed-arrival HTTP performance
 
-These runs had zero request errors. The candidate had zero checked-out
-connections after shutdown. The low-load baseline had one connection checked out
-immediately after its lifespan returned; the saturated baseline had zero.
-The 40-connection experiment improved first-token p95 by only 12.34%, missing the
-20% target; authentication p95 also increased. That experiment has material
-limitations: closed-loop offered load, queued historical turns triggering startup
-recovery, setup included in SQL telemetry, and unobserved host admission. It does
-not prove database saturation and is not acceptance evidence.
+`scripts/benchmark_async_database.py` runs a separate fixed-arrival HTTP driver
+against a real TCP Uvicorn Core. Both revisions use Uvicorn's actual auto-selected
+`uvloop.Loop`, identical hardware/environment and fixtures, the system host monitor,
+a 20 ms inert provider, persisted local tools, and 12 harness sessions with 2,400
+complete historical turns. Setup and warmup are excluded from telemetry.
 
-Corrected fixed-rate TCP summaries are saved in `async-database-http.json`, with
-source/harness hashes, declared budgets, completion counts, failure counts and
-cleanup results. These measurements precede the final auxiliary-store and
-activation-correctness fixes; they do not certify the final source tree.
+The equal-limit pair uses 15 connections and zero overflow for both revisions;
+the maximum pair uses the calculated 40 for both. The baseline pool override is
+external to its unchanged source. Successful latency is separate from overload
+rejections. Exact SSE output, tool output, durable completion counts and shutdown
+occupancy are checked. Reports retain source/harness hashes, acquisition waits,
+query/transaction timing, occupancy, event-loop lag and driver issue lag.
 
-| Monitor / workload | Pool | Baseline → candidate admission p95 | Baseline → candidate first token p95 | Baseline → candidate listing p95 |
+The ten-run matrix at `8384824` passes the default mixed-load target:
+
+| Workload | Pool | Admission p95, baseline → candidate | First token p95 | Listing p95 |
 | --- | ---: | ---: | ---: | ---: |
-| System, 1 group/s, 30 chats | 15 | 109.138 → 141.908 ms | 211.477 → 182.297 ms | 107.980 → 51.112 ms |
-| System, 4 groups/s, 120 chats | 40 | 131.736 → 193.131 ms | 259.636 → 274.971 ms | 125.229 → 62.779 ms |
-| Controlled, 8 groups/s, 120 chats | 15 | 7690.613 → 10693.405 ms | 9028.056 → 10896.243 ms | 16654.871 → 728.074 ms |
-| Controlled, 8 groups/s, repetition 1 | 40 | 6585.556 → 10068.122 ms | 7909.132 → 10261.110 ms | 14928.311 → 590.565 ms |
-| Controlled, 8 groups/s, repetition 2, reversed order | 40 | 6455.616 → 8116.964 ms | 7834.096 → 8338.758 ms | 14766.598 → 606.303 ms |
-| System, 2 groups/s, five-minute soak | 40 | 151.038 → 171.231 ms | 276.869 → 219.760 ms | 147.547 → 57.330 ms |
+| Low, 1 group/s, 30 chats | 15 | 150.016 → 130.692 ms | 284.544 → 192.562 ms | 148.815 → 41.335 ms |
+| Saturated mixed, 8 groups/s, 120 chats | 15 | 45,760.379 → 7,684.914 ms | 45,854.884 → 7,720.517 ms | 522.296 → 196.609 ms |
+| Saturated mixed, 8 groups/s, 120 chats | 40 | 59,211.562 → 18,996.529 ms | 59,295.683 → 19,033.725 ms | 5,825.140 → 226.761 ms |
+| Overload, 16 groups/s, 180 chats | 40 | 66,871.360 → 35,094.038 ms | 66,968.968 → 35,132.779 ms | 8,116.612 → 5,446.631 ms |
+| Five-minute soak, 2 groups/s, 600 chats | 40 | 131.472 → 134.515 ms | 252.845 → 175.106 ms | 123.021 → 42.662 ms |
 
-All 14 corrected runs had zero request errors and expected durable completion
-counts. Every candidate run ended with zero checked-out connections. Candidate
-pool diagnostics recorded no timeouts or connection failures. Authentication and
-listing improved substantially in these comparisons, but chat admission did not.
-The soak first-token gain does not establish the mixed-load acceptance target.
-Performance acceptance has **not passed**.
+Every run had zero request errors, zero rejections, exact expected completions,
+and zero checked-out connections after shutdown. Candidate diagnostics recorded
+zero pool timeouts or connection failures. Mixed-load gains exceed 20% for all
+three target metrics at both limits; low-load latency improves. Soak admission
+varies by 2.3% while first-token latency improves by 30.7%. Overload driver issue
+lag reached 0.894 seconds; that limits interpretation of its instantaneous rate.
+It does not establish overload rejection behavior; focused pool saturation tests
+cover asynchronous waiting and controlled timeout failures.
 
-Controlled-monitor experiments retain the real finite host gate and provider
-limits, but use a synthetic healthy host monitor; they cannot replace production
-host-admission evidence. The 16-groups/s overload pair also experienced over two
-seconds of load-generator clock slippage, limiting interpretation of its offered
-rate. It had no lost or duplicated completions, but does not prove a production
-overload-rejection contract.
+The complete matrix is in `async-database-http-final.json`. It predates the last
+caller repairs; final-source candidate rechecks remain a merge gate. The unchanged
+baseline/harness provide the comparison, and final runtime hashes must match.
 
-Subsequent harness-only traces show longer serial storage phases and provider-slot
-residence with the candidate, and nearly full use of one event-loop CPU thread
-during the controlled busy interval. They do not establish exhausted connection
-capacity or identify a specific CPU repair. CPU attribution remains in progress.
+Earlier exploratory closed-loop results and 14 fixed-rate experiments failed the
+chat target. They remain in `async-database-http.json` and are not acceptance
+evidence. Diagnosis found a lost Uvicorn loop-selection boundary and repeated
+queue-position scans; runtime code restores auto loop selection and shares a
+short-lived single-flight position snapshot. Claims and admission never use that
+snapshot, and same-transaction reads bypass it.
 
-## Production UI and LAN evidence
+## Production UI, packaging and LAN
 
-The candidate production UI build and its three focused API mapping tests pass.
-A disposable CLI-launched Core served the production bundle at
-`http://172.26.91.250:32873`. Unauthenticated project listing returned 401;
-authenticated health, project listing, and device listing succeeded. The served
-entry asset matched SHA-256
-`e20f3a01ec49c44495dea4de87f160fa1284630a697c1e4d2740e9f8be2dbf23`.
-The build manifest identified base commit `928727eb` and build time
-`2026-11-06T10:56:57.649Z`; this is an uncommitted candidate bundle, not a release.
-The owned Core and its temporary data were removed after the check.
+The selected journeys serve the production bundle from a disposable authenticated
+Core on a non-loopback origin. Coverage includes desktop Chromium at 1440/1024,
+emulated mobile Chromium and WebKit at 320/390/430, approval settlement, active
+versus pending selection after refresh, explicit same-goal resume, provider
+continuation, budget pause, transcript preservation and responsive geometry.
+Physical devices were not used.
 
-The committed real-Core switching journey covers the same conversation through
-an approval boundary, refresh, deferred activation, explicit goal resume, and
-provider continuation. Local desktop/compact Chromium and mobile Chromium/WebKit
-runs remain unavailable: Playwright's browser download was denied with HTTP 403
-by environment policy. PR CI can install its selected browsers. Its first desktop
-run passed deferred activation and durable-goal assertions, then exposed a test
-that opened Assistant settings instead of revealing the full goal panel. That
-test control path is corrected; final browser acceptance is still pending.
-HTTP checks do not substitute for these browser journeys.
+Current-candidate hosted checks remain required: 217 Python cases on 3.11–3.13,
+three frontend cases and production build, four current product-index/digest/Chroma
+checks (within the Python selection), all 24 browser cases, and two real frozen
+Linux SQLite/PostgreSQL journeys. Hosted jobs install their own browser/model
+boundaries; local downloads were denied and no alternate download route was used.
+Frozen checks cover authentication, concurrent listing, provider completion,
+graceful shutdown, restart transcript preservation and current Chroma guidance.
 
-Focused browser collection finds 24 cases: 16 mocked runtime/compaction cases
-across desktop, compact and mobile engines, plus eight real-Core switching cases
-across the selected desktop and mobile boundary widths. These cases are selected
-for PR CI; collection is not an execution result.
+The real Linux PyInstaller build at `8384824` passed its archive audit: 11,918
+members and zero forbidden members. Its SQLite journey passed chat/restart checks
+before an external-verifier import error. The direct-invocation import path is
+repaired; both complete frozen journeys still require a passing rerun.
 
-The first CI Python run passed 95 cases and skipped eight PostgreSQL cases because
-the selected job had no database service. PostgreSQL coverage was already passing
-locally. The selected CI job now provisions its own service for those eight cases
-and rejects missing configuration, without expanding the 103-case selection.
+## Promotion and rollback
 
-The product-knowledge rebuild was also denied while fetching the ONNX embedding
-model. No replacement vectors or stale-digest workaround were introduced.
-Regeneration, current-source digest verification, and Chroma synchronization are
-still required.
+Configure the deployment budgets before promotion; include rolling overlap and
+all auxiliary consumers. No production instance was restarted for this work.
+Follow Butler's project inventory, verified pause, health and selective-resume
+procedure before replacing Core. Preserve work already paused or blocked.
 
-## Promotion and rollback requirements
-
-Before promotion, supply the three deployment budgets and account for rolling
-process overlap, maintenance, and auxiliary clients. Observe pool usage separately
-from that declared allocation. Follow the repository's Butler pause/resume
-procedure and verify authoritative state before replacing a running Core.
-
-The two new migrations are additive. The selected rollback rehearsal passes on
-SQLite and PostgreSQL: returning to `0028_harness_session_title_lookup` preserves
-entity payloads, revisions, and ordered events, and upgrading again succeeds.
-Use the candidate's migration
-code while Core is stopped; older code cannot resolve the new Alembic revision.
-A previous Core binary also needs an allocation large enough for its 15-connection
-default, or an already-validated bounded-pool backport. Do not restart an older
-binary under a smaller allocation. Keep the complete coherent rollback snapshot
-until the new deployment and any recovery have been verified.
+The new migrations are additive. Selected SQLite/PostgreSQL rehearsals return to
+`0028_harness_session_title_lookup`, retain entity payloads/revisions/events and
+upgrade again. Use candidate migration code with Core stopped; an older binary
+cannot resolve the new Alembic head. Its default pool also needs a compatible
+allocation or a validated bounded-pool backport. Retain the coherent rollback
+snapshot until promotion and recovery are verified.

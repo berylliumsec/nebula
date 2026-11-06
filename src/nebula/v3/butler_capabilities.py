@@ -35,7 +35,9 @@ from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
 
 if TYPE_CHECKING:
+    from .control_assistant_work import ControlAssistantWork
     from .container_terminal import ContainerTerminalService
+    from .storage import NebulaStore, StoreTransaction
     from .workspace import WorkspaceService
 
 
@@ -275,7 +277,7 @@ class ButlerCapabilities:
 
     async def _initialize(
         self,
-        store: Any,
+        store: NebulaStore,
         artifact_store: Any,
         project_id: str,
         *,
@@ -283,7 +285,7 @@ class ButlerCapabilities:
         notebooks: Any = None,
         workspace: WorkspaceService | None = None,
         container_terminals: ContainerTerminalService | None = None,
-        work: Any = None,
+        work: ControlAssistantWork | None = None,
         memory: Any = None,
         operator_message: str = "",
         operator_turn_id: str | None = None,
@@ -588,21 +590,47 @@ class ButlerCapabilities:
                 "A full subagent slot is not a runtime configuration failure"
             )
 
+    async def _locked_background_case(
+        self, transaction: StoreTransaction
+    ) -> ButlerRecoveryCase | None:
+        from .database import EntityRow
+
+        assert self._background_case_id is not None
+        row = await transaction.session.get(
+            EntityRow,
+            self._background_case_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        return (
+            ButlerRecoveryCase.model_validate(row.payload) if row is not None else None
+        )
+
     async def _begin_background_step(
         self, operation: str, arguments: dict[str, Any]
     ) -> str:
         from .butler_oversight import _entity_in_transaction
         from .butler_authority import policy_id
 
-        case = await self._background_case()
         step_id = str(uuid4())
         digest = hashlib.sha256(
             json.dumps(arguments, sort_keys=True, default=str).encode()
         ).hexdigest()
         async with self._store.transaction(immediate=True) as transaction:
-            current = await _entity_in_transaction(
-                transaction, ButlerRecoveryCase, case.id
-            )
+            # Serialize audit appends before taking the authorization snapshot.
+            # SQLite's immediate transaction and PostgreSQL's row locks protect
+            # both begin and finish without holding a connection during effects.
+            current = await self._locked_background_case(transaction)
+            from .database import EntityRow
+
+            for entity_id in (self._project_id, policy_id(self._project_id)):
+                await transaction.session.get(
+                    EntityRow,
+                    entity_id,
+                    with_for_update=True,
+                    populate_existing=True,
+                )
+            case = await self._background_case()
             policy = await _entity_in_transaction(
                 transaction,
                 ButlerAuthorityPolicy,
@@ -647,13 +675,10 @@ class ButlerCapabilities:
         result: dict[str, Any] | None = None,
         error: BaseException | None = None,
     ) -> None:
-        from .butler_oversight import _entity_in_transaction
 
         assert self._background_case_id is not None
         async with self._store.transaction(immediate=True) as transaction:
-            case = await _entity_in_transaction(
-                transaction, ButlerRecoveryCase, self._background_case_id
-            )
+            case = await self._locked_background_case(transaction)
             if case is None:
                 return
             steps = list(case.steps)
@@ -1148,14 +1173,14 @@ class ButlerCapabilities:
                         "subagent_model",
                     )
                 ):
-                    current = self._work.chat_settings(
+                    current = await self._work.chat_settings(
                         self._project_id, payload.get("session_id")
                     )
                     selected = {**current["settings"], **settings}
                     if selected.get("backend") == "harness" and selected.get(
                         "allow_subagents"
                     ):
-                        self._work.chat.subagents.validate_harness_setting(
+                        await self._work.chat.subagents.validate_harness_setting(
                             self._project_id,
                             selected.get("subagent_provider_id") or "",
                             selected.get("subagent_model") or "",

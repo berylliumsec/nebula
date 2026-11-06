@@ -2032,7 +2032,9 @@ async def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path
             def __init__(self) -> None:
                 self.store = store
 
-            def project_execution_mode(self, engagement_id: str) -> str:
+            async def project_execution_mode(
+                self, engagement_id: str, *, transaction=None
+            ) -> str:
                 del engagement_id
                 return "host"
 
@@ -2078,7 +2080,9 @@ async def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_
         def __init__(self) -> None:
             self.store = store
 
-        def project_execution_mode(self, engagement_id: str) -> str:
+        async def project_execution_mode(
+            self, engagement_id: str, *, transaction=None
+        ) -> str:
             del engagement_id
             return "host"
 
@@ -2159,7 +2163,9 @@ async def test_existing_codex_session_forks_when_project_changes_to_host_mode(tm
             def __init__(self) -> None:
                 self.store = store
 
-            def project_execution_mode(self, engagement_id: str) -> str:
+            async def project_execution_mode(
+                self, engagement_id: str, *, transaction=None
+            ) -> str:
                 del engagement_id
                 return "host"
 
@@ -2202,7 +2208,9 @@ async def test_harness_session_does_not_require_unprepared_optional_command_runt
     store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
 
     class UnpreparedCommands:
-        def project_execution_mode(self, engagement_id: str) -> str:
+        async def project_execution_mode(
+            self, engagement_id: str, *, transaction=None
+        ) -> str:
             del engagement_id
             return "docker"
 
@@ -2274,7 +2282,9 @@ async def test_chat_rolls_over_to_current_command_runtime_without_mutating_froze
                 self.store = store
                 self.digest = digest
 
-            def project_execution_mode(self, engagement_id: str) -> str:
+            async def project_execution_mode(
+                self, engagement_id: str, *, transaction=None
+            ) -> str:
                 del engagement_id
                 return "docker"
 
@@ -5470,7 +5480,9 @@ async def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp
             def __init__(self) -> None:
                 self.store = store
 
-            def project_execution_mode(self, engagement_id: str) -> str:
+            async def project_execution_mode(
+                self, engagement_id: str, *, transaction=None
+            ) -> str:
                 del engagement_id
                 return "host"
 

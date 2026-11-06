@@ -40,7 +40,7 @@ async def test_butler_sources_page_metadata_and_prepare_only_owned_revisions(tmp
             engagement_id=other.id, name="foreign-private", source_type="text"
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id
     )
 

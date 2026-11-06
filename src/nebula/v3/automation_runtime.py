@@ -77,7 +77,13 @@ from .sandbox import (
     SandboxWorkspaceAccess,
     _runtime_environment,
 )
-from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
+from .storage import (
+    ConflictError,
+    CorruptRecordError,
+    NebulaStore,
+    NotFoundError,
+    StoreTransaction,
+)
 from .credentials import CredentialStore
 
 
@@ -1144,7 +1150,17 @@ class AutomationRuntimeManager:
             return_exceptions=True,
         )
 
-    async def project_policy(self, engagement_id: str) -> AutomationProjectPolicy:
+    async def project_policy(
+        self, engagement_id: str, *, transaction: StoreTransaction | None = None
+    ) -> AutomationProjectPolicy:
+        if transaction is not None:
+            from .database import EntityRow
+
+            # Serialize first-policy creation with other admissions for this
+            # project, keeping it in the caller's atomic unit of work.
+            await transaction.session.get(
+                EntityRow, engagement_id, with_for_update=True, populate_existing=True
+            )
         (await self.store.get(Engagement, engagement_id))
         policy_id = str(
             uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")
@@ -1153,16 +1169,14 @@ class AutomationRuntimeManager:
             return await self.store.get(AutomationProjectPolicy, policy_id)
         except NotFoundError:
             # diagnostic-expected: first access creates the deterministic default policy.
-            try:
-                return await self.store.create(
-                    AutomationProjectPolicy(
-                        id=policy_id,
-                        engagement_id=engagement_id,
-                    )
+            if transaction is not None:
+                default = AutomationProjectPolicy(
+                    id=policy_id, engagement_id=engagement_id
                 )
-            except ConflictError:
-                # diagnostic-expected: a concurrent creator won; read its durable value.
-                return await self.store.get(AutomationProjectPolicy, policy_id)
+                await transaction.add(default)
+                return default
+            async with self.store.transaction(immediate=True) as creation:
+                return await self.project_policy(engagement_id, transaction=creation)
 
     async def notebook_data_directory(self, engagement_id: str) -> Path:
         """Private project environment mount for the namespace-mapped container UID."""
