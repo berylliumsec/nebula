@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from .diagnostics import record_caught_exception
 
+import asyncio
 import fcntl
 import os
 import sqlite3
-import threading
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, AsyncIterator, cast
 
 from alembic import command
 from alembic.config import Config
@@ -24,8 +25,8 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Table,
     UniqueConstraint,
-    create_engine,
     event,
     func,
     inspect,
@@ -33,33 +34,23 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import AsyncAdaptedQueuePool
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+from .database_pool import ConnectionBudget, PoolSettings, connection_budget
 
 from .domain import utc_now
 from .performance import PerformanceTelemetry, install_sql_timing
 
 CURRENT_SCHEMA_VERSION = 5
 SCRATCH_PROJECT_BOOTSTRAP_KEY = "scratch_project_v1"
-
-_BOOTSTRAP_THREAD_LOCKS: dict[str, threading.Lock] = {}
-_BOOTSTRAP_THREAD_LOCKS_GUARD = threading.Lock()
-
-
-def _bootstrap_thread_lock(key: str) -> threading.Lock:
-    """Return the process-local half of the database bootstrap lock.
-
-    ``flock`` provides the cross-process guarantee for local SQLite files. An
-    explicit thread lock is still required because file-lock semantics within
-    one process vary across supported Unix platforms.
-    """
-
-    with _BOOTSTRAP_THREAD_LOCKS_GUARD:
-        lock = _BOOTSTRAP_THREAD_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _BOOTSTRAP_THREAD_LOCKS[key] = lock
-        return lock
-
 
 class Base(DeclarativeBase):
     pass
@@ -227,6 +218,7 @@ class EntityRow(Base):
     chat_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # Resolve names for a page of harness sessions without reading all turns.
     harness_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    runtime_switch_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # Active-turn readers use these projections without fetching large JSON envelopes.
     chat_turn_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     chat_turn_recovery_visible: Mapped[bool | None] = mapped_column(nullable=True)
@@ -243,6 +235,53 @@ class EntityRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+# Keep ORM metadata aligned with the additive lookup migrations.
+from .query_predicates import visible_harness_chat_title
+
+Index(
+    "ix_entities_harness_title_project",
+    EntityRow.kind,
+    EntityRow.harness_session_id,
+    EntityRow.engagement_id,
+    EntityRow.created_at,
+    EntityRow.id,
+)
+for _index_name, _columns in (
+    (
+        "ix_entities_harness_chat_title",
+        (
+            EntityRow.kind,
+            EntityRow.harness_session_id,
+            EntityRow.created_at,
+            EntityRow.id,
+        ),
+    ),
+    (
+        "ix_entities_harness_chat_title_project",
+        (
+            EntityRow.kind,
+            EntityRow.harness_session_id,
+            EntityRow.engagement_id,
+            EntityRow.created_at,
+            EntityRow.id,
+        ),
+    ),
+):
+    Index(
+        _index_name,
+        *_columns,
+        sqlite_where=visible_harness_chat_title(EntityRow, "sqlite"),
+        postgresql_where=visible_harness_chat_title(EntityRow, "postgresql"),
+    )
+Index(
+    "ix_entities_runtime_switch",
+    EntityRow.kind,
+    EntityRow.runtime_switch_status,
+    EntityRow.created_at,
+    EntityRow.id,
+)
 
 
 class WorkspaceProvenanceBlobRow(Base):
@@ -580,8 +619,12 @@ class SchemaVersionError(RuntimeError):
     """Raised when a database was created by an incompatible Nebula version."""
 
 
+class DatabaseBusyError(PoolTimeoutError):
+    """Bounded capacity was unavailable; no automatic write replay is implied."""
+
+
 class Database:
-    """Own the SQLAlchemy engine, sessions, WAL setup, and schema version."""
+    """One async engine per Core process and task-owned units of work."""
 
     def __init__(
         self,
@@ -589,60 +632,95 @@ class Database:
         *,
         echo: bool = False,
         bootstrap: bool = True,
+        pool_settings: PoolSettings | None = None,
     ) -> None:
         self.url = self._normalize_url(location)
-        connect_args: dict[str, Any] = {}
-        if self.url.startswith("sqlite"):
-            connect_args = {"check_same_thread": False, "timeout": 30}
-
-        self.engine = create_engine(
-            self.url,
-            echo=echo,
-            future=True,
-            pool_pre_ping=True,
-            connect_args=connect_args,
-        )
-        if self.engine.dialect.name == "sqlite":
-            event.listen(self.engine, "connect", self._configure_sqlite)
         self.performance = PerformanceTelemetry()
-        self._session_factory = sessionmaker(
-            bind=self.engine,
-            class_=Session,
-            expire_on_commit=False,
-            autoflush=False,
+        self._echo = echo
+        self._bootstrap = bootstrap
+        self._pool_settings = pool_settings
+        self._initialized = False
+        self._initialize_lock = asyncio.Lock()
+        self._active_session: ContextVar[
+            tuple[asyncio.Task | None, AsyncSession] | None
+        ] = ContextVar("nebula_database_session", default=None)
+        self._bulk_owner: ContextVar[asyncio.Task | None] = ContextVar(
+            "nebula_database_bulk_reader", default=None
         )
-        if bootstrap:
-            try:
-                self.bootstrap()
-            except Exception as caught_error:
-                record_caught_exception(
-                    "storage",
-                    "storage.database.caught_failure_001",
-                    "A handled storage operation raised an exception.",
-                    caught_error,
-                    stage="database",
-                )
-                self.engine.dispose()
-                raise
-        # Bootstrap DDL must not consume the bounded runtime label budget.
-        install_sql_timing(self.engine, self.performance)
+        self.budget: ConnectionBudget | None = None
+        self.pool_size = (
+            1
+            if self.url.startswith("postgresql") or self.url.endswith(":memory:")
+            else 5
+        )
+        self.pool_state = {
+            "checked_out": 0,
+            "peak_checked_out": 0,
+            "waiters": 0,
+            "timeouts": 0,
+            "connection_failures": 0,
+        }
+        self.engine = self._engine(self.pool_size)
+        self._session_factory = async_sessionmaker(
+            self.engine, expire_on_commit=False, autoflush=False
+        )
+        self.bulk_slots = asyncio.Semaphore(max(1, min(4, self.pool_size - 1)))
+        self.performance.database_snapshot = self.pool_snapshot
+
+    def _engine(self, size: int):
+        options: dict[str, Any] = {"echo": self._echo, "pool_pre_ping": True}
+        memory = self.url.startswith("sqlite") and self.url.endswith(":memory:")
+        options.update(
+            poolclass=AsyncAdaptedQueuePool,
+            pool_size=1 if memory else size,
+            max_overflow=0,
+            pool_timeout=self._pool_settings.timeout if self._pool_settings else 30,
+        )
+        if self.url.startswith("sqlite"):
+            options["connect_args"] = {"timeout": 30}
+        engine = create_async_engine(self.url, **options)
+        if engine.dialect.name == "sqlite":
+            event.listen(engine.sync_engine, "connect", self._configure_sqlite)
+        install_sql_timing(
+            engine.sync_engine, self.performance, enabled=lambda: self._initialized
+        )
+
+        def checkout(*_):
+            self.pool_state["checked_out"] += 1
+            self.pool_state["peak_checked_out"] = max(
+                self.pool_state["peak_checked_out"], self.pool_state["checked_out"]
+            )
+
+        def checkin(*_):
+            self.pool_state["checked_out"] = max(0, self.pool_state["checked_out"] - 1)
+
+        event.listen(engine.sync_engine, "checkout", checkout)
+        event.listen(engine.sync_engine, "checkin", checkin)
+        return engine
 
     @staticmethod
     def _normalize_url(location: str | Path) -> str:
         value = str(location)
-        # SQLAlchemy's bare PostgreSQL scheme defaults to psycopg2. Core ships
-        # psycopg 3, so a normal server URL must select that packaged driver.
+        if value in {"sqlite://", "sqlite+pysqlite://", "sqlite+aiosqlite://"}:
+            return "sqlite+aiosqlite:///:memory:"
         for scheme in ("postgresql://", "postgres://"):
             if value.startswith(scheme):
                 return "postgresql+psycopg://" + value[len(scheme) :]
-        if "://" in value or value == "sqlite://":
+        if value.startswith(("sqlite://", "sqlite+pysqlite://")):
+            return value.replace(value.split(":", 1)[0], "sqlite+aiosqlite", 1)
+        if "://" in value:
             return value
         if value == ":memory:":
-            return "sqlite+pysqlite:///:memory:"
+            return "sqlite+aiosqlite:///:memory:"
         path = Path(value).expanduser().resolve()
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path.parent.chmod(0o700)
-        return f"sqlite+pysqlite:///{path}"
+        return f"sqlite+aiosqlite:///{path}"
+
+    @staticmethod
+    def _normalize_sync_url(location: str | Path) -> str:
+        """URL for standalone Alembic/import commands, never runtime sessions."""
+        return Database._normalize_url(location).replace(
+            "sqlite+aiosqlite:", "sqlite+pysqlite:", 1
+        )
 
     @staticmethod
     def _configure_sqlite(dbapi_connection: Any, _: Any) -> None:
@@ -652,262 +730,312 @@ class Database:
             cursor.execute("PRAGMA busy_timeout=30000")
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
-            database_rows = cursor.execute("PRAGMA database_list").fetchall()
-            for _, name, location in database_rows:
-                if name != "main" or not location:
-                    continue
-                database_path = Path(location)
-                for path in (
-                    database_path,
-                    Path(f"{database_path}-wal"),
-                    Path(f"{database_path}-shm"),
-                ):
-                    if path.exists():
-                        path.chmod(0o600)
+            cursor.execute("PRAGMA database_list")
+            for _, name, location in cursor.fetchall():
+                if name == "main" and location:
+                    for path in (
+                        Path(location),
+                        Path(location + "-wal"),
+                        Path(location + "-shm"),
+                    ):
+                        if path.exists():
+                            path.chmod(0o600)
         finally:
             cursor.close()
 
-    def bootstrap(self) -> int:
-        """Create the current schema or validate an existing schema version.
-
-        Version rows are append-only migration markers.  Future migrations should
-        apply one version at a time and insert a row only after each transaction.
-        """
-
-        with self._bootstrap_serialization():
-            # Capture and persist this fact before Alembic creates bookkeeping
-            # or application tables. It is deliberately stricter than "contains
-            # no engagements": an existing/upgraded/imported database is never
-            # eligible for an implicit Scratch Project, even when its entities
-            # have later been removed. Persisting before migration also lets a
-            # later constructor recover safely if migration is interrupted.
-            database_was_truly_empty = not inspect(self.engine).get_table_names()
-            self._prepare_bootstrap_marker(database_was_truly_empty)
-            self._run_alembic_migrations()
-            if self.engine.dialect.name == "sqlite":
-                database_path = self.engine.url.database
-                if database_path and database_path != ":memory:":
-                    Path(database_path).chmod(0o600)
-            with self.engine.begin() as connection:
-                current = connection.scalar(select(func.max(SchemaVersionRow.version)))
-                if current is None:
-                    connection.execute(
-                        insert(SchemaVersionRow).values(
-                            version=CURRENT_SCHEMA_VERSION, applied_at=utc_now()
+    async def initialize(self) -> None:
+        async with self._initialize_lock:
+            if self._initialized:
+                return
+            try:
+                if self.engine.dialect.name == "postgresql":
+                    settings = self._pool_settings or PoolSettings.from_environment()
+                    async with self.engine.connect() as connection:
+                        values = (
+                            await connection.execute(
+                                text("""
+                            SELECT current_setting('max_connections')::int AS maximum,
+                              current_setting('superuser_reserved_connections')::int +
+                              COALESCE(current_setting('reserved_connections', true), '0')::int AS reserved,
+                              (SELECT rolconnlimit FROM pg_roles WHERE rolname = current_user) AS role_limit,
+                              (SELECT datconnlimit FROM pg_database WHERE datname = current_database()) AS database_limit
+                        """)
+                            )
+                        ).one()
+                    await self.engine.dispose()
+                    self.budget = connection_budget(
+                        settings,
+                        max_connections=values.maximum,
+                        postgres_reserved=values.reserved,
+                        role_limit=values.role_limit,
+                        database_limit=values.database_limit,
+                    )
+                    self._pool_settings = settings
+                    self.pool_size = self.budget.pool_size
+                    self.engine = self._engine(self.pool_size)
+                    self._session_factory.configure(bind=self.engine)
+                    self.bulk_slots = asyncio.Semaphore(
+                        max(1, min(4, self.pool_size - 1))
+                    )
+                else:
+                    database = self.engine.url.database
+                    if database and database != ":memory:":
+                        path = Path(database)
+                        await asyncio.to_thread(
+                            path.parent.mkdir, parents=True, exist_ok=True, mode=0o700
                         )
-                    )
-                    current = CURRENT_SCHEMA_VERSION
-                elif current > CURRENT_SCHEMA_VERSION:
-                    raise SchemaVersionError(
-                        f"database schema {current} is newer than supported schema "
-                        f"{CURRENT_SCHEMA_VERSION}"
-                    )
-                elif current < CURRENT_SCHEMA_VERSION:
-                    self._migrate(connection, current, CURRENT_SCHEMA_VERSION)
-                marker = connection.scalar(
-                    select(BootstrapStateRow).where(
-                        BootstrapStateRow.key == SCRATCH_PROJECT_BOOTSTRAP_KEY
-                    )
+                        await asyncio.to_thread(path.parent.chmod, 0o700)
+                if self._bootstrap:
+                    await self.bootstrap()
+                self._initialized = True
+            except BaseException:
+                self.pool_state["connection_failures"] += 1
+                await self.engine.dispose()
+                raise
+
+    async def bootstrap(self) -> int:
+        # Advisory-lock waits use the async driver. SQLite's nonblocking kernel
+        # lock is polled without leaving a worker or file descriptor behind if
+        # startup is cancelled while another process is migrating.
+        descriptor = None
+        database = self.engine.url.database
+        try:
+            if (
+                self.engine.dialect.name == "sqlite"
+                and database
+                and database != ":memory:"
+            ):
+                descriptor = os.open(
+                    database + ".bootstrap.lock",
+                    os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
                 )
-                if marker is None:
-                    # Defensive recovery for databases whose bootstrap table was
-                    # modified independently of Nebula's packaged migrations.
-                    now = utc_now()
-                    connection.execute(
-                        insert(BootstrapStateRow).values(
-                            key=SCRATCH_PROJECT_BOOTSTRAP_KEY,
-                            status=(
-                                "eligible" if database_was_truly_empty else "complete"
-                            ),
-                            engagement_id=None,
-                            created_at=now,
-                            completed_at=(None if database_was_truly_empty else now),
-                        )
-                    )
-                return CURRENT_SCHEMA_VERSION
-
-    @contextmanager
-    def _bootstrap_serialization(self) -> Iterator[None]:
-        """Serialize schema/bootstrap decisions across constructors.
-
-        The adjacent lock file is intentionally durable: the kernel owns the
-        actual lock, so a crash releases it without stale-lock cleanup. Keeping
-        the inode in place also avoids unlink/recreate races between processes.
-        """
-
-        database_path = self._sqlite_database_path()
-        key = str(database_path) if database_path is not None else self.url
-        with _bootstrap_thread_lock(key):
-            if self.engine.dialect.name == "postgresql":
-                # Migrations use several committed transactions/connections.
-                # Hold a session advisory lock across the complete bootstrap,
-                # scoped to this database and schema. PostgreSQL releases it
-                # automatically if the constructor process disconnects.
-                with self.engine.connect().execution_options(
-                    isolation_level="AUTOCOMMIT"
-                ) as connection:
-                    connection.execute(
-                        text(
-                            "SELECT pg_advisory_lock("
-                            "hashtext('nebula:bootstrap'), hashtext(current_schema()))"
-                        )
-                    )
+                while True:
                     try:
-                        yield
-                    finally:
-                        connection.execute(
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        await asyncio.sleep(0.05)
+            async with self.engine.connect() as connection:
+                postgres = self.engine.dialect.name == "postgresql"
+                if postgres:
+                    await connection.execute(
+                        text(
+                            "SELECT pg_advisory_lock(hashtext('nebula:bootstrap'), hashtext(current_schema()))"
+                        )
+                    )
+                    await connection.commit()
+                try:
+                    return await connection.run_sync(self._bootstrap_on_connection)
+                finally:
+                    if postgres:
+                        await connection.rollback()
+                        await connection.execute(
                             text(
-                                "SELECT pg_advisory_unlock("
-                                "hashtext('nebula:bootstrap'), hashtext(current_schema()))"
+                                "SELECT pg_advisory_unlock(hashtext('nebula:bootstrap'), hashtext(current_schema()))"
                             )
                         )
-                return
-            if database_path is None:
-                yield
-                return
-
-            lock_path = Path(f"{database_path}.bootstrap.lock")
-            flags = os.O_CREAT | os.O_RDWR
-            flags |= getattr(os, "O_CLOEXEC", 0)
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(lock_path, flags, 0o600)
-            try:
-                os.fchmod(descriptor, 0o600)
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-            finally:
+                        await connection.commit()
+        finally:
+            if descriptor is not None:
                 os.close(descriptor)
 
-    def _sqlite_database_path(self) -> Path | None:
-        if self.engine.dialect.name != "sqlite":
-            return None
-        database = self.engine.url.database
-        if not database or database == ":memory:":
-            return None
-        return Path(database).expanduser().resolve()
-
-    def _prepare_bootstrap_marker(self, database_was_truly_empty: bool) -> None:
-        """Persist first-run eligibility before migrations can be interrupted."""
-
-        connection = self.engine.connect()
+    @staticmethod
+    def _bootstrap_on_connection(connection: Any) -> int:
+        empty = not inspect(connection).get_table_names()
+        connection.commit()
+        sqlite = connection.dialect.name == "sqlite"
+        if sqlite:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        else:
+            connection.begin()
         try:
-            if self.engine.dialect.name == "sqlite":
-                # Python's sqlite driver does not reliably begin a transaction
-                # for DDL. An explicit write transaction makes table creation
-                # and the eligibility row atomic across crashes.
-                connection.exec_driver_sql("BEGIN IMMEDIATE")
-            else:
-                connection.begin()
-            BootstrapStateRow.metadata.tables[BootstrapStateRow.__tablename__].create(
-                connection, checkfirst=True
-            )
+            cast(Table, BootstrapStateRow.__table__).create(connection, checkfirst=True)
             marker = connection.scalar(
-                select(BootstrapStateRow).where(
+                select(BootstrapStateRow.key).where(
                     BootstrapStateRow.key == SCRATCH_PROJECT_BOOTSTRAP_KEY
                 )
             )
-            if marker is not None:
-                connection.commit()
-                return
-            now = utc_now()
-            connection.execute(
-                insert(BootstrapStateRow).values(
-                    key=SCRATCH_PROJECT_BOOTSTRAP_KEY,
-                    status=("eligible" if database_was_truly_empty else "complete"),
-                    engagement_id=None,
-                    created_at=now,
-                    completed_at=(None if database_was_truly_empty else now),
+            if marker is None:
+                connection.execute(
+                    insert(BootstrapStateRow).values(
+                        key=SCRATCH_PROJECT_BOOTSTRAP_KEY,
+                        status="eligible" if empty else "complete",
+                        engagement_id=None,
+                        created_at=utc_now(),
+                        completed_at=None if empty else utc_now(),
+                    )
                 )
-            )
             connection.commit()
-        except Exception as caught_error:
-            record_caught_exception(
-                "storage",
-                "storage.database.caught_failure_002",
-                "A handled storage operation raised an exception.",
-                caught_error,
-                stage="database",
+            config = Config()
+            config.set_main_option(
+                "script_location", str(Path(__file__).with_name("migrations"))
             )
+            config.attributes["connection"] = connection
+            command.upgrade(config, "head")
+            connection.commit()
+            current = connection.scalar(select(func.max(SchemaVersionRow.version)))
+            if current is not None and current > CURRENT_SCHEMA_VERSION:
+                raise SchemaVersionError(
+                    f"database schema {current} is newer than supported schema {CURRENT_SCHEMA_VERSION}"
+                )
+            if current is not None and current < 1:
+                raise SchemaVersionError(f"no migration path from schema {current}")
+            versions = (
+                [CURRENT_SCHEMA_VERSION]
+                if current is None
+                else range(current + 1, CURRENT_SCHEMA_VERSION + 1)
+            )
+            for version in versions:
+                connection.execute(
+                    insert(SchemaVersionRow).values(
+                        version=version, applied_at=utc_now()
+                    )
+                )
+            connection.commit()
+            return CURRENT_SCHEMA_VERSION
+        except BaseException:
             connection.rollback()
             raise
-        finally:
-            connection.close()
 
-    def _run_alembic_migrations(self) -> None:
-        """Apply packaged schema DDL after the atomic bootstrap-marker preflight."""
-
-        config = Config()
-        config.set_main_option(
-            "script_location", str(Path(__file__).with_name("migrations"))
-        )
-        config.attributes["connection"] = self.engine.connect()
+    async def connect(self) -> AsyncConnection:
+        """Acquire a ledger connection with the same bounded runtime budget."""
+        await self.initialize()
+        self.pool_state["waiters"] += 1
+        started = time.perf_counter()
         try:
-            command.upgrade(config, "head")
+            return await self.engine.connect()
+        except PoolTimeoutError as exc:
+            self.pool_state["timeouts"] += 1
+            raise DatabaseBusyError("Database connection capacity is busy") from exc
+        except BaseException:
+            self.pool_state["connection_failures"] += 1
+            raise
         finally:
-            config.attributes["connection"].close()
+            self.pool_state["waiters"] -= 1
+            self.performance.record(
+                "db.pool.acquire", (time.perf_counter() - started) * 1000
+            )
 
-    @staticmethod
-    def _migrate(connection: Any, current: int, target: int) -> None:
-        if current >= target:
+    @asynccontextmanager
+    async def connection(self) -> AsyncIterator[AsyncConnection]:
+        connection = await self.connect()
+        try:
+            yield connection
+        finally:
+            await connection.close()
+
+    @asynccontextmanager
+    async def bulk(self) -> AsyncIterator[None]:
+        """Share bounded read admission without inverting transaction locks."""
+        task = asyncio.current_task()
+        if self._bulk_owner.get() is task or self.task_session() is not None:
+            yield
             return
-        if current < 1 or target > CURRENT_SCHEMA_VERSION:
-            raise SchemaVersionError(
-                f"no migration path from schema {current} to {target}"
-            )
-        # Alembic has already applied the authoritative DDL. Keep the compact
-        # application schema ledger in step with every packaged revision.
-        for version in range(current + 1, target + 1):
-            connection.execute(
-                insert(SchemaVersionRow).values(version=version, applied_at=utc_now())
-            )
-
-    @contextmanager
-    def session(self) -> Iterator[Session]:
-        session = self._session_factory()
+        await self.initialize()
+        with self.performance.span("db.bulk.wait"):
+            await self.bulk_slots.acquire()
+        token = self._bulk_owner.set(task)
         try:
+            yield
+        finally:
+            self._bulk_owner.reset(token)
+            self.bulk_slots.release()
+
+    @asynccontextmanager
+    async def session(self, *, bulk: bool = False) -> AsyncIterator[AsyncSession]:
+        if bulk:
+            async with self.bulk():
+                async with self.session() as session:
+                    yield session
+            return
+        current = self._active_session.get()
+        if current is not None and current[0] is asyncio.current_task():
+            # Read helpers inside a unit of work see that unit's own writes.
+            # Child tasks inherit context, but never inherit its Session.
+            yield current[1]
+            return
+        await self.initialize()
+        session = self._session_factory()
+        owner = self._active_session.set((asyncio.current_task(), session))
+        self.pool_state["waiters"] += 1
+        started = time.perf_counter()
+        try:
+            try:
+                await session.connection()
+            except (PoolTimeoutError, asyncio.CancelledError):
+                raise
+            except BaseException:
+                self.pool_state["connection_failures"] += 1
+                raise
+            finally:
+                self.pool_state["waiters"] -= 1
+                self.performance.record(
+                    "db.pool.acquire", (time.perf_counter() - started) * 1000
+                )
             with self.performance.span("db.session"):
                 yield session
                 with self.performance.span("db.commit"):
-                    session.commit()
-        except Exception as caught_error:
-            record_caught_exception(
-                "storage",
-                "storage.database.caught_failure_003",
-                "A handled storage operation raised an exception.",
-                caught_error,
-                stage="database",
-            )
-            session.rollback()
+                    await session.commit()
+        except PoolTimeoutError as exc:
+            self.pool_state["timeouts"] += 1
+            await session.rollback()
+            raise DatabaseBusyError("Database connection capacity is busy") from exc
+        except BaseException:
+            await session.rollback()
             raise
         finally:
-            session.close()
+            self._active_session.reset(owner)
+            # Shield cleanup from a second cancellation, and wait for it before
+            # disposal can proceed. Each session belongs only to its caller.
+            close = asyncio.create_task(session.close())
+            try:
+                await asyncio.shield(close)
+            except asyncio.CancelledError:
+                await close
+                raise
 
-    def current_schema_version(self) -> int:
-        with self._session_factory() as session:
-            value = session.scalar(select(func.max(SchemaVersionRow.version)))
+    def task_session(self) -> AsyncSession | None:
+        current = self._active_session.get()
+        return (
+            current[1]
+            if current is not None and current[0] is asyncio.current_task()
+            else None
+        )
+
+    async def current_schema_version(self) -> int:
+        async with self.session() as session:
+            value = await session.scalar(select(func.max(SchemaVersionRow.version)))
             if value is None:
                 raise SchemaVersionError("database has not been bootstrapped")
             return int(value)
 
-    def health(self) -> dict[str, Any]:
-        with self.engine.connect() as connection:
-            connection.exec_driver_sql("SELECT 1")
-            result: dict[str, Any] = {
+    async def health(self) -> dict[str, Any]:
+        async with self.session() as session:
+            await session.execute(text("SELECT 1"))
+            version = await session.scalar(select(func.max(SchemaVersionRow.version)))
+            result = {
                 "database": "ok",
                 "dialect": self.engine.dialect.name,
-                "schema_version": self.current_schema_version(),
+                "schema_version": version,
             }
             if self.engine.dialect.name == "sqlite":
-                result["journal_mode"] = connection.exec_driver_sql(
-                    "PRAGMA journal_mode"
-                ).scalar_one()
+                result["journal_mode"] = await session.scalar(
+                    text("PRAGMA journal_mode")
+                )
             return result
 
-    def dispose(self) -> None:
-        self.engine.dispose()
+    def pool_snapshot(self) -> dict[str, Any]:
+        return {
+            "budget": self.budget.snapshot() if self.budget else None,
+            "configured_size": self.pool_size,
+            "max_overflow": 0,
+            **self.pool_state,
+        }
+
+    async def dispose(self) -> None:
+        await self.engine.dispose()
+        self._initialized = False
 
 
 class DatabaseInUseError(RuntimeError):

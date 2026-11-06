@@ -11,13 +11,13 @@ from .domain import ChatDecision, ChatMessage, ChatSession
 from .storage import ConflictError
 
 
-def decisions_for(store, session_id, project_id):
+async def decisions_for(store, session_id, project_id):
     side_chat = bool(
         session_id
-        and store.get(ChatSession, session_id).metadata.get("side_chat") is True
+        and (await store.get(ChatSession, session_id)).metadata.get("side_chat") is True
     )
-    with store.database.session() as database:
-        rows = database.scalars(
+    async with store.database.session() as database:
+        rows = await database.scalars(
             select(EntityRow)
             .where(
                 EntityRow.kind == "chat_decisions",
@@ -34,8 +34,8 @@ def decisions_for(store, session_id, project_id):
         return [ChatDecision.model_validate(row.payload) for row in rows]
 
 
-def decision_snapshot(store, session_id, project_id):
-    entries = decisions_for(store, session_id, project_id) if project_id else []
+async def decision_snapshot(store, session_id, project_id):
+    entries = (await decisions_for(store, session_id, project_id)) if project_id else []
     active = [
         {
             "id": item.id,
@@ -67,26 +67,28 @@ def decision_instructions(snapshot):
     )
 
 
-def fork_decisions(store, source, fork, boundary_sequence):
-    for item in decisions_for(store, source.id, source.engagement_id):
+async def fork_decisions(store, source, fork, boundary_sequence):
+    for item in await decisions_for(store, source.id, source.engagement_id):
         if (
             item.scope != "conversation"
             or item.status != "active"
             or item.effective_sequence > boundary_sequence
         ):
             continue
-        store.create(
-            ChatDecision(
-                engagement_id=fork.engagement_id,
-                session_id=fork.id,
-                kind=item.kind,
-                text=item.text,
-                source_message_id=item.source_message_id,
-                source_session_id=item.source_session_id,
-                source_selection=item.source_selection,
-                effective_sequence=item.effective_sequence,
-                copied_from_id=item.id,
-                copied_from_revision=item.revision,
+        (
+            await store.create(
+                ChatDecision(
+                    engagement_id=fork.engagement_id,
+                    session_id=fork.id,
+                    kind=item.kind,
+                    text=item.text,
+                    source_message_id=item.source_message_id,
+                    source_session_id=item.source_session_id,
+                    source_selection=item.source_selection,
+                    effective_sequence=item.effective_sequence,
+                    copied_from_id=item.id,
+                    copied_from_revision=item.revision,
+                )
             )
         )
 
@@ -106,20 +108,20 @@ def decisions_router(store):
     router = APIRouter(tags=["chat"])
 
     @router.get("/chat/sessions/{session_id}/decisions")
-    def read(session_id: str):
-        session = store.get(ChatSession, session_id)
-        return decisions_for(store, session_id, session.engagement_id)
+    async def read(session_id: str):
+        session = await store.get(ChatSession, session_id)
+        return await decisions_for(store, session_id, session.engagement_id)
 
     @router.put("/chat/sessions/{session_id}/decisions/{decision_id}")
-    def write(session_id: str, decision_id: str, body: DecisionWrite):
-        session = store.get(ChatSession, session_id)
+    async def write(session_id: str, decision_id: str, body: DecisionWrite):
+        session = await store.get(ChatSession, session_id)
         if len(decision_id) > 200:
             raise HTTPException(422, "Decision identity is too long")
         if body.expected_revision == 0:
             if body.action != "save" or not body.text.strip():
                 raise HTTPException(422, "Write the decision before saving")
             source = (
-                store.get(ChatMessage, body.source_message_id)
+                (await store.get(ChatMessage, body.source_message_id))
                 if body.source_message_id
                 else None
             )
@@ -133,9 +135,9 @@ def decisions_router(store):
                 raise HTTPException(
                     422, "Source selection must be exact text from the saved message"
                 )
-            with store.database.session() as database:
+            async with store.database.session() as database:
                 latest = (
-                    database.scalar(
+                    await database.scalar(
                         select(EntityRow.payload["sequence"].as_integer())
                         .where(
                             EntityRow.kind == "chat_messages",
@@ -144,9 +146,8 @@ def decisions_router(store):
                         .order_by(EntityRow.payload["sequence"].as_integer().desc())
                         .limit(1)
                     )
-                    or 0
-                )
-            return store.create(
+                ) or 0
+            return await store.create(
                 ChatDecision(
                     id=decision_id,
                     engagement_id=session.engagement_id,
@@ -159,7 +160,7 @@ def decisions_router(store):
                     effective_sequence=source.sequence if source else latest,
                 )
             )
-        current = store.get(ChatDecision, decision_id)
+        current = await store.get(ChatDecision, decision_id)
         if current.engagement_id != session.engagement_id or (
             current.scope == "conversation" and current.session_id != session_id
         ):
@@ -186,17 +187,19 @@ def decisions_router(store):
                 copied_from_revision=current.revision,
             )
             # Supersede the local copy atomically to prevent injecting it twice.
-            with store.transaction() as tx:
-                tx.update(
-                    ChatDecision,
-                    current.id,
-                    {
-                        "status": "superseded",
-                        "history": [*current.history, revision_entry(current)],
-                    },
-                    expected_revision=current.revision,
+            async with store.transaction() as tx:
+                (
+                    await tx.update(
+                        ChatDecision,
+                        current.id,
+                        {
+                            "status": "superseded",
+                            "history": [*current.history, revision_entry(current)],
+                        },
+                        expected_revision=current.revision,
+                    )
                 )
-                tx.add(promoted)
+                (await tx.add(promoted))
             return promoted
         if current.status != "active":
             raise ConflictError(
@@ -211,7 +214,7 @@ def decisions_router(store):
             changes.update(text=body.text, kind=body.kind)
         else:
             changes["status"] = "removed" if body.action == "remove" else "superseded"
-        return store.update(
+        return await store.update(
             ChatDecision, current.id, changes, expected_revision=current.revision
         )
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 
 from .domain import LibraryItem, RiskClass
@@ -51,19 +53,19 @@ class ButlerLibrary:
             "artifact_available": bool(item.artifact_id),
         }
 
-    def list_items(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def list_items(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 10000:
             raise ValueError("offset must be from 0 to 10000")
-        rows = self.store.list_entities(LibraryItem, offset=offset, limit=51)
+        rows = await self.store.list_entities(LibraryItem, offset=offset, limit=51)
         return {
             "items": [self._summary(item) for item in rows[:50]],
             "next_offset": offset + 50 if len(rows) > 50 else None,
             "scope": "shared across every project",
         }
 
-    def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        item = self.store.get(LibraryItem, arguments["item_id"])
+    async def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        item = await self.store.get(LibraryItem, arguments["item_id"])
         return {
             **self._summary(item),
             "citation": item.citation,
@@ -71,8 +73,8 @@ class ButlerLibrary:
             "scope": "shared across every project",
         }
 
-    def _pending(self, arguments: dict[str, Any], kind: str) -> dict[str, Any]:
-        item = self.store.get(LibraryItem, arguments["item_id"])
+    async def _pending(self, arguments: dict[str, Any], kind: str) -> dict[str, Any]:
+        item = await self.store.get(LibraryItem, arguments["item_id"])
         if item.revision != arguments["expected_revision"]:
             raise ValueError(
                 "Library item changed; read its current revision before acting"
@@ -90,11 +92,11 @@ class ButlerLibrary:
             },
         }
 
-    def reindex(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._pending(arguments, "library_reindex")
+    async def reindex(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self._pending(arguments, "library_reindex")
 
-    def remove(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._pending(arguments, "library_remove")
+    async def remove(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self._pending(arguments, "library_remove")
 
     def add(self, _arguments: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -105,8 +107,8 @@ class ButlerLibrary:
             },
         }
 
-    def download(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._pending(arguments, "library_download")
+    async def download(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self._pending(arguments, "library_download")
 
     def actions(self) -> list[AnalysisTool]:
         operations = (
@@ -164,7 +166,7 @@ class ButlerLibrary:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

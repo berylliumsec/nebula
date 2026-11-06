@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
+from .async_utils import MaybeAsync
+
 import hashlib
 import json
 import threading
@@ -10,9 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .context import _reasoning_text, estimate_tokens
 from .database import ChatTurnCheckpointRow, ChatTurnStepEventRow, Database
@@ -289,63 +293,71 @@ class ChatTurnLedger:
         self._folded: OrderedDict[str, _FoldedHistory] = OrderedDict()
         self._folded_lock = threading.Lock()
 
-    def _rows(self, turn_id: str) -> list[ChatTurnStepEventRow]:
-        with self.database.session() as session:
+    async def _rows(self, turn_id: str) -> list[ChatTurnStepEventRow]:
+        async with self.database.session() as session:
             return list(
-                session.scalars(
-                    select(ChatTurnStepEventRow)
-                    .where(ChatTurnStepEventRow.turn_id == turn_id)
-                    .order_by(ChatTurnStepEventRow.sequence)
+                (
+                    await session.scalars(
+                        select(ChatTurnStepEventRow)
+                        .where(ChatTurnStepEventRow.turn_id == turn_id)
+                        .order_by(ChatTurnStepEventRow.sequence)
+                    )
                 )
             )
 
-    def has_events(self, turn_id: str) -> bool:
-        with self.database.session() as session:
+    async def has_events(self, turn_id: str) -> bool:
+        async with self.database.session() as session:
             return bool(
-                session.scalar(
-                    select(func.count())
-                    .select_from(ChatTurnStepEventRow)
-                    .where(ChatTurnStepEventRow.turn_id == turn_id)
+                (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ChatTurnStepEventRow)
+                        .where(ChatTurnStepEventRow.turn_id == turn_id)
+                    )
                 )
             )
 
-    def next_provider_group(self, turn_id: str) -> int:
+    async def next_provider_group(self, turn_id: str) -> int:
         """Ordinal for the turn's next routing response, counted from 1.
 
         Steps carry it in ``provider_group``, so the ledger groups the calls
         one provider response issued, across pauses and restarts.
         """
 
-        with self.database.session() as session:
+        async with self.database.session() as session:
             return (
                 int(
-                    session.scalar(
-                        select(
-                            func.coalesce(
-                                func.max(ChatTurnStepEventRow.provider_group), 0
-                            )
-                        ).where(ChatTurnStepEventRow.turn_id == turn_id)
+                    (
+                        await session.scalar(
+                            select(
+                                func.coalesce(
+                                    func.max(ChatTurnStepEventRow.provider_group), 0
+                                )
+                            ).where(ChatTurnStepEventRow.turn_id == turn_id)
+                        )
                     )
                     or 0
                 )
                 + 1
             )
 
-    def import_legacy(self, turn: ChatTurn) -> None:
-        if not turn.tool_history or self.has_events(turn.id):
+    async def import_legacy(self, turn: ChatTurn) -> None:
+        if not turn.tool_history or (await self.has_events(turn.id)):
             return
         for entry in turn.tool_history:
             if isinstance(entry, dict):
-                self.append(
-                    turn.id,
-                    entry,
-                    idempotency_key=f"legacy:{int(entry.get('step', 0))}:0",
-                    event_type="legacy_imported",
+                (
+                    await self.append(
+                        turn.id,
+                        entry,
+                        idempotency_key=f"legacy:{int(entry.get('step', 0))}:0",
+                        event_type="legacy_imported",
+                    )
                 )
 
     @staticmethod
-    def _stored_payload(
-        session: Session, turn_id: str, step: int, payload: dict[str, Any]
+    async def _stored_payload(
+        session: AsyncSession, turn_id: str, step: int, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """``payload`` without the replay state its step already holds.
 
@@ -361,7 +373,7 @@ class ChatTurnLedger:
         }
         if not shared:
             return payload
-        holder = session.scalar(
+        holder = await session.scalar(
             select(ChatTurnStepEventRow)
             .where(
                 ChatTurnStepEventRow.turn_id == turn_id,
@@ -372,7 +384,7 @@ class ChatTurnLedger:
         )
         reference = holder.payload.get(_REPLAY_FROM) if holder is not None else None
         if isinstance(reference, int) and not isinstance(reference, bool):
-            holder = session.scalar(
+            holder = await session.scalar(
                 select(ChatTurnStepEventRow).where(
                     ChatTurnStepEventRow.turn_id == turn_id,
                     ChatTurnStepEventRow.sequence == reference,
@@ -410,7 +422,23 @@ class ChatTurnLedger:
                     entry[field] = holder.payload[field]
         return _without_callback_key(entry)
 
-    def append(
+    async def _lock_turn(self, session: AsyncSession, turn_id: str) -> None:
+        """Serialize sequence/checkpoint decisions across newly yielding writers."""
+        connection = await session.connection()
+        if connection.dialect.name == "postgresql":
+            await session.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock(hashtext('nebula:turn-ledger'), hashtext(:turn_id))"
+                ),
+                {"turn_id": turn_id},
+            )
+        elif connection.dialect.name == "sqlite":
+            raw = await connection.get_raw_connection()
+            assert raw.driver_connection is not None
+            if not raw.driver_connection.in_transaction:
+                await session.execute(text("BEGIN IMMEDIATE"))
+
+    async def append(
         self,
         turn_id: str,
         entry: dict[str, Any],
@@ -424,8 +452,9 @@ class ChatTurnLedger:
             f"step:{step}:{event_type or _event_type(entry)}:"
             f"{hashlib.sha256(_canonical(entry)).hexdigest()[:24]}"
         )
-        with self.database.session() as session:
-            existing = session.scalar(
+        async with self.database.session() as session:
+            await self._lock_turn(session, turn_id)
+            existing = await session.scalar(
                 select(ChatTurnStepEventRow).where(
                     ChatTurnStepEventRow.turn_id == turn_id,
                     ChatTurnStepEventRow.idempotency_key == key,
@@ -435,10 +464,14 @@ class ChatTurnLedger:
                 return existing.sequence
             sequence = (
                 int(
-                    session.scalar(
-                        select(
-                            func.coalesce(func.max(ChatTurnStepEventRow.sequence), 0)
-                        ).where(ChatTurnStepEventRow.turn_id == turn_id)
+                    (
+                        await session.scalar(
+                            select(
+                                func.coalesce(
+                                    func.max(ChatTurnStepEventRow.sequence), 0
+                                )
+                            ).where(ChatTurnStepEventRow.turn_id == turn_id)
+                        )
                     )
                     or 0
                 )
@@ -458,20 +491,22 @@ class ChatTurnLedger:
                 tool_call_id=(
                     str(entry["tool_call_id"]) if entry.get("tool_call_id") else None
                 ),
-                payload=self._stored_payload(
-                    session, turn_id, step, json.loads(_canonical(entry))
+                payload=(
+                    await self._stored_payload(
+                        session, turn_id, step, json.loads(_canonical(entry))
+                    )
                 ),
                 occurred_at=utc_now(),
                 idempotency_key=key,
             )
             session.add(row)
             try:
-                session.flush()
+                (await session.flush())
             except IntegrityError:
                 # Another callback may have appended the identical transition.
-                session.rollback()
-                with self.database.session() as retry:
-                    winner = retry.scalar(
+                (await session.rollback())
+                async with self.database.session() as retry:
+                    winner = await retry.scalar(
                         select(ChatTurnStepEventRow).where(
                             ChatTurnStepEventRow.turn_id == turn_id,
                             ChatTurnStepEventRow.idempotency_key == key,
@@ -482,25 +517,29 @@ class ChatTurnLedger:
                     return winner.sequence
             return sequence
 
-    def _rows_after(self, turn_id: str, sequence: int) -> list[tuple[int, int, Any]]:
-        with self.database.session() as session:
+    async def _rows_after(
+        self, turn_id: str, sequence: int
+    ) -> list[tuple[int, int, Any]]:
+        async with self.database.session() as session:
             return [
                 (row.sequence, row.step, row.payload)
-                for row in session.execute(
-                    select(
-                        ChatTurnStepEventRow.sequence,
-                        ChatTurnStepEventRow.step,
-                        ChatTurnStepEventRow.payload,
+                for row in (
+                    await session.execute(
+                        select(
+                            ChatTurnStepEventRow.sequence,
+                            ChatTurnStepEventRow.step,
+                            ChatTurnStepEventRow.payload,
+                        )
+                        .where(
+                            ChatTurnStepEventRow.turn_id == turn_id,
+                            ChatTurnStepEventRow.sequence > sequence,
+                        )
+                        .order_by(ChatTurnStepEventRow.sequence)
                     )
-                    .where(
-                        ChatTurnStepEventRow.turn_id == turn_id,
-                        ChatTurnStepEventRow.sequence > sequence,
-                    )
-                    .order_by(ChatTurnStepEventRow.sequence)
                 )
             ]
 
-    def history(self, turn: ChatTurn) -> list[dict[str, Any]]:
+    async def history(self, turn: ChatTurn) -> list[dict[str, Any]]:
         """The latest projection of every step, in the order it was recorded.
 
         Rows are append-only and their sequences commit in order, so a fold
@@ -516,7 +555,7 @@ class ChatTurnLedger:
                 if cached is not None
                 else _FoldedHistory()
             )
-        rows = self._rows_after(turn.id, folded.through_sequence)
+        rows = await self._rows_after(turn.id, folded.through_sequence)
         if not rows and not folded.latest:
             return [
                 _without_callback_key(dict(item))
@@ -535,7 +574,7 @@ class ChatTurnLedger:
                     if reference in read
                     else folded.latest[step][1]
                     if step in folded.latest
-                    else self._payload_at(turn.id, reference)
+                    else (await self._payload_at(turn.id, reference))
                 )
                 for name in SHARED_REPLAY_FIELDS:
                     if held is not None and name in held and name not in entry:
@@ -558,9 +597,9 @@ class ChatTurnLedger:
             for _, entry in sorted(folded.latest.values(), key=lambda item: item[0])
         ]
 
-    def _payload_at(self, turn_id: str, sequence: int) -> dict[str, Any] | None:
-        with self.database.session() as session:
-            row = session.scalar(
+    async def _payload_at(self, turn_id: str, sequence: int) -> dict[str, Any] | None:
+        async with self.database.session() as session:
+            row = await session.scalar(
                 select(ChatTurnStepEventRow).where(
                     ChatTurnStepEventRow.turn_id == turn_id,
                     ChatTurnStepEventRow.sequence == sequence,
@@ -568,11 +607,11 @@ class ChatTurnLedger:
             )
             return dict(row.payload) if row is not None else None
 
-    def event(self, turn_id: str, idempotency_key: str) -> dict[str, Any] | None:
+    async def event(self, turn_id: str, idempotency_key: str) -> dict[str, Any] | None:
         """The step entry one row recorded, shared replay state included."""
 
-        with self.database.session() as session:
-            row = session.scalar(
+        async with self.database.session() as session:
+            row = await session.scalar(
                 select(ChatTurnStepEventRow).where(
                     ChatTurnStepEventRow.turn_id == turn_id,
                     ChatTurnStepEventRow.idempotency_key == idempotency_key,
@@ -582,10 +621,12 @@ class ChatTurnLedger:
                 return None
             reference = row.payload.get(_REPLAY_FROM)
             holder = (
-                session.scalar(
-                    select(ChatTurnStepEventRow).where(
-                        ChatTurnStepEventRow.turn_id == turn_id,
-                        ChatTurnStepEventRow.sequence == reference,
+                (
+                    await session.scalar(
+                        select(ChatTurnStepEventRow).where(
+                            ChatTurnStepEventRow.turn_id == turn_id,
+                            ChatTurnStepEventRow.sequence == reference,
+                        )
                     )
                 )
                 if isinstance(reference, int) and not isinstance(reference, bool)
@@ -594,30 +635,36 @@ class ChatTurnLedger:
             rows = {holder.sequence: holder} if holder is not None else {}
             return self._resolved(row.payload, rows)
 
-    def tail(self, turn_id: str, count: int) -> tuple[int, list[dict[str, Any]]] | None:
+    async def tail(
+        self, turn_id: str, count: int
+    ) -> tuple[int, list[dict[str, Any]]] | None:
         """The step count and last ``count`` steps of ``history``, read
         without the rest; None when the turn has no ledger rows."""
 
-        with self.database.session() as session:
+        async with self.database.session() as session:
             steps = list(
-                session.scalars(
-                    select(ChatTurnStepEventRow.step)
-                    .where(ChatTurnStepEventRow.turn_id == turn_id)
-                    .distinct()
-                    .order_by(ChatTurnStepEventRow.step.desc())
-                    .limit(count)
+                (
+                    await session.scalars(
+                        select(ChatTurnStepEventRow.step)
+                        .where(ChatTurnStepEventRow.turn_id == turn_id)
+                        .distinct()
+                        .order_by(ChatTurnStepEventRow.step.desc())
+                        .limit(count)
+                    )
                 )
             )
             if not steps:
                 return None
             rows = list(
-                session.scalars(
-                    select(ChatTurnStepEventRow)
-                    .where(
-                        ChatTurnStepEventRow.turn_id == turn_id,
-                        ChatTurnStepEventRow.step >= min(steps),
+                (
+                    await session.scalars(
+                        select(ChatTurnStepEventRow)
+                        .where(
+                            ChatTurnStepEventRow.turn_id == turn_id,
+                            ChatTurnStepEventRow.step >= min(steps),
+                        )
+                        .order_by(ChatTurnStepEventRow.sequence)
                     )
-                    .order_by(ChatTurnStepEventRow.sequence)
                 )
             )
         # A row naming its step's first row for shared replay state finds it
@@ -631,20 +678,20 @@ class ChatTurnLedger:
             for row in sorted(latest.values(), key=lambda row: row.sequence)
         ]
 
-    def tool_call_ids(self, turn: ChatTurn) -> list[str]:
+    async def tool_call_ids(self, turn: ChatTurn) -> list[str]:
         ids = [
             str(entry["tool_call_id"])
-            for entry in self.history(turn)
+            for entry in (await self.history(turn))
             if entry.get("tool_call_id")
         ]
-        if turn.tool_call_ids and not self.has_events(turn.id):
+        if turn.tool_call_ids and not (await self.has_events(turn.id)):
             # A turn from before the ledger kept its calls in this list.
             return list(dict.fromkeys([*turn.tool_call_ids, *ids]))
         return ids
 
-    def latest_checkpoint(self, turn_id: str) -> TurnCheckpoint | None:
-        with self.database.session() as session:
-            row = session.scalar(
+    async def latest_checkpoint(self, turn_id: str) -> TurnCheckpoint | None:
+        async with self.database.session() as session:
+            row = await session.scalar(
                 select(ChatTurnCheckpointRow)
                 .where(ChatTurnCheckpointRow.turn_id == turn_id)
                 .order_by(ChatTurnCheckpointRow.through_step.desc())
@@ -707,13 +754,13 @@ class ChatTurnLedger:
             or f"step:{entry.get('step', 0)}"
         )
 
-    def compacted_history(
+    async def compacted_history(
         self,
         turn: ChatTurn,
         *,
         advance: bool = False,
         byte_limit: int = CHECKPOINT_BYTE_LIMIT,
-        working_notes: Callable[[], dict[str, Any] | None] | None = None,
+        working_notes: (MaybeAsync[[], dict[str, Any] | None] | None) = None,
         recent_groups: int = RECENT_RESPONSE_GROUPS,
         recent_tokens: int | None = None,
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
@@ -745,7 +792,7 @@ class ChatTurnLedger:
         blocks, so the prefix stays stable between advances.
         """
 
-        history = self.history(turn)
+        history = await self.history(turn)
         if not history:
             return None, []
         keep_groups = self._recent_groups(history, recent_groups, recent_tokens)
@@ -755,7 +802,7 @@ class ChatTurnLedger:
             if self._group(entry) not in keep_groups
             and entry.get("status") not in PENDING_STATUSES
         ]
-        checkpoint = self.latest_checkpoint(turn.id)
+        checkpoint = await self.latest_checkpoint(turn.id)
         uncheckpointed = [
             entry
             for entry in fold
@@ -767,17 +814,19 @@ class ChatTurnLedger:
             or _token_estimate(uncheckpointed) >= CHECKPOINT_TOKEN_TRIGGER
         )
         if should_checkpoint:
-            checkpoint = self._write_checkpoint(
+            checkpoint = await self._write_checkpoint(
                 turn.id,
                 fold,
                 byte_limit=byte_limit,
-                notes=working_notes() if working_notes is not None else None,
+                notes=await call_async(working_notes)
+                if working_notes is not None
+                else None,
             )
         if checkpoint is None:
             return None, history
         return checkpoint, [entry for entry in history if not checkpoint.covers(entry)]
 
-    def _write_checkpoint(
+    async def _write_checkpoint(
         self,
         turn_id: str,
         entries: Iterable[dict[str, Any]],
@@ -877,8 +926,9 @@ class ChatTurnLedger:
             summary["working_notes"] = dict(notes)
         token_estimate = _token_estimate(summary)
         checkpoint = TurnCheckpoint(through_step, summary, digest, token_estimate)
-        with self.database.session() as session:
-            exists = session.scalar(
+        async with self.database.session() as session:
+            await self._lock_turn(session, turn_id)
+            exists = await session.scalar(
                 select(ChatTurnCheckpointRow).where(
                     ChatTurnCheckpointRow.turn_id == turn_id,
                     ChatTurnCheckpointRow.through_step == through_step,
@@ -907,7 +957,7 @@ class ChatTurnLedger:
         return checkpoint
 
 
-def turn_history(database: Database, turn: ChatTurn) -> list[dict[str, Any]]:
+async def turn_history(database: Database, turn: ChatTurn) -> list[dict[str, Any]]:
     """Compatibility helper for readers outside ChatService."""
 
-    return ChatTurnLedger(database).history(turn)
+    return await ChatTurnLedger(database).history(turn)

@@ -226,8 +226,8 @@ class ButlerTimeline:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def _visible_session(self, project_id: str, session_id: str) -> ChatSession:
-        session = self.store.get(ChatSession, session_id)
+    async def _visible_session(self, project_id: str, session_id: str) -> ChatSession:
+        session = await self.store.get(ChatSession, session_id)
         if session.engagement_id != project_id or any(
             session.metadata.get(key) is True
             for key in ("control_assistant", "side_chat", "temporary_assistant")
@@ -235,7 +235,7 @@ class ButlerTimeline:
             raise ValueError("choose an Assistant in this project")
         return session
 
-    def _resolve_name(
+    async def _resolve_name(
         self, project_id: str, name: str
     ) -> tuple[ChatSession | None, list[dict[str, str]], bool]:
         title = func.lower(EntityRow.payload["title"].as_string())
@@ -245,30 +245,34 @@ class ButlerTimeline:
             )
             for key in ("control_assistant", "side_chat", "temporary_assistant")
         ]
-        with self.store.database.session() as db:
+        async with self.store.database.session() as db:
             exact_rows = list(
-                db.scalars(
-                    select(EntityRow)
-                    .where(
-                        EntityRow.kind == ChatSession.entity_kind,
-                        EntityRow.engagement_id == project_id,
-                        title == name.casefold(),
-                        *visible,
+                (
+                    await db.scalars(
+                        select(EntityRow)
+                        .where(
+                            EntityRow.kind == ChatSession.entity_kind,
+                            EntityRow.engagement_id == project_id,
+                            title == name.casefold(),
+                            *visible,
+                        )
+                        .limit(2)
                     )
-                    .limit(2)
                 )
             )
             rows = list(
-                db.scalars(
-                    select(EntityRow)
-                    .where(
-                        EntityRow.kind == ChatSession.entity_kind,
-                        EntityRow.engagement_id == project_id,
-                        title.contains(name.casefold(), autoescape=True),
-                        *visible,
+                (
+                    await db.scalars(
+                        select(EntityRow)
+                        .where(
+                            EntityRow.kind == ChatSession.entity_kind,
+                            EntityRow.engagement_id == project_id,
+                            title.contains(name.casefold(), autoescape=True),
+                            *visible,
+                        )
+                        .order_by(EntityRow.updated_at.desc(), EntityRow.id.desc())
+                        .limit(21)
                     )
-                    .order_by(EntityRow.updated_at.desc(), EntityRow.id.desc())
-                    .limit(21)
                 )
             )
         matches = [
@@ -297,7 +301,7 @@ class ButlerTimeline:
         ]
         return chosen, choices, len(rows) > 20
 
-    def _lineage(
+    async def _lineage(
         self, project_id: str, root: ChatSession
     ) -> tuple[list[ChatSession], list[ChatSubagent], bool]:
         sessions = [root]
@@ -308,7 +312,7 @@ class ButlerTimeline:
         while index < len(sessions):
             parent = sessions[index]
             index += 1
-            children = self.store.find_entities(
+            children = await self.store.find_entities(
                 ChatSession,
                 {"parent_session_id": parent.id},
                 engagement_id=project_id,
@@ -332,11 +336,13 @@ class ButlerTimeline:
                 complete = False
                 break
             subagents.extend(
-                self.store.find_entities(
-                    ChatSubagent,
-                    {"parent_session_id": parent.id},
-                    engagement_id=project_id,
-                    limit=MAX_AGENTS + 1,
+                (
+                    await self.store.find_entities(
+                        ChatSubagent,
+                        {"parent_session_id": parent.id},
+                        engagement_id=project_id,
+                        limit=MAX_AGENTS + 1,
+                    )
                 )
             )
         return (
@@ -345,7 +351,7 @@ class ButlerTimeline:
             complete,
         )
 
-    def read(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def read(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
         limit = arguments.get("limit", 30)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
             raise ValueError(f"limit must be an integer from 1 to {MAX_PAGE}")
@@ -362,7 +368,7 @@ class ButlerTimeline:
                 != (state["until"] - state["since"]).total_seconds() / 3600
             ):
                 raise ValueError("timeline cursor fixes the requested time window")
-            root = self._visible_session(project_id, session_id)
+            root = await self._visible_session(project_id, session_id)
             since, until, before = state["since"], state["until"], state["before"]
         else:
             hours = arguments.get("hours", 24)
@@ -373,9 +379,11 @@ class ButlerTimeline:
             if selected is not None:
                 if not isinstance(selected, str) or not selected:
                     raise ValueError("provide a listed Assistant session_id")
-                root = self._visible_session(project_id, selected)
+                root = await self._visible_session(project_id, selected)
             elif isinstance(name, str) and name.strip():
-                resolved, choices, more = self._resolve_name(project_id, name.strip())
+                resolved, choices, more = await self._resolve_name(
+                    project_id, name.strip()
+                )
                 if resolved is None:
                     return {
                         "selection_required": True,
@@ -391,34 +399,38 @@ class ButlerTimeline:
             until = utc_now()
             since = until - timedelta(hours=hours)
             before = None
-        sessions, subagents, lineage_complete = self._lineage(project_id, root)
+        sessions, subagents, lineage_complete = await self._lineage(project_id, root)
         ids = [item.id for item in sessions]
-        items = self._events(project_id, ids, subagents, since, until, before, limit)
+        items = await self._events(
+            project_id, ids, subagents, since, until, before, limit
+        )
         items.sort(key=lambda item: item.point.key, reverse=True)
         page = items[:limit]
-        goal = self.store.find_entity(ChatGoal, "session_id", root.id)
-        with self.store.database.session() as db:
+        goal = await self.store.find_entity(ChatGoal, "session_id", root.id)
+        async with self.store.database.session() as db:
             active_rows = list(
-                db.scalars(
-                    select(EntityRow)
-                    .where(
-                        EntityRow.kind == ChatTurn.entity_kind,
-                        EntityRow.engagement_id == project_id,
-                        EntityRow.chat_session_id.in_(ids),
-                        EntityRow.payload["status"]
-                        .as_string()
-                        .in_(
-                            (
-                                "queued",
-                                "routing",
-                                "waiting_approval",
-                                "waiting_callback",
-                                "finalizing",
-                            )
-                        ),
+                (
+                    await db.scalars(
+                        select(EntityRow)
+                        .where(
+                            EntityRow.kind == ChatTurn.entity_kind,
+                            EntityRow.engagement_id == project_id,
+                            EntityRow.chat_session_id.in_(ids),
+                            EntityRow.payload["status"]
+                            .as_string()
+                            .in_(
+                                (
+                                    "queued",
+                                    "routing",
+                                    "waiting_approval",
+                                    "waiting_callback",
+                                    "finalizing",
+                                )
+                            ),
+                        )
+                        .order_by(EntityRow.updated_at.desc())
+                        .limit(MAX_AGENTS)
                     )
-                    .order_by(EntityRow.updated_at.desc())
-                    .limit(MAX_AGENTS)
                 )
             )
         result = {
@@ -491,7 +503,7 @@ class ButlerTimeline:
             )
         return result
 
-    def _events(
+    async def _events(
         self,
         project_id: str,
         session_ids: list[str],
@@ -508,7 +520,7 @@ class ButlerTimeline:
             (ToolCall, "tool_call", EntityRow.created_at),
             (ButlerAgentReport, "report", EntityRow.created_at),
         )
-        with self.store.database.session() as db:
+        async with self.store.database.session() as db:
             for model, kind, clock in models:
                 statement = select(EntityRow).where(
                     EntityRow.kind == model.entity_kind,
@@ -525,7 +537,7 @@ class ButlerTimeline:
                         .as_string()
                         .is_(None),
                     )
-                rows = db.scalars(
+                rows = await db.scalars(
                     statement.order_by(clock.desc(), EntityRow.id.desc()).limit(
                         limit + 1
                     )
@@ -647,7 +659,7 @@ class ButlerTimeline:
                 )
                 .limit(limit + 1)
             )
-            for row, session_id in db.execute(step_query):
+            for row, session_id in await db.execute(step_query):
                 payload = row.payload if isinstance(row.payload, dict) else {}
                 name = payload.get("name") or "Provider step"
                 status = str(payload.get("status") or row.event_type)
@@ -716,7 +728,7 @@ class ButlerTimeline:
                 )
                 .limit(limit + 1)
             )
-            for row, session_id in db.execute(event_query):
+            for row, session_id in await db.execute(event_query):
                 payload = row.payload if isinstance(row.payload, dict) else {}
                 title = str(
                     payload.get("title")

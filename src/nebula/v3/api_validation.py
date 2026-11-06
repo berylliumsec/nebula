@@ -234,7 +234,7 @@ class ApiEntityValidator:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def validate_create(self, entity: Entity) -> None:
+    async def validate_create(self, entity: Entity) -> None:
         if (
             isinstance(entity, HarnessProfile)
             and entity.kind not in PROVIDED_HARNESS_KINDS
@@ -242,9 +242,9 @@ class ApiEntityValidator:
             raise ApiEntityValidationError(
                 f"harness kind {entity.kind.value!r} is not provided"
             )
-        self._validate(entity)
+        (await self._validate(entity))
 
-    def validate_update(self, current: Entity, candidate: Entity) -> None:
+    async def validate_update(self, current: Entity, candidate: Entity) -> None:
         if type(current) is not type(candidate):
             raise ApiEntityValidationError("entity type cannot be changed")
         if (
@@ -268,7 +268,7 @@ class ApiEntityValidator:
         ):
             offset = 0
             while True:
-                sessions = self.store.list_entities(
+                sessions = await self.store.list_entities(
                     HarnessSession, offset=offset, limit=1000
                 )
                 if any(
@@ -287,9 +287,9 @@ class ApiEntityValidator:
             raise ApiEntityValidationError(
                 f"{current.entity_kind} engagement ownership cannot be changed"
             )
-        self._validate(candidate)
+        (await self._validate(candidate))
 
-    def validate_delete(self, target: Entity) -> None:
+    async def validate_delete(self, target: Entity) -> None:
         """Reject deletion when any durable entity still references the target."""
 
         if isinstance(target, Report) and target.status == ReportStatus.FINAL:
@@ -326,7 +326,7 @@ class ApiEntityValidator:
                 if isinstance(target, Engagement)
                 else self.store.iter_reference_candidates(model, references)
             )
-            for candidate in candidates:
+            async for candidate in candidates:
                 if type(candidate) is type(target) and candidate.id == target.id:
                     continue
                 if (
@@ -348,35 +348,41 @@ class ApiEntityValidator:
                     if target.id in values:
                         self._delete_conflict(target, candidate, rule.field)
 
-    def _validate(self, entity: Entity) -> None:
+    async def _validate(self, entity: Entity) -> None:
         owner_id = entity_engagement_id(entity)
         if owner_id is not None and not isinstance(entity, Engagement):
-            self._referenced_entity(
-                entity,
-                field="engagement_id",
-                target_model=Engagement,
-                target_id=owner_id,
-                expected_engagement=owner_id,
+            (
+                await self._referenced_entity(
+                    entity,
+                    field="engagement_id",
+                    target_model=Engagement,
+                    target_id=owner_id,
+                    expected_engagement=owner_id,
+                )
             )
         for rule in _REFERENCE_RULES.get(type(entity), ()):
             raw = getattr(entity, rule.field)
             values = raw if rule.many else [raw]
             for target_id in dict.fromkeys(value for value in values if value):
-                self._referenced_entity(
-                    entity,
-                    field=rule.field,
-                    target_model=rule.target,
-                    target_id=target_id,
-                    expected_engagement=owner_id if rule.same_engagement else None,
+                (
+                    await self._referenced_entity(
+                        entity,
+                        field=rule.field,
+                        target_model=rule.target,
+                        target_id=target_id,
+                        expected_engagement=owner_id if rule.same_engagement else None,
+                    )
                 )
         if isinstance(entity, Report):
             for transform in entity.note_transforms:
-                self._referenced_entity(
-                    entity,
-                    field="note_transforms.observation_id",
-                    target_model=Observation,
-                    target_id=transform.observation_id,
-                    expected_engagement=owner_id,
+                (
+                    await self._referenced_entity(
+                        entity,
+                        field="note_transforms.observation_id",
+                        target_model=Observation,
+                        target_id=transform.observation_id,
+                        expected_engagement=owner_id,
+                    )
                 )
         if isinstance(entity, ProviderProfile):
             self._validate_provider(entity)
@@ -389,7 +395,7 @@ class ApiEntityValidator:
                 "report finalization requires a dedicated signed workflow"
             )
 
-    def _referenced_entity(
+    async def _referenced_entity(
         self,
         entity: Entity,
         *,
@@ -399,7 +405,7 @@ class ApiEntityValidator:
         expected_engagement: str | None,
     ) -> Entity:
         try:
-            target = self.store.get(target_model, target_id)
+            target = await self.store.get(target_model, target_id)
         except NotFoundError as exc:
             record_caught_exception(
                 "api",

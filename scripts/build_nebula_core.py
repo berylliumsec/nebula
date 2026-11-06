@@ -30,6 +30,10 @@ REQUIRED_RUNTIME_IMPORTS = (
     "psycopg",
     "psycopg_binary",
     "sqlalchemy.dialects.postgresql.psycopg",
+    "sqlalchemy.ext.asyncio",
+    "sqlalchemy.dialects.sqlite.aiosqlite",
+    "aiosqlite",
+    "greenlet",
 )
 
 
@@ -167,7 +171,9 @@ def main() -> None:
     diagnostic_guidance = root / "src" / "nebula" / "v3" / "diagnostic_guidance.json"
     if not diagnostic_guidance.is_file():
         raise RuntimeError("the bundled diagnostic guidance catalog is required")
-    assistant_destinations = root / "src" / "nebula" / "v3" / "assistant_destinations.json"
+    assistant_destinations = (
+        root / "src" / "nebula" / "v3" / "assistant_destinations.json"
+    )
     if not assistant_destinations.is_file():
         raise RuntimeError("the bundled assistant navigation catalog is required")
     kali_tool_inventory = root / "src" / "nebula" / "v3" / "kali_tool_inventory.py"
@@ -227,6 +233,12 @@ def main() -> None:
         "psycopg_binary",
         "--hidden-import",
         "sqlalchemy.dialects.postgresql.psycopg",
+        "--hidden-import",
+        "sqlalchemy.dialects.sqlite.aiosqlite",
+        "--collect-all",
+        "aiosqlite",
+        "--collect-all",
+        "greenlet",
         "--hidden-import",
         "chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2",
         "--hidden-import",

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import call_async
+
 from .diagnostics import record_caught_exception
 
 import asyncio
@@ -303,7 +307,7 @@ class WorkspaceService:
         store: NebulaStore,
         artifact_store: ArtifactStore,
         tool_platform: RuntimePlatform,
-        operator_id: Callable[[], str] | None = None,
+        operator_id: (MaybeAsync[[], str] | None) = None,
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store
@@ -311,7 +315,7 @@ class WorkspaceService:
         self.operator_id = operator_id or (lambda: "system")
         self._upload_locks: dict[str, asyncio.Lock] = {}
 
-    def list(
+    async def list(
         self,
         engagement_id: str,
         path: str = "",
@@ -319,9 +323,9 @@ class WorkspaceService:
         offset: int = 0,
         limit: int = 100,
     ) -> WorkspaceListing:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(path)
-        descriptor = self._open_directory(engagement_id, relative)
+        descriptor = await self._open_directory(engagement_id, relative)
         try:
             rows: list[WorkspaceEntry] = []
             with os.scandir(descriptor) as entries:
@@ -395,14 +399,14 @@ class WorkspaceService:
                 status_code=412,
             )
 
-    def inspect_entry(self, engagement_id: str, path: str) -> WorkspaceEntryState:
+    async def inspect_entry(self, engagement_id: str, path: str) -> WorkspaceEntryState:
         """Read an exact regular file digest or opaque directory revision."""
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(path)
         normalized = PurePosixPath(*relative).as_posix() if relative else ""
         if not relative:
-            descriptor = self._open_directory(engagement_id, ())
+            descriptor = await self._open_directory(engagement_id, ())
             try:
                 metadata = os.fstat(descriptor)
             finally:
@@ -414,7 +418,7 @@ class WorkspaceService:
                 size=metadata.st_size,
                 entry_identity=self._directory_identity(metadata, root=True),
             )
-        parent = self._open_directory(engagement_id, relative[:-1])
+        parent = await self._open_directory(engagement_id, relative[:-1])
         try:
             try:
                 metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
@@ -495,9 +499,9 @@ class WorkspaceService:
         finally:
             os.close(parent)
 
-    def tasks(self, engagement_id: str) -> WorkspaceTaskList:
+    async def tasks(self, engagement_id: str) -> WorkspaceTaskList:
         """Discover declarative project tasks without evaluating project code."""
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         tasks: list[WorkspaceTask] = []
 
         def add(
@@ -527,7 +531,7 @@ class WorkspaceService:
                 )
             )
 
-        vscode_tasks, vscode_tasks_error = self._read_vscode_manifest(
+        vscode_tasks, vscode_tasks_error = await self._read_vscode_manifest(
             engagement_id, ".vscode/tasks.json"
         )
         if vscode_tasks_error:
@@ -570,7 +574,7 @@ class WorkspaceService:
                             continue
                         add(*normalized)
 
-        package = self._read_task_manifest(engagement_id, "package.json")
+        package = await self._read_task_manifest(engagement_id, "package.json")
         if package is not None:
             try:
                 parsed = json.loads(package)
@@ -607,7 +611,7 @@ class WorkspaceService:
                         value[:1_000],
                     )
 
-        makefile = self._read_task_manifest(engagement_id, "Makefile")
+        makefile = await self._read_task_manifest(engagement_id, "Makefile")
         if makefile is not None:
             for target in re.findall(
                 r"(?m)^([A-Za-z0-9][A-Za-z0-9_.-]*):(?:\s|$)", makefile
@@ -633,7 +637,7 @@ class WorkspaceService:
                     "Declared Make target",
                 )
 
-        root = self._workspace_root(engagement_id)
+        root = await self._workspace_root(engagement_id)
         scanned = 0
         truncated = False
         pytest_files: list[str] = []
@@ -685,7 +689,7 @@ class WorkspaceService:
                     "Run this discovered test file",
                     path,
                 )
-        if self._read_task_manifest(engagement_id, "go.mod") is not None:
+        if (await self._read_task_manifest(engagement_id, "go.mod")) is not None:
             add(
                 "Go: test workspace",
                 "go test ./...",
@@ -693,7 +697,7 @@ class WorkspaceService:
                 "go.mod",
                 "Go module test suite",
             )
-        if self._read_task_manifest(engagement_id, "Cargo.toml") is not None:
+        if (await self._read_task_manifest(engagement_id, "Cargo.toml")) is not None:
             add(
                 "Cargo: test workspace",
                 "cargo test",
@@ -855,11 +859,11 @@ class WorkspaceService:
         detail = f"VS Code {task_type} task"
         return (label, command_line, kind, source, detail, None, True, None)
 
-    def _read_task_manifest(
+    async def _read_task_manifest(
         self, engagement_id: str, path: str, *, max_bytes: int = 512 * 1024
     ) -> str | None:
         try:
-            stream, metadata = self._open_regular(engagement_id, (path,))
+            stream, metadata = await self._open_regular(engagement_id, (path,))
         except ExecutionServiceError as exc:
             if exc.status_code == 404:
                 return None
@@ -876,11 +880,11 @@ class WorkspaceService:
             # diagnostic-expected: non-UTF-8 optional task manifests are unsupported.
             return None
 
-    def _read_vscode_manifest(
+    async def _read_vscode_manifest(
         self, engagement_id: str, path: str
     ) -> tuple[str | None, str | None]:
         try:
-            stream, metadata = self._open_regular(engagement_id, (path,))
+            stream, metadata = await self._open_regular(engagement_id, (path,))
         except ExecutionServiceError as exc:
             if exc.status_code == 404:
                 return None, None
@@ -903,11 +907,11 @@ class WorkspaceService:
             # diagnostic-expected: the caller renders this exact configuration error.
             return None, f"{path} must use UTF-8 text."
 
-    def debug_configurations(
+    async def debug_configurations(
         self, engagement_id: str, active_path: str
     ) -> WorkspaceDebugConfigurationList:
         """Read bounded Python launch profiles without allowing runtime overrides."""
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         active = PurePosixPath(
             *_relative_parts(active_path, require_value=True)
         ).as_posix()
@@ -941,7 +945,7 @@ class WorkspaceService:
                 )
             )
 
-        manifest, manifest_error = self._read_vscode_manifest(
+        manifest, manifest_error = await self._read_vscode_manifest(
             engagement_id, ".vscode/launch.json"
         )
         if manifest_error:
@@ -1106,9 +1110,9 @@ class WorkspaceService:
             truncated=len(declared) > 100,
         )
 
-    def preview(self, engagement_id: str, path: str) -> WorkspacePreview:
+    async def preview(self, engagement_id: str, path: str) -> WorkspacePreview:
         relative = _relative_parts(path, require_value=True)
-        stream, metadata = self._open_regular(engagement_id, relative)
+        stream, metadata = await self._open_regular(engagement_id, relative)
         try:
             payload = stream.read(MAX_PREVIEW_BYTES + 1)
         finally:
@@ -1149,7 +1153,7 @@ class WorkspaceService:
             preview_sha256=hashlib.sha256(visible).hexdigest(),
         )
 
-    def search(
+    async def search(
         self,
         engagement_id: str,
         query: str,
@@ -1160,7 +1164,7 @@ class WorkspaceService:
     ) -> WorkspaceSearchResult:
         """Search one workspace without following links or escaping its root."""
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         normalized_query = query.strip()
         if not normalized_query:
             raise ExecutionServiceError(
@@ -1169,8 +1173,8 @@ class WorkspaceService:
                 status_code=422,
             )
         relative = _relative_parts(path)
-        root = self._workspace_root(engagement_id)
-        descriptor: int | None = self._open_directory(engagement_id, relative)
+        root = await self._workspace_root(engagement_id)
+        descriptor: int | None = await self._open_directory(engagement_id, relative)
         needle = normalized_query.casefold()
         matches: list[WorkspaceSearchMatch] = []
         scanned_files = 0
@@ -1364,8 +1368,8 @@ class WorkspaceService:
     async def source_control_status(self, engagement_id: str) -> SourceControlStatus:
         """Return bounded Git status without executing repository-configured helpers."""
 
-        self.store.get(Engagement, engagement_id)
-        root = self._workspace_root(engagement_id).resolve(strict=True)
+        (await self.store.get(Engagement, engagement_id))
+        root = (await self._workspace_root(engagement_id)).resolve(strict=True)
         executable = shutil.which("git")
         if executable is None:
             return SourceControlStatus(
@@ -1461,7 +1465,7 @@ class WorkspaceService:
             raise ExecutionServiceError(
                 "source_control_unavailable", status.detail, status_code=409
             )
-        root = self._workspace_root(engagement_id).resolve(strict=True)
+        root = (await self._workspace_root(engagement_id)).resolve(strict=True)
         executable = shutil.which("git")
         if (
             executable is None
@@ -1503,9 +1507,9 @@ class WorkspaceService:
             head=status.head,
         )
 
-    def download(self, engagement_id: str, path: str) -> WorkspaceDownload:
+    async def download(self, engagement_id: str, path: str) -> WorkspaceDownload:
         relative = _relative_parts(path, require_value=True)
-        stream, metadata = self._open_regular(engagement_id, relative)
+        stream, metadata = await self._open_regular(engagement_id, relative)
         filename = relative[-1]
         return WorkspaceDownload(
             stream,
@@ -1514,12 +1518,12 @@ class WorkspaceService:
             size=metadata.st_size,
         )
 
-    def promote(
+    async def promote(
         self, engagement_id: str, request: WorkspacePromotionRequest
     ) -> Evidence:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         relative = _relative_parts(request.path, require_value=True)
-        stream, _metadata = self._open_regular(engagement_id, relative)
+        stream, _metadata = await self._open_regular(engagement_id, relative)
         path = PurePosixPath(*relative).as_posix()
         try:
             stored = self.artifact_store.put_stream_with_status(
@@ -1544,12 +1548,12 @@ class WorkspaceService:
             description=request.description,
             artifact_id=stored.artifact.id,
             sha256=stored.artifact.sha256,
-            captured_by=self.operator_id(),
+            captured_by=(await call_async(self.operator_id)),
             source_version="nebula.workspace-promotion/v1",
             metadata={"workspace_path": path},
         )
         try:
-            self.store.create_many([stored.artifact, evidence])
+            (await self.store.create_many([stored.artifact, evidence]))
         except Exception as caught_error:
             record_caught_exception(
                 "workspace",
@@ -1560,19 +1564,21 @@ class WorkspaceService:
             )
             self.artifact_store.discard_new_blob(stored)
             raise
-        self.store.append_operation_event(
-            evidence.id,
-            "workspace_promotion",
-            engagement.id,
-            "workspace.promoted",
-            {
-                "path": path,
-                "artifact_id": stored.artifact.id,
-                "evidence_id": evidence.id,
-                "sha256": stored.artifact.sha256,
-            },
-            actor_id=self.operator_id(),
-            idempotency_key=f"workspace-promotion:{evidence.id}",
+        (
+            await self.store.append_operation_event(
+                evidence.id,
+                "workspace_promotion",
+                engagement.id,
+                "workspace.promoted",
+                {
+                    "path": path,
+                    "artifact_id": stored.artifact.id,
+                    "evidence_id": evidence.id,
+                    "sha256": stored.artifact.sha256,
+                },
+                actor_id=(await call_async(self.operator_id)),
+                idempotency_key=f"workspace-promotion:{evidence.id}",
+            )
         )
         return evidence
 
@@ -1614,9 +1620,9 @@ class WorkspaceService:
     ) -> WorkspaceUploadResult:
         """Write an upload while serializing only other API uploads."""
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(path, require_value=True)
-        parent = self._open_directory(engagement_id, relative[:-1])
+        parent = await self._open_directory(engagement_id, relative[:-1])
         temporary_name = f".nebula-upload-{uuid4().hex}.tmp"
         descriptor: int | None = None
         size = 0
@@ -1746,21 +1752,23 @@ class WorkspaceService:
             sha256=actual_sha256,
             overwritten=replaced,
         )
-        self.store.append_operation_event(
-            str(uuid4()),
-            "workspace_upload",
-            engagement_id,
-            "workspace.uploaded",
-            result.model_dump(mode="json"),
-            actor_id=self.operator_id(),
-            idempotency_key=f"workspace-upload:{engagement_id}:{normalized}:{result.sha256}",
+        (
+            await self.store.append_operation_event(
+                str(uuid4()),
+                "workspace_upload",
+                engagement_id,
+                "workspace.uploaded",
+                result.model_dump(mode="json"),
+                actor_id=(await call_async(self.operator_id)),
+                idempotency_key=f"workspace-upload:{engagement_id}:{normalized}:{result.sha256}",
+            )
         )
         return result
 
-    def reset(
+    async def reset(
         self, engagement_id: str, request: WorkspaceResetRequest
     ) -> WorkspaceResetResult:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         if engagement.workspace_path:
             raise ExecutionServiceError(
                 "linked_workspace",
@@ -1775,7 +1783,7 @@ class WorkspaceService:
             )
         offset = 0
         while True:
-            executions = self.store.list_entities(
+            executions = await self.store.list_entities(
                 OperatorExecution,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -1789,7 +1797,7 @@ class WorkspaceService:
             if len(executions) < 1000:
                 break
             offset += len(executions)
-        root = self._workspace_root(engagement_id)
+        root = await self._workspace_root(engagement_id)
         descriptor = os.open(
             root,
             os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
@@ -1800,23 +1808,25 @@ class WorkspaceService:
         finally:
             os.close(descriptor)
         operation_id = str(uuid4())
-        self.store.append_operation_event(
-            operation_id,
-            "workspace_reset",
-            engagement.id,
-            "workspace.reset",
-            {"removed_entries": removed},
-            actor_id=self.operator_id(),
-            idempotency_key=f"workspace-reset:{operation_id}",
+        (
+            await self.store.append_operation_event(
+                operation_id,
+                "workspace_reset",
+                engagement.id,
+                "workspace.reset",
+                {"removed_entries": removed},
+                actor_id=(await call_async(self.operator_id)),
+                idempotency_key=f"workspace-reset:{operation_id}",
+            )
         )
         return WorkspaceResetResult(
             engagement_id=engagement.id, removed_entries=removed
         )
 
-    def reset_status(
+    async def reset_status(
         self, engagement_id: str, *, active_terminal_count: int = 0
     ) -> WorkspaceResetStatus:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         if engagement.workspace_path:
             return WorkspaceResetStatus(
                 engagement_id=engagement_id,
@@ -1829,7 +1839,7 @@ class WorkspaceService:
         active_execution_count = 0
         offset = 0
         while True:
-            executions = self.store.list_entities(
+            executions = await self.store.list_entities(
                 OperatorExecution,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -1863,12 +1873,12 @@ class WorkspaceService:
             detail=detail,
         )
 
-    def create_directory(
+    async def create_directory(
         self, engagement_id: str, request: WorkspaceCreateDirectoryRequest
     ) -> WorkspaceMutationResult:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(request.path, require_value=True)
-        parent = self._open_directory(engagement_id, relative[:-1])
+        parent = await self._open_directory(engagement_id, relative[:-1])
         try:
             current = self._directory_identity(
                 os.fstat(parent), root=len(relative) == 1
@@ -1892,13 +1902,13 @@ class WorkspaceService:
         result = WorkspaceMutationResult(
             engagement_id=engagement_id, path=PurePosixPath(*relative).as_posix()
         )
-        self._record_mutation(engagement_id, "created_directory", result)
+        (await self._record_mutation(engagement_id, "created_directory", result))
         return result
 
-    def rename(
+    async def rename(
         self, engagement_id: str, request: WorkspaceRenameRequest
     ) -> WorkspaceMutationResult:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(request.path, require_value=True)
         if (
             "/" in request.new_name
@@ -1910,7 +1920,7 @@ class WorkspaceService:
                 "new name must be one workspace path segment",
                 status_code=422,
             )
-        parent = self._open_directory(engagement_id, relative[:-1])
+        parent = await self._open_directory(engagement_id, relative[:-1])
         try:
             metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
             if request.expected_sha256 is not None:
@@ -1953,10 +1963,10 @@ class WorkspaceService:
         result = WorkspaceMutationResult(
             engagement_id=engagement_id, path=path, previous_path=request.path
         )
-        self._record_mutation(engagement_id, "renamed", result)
+        (await self._record_mutation(engagement_id, "renamed", result))
         return result
 
-    def delete(
+    async def delete(
         self,
         engagement_id: str,
         path: str,
@@ -1964,9 +1974,9 @@ class WorkspaceService:
         expected_sha256: str | None = None,
         expected_entry_identity: str | None = None,
     ) -> WorkspaceMutationResult:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         relative = _relative_parts(path, require_value=True)
-        parent = self._open_directory(engagement_id, relative[:-1])
+        parent = await self._open_directory(engagement_id, relative[:-1])
         try:
             metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
             if expected_sha256 is not None:
@@ -1998,7 +2008,7 @@ class WorkspaceService:
         finally:
             os.close(parent)
         result = WorkspaceMutationResult(engagement_id=engagement_id, path=path)
-        self._record_mutation(engagement_id, "deleted", result)
+        (await self._record_mutation(engagement_id, "deleted", result))
         return result
 
     @staticmethod
@@ -2057,27 +2067,29 @@ class WorkspaceService:
         finally:
             os.close(descriptor)
 
-    def _record_mutation(
+    async def _record_mutation(
         self, engagement_id: str, action: str, result: WorkspaceMutationResult
     ) -> None:
         operation_id = str(uuid4())
-        self.store.append_operation_event(
-            operation_id,
-            f"workspace_{action}",
-            engagement_id,
-            f"workspace.{action}",
-            result.model_dump(mode="json"),
-            actor_id=self.operator_id(),
-            idempotency_key=f"workspace-{action}:{operation_id}",
+        (
+            await self.store.append_operation_event(
+                operation_id,
+                f"workspace_{action}",
+                engagement_id,
+                f"workspace.{action}",
+                result.model_dump(mode="json"),
+                actor_id=(await call_async(self.operator_id)),
+                idempotency_key=f"workspace-{action}:{operation_id}",
+            )
         )
 
-    def _workspace_root(self, engagement_id: str) -> Path:
-        root = self.tool_platform.workspace_for(engagement_id)
+    async def _workspace_root(self, engagement_id: str) -> Path:
+        root = await self.tool_platform.workspace_for(engagement_id)
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
         return root
 
-    def _open_directory(self, engagement_id: str, parts: tuple[str, ...]) -> int:
-        root = self._workspace_root(engagement_id)
+    async def _open_directory(self, engagement_id: str, parts: tuple[str, ...]) -> int:
+        root = await self._workspace_root(engagement_id)
         descriptor = os.open(
             root,
             os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
@@ -2107,10 +2119,10 @@ class WorkspaceService:
                 status_code=404,
             ) from exc
 
-    def _open_regular(
+    async def _open_regular(
         self, engagement_id: str, parts: tuple[str, ...]
     ) -> tuple[BinaryIO, os.stat_result]:
-        parent = self._open_directory(engagement_id, parts[:-1])
+        parent = await self._open_directory(engagement_id, parts[:-1])
         try:
             descriptor = os.open(
                 parts[-1],

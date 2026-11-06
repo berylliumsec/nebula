@@ -27,7 +27,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import EntityRow
 from .domain import ChatSession, ChatTurn
@@ -87,7 +87,7 @@ _caches: weakref.WeakKeyDictionary[Engine, _HeaderCache] = weakref.WeakKeyDictio
 _caches_lock = threading.Lock()
 
 
-def _cache_for(database: Session) -> _HeaderCache:
+def _cache_for(database: AsyncSession) -> _HeaderCache:
     bind: Any = database.get_bind()
     engine = getattr(bind, "engine", bind)
     with _caches_lock:
@@ -140,8 +140,8 @@ def _header(payload: dict[str, Any], revision: int) -> ChatTurnHeader:
     )
 
 
-def _resolve(
-    database: Session, versions: Sequence[tuple[str, int, Any]]
+async def _resolve(
+    database: AsyncSession, versions: Sequence[tuple[str, int, Any]]
 ) -> list[ChatTurnHeader]:
     """Return headers for row versions in order, reading only changed payloads."""
 
@@ -157,7 +157,7 @@ def _resolve(
     identifiers = list(missing)
     for start in range(0, len(identifiers), _LOOKUP_CHUNK):
         chunk = identifiers[start : start + _LOOKUP_CHUNK]
-        for turn_id, revision, payload in database.execute(
+        for turn_id, revision, payload in await database.execute(
             select(EntityRow.id, EntityRow.revision, EntityRow.payload).where(
                 EntityRow.id.in_(chunk), EntityRow.kind == ChatTurn.entity_kind
             )
@@ -171,8 +171,8 @@ def _resolve(
     return [resolved[version[0]] for version in versions if version[0] in resolved]
 
 
-def session_turn_headers(
-    database: Session, session_id: str, *, newest_first: bool = True
+async def session_turn_headers(
+    database: AsyncSession, session_id: str, *, newest_first: bool = True
 ) -> list[ChatTurnHeader]:
     """Every turn of one conversation, ordered by ``(created_at, id)``."""
 
@@ -183,20 +183,22 @@ def session_turn_headers(
     )
     versions = [
         (row.id, row.revision, row.created_at)
-        for row in database.execute(
-            select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
-            .where(
-                EntityRow.kind == ChatTurn.entity_kind,
-                EntityRow.chat_session_id == session_id,
+        for row in (
+            await database.execute(
+                select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
+                .where(
+                    EntityRow.kind == ChatTurn.entity_kind,
+                    EntityRow.chat_session_id == session_id,
+                )
+                .order_by(*order)
             )
-            .order_by(*order)
         )
     ]
-    return _resolve(database, versions)
+    return await _resolve(database, versions)
 
 
-def sessions_turn_headers(
-    database: Session, session_ids: Iterable[str]
+async def sessions_turn_headers(
+    database: AsyncSession, session_ids: Iterable[str]
 ) -> list[ChatTurnHeader]:
     """Every turn of the given conversations, oldest first per conversation."""
 
@@ -206,38 +208,44 @@ def sessions_turn_headers(
         chunk = identifiers[start : start + _LOOKUP_CHUNK]
         versions.extend(
             (row.id, row.revision, row.created_at)
-            for row in database.execute(
-                select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
-                .where(
-                    EntityRow.kind == ChatTurn.entity_kind,
-                    EntityRow.chat_session_id.in_(chunk),
+            for row in (
+                await database.execute(
+                    select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
+                    .where(
+                        EntityRow.kind == ChatTurn.entity_kind,
+                        EntityRow.chat_session_id.in_(chunk),
+                    )
+                    .order_by(EntityRow.created_at, EntityRow.id)
                 )
-                .order_by(EntityRow.created_at, EntityRow.id)
             )
         )
-    return _resolve(database, versions)
+    return await _resolve(database, versions)
 
 
-def latest_turn_header(database: Session, session_id: str) -> ChatTurnHeader | None:
+async def latest_turn_header(
+    database: AsyncSession, session_id: str
+) -> ChatTurnHeader | None:
     """The newest turn of one conversation, by ``(created_at, id)``."""
 
-    row = database.execute(
-        select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
-        .where(
-            EntityRow.kind == ChatTurn.entity_kind,
-            EntityRow.chat_session_id == session_id,
+    row = (
+        await database.execute(
+            select(EntityRow.id, EntityRow.revision, EntityRow.created_at)
+            .where(
+                EntityRow.kind == ChatTurn.entity_kind,
+                EntityRow.chat_session_id == session_id,
+            )
+            .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
+            .limit(1)
         )
-        .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
-        .limit(1)
     ).first()
     if row is None:
         return None
-    headers = _resolve(database, [(row.id, row.revision, row.created_at)])
+    headers = await _resolve(database, [(row.id, row.revision, row.created_at)])
     return headers[0] if headers else None
 
 
-def engagement_turn_headers(
-    database: Session, engagement_id: str
+async def engagement_turn_headers(
+    database: AsyncSession, engagement_id: str
 ) -> list[ChatTurnHeader]:
     """Every turn of one project's conversations, oldest first per conversation.
 
@@ -245,32 +253,36 @@ def engagement_turn_headers(
     conversation index, so neither read touches a JSON payload.
     """
 
-    session_ids = database.scalars(
-        select(EntityRow.id).where(
-            EntityRow.kind == ChatSession.entity_kind,
-            EntityRow.engagement_id == engagement_id,
+    session_ids = (
+        await database.scalars(
+            select(EntityRow.id).where(
+                EntityRow.kind == ChatSession.entity_kind,
+                EntityRow.engagement_id == engagement_id,
+            )
         )
     ).all()
     return [
         item
-        for item in sessions_turn_headers(database, session_ids)
+        for item in (await sessions_turn_headers(database, session_ids))
         if item.engagement_id == engagement_id
     ]
 
 
-def turn_header(
-    database: Session, session_id: str, turn_id: str
+async def turn_header(
+    database: AsyncSession, session_id: str, turn_id: str
 ) -> ChatTurnHeader | None:
     """One turn of a known conversation, through the same covering index."""
 
-    row = database.execute(
-        select(EntityRow.id, EntityRow.revision, EntityRow.created_at).where(
-            EntityRow.kind == ChatTurn.entity_kind,
-            EntityRow.chat_session_id == session_id,
-            EntityRow.id == turn_id,
+    row = (
+        await database.execute(
+            select(EntityRow.id, EntityRow.revision, EntityRow.created_at).where(
+                EntityRow.kind == ChatTurn.entity_kind,
+                EntityRow.chat_session_id == session_id,
+                EntityRow.id == turn_id,
+            )
         )
     ).first()
     if row is None:
         return None
-    headers = _resolve(database, [(row.id, row.revision, row.created_at)])
+    headers = await _resolve(database, [(row.id, row.revision, row.created_at)])
     return headers[0] if headers else None

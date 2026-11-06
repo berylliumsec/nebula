@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import call_async
+
 import hashlib
 import ipaddress
 import json
@@ -128,7 +132,7 @@ class ScopeImportService:
         provider_factory: Callable[
             [ProviderProfile], ModelProvider
         ] = provider_from_profile,
-        operator_id: Callable[[], str] = lambda: "local-operator",
+        operator_id: (MaybeAsync[[], str]) = lambda: "local-operator",
         harness_runtime: HarnessRuntimeService | None = None,
     ) -> None:
         self.store = store
@@ -150,7 +154,7 @@ class ScopeImportService:
         media_type: str | None,
         cloud_confirmed: bool,
     ) -> ScopeImport:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         profile: ProviderProfile | HarnessProfile
         if backend_kind == "harness":
             if self.harness_runtime is None or not harness_profile_id or provider_id:
@@ -158,16 +162,16 @@ class ScopeImportService:
                     "configuration_invalid",
                     "harness scope import requires harness_profile_id and no provider_id",
                 )
-            profile = self.store.get(HarnessProfile, harness_profile_id)
-            self._validate_harness(engagement, profile, model, cloud_confirmed)
+            profile = await self.store.get(HarnessProfile, harness_profile_id)
+            (await self._validate_harness(engagement, profile, model, cloud_confirmed))
         else:
             if not provider_id or harness_profile_id:
                 raise ScopeImportError(
                     "configuration_invalid",
                     "provider scope import requires provider_id and no harness_profile_id",
                 )
-            profile = self.store.get(ProviderProfile, provider_id)
-            self._validate_provider(engagement, profile, model, cloud_confirmed)
+            profile = await self.store.get(ProviderProfile, provider_id)
+            (await self._validate_provider(engagement, profile, model, cloud_confirmed))
         clean_name = safe_filename(filename)
         extracted = extract_document(data, filename=clean_name, media_type=media_type)
         extracted_size = sum(len(section.text) for section in extracted.sections)
@@ -184,7 +188,7 @@ class ScopeImportService:
             metadata={"prompt_version": PROMPT_VERSION},
         )
         current_scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else None
         )
@@ -197,7 +201,7 @@ class ScopeImportService:
             base_scope_revision=current_scope.revision if current_scope else 0,
         )
         try:
-            self.store.create_many([stored.artifact, scope_import])
+            (await self.store.create_many([stored.artifact, scope_import]))
         except Exception:
             self.artifact_store.discard_new_blob(stored)
             raise
@@ -210,16 +214,18 @@ class ScopeImportService:
             assert isinstance(profile, ProviderProfile)
             return await self._generate(scope_import, extracted, profile, model)
         except Exception as exc:
-            current = self.store.get(ScopeImport, scope_import.id)
+            current = await self.store.get(ScopeImport, scope_import.id)
             if current.status == ScopeImportStatus.GENERATING:
-                self.store.update(
-                    ScopeImport,
-                    current.id,
-                    {
-                        "status": ScopeImportStatus.FAILED,
-                        "error_detail": str(exc)[:4000],
-                    },
-                    expected_revision=current.revision,
+                (
+                    await self.store.update(
+                        ScopeImport,
+                        current.id,
+                        {
+                            "status": ScopeImportStatus.FAILED,
+                            "error_detail": str(exc)[:4000],
+                        },
+                        expected_revision=current.revision,
+                    )
                 )
             if isinstance(exc, (ScopeImportError, KnowledgeIngestionError)):
                 # Document faults are the operator's to fix; only model and
@@ -287,8 +293,8 @@ class ScopeImportService:
             source_text="\n".join(section.text for section in extracted.sections),
         )
         warnings.extend(normalization_warnings)
-        current = self.store.get(ScopeImport, scope_import.id)
-        return self.store.update(
+        current = await self.store.get(ScopeImport, scope_import.id)
+        return await self.store.update(
             ScopeImport,
             current.id,
             {
@@ -361,8 +367,8 @@ class ScopeImportService:
             source_text="\n".join(section.text for section in extracted.sections),
         )
         warnings.extend(normalization_warnings)
-        current = self.store.get(ScopeImport, scope_import.id)
-        return self.store.update(
+        current = await self.store.get(ScopeImport, scope_import.id)
+        return await self.store.update(
             ScopeImport,
             current.id,
             {
@@ -383,19 +389,19 @@ class ScopeImportService:
             expected_revision=current.revision,
         )
 
-    def apply(
+    async def apply(
         self, scope_import_id: str, request: ScopeImportApplyRequest
     ) -> ScopeImportApplyResult:
-        scope_import = self.store.get(ScopeImport, scope_import_id)
+        scope_import = await self.store.get(ScopeImport, scope_import_id)
         if scope_import.status != ScopeImportStatus.READY:
             raise ScopeImportError(
                 "import_not_ready",
                 "scope import is not ready to apply",
                 status_code=409,
             )
-        engagement = self.store.get(Engagement, scope_import.engagement_id)
+        engagement = await self.store.get(Engagement, scope_import.engagement_id)
         current_scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else None
         )
@@ -453,14 +459,14 @@ class ScopeImportService:
             changes = candidate_scope.model_dump(
                 exclude={"id", "engagement_id", "created_at", "updated_at", "revision"}
             )
-            with self.store.transaction() as transaction:
-                scope = transaction.update(
+            async with self.store.transaction() as transaction:
+                scope = await transaction.update(
                     ScopePolicy,
                     current_scope.id,
                     changes,
                     expected_revision=current_scope.revision,
                 )
-                completed = transaction.update(
+                completed = await transaction.update(
                     ScopeImport,
                     scope_import.id,
                     {
@@ -469,7 +475,7 @@ class ScopeImportService:
                         "applied_scope_policy_id": scope.id,
                         "applied_scope_revision": scope.revision,
                         "applied_at": utc_now(),
-                        "applied_by": self.operator_id(),
+                        "applied_by": (await call_async(self.operator_id)),
                     },
                     expected_revision=scope_import.revision,
                 )
@@ -481,15 +487,17 @@ class ScopeImportService:
                 allowed_domains=domains,
                 allowed_urls=urls,
             )
-            with self.store.transaction() as transaction:
-                transaction.add(scope)
-                transaction.update(
-                    Engagement,
-                    engagement.id,
-                    {"scope_policy_id": scope.id},
-                    expected_revision=engagement.revision,
+            async with self.store.transaction() as transaction:
+                (await transaction.add(scope))
+                (
+                    await transaction.update(
+                        Engagement,
+                        engagement.id,
+                        {"scope_policy_id": scope.id},
+                        expected_revision=engagement.revision,
+                    )
                 )
-                completed = transaction.update(
+                completed = await transaction.update(
                     ScopeImport,
                     scope_import.id,
                     {
@@ -498,7 +506,7 @@ class ScopeImportService:
                         "applied_scope_policy_id": scope.id,
                         "applied_scope_revision": scope.revision,
                         "applied_at": utc_now(),
-                        "applied_by": self.operator_id(),
+                        "applied_by": (await call_async(self.operator_id)),
                     },
                     expected_revision=scope_import.revision,
                 )
@@ -509,24 +517,26 @@ class ScopeImportService:
 
         # Only readable records: one unreadable row must not keep Core from
         # starting and settling the others.
-        for scope_import in self.store.iter_readable_entities(
+        async for scope_import in self.store.iter_readable_entities(
             ScopeImport, {"status": ScopeImportStatus.GENERATING.value}
         ):
-            self.store.update(
-                ScopeImport,
-                scope_import.id,
-                {
-                    "status": ScopeImportStatus.FAILED,
-                    "error_detail": INTERRUPTED_DETAIL,
-                },
-                expected_revision=scope_import.revision,
+            (
+                await self.store.update(
+                    ScopeImport,
+                    scope_import.id,
+                    {
+                        "status": ScopeImportStatus.FAILED,
+                        "error_detail": INTERRUPTED_DETAIL,
+                    },
+                    expected_revision=scope_import.revision,
+                )
             )
 
     async def shutdown(self) -> None:
         return None
 
-    def discard(self, scope_import_id: str) -> ScopeImport:
-        scope_import = self.store.get(ScopeImport, scope_import_id)
+    async def discard(self, scope_import_id: str) -> ScopeImport:
+        scope_import = await self.store.get(ScopeImport, scope_import_id)
         if scope_import.status not in {
             ScopeImportStatus.READY,
             ScopeImportStatus.FAILED,
@@ -536,18 +546,18 @@ class ScopeImportService:
                 "only a ready or failed scope import can be discarded",
                 status_code=409,
             )
-        return self.store.update(
+        return await self.store.update(
             ScopeImport,
             scope_import.id,
             {
                 "status": ScopeImportStatus.DISCARDED,
                 "discarded_at": utc_now(),
-                "discarded_by": self.operator_id(),
+                "discarded_by": (await call_async(self.operator_id)),
             },
             expected_revision=scope_import.revision,
         )
 
-    def _validate_provider(
+    async def _validate_provider(
         self,
         engagement: Engagement,
         profile: ProviderProfile,
@@ -582,13 +592,15 @@ class ScopeImportService:
                     status_code=428,
                 )
         try:
-            validate_engagement_provider_privacy(
-                self.store, engagement, self.provider_factory(profile)
+            (
+                await validate_engagement_provider_privacy(
+                    self.store, engagement, self.provider_factory(profile)
+                )
             )
         except ProviderPrivacyViolation as exc:
             raise ScopeImportError("privacy_denied", str(exc), status_code=409) from exc
 
-    def _validate_harness(
+    async def _validate_harness(
         self,
         engagement: Engagement,
         profile: HarnessProfile,
@@ -603,7 +615,7 @@ class ScopeImportService:
                 f"model {model!r} is not supported by the harness",
             )
         if engagement.scope_policy_id:
-            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
             if scope.local_only and not profile.privacy.local_only:
                 raise ScopeImportError(
                     "privacy_denied",

@@ -148,7 +148,7 @@ def _export_entity(entity: Entity) -> dict[str, Any]:
     return _credential_free(entity.model_dump(mode="json"))
 
 
-def _all_entities(
+async def _all_entities(
     store: NebulaStore,
     model: type[Entity],
     engagement_id: str | None = None,
@@ -156,7 +156,7 @@ def _all_entities(
     result: list[Entity] = []
     offset = 0
     while True:
-        page = store.list_entities(
+        page = await store.list_entities(
             model,
             engagement_id=engagement_id,
             offset=offset,
@@ -178,7 +178,7 @@ def _add_entity(
     entities.setdefault(type(entity), {})[entity.id] = entity
 
 
-def _get_reference(
+async def _get_reference(
     store: NebulaStore,
     model: type[Entity],
     entity_id: str,
@@ -186,7 +186,7 @@ def _get_reference(
     source: str,
 ) -> Entity:
     try:
-        return store.get(model, entity_id)
+        return await store.get(model, entity_id)
     except NotFoundError as exc:
         record_caught_exception(
             "evidence",
@@ -200,7 +200,7 @@ def _get_reference(
         ) from exc
 
 
-def _include_referenced_globals(
+async def _include_referenced_globals(
     *,
     store: NebulaStore,
     entities: dict[type[Entity], dict[str, Entity]],
@@ -308,48 +308,56 @@ def _include_referenced_globals(
     for provider_id in sorted(provider_ids):
         _add_entity(
             entities,
-            _get_reference(
-                store,
-                ProviderProfile,
-                provider_id,
-                source="engagement data",
+            (
+                await _get_reference(
+                    store,
+                    ProviderProfile,
+                    provider_id,
+                    source="engagement data",
+                )
             ),
         )
     for harness_profile_id in sorted(harness_profile_ids):
         _add_entity(
             entities,
-            _get_reference(
-                store,
-                HarnessProfile,
-                harness_profile_id,
-                source="engagement harness data",
+            (
+                await _get_reference(
+                    store,
+                    HarnessProfile,
+                    harness_profile_id,
+                    source="engagement harness data",
+                )
             ),
         )
     for mcp_profile_id in sorted(mcp_profile_ids):
         _add_entity(
             entities,
-            _get_reference(
-                store,
-                McpServerProfile,
-                mcp_profile_id,
-                source="engagement MCP data",
+            (
+                await _get_reference(
+                    store,
+                    McpServerProfile,
+                    mcp_profile_id,
+                    source="engagement MCP data",
+                )
             ),
         )
     for operator_id in sorted(required_operator_ids):
         _add_entity(
             entities,
-            _get_reference(
-                store,
-                OperatorProfile,
-                operator_id,
-                source="engagement data",
+            (
+                await _get_reference(
+                    store,
+                    OperatorProfile,
+                    operator_id,
+                    source="engagement data",
+                )
             ),
         )
     # Approval requesters and event actors may intentionally be agent/system names.
     # Include them only when they resolve to an actual operator profile.
     for operator_id in sorted(possible_operator_ids - required_operator_ids):
         try:
-            operator = store.get(OperatorProfile, operator_id)
+            operator = await store.get(OperatorProfile, operator_id)
         except NotFoundError as caught_error:
             record_caught_exception(
                 "evidence",
@@ -362,13 +370,13 @@ def _include_referenced_globals(
         _add_entity(entities, operator)
 
     if advisory_ids:
-        for advisory in _all_entities(store, Advisory):
+        for advisory in await _all_entities(store, Advisory):
             if isinstance(advisory, Advisory) and advisory.advisory_id in advisory_ids:
                 _add_entity(entities, advisory)
 
     for advisory in entities.get(Advisory, {}).values():
         if isinstance(advisory, Advisory) and advisory.source_snapshot_id:
-            snapshot = _get_reference(
+            snapshot = await _get_reference(
                 store,
                 SourceSnapshot,
                 advisory.source_snapshot_id,
@@ -383,7 +391,7 @@ def _include_referenced_globals(
     while pending_artifact_ids:
         artifact_id = min(pending_artifact_ids)
         pending_artifact_ids.remove(artifact_id)
-        artifact = _get_reference(
+        artifact = await _get_reference(
             store,
             Artifact,
             artifact_id,
@@ -398,7 +406,7 @@ def _include_referenced_globals(
             pending_artifact_ids.add(artifact.parent_artifact_id)
 
 
-def export_engagement(
+async def export_engagement(
     *,
     engagement_id: str,
     destination: str | Path,
@@ -408,7 +416,7 @@ def export_engagement(
 ) -> ExportManifest:
     """Atomically create a ZIP bundle with per-file SHA-256 verification data."""
 
-    store.get(Engagement, engagement_id)
+    (await store.get(Engagement, engagement_id))
     destination_path = Path(destination).expanduser().resolve()
     if destination_path.exists() and not overwrite:
         raise ExportError(f"destination already exists: {destination_path}")
@@ -418,7 +426,7 @@ def export_engagement(
     counts: dict[str, int] = {}
     entities_by_model: dict[type[Entity], dict[str, Entity]] = {}
     for model in ENTITY_MODELS:
-        entities = _all_entities(store, model, engagement_id)
+        entities = await _all_entities(store, model, engagement_id)
         if not entities:
             continue
         entities_by_model[model] = {entity.id: entity for entity in entities}
@@ -429,7 +437,9 @@ def export_engagement(
             continue
         cursor = 0
         while True:
-            run_page = store.replay_events(run.id, after_sequence=cursor, limit=10_000)
+            run_page = await store.replay_events(
+                run.id, after_sequence=cursor, limit=10_000
+            )
             run_events.extend(run_page)
             if not run_page or len(run_page) < 10_000:
                 break
@@ -438,7 +448,7 @@ def export_engagement(
     operation_events = []
     offset = 0
     while True:
-        operation_page = store.list_operation_events(
+        operation_page = await store.list_operation_events(
             engagement_id, offset=offset, limit=10_000
         )
         operation_events.extend(operation_page)
@@ -446,7 +456,7 @@ def export_engagement(
             break
         offset += len(operation_page)
 
-    terminal_records, terminal_artifact_ids = TerminalCommandHistory(
+    terminal_records, terminal_artifact_ids = await TerminalCommandHistory(
         store.database,
         store=store,
         artifact_store=artifact_store,
@@ -454,18 +464,22 @@ def export_engagement(
     for artifact_id in sorted(terminal_artifact_ids):
         _add_entity(
             entities_by_model,
-            _get_reference(
-                store,
-                Artifact,
-                artifact_id,
-                source="terminal audit record",
+            (
+                await _get_reference(
+                    store,
+                    Artifact,
+                    artifact_id,
+                    source="terminal audit record",
+                )
             ),
         )
 
-    _include_referenced_globals(
-        store=store,
-        entities=entities_by_model,
-        events=[*run_events, *operation_events],
+    (
+        await _include_referenced_globals(
+            store=store,
+            entities=entities_by_model,
+            events=[*run_events, *operation_events],
+        )
     )
     for model in ENTITY_MODELS:
         model_entities = entities_by_model.get(model)

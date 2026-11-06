@@ -137,8 +137,7 @@ class ButlerReportBroker:
             raise ToolNotPermitted(
                 "unsupported goal report tool", rule="butler.goal_report_tool"
             )
-        report, incident = await asyncio.to_thread(
-            ingest_agent_report,
+        report, incident = await ingest_agent_report(
             self.store,
             turn_id=invocation.chat_turn_id,
             idempotency_key=invocation.idempotency_key or invocation.id,

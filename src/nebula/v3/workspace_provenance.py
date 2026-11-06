@@ -8,6 +8,8 @@ than assigned to an arbitrary actor.
 
 from __future__ import annotations
 
+import asyncio
+
 import hashlib
 import os
 import stat
@@ -19,7 +21,7 @@ from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
     EntityRow,
@@ -62,7 +64,7 @@ class _Snapshot:
     reason: str | None = None
 
 
-def actor_id_for(
+async def actor_id_for(
     store: NebulaStore,
     *,
     owner_kind: Literal["chat", "mission", "harness", "api"],
@@ -73,7 +75,7 @@ def actor_id_for(
 
     if chat_session_id:
         try:
-            session = store.get(ChatSession, chat_session_id)
+            session = await store.get(ChatSession, chat_session_id)
         except NotFoundError:  # diagnostic-expected: non-chat owners and deleted sessions retain their explicit runtime identity
             pass
         else:
@@ -278,25 +280,33 @@ class WorkspaceProvenanceService:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def _hydrate(
+    async def _hydrate(
         self,
         observation: WorkspaceProvenanceObservation,
-        session: Session,
+        session: AsyncSession,
     ) -> WorkspaceProvenanceObservation:
         workspace = workspace_key(observation.engagement_id, observation.workspace_root)
         baseline = (
-            load_map(session, workspace, "paths", observation.baseline_snapshot_id)
+            (
+                await load_map(
+                    session, workspace, "paths", observation.baseline_snapshot_id
+                )
+            )
             if observation.baseline_snapshot_id
             else observation.baseline
         )
         current = (
-            load_map(session, workspace, "paths", observation.current_snapshot_id)
+            (
+                await load_map(
+                    session, workspace, "paths", observation.current_snapshot_id
+                )
+            )
             if observation.current_snapshot_id
             else observation.current
         )
         attribution = observation.attribution
         if observation.attribution_snapshot_id:
-            labels = load_map(
+            labels = await load_map(
                 session, workspace, "attribution", observation.attribution_snapshot_id
             )
             attribution = self._expand_attribution(current, labels)
@@ -309,25 +319,27 @@ class WorkspaceProvenanceService:
         )
 
     @staticmethod
-    def _lock_workspace(session: Session, workspace: str) -> None:
+    async def _lock_workspace(session: AsyncSession, workspace: str) -> None:
         if session.get_bind().dialect.name == "postgresql":
-            session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:workspace))"),
-                {"workspace": f"workspace-provenance:{workspace}"},
+            (
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:workspace))"),
+                    {"workspace": f"workspace-provenance:{workspace}"},
+                )
             )
 
     @staticmethod
-    def _stored_observation(
-        session: Session, identity: str
+    async def _stored_observation(
+        session: AsyncSession, identity: str
     ) -> WorkspaceProvenanceObservation | None:
-        row = session.get(EntityRow, identity)
+        row = await session.get(EntityRow, identity)
         if row is None:
             return None
         if row.kind != WorkspaceProvenanceObservation.entity_kind:
             raise ConflictError(f"entity id belongs to {row.kind}: {identity}")
         return WorkspaceProvenanceObservation.model_validate(row.payload)
 
-    def get(
+    async def get(
         self,
         *,
         engagement_id: str,
@@ -337,15 +349,15 @@ class WorkspaceProvenanceService:
         """Read one receipt, including its shared path chunks."""
 
         identity = _observation_id(engagement_id, scope_kind, scope_id)
-        with self.store.database.session() as session:
-            observation = self._stored_observation(session, identity)
+        async with self.store.database.session() as session:
+            observation = await self._stored_observation(session, identity)
             if observation is None:
                 raise NotFoundError(
                     f"workspace provenance observation not found: {identity}"
                 )
-            return self._hydrate(observation, session)
+            return await self._hydrate(observation, session)
 
-    def begin(
+    async def begin(
         self,
         workspace: Path,
         *,
@@ -360,12 +372,12 @@ class WorkspaceProvenanceService:
     ) -> WorkspaceProvenanceObservation:
         identity = _observation_id(engagement_id, scope_kind, scope_id)
         try:
-            return self.get(
+            return await self.get(
                 engagement_id=engagement_id, scope_kind=scope_kind, scope_id=scope_id
             )
         except NotFoundError:  # diagnostic-expected: first observation for this scope continues to creation
             pass
-        observed = snapshot(workspace)
+        observed = await asyncio.to_thread(snapshot, workspace)
         workspace_id = workspace_key(engagement_id, observed.workspace_root)
         entity = WorkspaceProvenanceObservation(
             id=identity,
@@ -383,12 +395,12 @@ class WorkspaceProvenanceService:
             confidence="exact" if observed.supported else "unsupported",
         )
         try:
-            with self.store.transaction(immediate=True) as transaction:
-                self._lock_workspace(transaction.session, workspace_id)
-                existing = self._stored_observation(transaction.session, identity)
+            async with self.store.transaction(immediate=True) as transaction:
+                (await self._lock_workspace(transaction.session, workspace_id))
+                existing = await self._stored_observation(transaction.session, identity)
                 if existing is not None:
-                    return self._hydrate(existing, transaction.session)
-                baseline_id = save_map(
+                    return await self._hydrate(existing, transaction.session)
+                baseline_id = await save_map(
                     transaction.session,
                     engagement_id,
                     workspace_id,
@@ -396,7 +408,7 @@ class WorkspaceProvenanceService:
                     observed.paths,
                 )
                 entity.baseline_snapshot_id = baseline_id
-                transaction.add(entity)
+                (await transaction.add(entity))
                 transaction.session.add(
                     WorkspaceProvenanceIndexRow(
                         observation_id=entity.id,
@@ -411,12 +423,12 @@ class WorkspaceProvenanceService:
         except (
             ConflictError
         ):  # diagnostic-expected: a concurrent begin won the durable scope id
-            return self.get(
+            return await self.get(
                 engagement_id=engagement_id, scope_kind=scope_kind, scope_id=scope_id
             )
         return entity.model_copy(update={"baseline": observed.paths})
 
-    def finish(
+    async def finish(
         self,
         workspace: Path,
         *,
@@ -425,27 +437,27 @@ class WorkspaceProvenanceService:
         scope_id: str,
     ) -> WorkspaceProvenanceObservation:
         identity = _observation_id(engagement_id, scope_kind, scope_id)
-        observation = self.get(
+        observation = await self.get(
             engagement_id=engagement_id, scope_kind=scope_kind, scope_id=scope_id
         )
         if observation.status == "complete":
             return observation
-        observed = snapshot(workspace)
+        observed = await asyncio.to_thread(snapshot, workspace)
         completed_at = utc_now()
         workspace_id = workspace_key(engagement_id, observation.workspace_root)
-        with self.store.transaction(immediate=True) as transaction:
+        async with self.store.transaction(immediate=True) as transaction:
             session = transaction.session
-            self._lock_workspace(session, workspace_id)
-            stored = self._stored_observation(session, identity)
+            (await self._lock_workspace(session, workspace_id))
+            stored = await self._stored_observation(session, identity)
             if stored is None:
                 raise NotFoundError(
                     f"workspace provenance observation not found: {identity}"
                 )
             if stored.status == "complete":
-                return self._hydrate(stored, session)
-            observation = self._hydrate(stored, session)
+                return await self._hydrate(stored, session)
+            observation = await self._hydrate(stored, session)
 
-            index = session.get(WorkspaceProvenanceIndexRow, identity)
+            index = await session.get(WorkspaceProvenanceIndexRow, identity)
             if index is None:
                 # An in-flight observation from before the cutover can finish
                 # using its inline baseline, without loading old history.
@@ -472,32 +484,36 @@ class WorkspaceProvenanceService:
             attribution_id: str | None = None
             owners = {}
             if supported:
-                concurrent = overlapping_scopes(session, observation, completed_at)
+                concurrent = await overlapping_scopes(
+                    session, observation, completed_at
+                )
                 confidence = "uncertain_parallel_turns" if concurrent else "exact"
                 mutations = [
                     {**row, "confidence": confidence}
                     for row in _change_rows(observation.baseline, observed.paths)
                 ]
-                owners = matching_owners(session, workspace_id, observed.paths)
+                owners = await matching_owners(session, workspace_id, observed.paths)
                 attribution = self._classify(
                     observation, observed.paths, mutations, confidence, owners
                 )
                 labels = self._compact_attribution(attribution)
-                attribution_id = save_map(
+                attribution_id = await save_map(
                     session, engagement_id, workspace_id, "attribution", labels
                 )
 
-            baseline_id = stored.baseline_snapshot_id or save_map(
-                session, engagement_id, workspace_id, "paths", observation.baseline
+            baseline_id = stored.baseline_snapshot_id or (
+                await save_map(
+                    session, engagement_id, workspace_id, "paths", observation.baseline
+                )
             )
-            current_id = save_map(
+            current_id = await save_map(
                 session, engagement_id, workspace_id, "paths", observed.paths
             )
             if supported:
                 remember_mutations(
                     session, workspace_id, observation, mutations, completed_at, owners
                 )
-            updated = transaction.update(
+            updated = await transaction.update(
                 WorkspaceProvenanceObservation,
                 identity,
                 {

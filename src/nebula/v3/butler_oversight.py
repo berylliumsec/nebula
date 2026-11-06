@@ -241,10 +241,10 @@ def normalize_machine(value: str) -> str:
 EntityT = TypeVar("EntityT", bound=Entity)
 
 
-def _entity_in_transaction(
+async def _entity_in_transaction(
     transaction: StoreTransaction, model: type[EntityT], entity_id: str
 ) -> EntityT | None:
-    row = transaction.session.get(EntityRow, entity_id)
+    row = await transaction.session.get(EntityRow, entity_id)
     if row is None:
         return None
     if row.kind != model.entity_kind:
@@ -259,16 +259,19 @@ def _coverage_reason() -> str:
     )
 
 
-def _ensure_project_state(transaction: StoreTransaction, engagement_id: str) -> None:
+async def _ensure_project_state(
+    transaction: StoreTransaction, engagement_id: str
+) -> None:
     if (
-        _entity_in_transaction(
+        await _entity_in_transaction(
             transaction, ButlerProjectState, project_state_id(engagement_id)
         )
-        is None
-    ):
-        transaction.add(
-            ButlerProjectState(
-                id=project_state_id(engagement_id), engagement_id=engagement_id
+    ) is None:
+        (
+            await transaction.add(
+                ButlerProjectState(
+                    id=project_state_id(engagement_id), engagement_id=engagement_id
+                )
             )
         )
 
@@ -296,7 +299,7 @@ def _watch_for_goal(
     )
 
 
-def _append_project_event(
+async def _append_project_event(
     transaction: StoreTransaction,
     *,
     engagement_id: str,
@@ -308,9 +311,9 @@ def _append_project_event(
     if payload.project_id != engagement_id:
         raise ValueError("oversight event project does not match its stream")
     stream_id = project_stream_id(engagement_id)
-    transaction.lock_operation_stream(stream_id)
-    _ensure_project_state(transaction, engagement_id)
-    event = transaction.append_operation_event(
+    (await transaction.lock_operation_stream(stream_id))
+    (await _ensure_project_state(transaction, engagement_id))
+    event = await transaction.append_operation_event(
         stream_id,
         PROJECT_STREAM_KIND,
         engagement_id,
@@ -323,48 +326,52 @@ def _append_project_event(
     return event
 
 
-def _resolve_progress_incident(
+async def _resolve_progress_incident(
     transaction: StoreTransaction, *, goal: ChatGoal, reason: str, now: datetime
 ) -> None:
     key = _progress_incident_key(goal.id)
     record_id = incident_id(goal.engagement_id, key)
-    incident = _entity_in_transaction(transaction, ButlerIncident, record_id)
+    incident = await _entity_in_transaction(transaction, ButlerIncident, record_id)
     if incident is None or incident.status == "resolved":
         return
-    transaction.update(
-        ButlerIncident,
-        incident.id,
-        {"status": "resolved", "resolved_at": now},
-        expected_revision=incident.revision,
+    (
+        await transaction.update(
+            ButlerIncident,
+            incident.id,
+            {"status": "resolved", "resolved_at": now},
+            expected_revision=incident.revision,
+        )
     )
-    _append_project_event(
-        transaction,
-        engagement_id=goal.engagement_id,
-        event_type="incident.resolved",
-        payload=ButlerEventPayload(
-            project_id=goal.engagement_id,
-            goal_id=goal.id,
-            session_id=goal.session_id,
-            source="core",
-            actor_role="core",
-            summary=reason,
-            verification_state="core_observed",
-            evidence_refs=[
-                ButlerEvidenceRef(
-                    kind="incident", id=incident.id, project_id=goal.engagement_id
-                ),
-                ButlerEvidenceRef(
-                    kind="goal", id=goal.id, project_id=goal.engagement_id
-                ),
-            ],
-            incident_key=key,
-        ),
-        idempotency_key=f"progress-overdue-resolved:{incident.id}:{incident.revision + 1}",
-        now=now,
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=goal.engagement_id,
+            event_type="incident.resolved",
+            payload=ButlerEventPayload(
+                project_id=goal.engagement_id,
+                goal_id=goal.id,
+                session_id=goal.session_id,
+                source="core",
+                actor_role="core",
+                summary=reason,
+                verification_state="core_observed",
+                evidence_refs=[
+                    ButlerEvidenceRef(
+                        kind="incident", id=incident.id, project_id=goal.engagement_id
+                    ),
+                    ButlerEvidenceRef(
+                        kind="goal", id=goal.id, project_id=goal.engagement_id
+                    ),
+                ],
+                incident_key=key,
+            ),
+            idempotency_key=f"progress-overdue-resolved:{incident.id}:{incident.revision + 1}",
+            now=now,
+        )
     )
 
 
-def record_goal_transition(
+async def record_goal_transition(
     transaction: StoreTransaction, before: ChatGoal, after: ChatGoal
 ) -> None:
     """Record a changed goal status and its Watch in the goal write transaction."""
@@ -374,13 +381,15 @@ def record_goal_transition(
     if before.status == after.status:
         return
     now = utc_now()
-    prior = _entity_in_transaction(transaction, ButlerGoalWatch, watch_id(after.id))
+    prior = await _entity_in_transaction(
+        transaction, ButlerGoalWatch, watch_id(after.id)
+    )
     if prior is None:
         watch = _watch_for_goal(after, now=now)
-        transaction.add(watch)
+        (await transaction.add(watch))
     else:
         running = after.status == ChatGoalStatus.RUNNING
-        watch = transaction.update(
+        watch = await transaction.update(
             ButlerGoalWatch,
             prior.id,
             {
@@ -409,11 +418,13 @@ def record_goal_transition(
         else after.status.value
     )
     if after.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
-        _resolve_progress_incident(
-            transaction,
-            goal=after,
-            reason="Goal stopped waiting for a progress checkpoint.",
-            now=now,
+        (
+            await _resolve_progress_incident(
+                transaction,
+                goal=after,
+                reason="Goal stopped waiting for a progress checkpoint.",
+                now=now,
+            )
         )
     payload = ButlerEventPayload(
         project_id=after.engagement_id,
@@ -432,17 +443,19 @@ def record_goal_transition(
             ButlerEvidenceRef(kind="goal", id=after.id, project_id=after.engagement_id)
         ],
     )
-    _append_project_event(
-        transaction,
-        engagement_id=after.engagement_id,
-        event_type=f"goal.{action}",
-        payload=payload,
-        idempotency_key=f"goal:{after.id}:revision:{after.revision}:status",
-        now=now,
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=after.engagement_id,
+            event_type=f"goal.{action}",
+            payload=payload,
+            idempotency_key=f"goal:{after.id}:revision:{after.revision}:status",
+            now=now,
+        )
     )
 
 
-def record_goal_plan_change(
+async def record_goal_plan_change(
     transaction: StoreTransaction, before: ChatGoal, after: ChatGoal
 ) -> None:
     """Wake semantic review only for a material edit to a watched goal."""
@@ -458,38 +471,40 @@ def record_goal_plan_change(
     ):
         return
     now = utc_now()
-    _append_project_event(
-        transaction,
-        engagement_id=after.engagement_id,
-        event_type="goal.plan_changed",
-        payload=ButlerEventPayload(
-            project_id=after.engagement_id,
-            goal_id=after.id,
-            session_id=after.session_id,
-            source="core",
-            actor_role="subagent" if after.parent_goal_id else "main_agent",
-            parent_goal_id=after.parent_goal_id,
-            summary="Goal objective, criteria, or plan changed.",
-            metrics={
-                "goal_revision": after.revision,
-                "objective_changed": before.objective != after.objective,
-                "criteria_changed": before.completion_criteria
-                != after.completion_criteria,
-                "plan_changed": before.plan != after.plan,
-            },
-            verification_state="core_observed",
-            evidence_refs=[
-                ButlerEvidenceRef(
-                    kind="goal", id=after.id, project_id=after.engagement_id
-                )
-            ],
-        ),
-        idempotency_key=f"goal:{after.id}:plan:{after.revision}",
-        now=now,
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=after.engagement_id,
+            event_type="goal.plan_changed",
+            payload=ButlerEventPayload(
+                project_id=after.engagement_id,
+                goal_id=after.id,
+                session_id=after.session_id,
+                source="core",
+                actor_role="subagent" if after.parent_goal_id else "main_agent",
+                parent_goal_id=after.parent_goal_id,
+                summary="Goal objective, criteria, or plan changed.",
+                metrics={
+                    "goal_revision": after.revision,
+                    "objective_changed": before.objective != after.objective,
+                    "criteria_changed": before.completion_criteria
+                    != after.completion_criteria,
+                    "plan_changed": before.plan != after.plan,
+                },
+                verification_state="core_observed",
+                evidence_refs=[
+                    ButlerEvidenceRef(
+                        kind="goal", id=after.id, project_id=after.engagement_id
+                    )
+                ],
+            ),
+            idempotency_key=f"goal:{after.id}:plan:{after.revision}",
+            now=now,
+        )
     )
 
 
-def _report_evidence(
+async def _report_evidence(
     transaction: StoreTransaction,
     *,
     project_id: str,
@@ -499,13 +514,15 @@ def _report_evidence(
     for reference in references:
         record: ChatGoal | ChatTurn | HarnessTurn | Artifact | None
         if reference.kind == "goal":
-            record = _entity_in_transaction(transaction, ChatGoal, reference.id)
+            record = await _entity_in_transaction(transaction, ChatGoal, reference.id)
         elif reference.kind == "chat_turn":
-            record = _entity_in_transaction(transaction, ChatTurn, reference.id)
+            record = await _entity_in_transaction(transaction, ChatTurn, reference.id)
         elif reference.kind == "harness_turn":
-            record = _entity_in_transaction(transaction, HarnessTurn, reference.id)
+            record = await _entity_in_transaction(
+                transaction, HarnessTurn, reference.id
+            )
         else:
-            record = _entity_in_transaction(transaction, Artifact, reference.id)
+            record = await _entity_in_transaction(transaction, Artifact, reference.id)
         if record is None or record.engagement_id != project_id:
             raise ConflictError(
                 "report evidence is missing or belongs to another project"
@@ -518,7 +535,7 @@ def _report_evidence(
     return resolved
 
 
-def _machine_incident(
+async def _machine_incident(
     transaction: StoreTransaction,
     *,
     goal: ChatGoal,
@@ -531,7 +548,7 @@ def _machine_incident(
     machine = normalize_machine(details.machine)
     key = f"machine:{machine}"
     record_id = incident_id(goal.engagement_id, key)
-    previous = _entity_in_transaction(transaction, ButlerIncident, record_id)
+    previous = await _entity_in_transaction(transaction, ButlerIncident, record_id)
     # The report's prose is retained as an attributed claim. The incident
     # heading is Core-generated so untrusted content cannot pose as a finding.
     heading = f"Agent reports {machine} is down or unreachable."
@@ -565,7 +582,7 @@ def _machine_incident(
             session_ids=[goal.session_id],
             observed_at=now,
         )
-        transaction.add(incident)
+        (await transaction.add(incident))
         event_type = "incident.opened"
     else:
         prior_refs = [
@@ -574,7 +591,7 @@ def _machine_incident(
         refs = list(
             {(ref.kind, ref.id): ref for ref in [*prior_refs, *new_refs]}.values()
         )[-20:]
-        incident = transaction.update(
+        incident = await transaction.update(
             ButlerIncident,
             previous.id,
             {
@@ -600,34 +617,36 @@ def _machine_incident(
         event_type = (
             "incident.reopened" if previous.status == "resolved" else "incident.updated"
         )
-    _append_project_event(
-        transaction,
-        engagement_id=goal.engagement_id,
-        event_type=event_type,
-        payload=ButlerEventPayload(
-            project_id=goal.engagement_id,
-            goal_id=goal.id,
-            session_id=goal.session_id,
-            source="core",
-            actor_role="core",
-            summary=heading,
-            metrics={"incident_status": incident.status},
-            verification_state="agent_reported",
-            evidence_refs=[
-                ButlerEvidenceRef(
-                    kind="incident", id=incident.id, project_id=goal.engagement_id
-                ),
-                report_ref,
-            ],
-            incident_key=key,
-        ),
-        idempotency_key=f"incident:{incident.id}:report:{report.id}",
-        now=now,
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=goal.engagement_id,
+            event_type=event_type,
+            payload=ButlerEventPayload(
+                project_id=goal.engagement_id,
+                goal_id=goal.id,
+                session_id=goal.session_id,
+                source="core",
+                actor_role="core",
+                summary=heading,
+                metrics={"incident_status": incident.status},
+                verification_state="agent_reported",
+                evidence_refs=[
+                    ButlerEvidenceRef(
+                        kind="incident", id=incident.id, project_id=goal.engagement_id
+                    ),
+                    report_ref,
+                ],
+                incident_key=key,
+            ),
+            idempotency_key=f"incident:{incident.id}:report:{report.id}",
+            now=now,
+        )
     )
     return incident, key
 
 
-def ingest_agent_report(
+async def ingest_agent_report(
     store: NebulaStore,
     *,
     turn_id: str,
@@ -646,8 +665,8 @@ def ingest_agent_report(
     )
     report_id = _stable_id("butler-report", f"{turn_id}\0{idempotency_key}")
     details = body.model_dump(mode="json")
-    with store.transaction(immediate=True) as transaction:
-        turn = _entity_in_transaction(transaction, ChatTurn, turn_id)
+    async with store.transaction(immediate=True) as transaction:
+        turn = await _entity_in_transaction(transaction, ChatTurn, turn_id)
         if turn is None or turn.goal_id is None:
             raise ConflictError("agent report requires a Core-owned goal turn")
         if (
@@ -664,8 +683,10 @@ def ingest_agent_report(
             and turn.backend != ChatBackend.HARNESS
         ):
             raise ConflictError("agent report source does not match the turn runtime")
-        transaction.lock_operation_stream(project_stream_id(turn.engagement_id))
-        existing = _entity_in_transaction(transaction, ButlerAgentReport, report_id)
+        (await transaction.lock_operation_stream(project_stream_id(turn.engagement_id)))
+        existing = await _entity_in_transaction(
+            transaction, ButlerAgentReport, report_id
+        )
         if existing is not None:
             if (
                 existing.turn_id != turn_id
@@ -676,13 +697,15 @@ def ingest_agent_report(
             ):
                 raise ConflictError("report key was reused with different content")
             incident = (
-                _entity_in_transaction(
-                    transaction,
-                    ButlerIncident,
-                    incident_id(
-                        existing.engagement_id,
-                        f"machine:{normalize_machine(body.machine)}",
-                    ),
+                (
+                    await _entity_in_transaction(
+                        transaction,
+                        ButlerIncident,
+                        incident_id(
+                            existing.engagement_id,
+                            f"machine:{normalize_machine(body.machine)}",
+                        ),
+                    )
                 )
                 if isinstance(body, GoalAttentionReport)
                 and body.condition in {"machine_unreachable", "machine_down"}
@@ -700,9 +723,11 @@ def ingest_agent_report(
             }
         ):
             raise ConflictError("new provider reports require an active tool turn")
-        goal = _entity_in_transaction(transaction, ChatGoal, turn.goal_id)
-        session = _entity_in_transaction(transaction, ChatSession, turn.session_id)
-        watch = _entity_in_transaction(
+        goal = await _entity_in_transaction(transaction, ChatGoal, turn.goal_id)
+        session = await _entity_in_transaction(
+            transaction, ChatSession, turn.session_id
+        )
+        watch = await _entity_in_transaction(
             transaction, ButlerGoalWatch, watch_id(turn.goal_id)
         )
         if (
@@ -723,7 +748,7 @@ def ingest_agent_report(
         if report_type == "progress" and goal.status != ChatGoalStatus.RUNNING:
             raise ConflictError("progress reports require a running goal")
         now = utc_now()
-        evidence_refs = _report_evidence(
+        evidence_refs = await _report_evidence(
             transaction,
             project_id=goal.engagement_id,
             references=body.evidence_refs,
@@ -742,7 +767,7 @@ def ingest_agent_report(
             evidence_refs=[ref.model_dump() for ref in evidence_refs],
             reported_at=now,
         )
-        transaction.add(report)
+        (await transaction.add(report))
         coverage_changes = {
             "report_capability": "validated",
             "coverage_reason": (
@@ -758,33 +783,39 @@ def ingest_agent_report(
                     now + timedelta(minutes=5),
                     min(body.next_checkpoint_at, now + MAX_CHECKPOINT_INTERVAL),
                 )
-            transaction.update(
-                ButlerGoalWatch,
-                watch.id,
-                {
-                    **coverage_changes,
-                    "last_progress_at": now,
-                    "progress_due_at": due,
-                    "deadline_generation": watch.deadline_generation + 1,
-                    "overdue_emitted_generation": None,
-                },
-                expected_revision=watch.revision,
+            (
+                await transaction.update(
+                    ButlerGoalWatch,
+                    watch.id,
+                    {
+                        **coverage_changes,
+                        "last_progress_at": now,
+                        "progress_due_at": due,
+                        "deadline_generation": watch.deadline_generation + 1,
+                        "overdue_emitted_generation": None,
+                    },
+                    expected_revision=watch.revision,
+                )
             )
-            _resolve_progress_incident(
-                transaction,
-                goal=goal,
-                reason="Core received a schema-checked progress report for this goal.",
-                now=now,
+            (
+                await _resolve_progress_incident(
+                    transaction,
+                    goal=goal,
+                    reason="Core received a schema-checked progress report for this goal.",
+                    now=now,
+                )
             )
         else:
-            transaction.update(
-                ButlerGoalWatch,
-                watch.id,
-                coverage_changes,
-                expected_revision=watch.revision,
+            (
+                await transaction.update(
+                    ButlerGoalWatch,
+                    watch.id,
+                    coverage_changes,
+                    expected_revision=watch.revision,
+                )
             )
             if body.condition in {"machine_unreachable", "machine_down"}:
-                incident, key = _machine_incident(
+                incident, key = await _machine_incident(
                     transaction,
                     goal=goal,
                     report=report,
@@ -792,35 +823,39 @@ def ingest_agent_report(
                     evidence_refs=evidence_refs,
                     now=now,
                 )
-        _append_project_event(
-            transaction,
-            engagement_id=goal.engagement_id,
-            event_type=f"agent.{report_type}_reported",
-            payload=ButlerEventPayload(
-                project_id=goal.engagement_id,
-                goal_id=goal.id,
-                session_id=goal.session_id,
-                source="agent",
-                actor_role=report.actor_role,
-                parent_goal_id=goal.parent_goal_id,
-                summary=f"Agent submitted a {report_type} report.",
-                metrics={"report_type": report_type},
-                verification_state="agent_reported",
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="agent_report", id=report.id, project_id=goal.engagement_id
-                    ),
-                    *evidence_refs,
-                ],
-                incident_key=key,
-            ),
-            idempotency_key=f"report:{report.id}",
-            now=now,
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=goal.engagement_id,
+                event_type=f"agent.{report_type}_reported",
+                payload=ButlerEventPayload(
+                    project_id=goal.engagement_id,
+                    goal_id=goal.id,
+                    session_id=goal.session_id,
+                    source="agent",
+                    actor_role=report.actor_role,
+                    parent_goal_id=goal.parent_goal_id,
+                    summary=f"Agent submitted a {report_type} report.",
+                    metrics={"report_type": report_type},
+                    verification_state="agent_reported",
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="agent_report",
+                            id=report.id,
+                            project_id=goal.engagement_id,
+                        ),
+                        *evidence_refs,
+                    ],
+                    incident_key=key,
+                ),
+                idempotency_key=f"report:{report.id}",
+                now=now,
+            )
         )
     return report, incident
 
 
-def acknowledge_incident(
+async def acknowledge_incident(
     store: NebulaStore,
     *,
     engagement_id: str,
@@ -829,10 +864,10 @@ def acknowledge_incident(
 ) -> ButlerIncident:
     """Acknowledge one project incident; repeat submissions return the saved state."""
 
-    store.get(Engagement, engagement_id)
-    with store.transaction(immediate=True) as transaction:
-        transaction.lock_operation_stream(project_stream_id(engagement_id))
-        incident = _entity_in_transaction(transaction, ButlerIncident, record_id)
+    (await store.get(Engagement, engagement_id))
+    async with store.transaction(immediate=True) as transaction:
+        (await transaction.lock_operation_stream(project_stream_id(engagement_id)))
+        incident = await _entity_in_transaction(transaction, ButlerIncident, record_id)
         if incident is None or incident.engagement_id != engagement_id:
             raise NotFoundError("Butler incident not found in this project")
         if incident.status == "acknowledged":
@@ -842,31 +877,33 @@ def acknowledge_incident(
         if incident.revision != expected_revision:
             raise ConflictError("incident changed; refresh before acknowledging")
         now = utc_now()
-        updated = transaction.update(
+        updated = await transaction.update(
             ButlerIncident,
             incident.id,
             {"status": "acknowledged", "acknowledged_at": now},
             expected_revision=incident.revision,
         )
-        _append_project_event(
-            transaction,
-            engagement_id=engagement_id,
-            event_type="incident.acknowledged",
-            payload=ButlerEventPayload(
-                project_id=engagement_id,
-                source="core",
-                actor_role="core",
-                summary="Operator acknowledged a Butler incident.",
-                verification_state="core_observed",
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="incident", id=incident.id, project_id=engagement_id
-                    )
-                ],
-                incident_key=incident.incident_key,
-            ),
-            idempotency_key=f"incident:{incident.id}:ack:{updated.revision}",
-            now=now,
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=engagement_id,
+                event_type="incident.acknowledged",
+                payload=ButlerEventPayload(
+                    project_id=engagement_id,
+                    source="core",
+                    actor_role="core",
+                    summary="Operator acknowledged a Butler incident.",
+                    verification_state="core_observed",
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="incident", id=incident.id, project_id=engagement_id
+                        )
+                    ],
+                    incident_key=incident.incident_key,
+                ),
+                idempotency_key=f"incident:{incident.id}:ack:{updated.revision}",
+                now=now,
+            )
         )
     return updated
 
@@ -912,11 +949,11 @@ class ButlerOversightService:
 
     async def startup(self) -> None:
         self._loop = asyncio.get_running_loop()
-        await asyncio.to_thread(self.reconcile_watches)
+        await self.reconcile_watches()
         from .butler_attention import reconcile_attention
 
-        await asyncio.to_thread(reconcile_attention, self.store)
-        for state in self.store.iter_readable_entities(ButlerProjectState):
+        await reconcile_attention(self.store)
+        async for state in self.store.iter_readable_entities(ButlerProjectState):
             self._wake_on_loop(state.engagement_id)
 
     async def shutdown(self) -> None:
@@ -931,62 +968,74 @@ class ButlerOversightService:
         self._issue_tasks.clear()
         self._signals.clear()
 
-    def reconcile_watches(self) -> None:
+    async def reconcile_watches(self) -> None:
         """Restore missing watches from current goal state without inventing history."""
 
-        for goal in self.store.iter_readable_entities(
+        async for goal in self.store.iter_readable_entities(
             ChatGoal,
             {"status": ["running", "paused", "blocked"]},
         ):
-            if self.store.find_entity(ButlerGoalWatch, "goal_id", goal.id):
+            if await self.store.find_entity(ButlerGoalWatch, "goal_id", goal.id):
                 continue
-            with self.store.transaction() as transaction:
-                current = _entity_in_transaction(transaction, ChatGoal, goal.id)
+            async with self.store.transaction() as transaction:
+                current = await _entity_in_transaction(transaction, ChatGoal, goal.id)
                 if current is None or current.status not in {
                     ChatGoalStatus.RUNNING,
                     ChatGoalStatus.PAUSED,
                     ChatGoalStatus.BLOCKED,
                 }:
                     continue
-                if _entity_in_transaction(
+                if await _entity_in_transaction(
                     transaction, ButlerGoalWatch, watch_id(goal.id)
                 ):
                     continue
                 now = utc_now()
-                transaction.lock_operation_stream(project_stream_id(goal.engagement_id))
-                transaction.add(_watch_for_goal(current, now=now, recovered=True))
-                _append_project_event(
-                    transaction,
-                    engagement_id=current.engagement_id,
-                    event_type="goal.watch_recovered",
-                    payload=ButlerEventPayload(
-                        project_id=current.engagement_id,
-                        goal_id=current.id,
-                        session_id=current.session_id,
-                        source="core_recovery",
-                        actor_role=(
-                            "subagent" if current.parent_goal_id else "main_agent"
+                (
+                    await transaction.lock_operation_stream(
+                        project_stream_id(goal.engagement_id)
+                    )
+                )
+                (
+                    await transaction.add(
+                        _watch_for_goal(current, now=now, recovered=True)
+                    )
+                )
+                (
+                    await _append_project_event(
+                        transaction,
+                        engagement_id=current.engagement_id,
+                        event_type="goal.watch_recovered",
+                        payload=ButlerEventPayload(
+                            project_id=current.engagement_id,
+                            goal_id=current.id,
+                            session_id=current.session_id,
+                            source="core_recovery",
+                            actor_role=(
+                                "subagent" if current.parent_goal_id else "main_agent"
+                            ),
+                            parent_goal_id=current.parent_goal_id,
+                            summary="Watch restored from the current goal state; earlier events may be missing.",
+                            metrics={"goal_revision": current.revision},
+                            verification_state="core_observed",
+                            evidence_refs=[
+                                ButlerEvidenceRef(
+                                    kind="goal",
+                                    id=current.id,
+                                    project_id=current.engagement_id,
+                                )
+                            ],
                         ),
-                        parent_goal_id=current.parent_goal_id,
-                        summary="Watch restored from the current goal state; earlier events may be missing.",
-                        metrics={"goal_revision": current.revision},
-                        verification_state="core_observed",
-                        evidence_refs=[
-                            ButlerEvidenceRef(
-                                kind="goal",
-                                id=current.id,
-                                project_id=current.engagement_id,
-                            )
-                        ],
-                    ),
-                    idempotency_key=f"goal:{current.id}:watch-recovered",
-                    now=now,
+                        idempotency_key=f"goal:{current.id}:watch-recovered",
+                        now=now,
+                    )
                 )
 
-    def _claim_project(self, engagement_id: str) -> ButlerProjectState | None:
+    async def _claim_project(self, engagement_id: str) -> ButlerProjectState | None:
         state_id = project_state_id(engagement_id)
-        with self.store.transaction() as transaction:
-            state = _entity_in_transaction(transaction, ButlerProjectState, state_id)
+        async with self.store.transaction() as transaction:
+            state = await _entity_in_transaction(
+                transaction, ButlerProjectState, state_id
+            )
             if state is None:
                 return None
             now = utc_now()
@@ -996,7 +1045,7 @@ class ButlerOversightService:
                 and state.lease_expires_at > now
             ):
                 return None
-            return transaction.update(
+            return await transaction.update(
                 ButlerProjectState,
                 state.id,
                 {
@@ -1006,26 +1055,26 @@ class ButlerOversightService:
                 expected_revision=state.revision,
             )
 
-    def replay_project(self, engagement_id: str) -> bool:
+    async def replay_project(self, engagement_id: str) -> bool:
         """Advance a durable cursor; terminal watches close only after their event."""
 
         try:
-            state = self._claim_project(engagement_id)
+            state = await self._claim_project(engagement_id)
         except ConflictError:
             # diagnostic-expected: another worker owns the project lease.
             return False
         if state is None:
             return False
         while True:
-            page = self.store.replay_operation_events(
+            page = await self.store.replay_operation_events(
                 project_stream_id(engagement_id),
                 after_sequence=state.last_event_sequence,
                 limit=100,
             )
             if not page:
                 return True
-            with self.store.transaction() as transaction:
-                current = _entity_in_transaction(
+            async with self.store.transaction() as transaction:
+                current = await _entity_in_transaction(
                     transaction, ButlerProjectState, project_state_id(engagement_id)
                 )
                 now = utc_now()
@@ -1038,7 +1087,7 @@ class ButlerOversightService:
                     return False
                 # Renew by CAS before applying the page. A stale worker cannot
                 # commit a cursor or watch change after another Core takes over.
-                state = transaction.update(
+                state = await transaction.update(
                     ButlerProjectState,
                     current.id,
                     {"lease_expires_at": now + LEASE_DURATION},
@@ -1057,7 +1106,7 @@ class ButlerOversightService:
                         event.event_type in {"goal.completed", "goal.cancelled"}
                         and payload.goal_id
                     ):
-                        watch = _entity_in_transaction(
+                        watch = await _entity_in_transaction(
                             transaction, ButlerGoalWatch, watch_id(payload.goal_id)
                         )
                         if (
@@ -1069,13 +1118,15 @@ class ButlerOversightService:
                                 ChatGoalStatus.CANCELLED,
                             }
                         ):
-                            transaction.update(
-                                ButlerGoalWatch,
-                                watch.id,
-                                {"closed_at": utc_now()},
-                                expected_revision=watch.revision,
+                            (
+                                await transaction.update(
+                                    ButlerGoalWatch,
+                                    watch.id,
+                                    {"closed_at": utc_now()},
+                                    expected_revision=watch.revision,
+                                )
                             )
-                state = transaction.update(
+                state = await transaction.update(
                     ButlerProjectState,
                     state.id,
                     {
@@ -1085,12 +1136,12 @@ class ButlerOversightService:
                     expected_revision=state.revision,
                 )
 
-    def fire_due_deadlines(self, engagement_id: str) -> int:
+    async def fire_due_deadlines(self, engagement_id: str) -> int:
         """Emit each due generation once; overdue is a signal, not a finding."""
 
         fired = 0
         now = utc_now()
-        for watch in self.store.iter_readable_entities(
+        async for watch in self.store.iter_readable_entities(
             ButlerGoalWatch,
             {"status": ChatGoalStatus.RUNNING.value},
             engagement_id=engagement_id,
@@ -1100,9 +1151,13 @@ class ButlerOversightService:
             if watch.overdue_emitted_generation == watch.deadline_generation:
                 continue
             try:
-                with self.store.transaction() as transaction:
-                    transaction.lock_operation_stream(project_stream_id(engagement_id))
-                    state = _entity_in_transaction(
+                async with self.store.transaction() as transaction:
+                    (
+                        await transaction.lock_operation_stream(
+                            project_stream_id(engagement_id)
+                        )
+                    )
+                    state = await _entity_in_transaction(
                         transaction, ButlerProjectState, project_state_id(engagement_id)
                     )
                     checked_at = utc_now()
@@ -1115,16 +1170,20 @@ class ButlerOversightService:
                         return fired
                     # Claim the next lease interval before emitting a deadline.
                     # The renewal and event both roll back if ownership races.
-                    transaction.update(
-                        ButlerProjectState,
-                        state.id,
-                        {"lease_expires_at": checked_at + LEASE_DURATION},
-                        expected_revision=state.revision,
+                    (
+                        await transaction.update(
+                            ButlerProjectState,
+                            state.id,
+                            {"lease_expires_at": checked_at + LEASE_DURATION},
+                            expected_revision=state.revision,
+                        )
                     )
-                    current = _entity_in_transaction(
+                    current = await _entity_in_transaction(
                         transaction, ButlerGoalWatch, watch.id
                     )
-                    goal = _entity_in_transaction(transaction, ChatGoal, watch.goal_id)
+                    goal = await _entity_in_transaction(
+                        transaction, ChatGoal, watch.goal_id
+                    )
                     if (
                         current is None
                         or goal is None
@@ -1136,122 +1195,134 @@ class ButlerOversightService:
                         == current.deadline_generation
                     ):
                         continue
-                    transaction.update(
-                        ButlerGoalWatch,
-                        current.id,
-                        {
-                            "progress_due_at": None,
-                            "overdue_emitted_generation": current.deadline_generation,
-                        },
-                        expected_revision=current.revision,
-                    )
-                    _append_project_event(
-                        transaction,
-                        engagement_id=engagement_id,
-                        event_type="goal.progress_overdue",
-                        payload=ButlerEventPayload(
-                            project_id=engagement_id,
-                            goal_id=goal.id,
-                            session_id=goal.session_id,
-                            source="core",
-                            actor_role=(
-                                "subagent" if goal.parent_goal_id else "main_agent"
-                            ),
-                            parent_goal_id=goal.parent_goal_id,
-                            summary="Goal progress checkpoint is overdue; work may still be in progress.",
-                            metrics={
-                                "deadline_generation": current.deadline_generation
-                            },
-                            verification_state="core_observed",
-                            evidence_refs=[
-                                ButlerEvidenceRef(
-                                    kind="goal", id=goal.id, project_id=engagement_id
-                                )
-                            ],
-                        ),
-                        idempotency_key=(
-                            f"goal:{goal.id}:deadline:{current.deadline_generation}"
-                        ),
-                        now=utc_now(),
-                    )
-                    key = _progress_incident_key(goal.id)
-                    record_id = incident_id(engagement_id, key)
-                    previous = _entity_in_transaction(
-                        transaction, ButlerIncident, record_id
-                    )
-                    if previous is None:
-                        transaction.add(
-                            ButlerIncident(
-                                id=record_id,
-                                engagement_id=engagement_id,
-                                incident_key=key,
-                                source="goal_checkpoint",
-                                verification_state="core_observed",
-                                summary="Progress checkpoint is overdue.",
-                                impact=(
-                                    "Core has not received a schema-checked progress "
-                                    "report since this goal's previous checkpoint."
-                                ),
-                                next_action="Review the goal and request an update through its main agent.",
-                                evidence_refs=[
-                                    ButlerEvidenceRef(
-                                        kind="goal",
-                                        id=goal.id,
-                                        project_id=engagement_id,
-                                    ).model_dump()
-                                ],
-                                goal_ids=[goal.id],
-                                session_ids=[goal.session_id],
-                                observed_at=checked_at,
-                            )
-                        )
-                        incident_event = "incident.opened"
-                    elif previous.status == "resolved":
-                        transaction.update(
-                            ButlerIncident,
-                            previous.id,
+                    (
+                        await transaction.update(
+                            ButlerGoalWatch,
+                            current.id,
                             {
-                                "status": "open",
-                                "acknowledged_at": None,
-                                "resolved_at": None,
-                                "observed_at": checked_at,
+                                "progress_due_at": None,
+                                "overdue_emitted_generation": current.deadline_generation,
                             },
-                            expected_revision=previous.revision,
+                            expected_revision=current.revision,
                         )
-                        incident_event = "incident.reopened"
-                    else:
-                        incident_event = None
-                    if incident_event is not None:
-                        _append_project_event(
+                    )
+                    (
+                        await _append_project_event(
                             transaction,
                             engagement_id=engagement_id,
-                            event_type=incident_event,
+                            event_type="goal.progress_overdue",
                             payload=ButlerEventPayload(
                                 project_id=engagement_id,
                                 goal_id=goal.id,
                                 session_id=goal.session_id,
                                 source="core",
-                                actor_role="core",
-                                summary="Progress checkpoint is overdue; work may still be in progress.",
+                                actor_role=(
+                                    "subagent" if goal.parent_goal_id else "main_agent"
+                                ),
+                                parent_goal_id=goal.parent_goal_id,
+                                summary="Goal progress checkpoint is overdue; work may still be in progress.",
+                                metrics={
+                                    "deadline_generation": current.deadline_generation
+                                },
                                 verification_state="core_observed",
                                 evidence_refs=[
-                                    ButlerEvidenceRef(
-                                        kind="incident",
-                                        id=record_id,
-                                        project_id=engagement_id,
-                                    ),
                                     ButlerEvidenceRef(
                                         kind="goal",
                                         id=goal.id,
                                         project_id=engagement_id,
-                                    ),
+                                    )
                                 ],
-                                incident_key=key,
                             ),
                             idempotency_key=(
-                                f"progress-overdue-incident:{record_id}:{current.deadline_generation}"
+                                f"goal:{goal.id}:deadline:{current.deadline_generation}"
                             ),
-                            now=checked_at,
+                            now=utc_now(),
+                        )
+                    )
+                    key = _progress_incident_key(goal.id)
+                    record_id = incident_id(engagement_id, key)
+                    previous = await _entity_in_transaction(
+                        transaction, ButlerIncident, record_id
+                    )
+                    if previous is None:
+                        (
+                            await transaction.add(
+                                ButlerIncident(
+                                    id=record_id,
+                                    engagement_id=engagement_id,
+                                    incident_key=key,
+                                    source="goal_checkpoint",
+                                    verification_state="core_observed",
+                                    summary="Progress checkpoint is overdue.",
+                                    impact=(
+                                        "Core has not received a schema-checked progress "
+                                        "report since this goal's previous checkpoint."
+                                    ),
+                                    next_action="Review the goal and request an update through its main agent.",
+                                    evidence_refs=[
+                                        ButlerEvidenceRef(
+                                            kind="goal",
+                                            id=goal.id,
+                                            project_id=engagement_id,
+                                        ).model_dump()
+                                    ],
+                                    goal_ids=[goal.id],
+                                    session_ids=[goal.session_id],
+                                    observed_at=checked_at,
+                                )
+                            )
+                        )
+                        incident_event = "incident.opened"
+                    elif previous.status == "resolved":
+                        (
+                            await transaction.update(
+                                ButlerIncident,
+                                previous.id,
+                                {
+                                    "status": "open",
+                                    "acknowledged_at": None,
+                                    "resolved_at": None,
+                                    "observed_at": checked_at,
+                                },
+                                expected_revision=previous.revision,
+                            )
+                        )
+                        incident_event = "incident.reopened"
+                    else:
+                        incident_event = None
+                    if incident_event is not None:
+                        (
+                            await _append_project_event(
+                                transaction,
+                                engagement_id=engagement_id,
+                                event_type=incident_event,
+                                payload=ButlerEventPayload(
+                                    project_id=engagement_id,
+                                    goal_id=goal.id,
+                                    session_id=goal.session_id,
+                                    source="core",
+                                    actor_role="core",
+                                    summary="Progress checkpoint is overdue; work may still be in progress.",
+                                    verification_state="core_observed",
+                                    evidence_refs=[
+                                        ButlerEvidenceRef(
+                                            kind="incident",
+                                            id=record_id,
+                                            project_id=engagement_id,
+                                        ),
+                                        ButlerEvidenceRef(
+                                            kind="goal",
+                                            id=goal.id,
+                                            project_id=engagement_id,
+                                        ),
+                                    ],
+                                    incident_key=key,
+                                ),
+                                idempotency_key=(
+                                    f"progress-overdue-incident:{record_id}:{current.deadline_generation}"
+                                ),
+                                now=checked_at,
+                            )
                         )
                 fired += 1
             except ConflictError:
@@ -1259,11 +1330,11 @@ class ButlerOversightService:
                 continue
         return fired
 
-    def _next_wait_seconds(self, engagement_id: str) -> float:
+    async def _next_wait_seconds(self, engagement_id: str) -> float:
         now = utc_now()
         due_times = [
             watch.progress_due_at
-            for watch in self.store.iter_readable_entities(
+            async for watch in self.store.iter_readable_entities(
                 ButlerGoalWatch,
                 {"status": ChatGoalStatus.RUNNING.value},
                 engagement_id=engagement_id,
@@ -1307,9 +1378,9 @@ class ButlerOversightService:
         while True:
             signal.clear()
             try:
-                owned = await asyncio.to_thread(self.replay_project, engagement_id)
+                owned = await self.replay_project(engagement_id)
                 if owned:
-                    await asyncio.to_thread(self.fire_due_deadlines, engagement_id)
+                    await self.fire_due_deadlines(engagement_id)
                     from .butler_review import review_pending
 
                     await review_pending(
@@ -1339,8 +1410,7 @@ class ButlerOversightService:
                     if self.memory_service is not None:
                         try:
                             for _ in range(5):
-                                consumed = await asyncio.to_thread(
-                                    self.memory_service.capture_pivotal_project_events,
+                                consumed = await self.memory_service.capture_pivotal_project_events(
                                     self.store,
                                     engagement_id,
                                     limit=100,
@@ -1356,9 +1426,7 @@ class ButlerOversightService:
                                 stage="memory_capture",
                             )
                     self._schedule_improvements(engagement_id)
-                wait_seconds = await asyncio.to_thread(
-                    self._next_wait_seconds, engagement_id
-                )
+                wait_seconds = await self._next_wait_seconds(engagement_id)
             except Exception as exc:
                 record_caught_exception(
                     "butler",
@@ -1379,7 +1447,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
     router = APIRouter(tags=["butler"])
 
     @router.get("/engagements/{engagement_id}/butler/overview")
-    def overview(
+    async def overview(
         engagement_id: str,
         watch_offset: int = 0,
         incident_offset: int = 0,
@@ -1388,7 +1456,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
         action_offset: int = 0,
         recovery_offset: int = 0,
     ) -> dict:
-        service.store.get(Engagement, engagement_id)
+        (await service.store.get(Engagement, engagement_id))
         if any(
             offset < 0
             for offset in (
@@ -1402,10 +1470,10 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
         ):
             raise HTTPException(422, "overview offsets must be nonnegative")
         watch_filter = {"closed_at": None}
-        watch_count = service.store.count_entities(
+        watch_count = await service.store.count_entities(
             ButlerGoalWatch, watch_filter, engagement_id=engagement_id
         )
-        watches = service.store.find_entities(
+        watches = await service.store.find_entities(
             ButlerGoalWatch,
             watch_filter,
             engagement_id=engagement_id,
@@ -1418,7 +1486,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             if watch.closed_at is not None:
                 continue
             try:
-                goal = service.store.get(ChatGoal, watch.goal_id)
+                goal = await service.store.get(ChatGoal, watch.goal_id)
             except NotFoundError:
                 # diagnostic-expected: a deleted goal cannot appear in the overview.
                 continue
@@ -1440,15 +1508,17 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                 }
             )
         incident_counts = {
-            status: service.store.count_entities(
-                ButlerIncident, {"status": status}, engagement_id=engagement_id
+            status: (
+                await service.store.count_entities(
+                    ButlerIncident, {"status": status}, engagement_id=engagement_id
+                )
             )
             for status in ("open", "acknowledged", "resolved")
         }
         incident_total = incident_counts["open"] + incident_counts["acknowledged"]
         incidents = []
         if incident_offset < incident_counts["open"]:
-            incidents = service.store.find_entities(
+            incidents = await service.store.find_entities(
                 ButlerIncident,
                 {"status": "open"},
                 engagement_id=engagement_id,
@@ -1460,43 +1530,49 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
         if remaining > 0 and incident_offset + len(incidents) < incident_total:
             acknowledged_offset = max(0, incident_offset - incident_counts["open"])
             incidents.extend(
-                service.store.find_entities(
-                    ButlerIncident,
-                    {"status": "acknowledged"},
-                    engagement_id=engagement_id,
-                    offset=acknowledged_offset,
-                    limit=remaining,
-                    newest_first=True,
+                (
+                    await service.store.find_entities(
+                        ButlerIncident,
+                        {"status": "acknowledged"},
+                        engagement_id=engagement_id,
+                        offset=acknowledged_offset,
+                        limit=remaining,
+                        newest_first=True,
+                    )
                 )
             )
-        account_count = service.store.count_entities(
+        account_count = await service.store.count_entities(
             ButlerAccountCredit, engagement_id=engagement_id
         )
-        quota_count = service.store.count_entities(
+        quota_count = await service.store.count_entities(
             ButlerHarnessQuota, engagement_id=engagement_id
         )
         resource_count = account_count + quota_count
         account_states = (
-            service.store.find_entities(
-                ButlerAccountCredit,
-                {},
-                engagement_id=engagement_id,
-                offset=resource_offset,
-                limit=OVERVIEW_PAGE_SIZE,
-                newest_first=True,
+            (
+                await service.store.find_entities(
+                    ButlerAccountCredit,
+                    {},
+                    engagement_id=engagement_id,
+                    offset=resource_offset,
+                    limit=OVERVIEW_PAGE_SIZE,
+                    newest_first=True,
+                )
             )
             if resource_offset < account_count
             else []
         )
         remaining_resources = OVERVIEW_PAGE_SIZE - len(account_states)
         quota_states = (
-            service.store.find_entities(
-                ButlerHarnessQuota,
-                {},
-                engagement_id=engagement_id,
-                offset=max(0, resource_offset - account_count),
-                limit=remaining_resources,
-                newest_first=True,
+            (
+                await service.store.find_entities(
+                    ButlerHarnessQuota,
+                    {},
+                    engagement_id=engagement_id,
+                    offset=max(0, resource_offset - account_count),
+                    limit=remaining_resources,
+                    newest_first=True,
+                )
             )
             if remaining_resources > 0
             and resource_offset + len(account_states) < resource_count
@@ -1507,7 +1583,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             profile = None
             for provider_id in resource.provider_ids:
                 try:
-                    candidate = service.store.get(ProviderProfile, provider_id)
+                    candidate = await service.store.get(ProviderProfile, provider_id)
                 except NotFoundError:
                     # diagnostic-expected: removed profiles are omitted from resource labels.
                     continue
@@ -1537,7 +1613,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             )
         for quota in quota_states:
             try:
-                harness_profile = service.store.get(
+                harness_profile = await service.store.get(
                     HarnessProfile, quota.harness_profile_id
                 )
                 available = harness_profile.enabled
@@ -1564,13 +1640,13 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                     "source": quota.source,
                 }
             )
-        state = service.store.find_entity(
+        state = await service.store.find_entity(
             ButlerProjectState, "engagement_id", engagement_id
         )
-        decision_count = service.store.count_entities(
+        decision_count = await service.store.count_entities(
             ButlerDecision, engagement_id=engagement_id
         )
-        decisions = service.store.find_entities(
+        decisions = await service.store.find_entities(
             ButlerDecision,
             {},
             engagement_id=engagement_id,
@@ -1578,10 +1654,10 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             limit=OVERVIEW_PAGE_SIZE,
             newest_first=True,
         )
-        action_count = service.store.count_entities(
+        action_count = await service.store.count_entities(
             ButlerAction, engagement_id=engagement_id
         )
-        actions = service.store.find_entities(
+        actions = await service.store.find_entities(
             ButlerAction,
             {},
             engagement_id=engagement_id,
@@ -1589,10 +1665,10 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             limit=OVERVIEW_PAGE_SIZE,
             newest_first=True,
         )
-        recovery_count = service.store.count_entities(
+        recovery_count = await service.store.count_entities(
             ButlerRecoveryCase, engagement_id=engagement_id
         )
-        recovery_cases = service.store.find_entities(
+        recovery_cases = await service.store.find_entities(
             ButlerRecoveryCase,
             {},
             engagement_id=engagement_id,
@@ -1600,19 +1676,19 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             limit=OVERVIEW_PAGE_SIZE,
             newest_first=True,
         )
-        recovery_attention = service.store.count_entities(
+        recovery_attention = await service.store.count_entities(
             ButlerRecoveryCase,
             {"status": ["needs_attention", "uncertain"]},
             engagement_id=engagement_id,
         )
-        recovery_active = service.store.count_entities(
+        recovery_active = await service.store.count_entities(
             ButlerRecoveryCase,
             {"status": ["observed", "investigating", "verifying"]},
             engagement_id=engagement_id,
         )
         from .butler_authority import authority_view
 
-        policy = service.store.find_entity(
+        policy = await service.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", engagement_id
         )
         authority = authority_view(engagement_id, policy)
@@ -1621,7 +1697,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "authority": authority["authority"],
             "authority_revision": authority["revision"],
             "global_instructions": (
-                service.recovery_service.global_status()
+                (await service.recovery_service.global_status())
                 if service.recovery_service is not None
                 else {"status": "unavailable", "path": None}
             ),
@@ -1653,11 +1729,13 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                                 or next(
                                     (
                                         message.content
-                                        for message in service.store.list_session_entities(
-                                            ChatMessage,
-                                            recovery_goal.session_id,
-                                            newest_first=True,
-                                            limit=10,
+                                        for message in (
+                                            await service.store.list_session_entities(
+                                                ChatMessage,
+                                                recovery_goal.session_id,
+                                                newest_first=True,
+                                                limit=10,
+                                            )
                                         )
                                         if message.role == ChatRole.ASSISTANT
                                         and not message.metadata.get("retracted_at")
@@ -1669,8 +1747,8 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
                         }
                         for goal_id in item.recovery_goal_ids
                         if (
-                            recovery_goal := service.store.find_entity(
-                                ChatGoal, "id", goal_id
+                            recovery_goal := (
+                                await service.store.find_entity(ChatGoal, "id", goal_id)
                             )
                         )
                         is not None
@@ -1746,10 +1824,10 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
     @router.post(
         "/engagements/{engagement_id}/butler/incidents/{record_id}/acknowledge"
     )
-    def acknowledge(
+    async def acknowledge(
         engagement_id: str, record_id: str, body: IncidentAcknowledgeRequest
     ) -> ButlerIncident:
-        return acknowledge_incident(
+        return await acknowledge_incident(
             service.store,
             engagement_id=engagement_id,
             record_id=record_id,
@@ -1757,11 +1835,13 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
         )
 
     @router.get("/engagements/{engagement_id}/butler/events")
-    def events(engagement_id: str, after_sequence: int = 0, limit: int = 100) -> dict:
-        service.store.get(Engagement, engagement_id)
+    async def events(
+        engagement_id: str, after_sequence: int = 0, limit: int = 100
+    ) -> dict:
+        (await service.store.get(Engagement, engagement_id))
         if after_sequence < 0 or not 1 <= limit <= 100:
             raise HTTPException(422, "invalid Butler event page")
-        page = service.store.replay_operation_events(
+        page = await service.store.replay_operation_events(
             project_stream_id(engagement_id),
             after_sequence=after_sequence,
             limit=limit,

@@ -380,53 +380,71 @@ class BrowserResearchService:
         self.security = security
         self.artifact_store = artifact_store
 
-    def workspace(self, engagement_id: str) -> BrowserResearchWorkspace:
-        self.security.workspace(engagement_id)
+    async def workspace(self, engagement_id: str) -> BrowserResearchWorkspace:
+        (await self.security.workspace(engagement_id))
         return BrowserResearchWorkspace(
-            site_nodes=self.store.list_latest_entities(
-                BrowserSiteNode, engagement_id=engagement_id
+            site_nodes=(
+                await self.store.list_latest_entities(
+                    BrowserSiteNode, engagement_id=engagement_id
+                )
             ),
-            site_edges=self.store.list_latest_entities(
-                BrowserSiteEdge, engagement_id=engagement_id
+            site_edges=(
+                await self.store.list_latest_entities(
+                    BrowserSiteEdge, engagement_id=engagement_id
+                )
             ),
-            crawl_jobs=self.store.list_latest_entities(
-                BrowserCrawlJob, engagement_id=engagement_id
+            crawl_jobs=(
+                await self.store.list_latest_entities(
+                    BrowserCrawlJob, engagement_id=engagement_id
+                )
             ),
-            intercepts=self.store.list_latest_entities(
-                BrowserInterceptItem, engagement_id=engagement_id
+            intercepts=(
+                await self.store.list_latest_entities(
+                    BrowserInterceptItem, engagement_id=engagement_id
+                )
             ),
-            repeater_tabs=self.store.list_latest_entities(
-                BrowserRepeaterTab, engagement_id=engagement_id
+            repeater_tabs=(
+                await self.store.list_latest_entities(
+                    BrowserRepeaterTab, engagement_id=engagement_id
+                )
             ),
-            repeater_results=self.store.list_latest_entities(
-                BrowserRepeaterResult, engagement_id=engagement_id
+            repeater_results=(
+                await self.store.list_latest_entities(
+                    BrowserRepeaterResult, engagement_id=engagement_id
+                )
             ),
-            attacks=self.store.list_latest_entities(
-                BrowserAttack, engagement_id=engagement_id
+            attacks=(
+                await self.store.list_latest_entities(
+                    BrowserAttack, engagement_id=engagement_id
+                )
             ),
-            attack_results=self.store.list_latest_entities(
-                BrowserAttackResult, engagement_id=engagement_id
+            attack_results=(
+                await self.store.list_latest_entities(
+                    BrowserAttackResult, engagement_id=engagement_id
+                )
             ),
-            token_analyses=self.store.list_latest_entities(
-                BrowserTokenAnalysis, engagement_id=engagement_id
+            token_analyses=(
+                await self.store.list_latest_entities(
+                    BrowserTokenAnalysis, engagement_id=engagement_id
+                )
             ),
         )
 
-    def create_crawl(
+    async def create_crawl(
         self, request: CrawlCreateRequest, actor_id: str
     ) -> BrowserCrawlJob:
-        session = self.store.get(BrowserSession, request.session_id)
+        session = await self.store.get(BrowserSession, request.session_id)
         self.security._require_agent_security_runtime(session)
         if session.identity_id != request.identity_id:
             raise BrowserWorkflowError("crawl identity must match the selected session")
         self.security._require_in_scope(
-            self.security._scope(session.engagement_id),
+            (await self.security._scope(session.engagement_id)),
             request.start_url,
             "browser.crawl.create",
             self._active_risk(),
             native_scope_authority=True,
         )
-        return self._create(
+        return await self._create(
             BrowserCrawlJob(
                 engagement_id=session.engagement_id,
                 frontier=[(request.start_url, 0)],
@@ -436,10 +454,10 @@ class BrowserResearchService:
             actor_id,
         )
 
-    def transition_crawl(
+    async def transition_crawl(
         self, crawl_id: str, request: CrawlStateRequest
     ) -> BrowserCrawlJob:
-        crawl = self.store.get(BrowserCrawlJob, crawl_id)
+        crawl = await self.store.get(BrowserCrawlJob, crawl_id)
         transitions = {
             "draft": {"queue": "queued", "cancel": "cancelled"},
             "queued": {"start": "running", "cancel": "cancelled", "fail": "failed"},
@@ -479,7 +497,7 @@ class BrowserResearchService:
             changes["started_at"] = utc_now()
         if next_state in {"complete", "cancelled", "failed"}:
             changes["completed_at"] = utc_now()
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserCrawlJob,
             crawl.id,
             changes,
@@ -493,24 +511,26 @@ class BrowserResearchService:
         )
         return updated
 
-    def delete_crawl(self, crawl_id: str, expected_revision: int) -> None:
-        crawl = self.store.get(BrowserCrawlJob, crawl_id)
+    async def delete_crawl(self, crawl_id: str, expected_revision: int) -> None:
+        crawl = await self.store.get(BrowserCrawlJob, crawl_id)
         if crawl.state in {"queued", "running", "paused"}:
             raise BrowserWorkflowError("cancel the crawl before deleting it")
-        self.store.delete(
-            BrowserCrawlJob, crawl.id, expected_revision=expected_revision
+        (
+            await self.store.delete(
+                BrowserCrawlJob, crawl.id, expected_revision=expected_revision
+            )
         )
 
-    def record_site_node(
+    async def record_site_node(
         self, request: SiteNodeRecordRequest, actor_id: str
     ) -> BrowserSiteNode:
-        session = self.store.get(BrowserSession, request.session_id)
-        scope = self.security._scope(session.engagement_id)
+        session = await self.store.get(BrowserSession, request.session_id)
+        scope = await self.security._scope(session.engagement_id)
         self.security._require_in_scope(
             scope, request.url, "browser.target.record", self._passive_risk()
         )
         normalized = self._normalized_site_url(request.url)
-        matches = self.store.find_entities(
+        matches = await self.store.find_entities(
             BrowserSiteNode,
             {"session_id": session.id, "method": request.method, "url": normalized},
             engagement_id=session.engagement_id,
@@ -527,7 +547,7 @@ class BrowserResearchService:
             }
         )[:256]
         if existing is not None:
-            updated, _ = self.store.update_with_operation_event(
+            updated, _ = await self.store.update_with_operation_event(
                 BrowserSiteNode,
                 existing.id,
                 {
@@ -567,9 +587,9 @@ class BrowserResearchService:
             evidence_ids=request.evidence_ids,
             metadata=request.metadata,
         )
-        return self._create(node, "browser_site_node.created", actor_id)
+        return await self._create(node, "browser_site_node.created", actor_id)
 
-    def record_exchange(
+    async def record_exchange(
         self, exchange: BrowserTrafficExchange, actor_id: str
     ) -> BrowserSiteNode | None:
         if exchange.scope_state != "in_scope":
@@ -592,7 +612,7 @@ class BrowserResearchService:
                 else "page"
             )
         )
-        return self.record_site_node(
+        return await self.record_site_node(
             SiteNodeRecordRequest(
                 session_id=exchange.session_id,
                 url=exchange.url,
@@ -606,21 +626,21 @@ class BrowserResearchService:
             actor_id,
         )
 
-    def record_site_edge(
+    async def record_site_edge(
         self, request: SiteEdgeRecordRequest, actor_id: str
     ) -> BrowserSiteEdge:
-        session = self.store.get(BrowserSession, request.session_id)
-        source = self._owned(
+        session = await self.store.get(BrowserSession, request.session_id)
+        source = await self._owned(
             BrowserSiteNode, request.source_node_id, session.engagement_id
         )
-        target = self._owned(
+        target = await self._owned(
             BrowserSiteNode, request.target_node_id, session.engagement_id
         )
         if source.session_id != session.id or target.session_id != session.id:
             raise BrowserWorkflowError(
                 "site-map edge endpoints must belong to the selected session"
             )
-        existing = self.store.find_entities(
+        existing = await self.store.find_entities(
             BrowserSiteEdge,
             {
                 "session_id": session.id,
@@ -633,7 +653,7 @@ class BrowserResearchService:
         )
         if existing:
             return existing[0]
-        return self._create(
+        return await self._create(
             BrowserSiteEdge(
                 engagement_id=session.engagement_id, **request.model_dump()
             ),
@@ -641,10 +661,10 @@ class BrowserResearchService:
             actor_id,
         )
 
-    def pause_intercept(
+    async def pause_intercept(
         self, session_id: str, request: InterceptCreateRequest, actor_id: str
     ) -> BrowserInterceptItem:
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         self.security._require_agent_security_runtime(session)
         if not session.interception_enabled:
             raise BrowserWorkflowError(
@@ -655,13 +675,13 @@ class BrowserResearchService:
                 "intercept tab does not belong to the browser session"
             )
         self.security._require_in_scope(
-            self.security._scope(session.engagement_id),
+            (await self.security._scope(session.engagement_id)),
             request.url,
             "browser.intercept",
             self._active_risk(),
             native_scope_authority=True,
         )
-        existing = self.store.find_entities(
+        existing = await self.store.find_entities(
             BrowserInterceptItem,
             {"transaction_id": request.transaction_id},
             engagement_id=session.engagement_id,
@@ -677,16 +697,16 @@ class BrowserResearchService:
             expires_at=utc_now() + timedelta(seconds=request.timeout_seconds),
             **request.model_dump(exclude={"headers", "timeout_seconds"}),
         )
-        return self._create(item, "browser_intercept.paused", actor_id)
+        return await self._create(item, "browser_intercept.paused", actor_id)
 
-    def decide_intercept(
+    async def decide_intercept(
         self, intercept_id: str, request: InterceptDecisionRequest
     ) -> BrowserInterceptItem:
-        item = self.store.get(BrowserInterceptItem, intercept_id)
+        item = await self.store.get(BrowserInterceptItem, intercept_id)
         if item.state != "paused":
             raise BrowserWorkflowError("only paused intercepts can be decided")
         if utc_now() >= item.expires_at:
-            return self._transition_intercept(
+            return await self._transition_intercept(
                 item,
                 request.expected_revision,
                 "expired",
@@ -695,7 +715,7 @@ class BrowserResearchService:
             )
         target = request.url or item.url
         self.security._require_in_scope(
-            self.security._scope(item.engagement_id),
+            (await self.security._scope(item.engagement_id)),
             target,
             "browser.intercept.forward",
             self._active_risk(),
@@ -716,7 +736,7 @@ class BrowserResearchService:
                     "edited_body_artifact_id": request.body_artifact_id,
                 }
             )
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserInterceptItem,
             item.id,
             changes,
@@ -730,63 +750,67 @@ class BrowserResearchService:
         )
         return updated
 
-    def interrupt_stale_intercepts(
+    async def interrupt_stale_intercepts(
         self, engagement_id: str, actor_id: str = "system"
     ) -> int:
         changed = 0
-        for item in self.store.find_entities(
+        for item in await self.store.find_entities(
             BrowserInterceptItem, {"state": "paused"}, engagement_id=engagement_id
         ):
             if utc_now() >= item.expires_at:
-                self._transition_intercept(
-                    item,
-                    item.revision,
-                    "interrupted",
-                    actor_id,
-                    "native transaction expired or disconnected",
+                (
+                    await self._transition_intercept(
+                        item,
+                        item.revision,
+                        "interrupted",
+                        actor_id,
+                        "native transaction expired or disconnected",
+                    )
                 )
                 changed += 1
         return changed
 
-    def create_repeater_tab(
+    async def create_repeater_tab(
         self, request: RepeaterTabCreateRequest, actor_id: str
     ) -> BrowserRepeaterTab:
-        session = self.store.get(BrowserSession, request.session_id)
+        session = await self.store.get(BrowserSession, request.session_id)
         self.security._require_agent_security_runtime(session)
         if session.identity_id != request.identity_id:
             raise BrowserWorkflowError(
                 "Repeater identity must match the selected session"
             )
         self.security._require_in_scope(
-            self.security._scope(session.engagement_id),
+            (await self.security._scope(session.engagement_id)),
             request.url,
             "browser.repeater.create",
             self._active_risk(),
             native_scope_authority=True,
         )
         if request.source_exchange_id:
-            self._owned(
-                BrowserTrafficExchange,
-                request.source_exchange_id,
-                session.engagement_id,
+            (
+                await self._owned(
+                    BrowserTrafficExchange,
+                    request.source_exchange_id,
+                    session.engagement_id,
+                )
             )
         tab = BrowserRepeaterTab(
             engagement_id=session.engagement_id,
             headers=self._redact_pairs(request.headers),
             **request.model_dump(exclude={"headers"}),
         )
-        return self._create(tab, "browser_repeater_tab.created", actor_id)
+        return await self._create(tab, "browser_repeater_tab.created", actor_id)
 
-    def update_repeater_tab(
+    async def update_repeater_tab(
         self, tab_id: str, request: RepeaterTabUpdateRequest, actor_id: str
     ) -> BrowserRepeaterTab:
-        tab = self.store.get(BrowserRepeaterTab, tab_id)
+        tab = await self.store.get(BrowserRepeaterTab, tab_id)
         if tab.state in {"queued", "running"}:
             raise BrowserWorkflowError(
                 "a queued or running Repeater tab cannot be edited"
             )
         self.security._require_in_scope(
-            self.security._scope(tab.engagement_id),
+            (await self.security._scope(tab.engagement_id)),
             request.url,
             "browser.repeater.edit",
             self._active_risk(),
@@ -794,7 +818,7 @@ class BrowserResearchService:
         )
         changes = request.model_dump(exclude={"expected_revision", "headers"})
         changes["headers"] = self._redact_pairs(request.headers)
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserRepeaterTab,
             tab.id,
             changes,
@@ -808,10 +832,10 @@ class BrowserResearchService:
         )
         return updated
 
-    def transition_repeater_tab(
+    async def transition_repeater_tab(
         self, tab_id: str, request: RepeaterStateRequest
     ) -> BrowserRepeaterTab:
-        tab = self.store.get(BrowserRepeaterTab, tab_id)
+        tab = await self.store.get(BrowserRepeaterTab, tab_id)
         transitions = {
             "draft": {"queue": "queued", "cancel": "cancelled"},
             "ready": {"queue": "queued", "cancel": "cancelled"},
@@ -825,7 +849,7 @@ class BrowserResearchService:
             raise BrowserWorkflowError(
                 f"cannot {request.action} a Repeater tab in {tab.state} state"
             )
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserRepeaterTab,
             tab.id,
             {"state": next_state, "error": request.error},
@@ -839,14 +863,14 @@ class BrowserResearchService:
         )
         return updated
 
-    def record_repeater_result(
+    async def record_repeater_result(
         self, tab_id: str, request: RepeaterResultRequest
     ) -> BrowserRepeaterResult:
-        tab = self.store.get(BrowserRepeaterTab, tab_id)
+        tab = await self.store.get(BrowserRepeaterTab, tab_id)
         if tab.state != "running":
             raise BrowserWorkflowError("Repeater results require a running tab")
         if request.exchange_id:
-            exchange = self._owned(
+            exchange = await self._owned(
                 BrowserTrafficExchange, request.exchange_id, tab.engagement_id
             )
             if exchange.session_id != tab.session_id:
@@ -854,7 +878,7 @@ class BrowserResearchService:
                     "Repeater result belongs to another browser session"
                 )
         if request.response_body_artifact_id:
-            artifact = self._owned(
+            artifact = await self._owned(
                 Artifact, request.response_body_artifact_id, tab.engagement_id
             )
             if artifact.metadata.get("browser_session_id") != tab.session_id:
@@ -873,11 +897,11 @@ class BrowserResearchService:
             response_body_artifact_id=request.response_body_artifact_id,
             error=request.error,
         )
-        created = self._create(
+        created = await self._create(
             result, "browser_repeater_result.created", request.actor_id
         )
         history = list(dict.fromkeys([*tab.history_exchange_ids, created.id]))[-500:]
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserRepeaterTab,
             tab.id,
             {
@@ -897,22 +921,24 @@ class BrowserResearchService:
         del updated
         return created
 
-    def delete_repeater_tab(self, tab_id: str, expected_revision: int) -> None:
-        tab = self.store.get(BrowserRepeaterTab, tab_id)
+    async def delete_repeater_tab(self, tab_id: str, expected_revision: int) -> None:
+        tab = await self.store.get(BrowserRepeaterTab, tab_id)
         if tab.state in {"queued", "running"}:
             raise BrowserWorkflowError("cancel the Repeater request before deleting it")
-        for result in self.store.find_entities(
+        for result in await self.store.find_entities(
             BrowserRepeaterResult, {"tab_id": tab.id}, engagement_id=tab.engagement_id
         ):
-            self.store.delete(BrowserRepeaterResult, result.id)
-        self.store.delete(
-            BrowserRepeaterTab, tab.id, expected_revision=expected_revision
+            (await self.store.delete(BrowserRepeaterResult, result.id))
+        (
+            await self.store.delete(
+                BrowserRepeaterTab, tab.id, expected_revision=expected_revision
+            )
         )
 
-    def create_attack(
+    async def create_attack(
         self, request: AttackCreateRequest, actor_id: str
     ) -> BrowserAttack:
-        session = self.store.get(BrowserSession, request.session_id)
+        session = await self.store.get(BrowserSession, request.session_id)
         self.security._require_agent_security_runtime(session)
         if session.identity_id != request.identity_id:
             raise BrowserWorkflowError(
@@ -922,7 +948,7 @@ class BrowserResearchService:
         for position in request.positions:
             sample_url = sample_url.replace(f"§{position}§", "sample")
         self.security._require_in_scope(
-            self.security._scope(session.engagement_id),
+            (await self.security._scope(session.engagement_id)),
             sample_url,
             "browser.intruder.create",
             self._active_risk(),
@@ -936,12 +962,12 @@ class BrowserResearchService:
             else {},
             **attack_data,
         )
-        return self._create(attack, "browser_attack.created", actor_id)
+        return await self._create(attack, "browser_attack.created", actor_id)
 
-    def transition_attack(
+    async def transition_attack(
         self, attack_id: str, request: AttackStateRequest
     ) -> BrowserAttack:
-        attack = self.store.get(BrowserAttack, attack_id)
+        attack = await self.store.get(BrowserAttack, attack_id)
         transitions = {
             "draft": {"queue": "queued", "cancel": "cancelled"},
             "queued": {"start": "running", "cancel": "cancelled", "fail": "failed"},
@@ -965,7 +991,7 @@ class BrowserResearchService:
             changes["started_at"] = utc_now()
         if next_state in {"complete", "cancelled", "failed"}:
             changes["completed_at"] = utc_now()
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserAttack,
             attack.id,
             changes,
@@ -979,15 +1005,15 @@ class BrowserResearchService:
         )
         return updated
 
-    def add_attack_result(
+    async def add_attack_result(
         self, attack_id: str, request: AttackResultRequest, actor_id: str
     ) -> BrowserAttackResult:
-        attack = self.store.get(BrowserAttack, attack_id)
+        attack = await self.store.get(BrowserAttack, attack_id)
         if attack.state != "running":
             raise BrowserWorkflowError("attack results require a running attack")
         if attack.request_count >= attack.max_requests:
             raise BrowserWorkflowError("attack request budget is exhausted")
-        existing = self.store.find_entities(
+        existing = await self.store.find_entities(
             BrowserAttackResult,
             {"attack_id": attack.id, "sequence": request.sequence},
             engagement_id=attack.engagement_id,
@@ -996,7 +1022,7 @@ class BrowserResearchService:
         if existing:
             return existing[0]
         if request.exchange_id:
-            exchange = self._owned(
+            exchange = await self._owned(
                 BrowserTrafficExchange, request.exchange_id, attack.engagement_id
             )
             if exchange.session_id != attack.session_id:
@@ -1008,40 +1034,46 @@ class BrowserResearchService:
             attack_id=attack.id,
             **request.model_dump(),
         )
-        created = self._create(result, "browser_attack_result.created", actor_id)
-        latest = self.store.get(BrowserAttack, attack.id)
+        created = await self._create(result, "browser_attack_result.created", actor_id)
+        latest = await self.store.get(BrowserAttack, attack.id)
         next_count = latest.request_count + 1
         complete = next_count >= latest.max_requests
-        self.store.update_with_operation_event(
-            BrowserAttack,
-            latest.id,
-            {
-                "request_count": next_count,
-                "error_count": latest.error_count + (1 if request.error else 0),
-                "state": "complete" if complete else latest.state,
-                "completed_at": utc_now() if complete else latest.completed_at,
-            },
-            expected_revision=latest.revision,
-            operation_id=latest.id,
-            operation_kind="browser_attack",
-            engagement_id=latest.engagement_id,
-            event_type="browser_attack.progress",
-            event_payload={"request_count": next_count, "complete": complete},
-            actor_id=actor_id,
+        (
+            await self.store.update_with_operation_event(
+                BrowserAttack,
+                latest.id,
+                {
+                    "request_count": next_count,
+                    "error_count": latest.error_count + (1 if request.error else 0),
+                    "state": "complete" if complete else latest.state,
+                    "completed_at": utc_now() if complete else latest.completed_at,
+                },
+                expected_revision=latest.revision,
+                operation_id=latest.id,
+                operation_kind="browser_attack",
+                engagement_id=latest.engagement_id,
+                event_type="browser_attack.progress",
+                event_payload={"request_count": next_count, "complete": complete},
+                actor_id=actor_id,
+            )
         )
         return created
 
-    def delete_attack(self, attack_id: str, expected_revision: int) -> None:
-        attack = self.store.get(BrowserAttack, attack_id)
+    async def delete_attack(self, attack_id: str, expected_revision: int) -> None:
+        attack = await self.store.get(BrowserAttack, attack_id)
         if attack.state in {"queued", "running", "paused"}:
             raise BrowserWorkflowError("cancel the Intruder attack before deleting it")
-        for result in self.store.find_entities(
+        for result in await self.store.find_entities(
             BrowserAttackResult,
             {"attack_id": attack.id},
             engagement_id=attack.engagement_id,
         ):
-            self.store.delete(BrowserAttackResult, result.id)
-        self.store.delete(BrowserAttack, attack.id, expected_revision=expected_revision)
+            (await self.store.delete(BrowserAttackResult, result.id))
+        (
+            await self.store.delete(
+                BrowserAttack, attack.id, expected_revision=expected_revision
+            )
+        )
 
     def decode(self, request: DecoderRequest) -> dict[str, Any]:
         value = request.value
@@ -1157,15 +1189,19 @@ class BrowserResearchService:
             "truncated": len(diff) == 10_000,
         }
 
-    def analyze_tokens(
+    async def analyze_tokens(
         self, request: TokenAnalysisRequest, actor_id: str
     ) -> BrowserTokenAnalysis:
-        session = self.store.get(BrowserSession, request.session_id)
+        session = await self.store.get(BrowserSession, request.session_id)
         encoded_size = sum(len(sample.encode()) for sample in request.samples)
         if encoded_size > 8 * MAX_UTILITY_INPUT:
             raise BrowserWorkflowError("token samples exceed the 8 MiB analysis limit")
         for exchange_id in request.source_exchange_ids:
-            self._owned(BrowserTrafficExchange, exchange_id, session.engagement_id)
+            (
+                await self._owned(
+                    BrowserTrafficExchange, exchange_id, session.engagement_id
+                )
+            )
         frequencies = Counter("".join(request.samples))
         total = sum(frequencies.values())
         entropy = (
@@ -1194,17 +1230,17 @@ class BrowserResearchService:
                 "interpretation": "descriptive only; not a cryptographic certification",
             },
         )
-        return self._create(analysis, "browser_token_analysis.created", actor_id)
+        return await self._create(analysis, "browser_token_analysis.created", actor_id)
 
-    def promote_finding(
+    async def promote_finding(
         self, engagement_id: str, request: FindingPromotionRequest, actor_id: str
     ) -> Finding:
         for evidence_id in request.evidence_ids:
-            self._owned(Evidence, evidence_id, engagement_id)
+            (await self._owned(Evidence, evidence_id, engagement_id))
         for node_id in request.site_node_ids:
-            self._owned(BrowserSiteNode, node_id, engagement_id)
+            (await self._owned(BrowserSiteNode, node_id, engagement_id))
         for exchange_id in request.source_exchange_ids:
-            self._owned(BrowserTrafficExchange, exchange_id, engagement_id)
+            (await self._owned(BrowserTrafficExchange, exchange_id, engagement_id))
         finding = Finding(
             engagement_id=engagement_id,
             title=request.title,
@@ -1220,12 +1256,14 @@ class BrowserResearchService:
                 "run_id": request.run_id,
             },
         )
-        return self._create(finding, "browser_finding.candidate_created", actor_id)
+        return await self._create(
+            finding, "browser_finding.candidate_created", actor_id
+        )
 
-    def import_har(
+    async def import_har(
         self, engagement_id: str, request: HarImportRequest, actor_id: str
     ) -> dict[str, Any]:
-        session = self._owned(BrowserSession, request.session_id, engagement_id)
+        session = await self._owned(BrowserSession, request.session_id, engagement_id)
         entries = (
             request.har.get("log", {}).get("entries")
             if isinstance(request.har.get("log"), dict)
@@ -1244,7 +1282,7 @@ class BrowserResearchService:
                 url = str(request_data["url"])
                 method = str(request_data.get("method") or "GET").upper()
                 self.security._require_in_scope(
-                    self.security._scope(engagement_id),
+                    (await self.security._scope(engagement_id)),
                     url,
                     "browser.har.import",
                     self._passive_risk(),
@@ -1253,24 +1291,26 @@ class BrowserResearchService:
                     str(item.get("name", "")): str(item.get("value", ""))
                     for item in response_data.get("headers", [])[:200]
                 }
-                self.record_site_node(
-                    SiteNodeRecordRequest(
-                        session_id=session.id,
-                        url=url,
-                        method=method,
-                        discovery_source="har",
-                        status_code=response_data.get("status"),
-                        content_type=next(
-                            (
-                                value
-                                for name, value in header_map.items()
-                                if name.lower() == "content-type"
+                (
+                    await self.record_site_node(
+                        SiteNodeRecordRequest(
+                            session_id=session.id,
+                            url=url,
+                            method=method,
+                            discovery_source="har",
+                            status_code=response_data.get("status"),
+                            content_type=next(
+                                (
+                                    value
+                                    for name, value in header_map.items()
+                                    if name.lower() == "content-type"
+                                ),
+                                None,
                             ),
-                            None,
+                            metadata={"har_imported": True, "bodies_omitted": True},
                         ),
-                        metadata={"har_imported": True, "bodies_omitted": True},
-                    ),
-                    actor_id,
+                        actor_id,
+                    )
                 )
                 imported += 1
             except (
@@ -1289,15 +1329,15 @@ class BrowserResearchService:
             "redaction": "headers and bodies containing reusable secrets are not imported",
         }
 
-    def export_har(
+    async def export_har(
         self, engagement_id: str, session_id: str, *, limit: int | None = None
     ) -> dict[str, Any]:
-        session = self._owned(BrowserSession, session_id, engagement_id)
+        session = await self._owned(BrowserSession, session_id, engagement_id)
         if limit is not None and not 1 <= limit <= 500:
             raise BrowserWorkflowError(
                 "bounded HAR export limit must be between 1 and 500"
             )
-        exchanges = self.store.find_entities(
+        exchanges = await self.store.find_entities(
             BrowserTrafficExchange,
             {"session_id": session.id},
             engagement_id=engagement_id,
@@ -1412,16 +1452,16 @@ class BrowserResearchService:
 
         return RiskClass.ACTIVE_SCAN
 
-    def _owned(self, model: type[Any], entity_id: str, engagement_id: str) -> Any:
-        entity = self.store.get(model, entity_id)
+    async def _owned(self, model: type[Any], entity_id: str, engagement_id: str) -> Any:
+        entity = await self.store.get(model, entity_id)
         if getattr(entity, "engagement_id", None) != engagement_id:
             raise BrowserWorkflowError(
                 "browser research object belongs to another Project"
             )
         return entity
 
-    def _create(self, entity: Any, event_type: str, actor_id: str) -> Any:
-        created, _ = self.store.create_with_operation_event(
+    async def _create(self, entity: Any, event_type: str, actor_id: str) -> Any:
+        created, _ = await self.store.create_with_operation_event(
             entity,
             operation_id=entity.id,
             operation_kind=entity.entity_kind,
@@ -1433,7 +1473,7 @@ class BrowserResearchService:
         )
         return created
 
-    def _transition_intercept(
+    async def _transition_intercept(
         self,
         item: BrowserInterceptItem,
         revision: int,
@@ -1441,7 +1481,7 @@ class BrowserResearchService:
         actor_id: str,
         error: str,
     ) -> BrowserInterceptItem:
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserInterceptItem,
             item.id,
             {

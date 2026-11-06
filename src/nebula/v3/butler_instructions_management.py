@@ -35,8 +35,8 @@ class ButlerCheckIntervalUpdate(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
-def butler_check_interval_snapshot(store: NebulaStore) -> dict[str, Any]:
-    state = store.find_entity(ButlerGlobalState, "id", GLOBAL_STATE_ID)
+async def butler_check_interval_snapshot(store: NebulaStore) -> dict[str, Any]:
+    state = await store.find_entity(ButlerGlobalState, "id", GLOBAL_STATE_ID)
     minutes = state.check_interval_minutes if state else DEFAULT_CHECK_INTERVAL_MINUTES
     return {
         "check_interval_minutes": minutes,
@@ -239,13 +239,15 @@ def butler_instructions_router(data_root: Path, store: NebulaStore) -> APIRouter
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/butler/check-interval")
-    def read_check_interval() -> dict[str, Any]:
-        return butler_check_interval_snapshot(store)
+    async def read_check_interval() -> dict[str, Any]:
+        return await butler_check_interval_snapshot(store)
 
     @router.put("/butler/check-interval")
-    def update_check_interval(request: ButlerCheckIntervalUpdate) -> dict[str, Any]:
-        with store.transaction(immediate=True) as transaction:
-            row = transaction.session.get(EntityRow, GLOBAL_STATE_ID)
+    async def update_check_interval(
+        request: ButlerCheckIntervalUpdate,
+    ) -> dict[str, Any]:
+        async with store.transaction(immediate=True) as transaction:
+            row = await transaction.session.get(EntityRow, GLOBAL_STATE_ID)
             state = ButlerGlobalState.model_validate(row.payload) if row else None
             if (state.revision if state else 0) != request.expected_revision:
                 raise HTTPException(
@@ -253,19 +255,23 @@ def butler_instructions_router(data_root: Path, store: NebulaStore) -> APIRouter
                     detail="Butler's check interval changed; reload before saving",
                 )
             if state is None:
-                transaction.add(
-                    ButlerGlobalState(
-                        id=GLOBAL_STATE_ID,
-                        check_interval_minutes=request.check_interval_minutes,
+                (
+                    await transaction.add(
+                        ButlerGlobalState(
+                            id=GLOBAL_STATE_ID,
+                            check_interval_minutes=request.check_interval_minutes,
+                        )
                     )
                 )
             else:
-                transaction.update(
-                    ButlerGlobalState,
-                    state.id,
-                    {"check_interval_minutes": request.check_interval_minutes},
-                    expected_revision=state.revision,
+                (
+                    await transaction.update(
+                        ButlerGlobalState,
+                        state.id,
+                        {"check_interval_minutes": request.check_interval_minutes},
+                        expected_revision=state.revision,
+                    )
                 )
-        return butler_check_interval_snapshot(store)
+        return await butler_check_interval_snapshot(store)
 
     return router

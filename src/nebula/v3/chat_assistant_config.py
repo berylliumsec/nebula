@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import resolve_workspace
+
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -61,14 +65,16 @@ class ChatAssistantConfigPatch(NebulaModel):
         return self
 
 
-def chat_assistant_config(store: NebulaStore, session: ChatSession) -> dict[str, Any]:
+async def chat_assistant_config(
+    store: NebulaStore, session: ChatSession
+) -> dict[str, Any]:
     """Read Core's saved next-turn choice, or derive the last effective turn."""
 
     metadata = session.metadata
     saved = metadata.get("assistant_config")
     options = metadata.get("harness_runtime_options")
     if session.backend == ChatBackend.HARNESS and session.harness_session_id:
-        harness = store.get(HarnessSession, session.harness_session_id)
+        harness = await store.get(HarnessSession, session.harness_session_id)
         options = harness.metadata.get("runtime_options", options)
     runtime_options = options if isinstance(options, dict) else {}
     subagent = metadata.get("provider_subagent")
@@ -111,52 +117,26 @@ def chat_assistant_config(store: NebulaStore, session: ChatSession) -> dict[str,
     return current
 
 
-def update_chat_assistant_config(
+async def validate_chat_assistant_selection(
     store: NebulaStore,
     session: ChatSession,
-    patch: ChatAssistantConfigPatch,
+    selected: dict[str, Any],
     *,
-    expected_revision: int,
-    workspace_resolver: Callable[[str], Path] | None = None,
-) -> ChatSession:
-    """Validate every supplied choice, save atomically, and retain chat binding."""
-
-    if (
-        session.metadata.get("side_chat") is True
-        or session.metadata.get("temporary_assistant") is True
-    ):
-        raise ValueError("Assistant settings are available on saved main chats")
-    if isinstance(session.metadata.get("archived_at"), str):
-        raise ValueError("unarchive this chat before changing Assistant settings")
-    if expected_revision != session.revision:
-        raise ValueError(
-            "conversation changed; read its Assistant settings and try again"
-        )
-    current = chat_assistant_config(store, session)
-    changes = patch.model_dump(exclude_unset=True, mode="json")
-    selected = {**current, **changes}
-    if changes.get("subagent_provider_id") and changes.get(
-        "subagent_harness_profile_id"
-    ):
-        raise ValueError("choose one subagent runtime")
-    if changes.get("subagent_provider_id"):
-        selected["subagent_harness_profile_id"] = None
-    elif changes.get("subagent_harness_profile_id"):
-        selected["subagent_provider_id"] = None
+    workspace_resolver: MaybeAsync[[str], Path] | None = None,
+) -> None:
+    """Revalidate a selection before saving it or activating deferred work."""
     backend = selected["backend"]
     if backend not in {"provider", "harness"}:
         raise ValueError("choose Provider or Agent harness")
-    if ("backend" in changes or "profile_id" in changes) and "model" not in changes:
-        raise ValueError("choose a listed model when changing runtime")
     profile_id = selected["profile_id"]
     model = selected["model"]
     if not isinstance(profile_id, str) or not isinstance(model, str):
         raise ValueError("choose an enabled runtime and listed model")
     if backend == "provider":
-        provider_profile = store.get(ProviderProfile, profile_id)
-        if (
-            not provider_profile.enabled
-            or model not in provider_profile.model_allowlist
+        provider_profile = await store.get(ProviderProfile, profile_id)
+        if not provider_profile.enabled or (
+            provider_profile.model_allowlist
+            and model not in provider_profile.model_allowlist
         ):
             raise ValueError("choose an enabled provider and one of its allowed models")
         if session.metadata.get(
@@ -166,7 +146,7 @@ def update_chat_assistant_config(
         if selected["tools_enabled"] and not provider_profile.tools_verified_for(model):
             raise ValueError("this provider model is not verified for command tools")
     else:
-        harness_profile = store.get(HarnessProfile, profile_id)
+        harness_profile = await store.get(HarnessProfile, profile_id)
         if (
             not harness_profile.enabled
             or model not in harness_profile.capabilities.models
@@ -207,22 +187,43 @@ def update_chat_assistant_config(
             )
         if mode and mode not in harness_profile.capabilities.modes:
             raise ValueError("the selected harness does not advertise that mode")
-    project = store.get(Engagement, session.engagement_id)
+    project = await store.get(Engagement, session.engagement_id)
     scope = (
-        store.get(ScopePolicy, project.scope_policy_id)
+        (await store.get(ScopePolicy, project.scope_policy_id))
         if project.scope_policy_id
         else None
     )
-    resolve_mcp_profiles(
-        store,
-        selected["mcp_server_ids"],
-        engagement_id=session.engagement_id,
-        bypass_permissions=bool(scope and scope.bypass_permissions),
+    if scope is not None and scope.engagement_id != project.id:
+        raise ValueError("the project scope belongs to another project")
+    if backend == "harness":
+        if scope and scope.local_only and not harness_profile.privacy.local_only:
+            raise ValueError("the project is local-only and cannot use this harness")
+        if selected["mcp_server_ids"] and not harness_profile.capabilities.mcp:
+            raise ValueError("the selected harness no longer supports MCP tools")
+        if (
+            selected["mcp_server_ids"] or selected["allow_agent_messaging"]
+        ) and not harness_profile.privacy.local_only:
+            if not harness_profile.privacy.permits_sensitive_data:
+                raise ValueError("the harness does not permit project tool results")
+            if not (
+                session.metadata.get("allow_cloud_tool_results")
+                or harness_profile.privacy.auto_share_tool_results
+            ):
+                raise ValueError("remote harness tools require operator confirmation")
+    (
+        await resolve_mcp_profiles(
+            store,
+            selected["mcp_server_ids"],
+            engagement_id=session.engagement_id,
+            bypass_permissions=bool(scope and scope.bypass_permissions),
+        )
     )
     if selected["hook_ids"]:
         if workspace_resolver is None:
             raise ValueError("the project workspace is unavailable for hook discovery")
-        catalog = discover_native_hooks(workspace_resolver(session.engagement_id))
+        catalog = discover_native_hooks(
+            (await resolve_workspace(workspace_resolver, session.engagement_id))
+        )
         for hook_id in selected["hook_ids"]:
             snapshot_native_hook(hook_id, catalog)
     if selected["allow_subagents"] and (
@@ -236,14 +237,14 @@ def update_chat_assistant_config(
         if bool(provider_id) == bool(harness_id) or not child_model:
             raise ValueError("choose one listed subagent runtime and model")
         if provider_id:
-            child_profile = store.get(ProviderProfile, provider_id)
+            child_profile = await store.get(ProviderProfile, provider_id)
             if (
                 not child_profile.enabled
                 or child_model not in child_profile.model_allowlist
             ):
                 raise ValueError("choose an enabled subagent provider and listed model")
         else:
-            child_harness = store.get(HarnessProfile, harness_id)
+            child_harness = await store.get(HarnessProfile, harness_id)
             if (
                 not child_harness.enabled
                 or child_model not in child_harness.capabilities.models
@@ -253,6 +254,46 @@ def update_chat_assistant_config(
         session.metadata.get("subagent_id") or session.metadata.get("side_chat")
     ):
         raise ValueError("agent messaging is available only to main chats")
+
+
+async def update_chat_assistant_config(
+    store: NebulaStore,
+    session: ChatSession,
+    patch: ChatAssistantConfigPatch,
+    *,
+    expected_revision: int,
+    workspace_resolver: MaybeAsync[[str], Path] | None = None,
+) -> ChatSession:
+    """Validate every supplied choice, save atomically, and retain chat binding."""
+
+    if (
+        session.metadata.get("side_chat") is True
+        or session.metadata.get("temporary_assistant") is True
+    ):
+        raise ValueError("Assistant settings are available on saved main chats")
+    if isinstance(session.metadata.get("archived_at"), str):
+        raise ValueError("unarchive this chat before changing Assistant settings")
+    if expected_revision != session.revision:
+        raise ValueError(
+            "conversation changed; read its Assistant settings and try again"
+        )
+    current = await chat_assistant_config(store, session)
+    changes = patch.model_dump(exclude_unset=True, mode="json")
+    selected = {**current, **changes}
+    if changes.get("subagent_provider_id") and changes.get(
+        "subagent_harness_profile_id"
+    ):
+        raise ValueError("choose one subagent runtime")
+    if changes.get("subagent_provider_id"):
+        selected["subagent_harness_profile_id"] = None
+    elif changes.get("subagent_harness_profile_id"):
+        selected["subagent_provider_id"] = None
+    if ("backend" in changes or "profile_id" in changes) and "model" not in changes:
+        raise ValueError("choose a listed model when changing runtime")
+    await validate_chat_assistant_selection(
+        store, session, selected, workspace_resolver=workspace_resolver
+    )
+    backend = selected["backend"]
     metadata = {**session.metadata, "assistant_config": selected}
     for key in (
         "mcp_server_ids",
@@ -293,7 +334,28 @@ def update_chat_assistant_config(
         }
     else:
         metadata.pop("provider_subagent", None)
-    return store.update(
+    profile = (
+        session.harness_profile_id
+        if session.backend == ChatBackend.HARNESS
+        else session.provider_profile_id
+    )
+    if (selected["backend"], selected["profile_id"], selected["model"]) != (
+        session.backend.value,
+        profile,
+        session.model,
+    ):
+        switcher = store.runtime_switch_service
+        if switcher is None:
+            raise ValueError(
+                "initialize the chat service before changing a conversation's runtime"
+            )
+        return await switcher.select(
+            session,
+            metadata,
+            switcher.binding(selected),
+            expected_revision=expected_revision,
+        )
+    return await store.update(
         ChatSession,
         session.id,
         {"metadata": metadata},

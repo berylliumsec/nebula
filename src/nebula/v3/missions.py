@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync, call_async
+
+from typing import AsyncIterator
+
 from .host_load import HostLoadGate
 from .host_admission import save_host_wait
 
@@ -166,7 +170,7 @@ class MissionComponents:
     context: dict[str, object] = field(default_factory=dict)
 
 
-ToolComponentsFactory = Callable[[AgentRun, ModelProvider], MissionComponents]
+ToolComponentsFactory = MaybeAsync[[AgentRun, ModelProvider], MissionComponents]
 
 
 def default_checkpoint_path(store: NebulaStore) -> Path | None:
@@ -237,7 +241,7 @@ class MissionService:
         recoveries: list[AgentRun] = []
         # Only readable runs: one unreadable row must not keep Core from
         # starting and recovering the others.
-        for run in self.store.iter_readable_entities(AgentRun):
+        async for run in self.store.iter_readable_entities(AgentRun):
             if run.backend != RunBackend.NATIVE:
                 continue
             if run.metadata.get("supervisor_mode") == "conversation":
@@ -258,7 +262,7 @@ class MissionService:
                 and isinstance(scheduled_for, str)
             ):
                 try:
-                    profile = self.store.get(
+                    profile = await self.store.get(
                         ProviderProfile, run.supervisor_provider_id or ""
                     )
                     provider = self.provider_factory(profile)
@@ -275,9 +279,11 @@ class MissionService:
                     continue
                 except Exception as exc:
                     # diagnostic-expected: the durable run is finalized with the safe failure.
-                    self._finalize_failed(
-                        run.id,
-                        f"scheduled mission could not be restored: {self._safe_error(exc)}",
+                    (
+                        await self._finalize_failed(
+                            run.id,
+                            f"scheduled mission could not be restored: {self._safe_error(exc)}",
+                        )
                     )
                     continue
             if (
@@ -290,7 +296,7 @@ class MissionService:
             ):
                 continue
             try:
-                reconciled = self._reconcile_interrupted_run(run.id)
+                reconciled = await self._reconcile_interrupted_run(run.id)
             except Exception as exc:
                 # One run whose records cannot be read must not keep Core from
                 # starting or the other runs from recovering.
@@ -310,7 +316,7 @@ class MissionService:
         await self._discard_finished_checkpoints()
         for run in recoveries:
             try:
-                profile = self.store.get(
+                profile = await self.store.get(
                     ProviderProfile, run.supervisor_provider_id or ""
                 )
                 provider = self.provider_factory(profile)
@@ -330,18 +336,20 @@ class MissionService:
                     exc,
                     stage="startup-recovery",
                 )
-                latest = self.store.get(AgentRun, run.id)
+                latest = await self.store.get(AgentRun, run.id)
                 if latest.status not in _TERMINAL_RUN_STATUSES:
-                    self._finalize_failed(
-                        latest.id,
-                        f"automatic restart recovery could not start: {self._safe_error(exc)}",
+                    (
+                        await self._finalize_failed(
+                            latest.id,
+                            f"automatic restart recovery could not start: {self._safe_error(exc)}",
+                        )
                     )
         for run in stalled_series:
             # The previous Core could not schedule the next occurrence (capacity,
             # configuration, or a missing profile). Retry now that the series
             # owner is known to be idle; a persistent failure is recorded again.
             series_id = str(run.metadata.get("series_id") or run.id)
-            if self._active_series_runs(series_id, exclude_run_id=run.id):
+            if await self._active_series_runs(series_id, exclude_run_id=run.id):
                 continue
             try:
                 await self._schedule_recurrence(run)
@@ -394,14 +402,14 @@ class MissionService:
             raise MissionConfigurationError(
                 "repeating missions must be at least one hour apart"
             )
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else ScopePolicy(engagement_id=engagement.id)
         )
         try:
-            mcp_profiles = resolve_mcp_profiles(
+            mcp_profiles = await resolve_mcp_profiles(
                 self.store,
                 list(dict.fromkeys(mcp_server_ids or ())),
                 bypass_permissions=scope.bypass_permissions,
@@ -438,7 +446,7 @@ class MissionService:
                 "API missions require a file-backed local SQLite checkpoint store"
             )
 
-        profile = self.store.get(ProviderProfile, clean_provider_id)
+        profile = await self.store.get(ProviderProfile, clean_provider_id)
         # Standing profile consent stands in for the per-mission confirmation.
         allow_cloud_tool_results = (
             allow_cloud_tool_results or profile.privacy.auto_share_tool_results
@@ -481,7 +489,7 @@ class MissionService:
                 raise MissionConfigurationError(
                     "executable missions require an engagement scope policy"
                 )
-            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
             if scope.engagement_id != engagement.id:
                 raise MissionConfigurationError(
                     "engagement scope policy ownership is inconsistent"
@@ -491,7 +499,11 @@ class MissionService:
                     "mission concurrency exceeds the engagement scope policy"
                 )
         try:
-            validate_engagement_provider_privacy(self.store, engagement, provider)
+            (
+                await validate_engagement_provider_privacy(
+                    self.store, engagement, provider
+                )
+            )
         except ProviderPrivacyViolation as exc:
             record_caught_exception(
                 "missions",
@@ -577,7 +589,7 @@ class MissionService:
                 # Build the locked registry before persistence so arbitrary
                 # capability names and unavailable runners fail as explicit
                 # configuration errors rather than queued background work.
-                self.tool_components_factory(run, provider)
+                await call_async(self.tool_components_factory, run, provider)
             except MissionServiceError as caught_error:
                 record_caught_exception(
                     "missions",
@@ -607,7 +619,7 @@ class MissionService:
                 raise MissionCapacityError(
                     "local mission concurrency limit has been reached"
                 )
-            run, _ = self.store.create_with_event(
+            run, _ = await self.store.create_with_event(
                 run,
                 run_id=run.id,
                 event_type="run.queued",
@@ -647,9 +659,11 @@ class MissionService:
                         actor_id,
                     )
                 except Exception as exc:
-                    self._finalize_failed(
-                        run.id,
-                        f"browser automation lease could not be created: {self._safe_error(exc)}",
+                    (
+                        await self._finalize_failed(
+                            run.id,
+                            f"browser automation lease could not be created: {self._safe_error(exc)}",
+                        )
                     )
                     raise MissionConfigurationError(
                         f"browser automation lease could not be created: {self._safe_error(exc)}"
@@ -681,30 +695,36 @@ class MissionService:
             delay = max(0.0, (scheduled_for - utc_now()).total_seconds())
             if delay:
                 await asyncio.sleep(delay)
-            run = self.store.get(AgentRun, run_id)
+            run = await self.store.get(AgentRun, run_id)
             if run.status != RunStatus.QUEUED or self._closed:
                 return
             series_id = str(run.metadata.get("series_id") or "")
             if series_id:
-                active = self._active_series_runs(series_id, exclude_run_id=run.id)
+                active = await self._active_series_runs(
+                    series_id, exclude_run_id=run.id
+                )
                 if active:
-                    self._finalize_cancelled(
-                        run_id,
-                        "Skipped because the previous occurrence is still active.",
-                        "system",
+                    (
+                        await self._finalize_cancelled(
+                            run_id,
+                            "Skipped because the previous occurrence is still active.",
+                            "system",
+                        )
                     )
-                    latest = self.store.get(AgentRun, run_id)
-                    self.store.update(
-                        AgentRun,
-                        latest.id,
-                        {
-                            "metadata": {
-                                **latest.metadata,
-                                "skipped": True,
-                                "skip_reason": "previous occurrence is still active",
-                            }
-                        },
-                        expected_revision=latest.revision,
+                    latest = await self.store.get(AgentRun, run_id)
+                    (
+                        await self.store.update(
+                            AgentRun,
+                            latest.id,
+                            {
+                                "metadata": {
+                                    **latest.metadata,
+                                    "skipped": True,
+                                    "skip_reason": "previous occurrence is still active",
+                                }
+                            },
+                            expected_revision=latest.revision,
+                        )
                     )
                     return
             deferred = False
@@ -721,21 +741,21 @@ class MissionService:
                 # they sleep, so the cap must be enforced when they fire.
                 if not deferred:
                     deferred = True
-                    self._record_capacity_deferral(run_id)
+                    (await self._record_capacity_deferral(run_id))
                 await asyncio.sleep(SCHEDULED_CAPACITY_RETRY_SECONDS)
-                run = self.store.get(AgentRun, run_id)
+                run = await self.store.get(AgentRun, run_id)
                 if run.status != RunStatus.QUEUED or self._closed:
                     return
             await self._execute(run, provider)
         except asyncio.CancelledError:
             # diagnostic-expected: cancellation is translated into durable mission state below.
             if not self._closed:
-                latest = self.store.get(AgentRun, run_id)
+                latest = await self.store.get(AgentRun, run_id)
                 if latest.status == RunStatus.CANCELLING:
                     reason, actor = self._cancel_reasons.get(
                         run_id, ("Stopped before scheduled start", "operator")
                     )
-                    self._finalize_cancelled(run_id, reason, actor)
+                    (await self._finalize_cancelled(run_id, reason, actor))
             return
         finally:
             self._scheduled_tasks.pop(run_id, None)
@@ -750,7 +770,7 @@ class MissionService:
         """Cancel actual work or durably cancel a dormant non-terminal run."""
 
         clean_reason = reason.strip() or "Stopped by operator"
-        run = self.store.get(AgentRun, run_id)
+        run = await self.store.get(AgentRun, run_id)
         if run.status in _TERMINAL_RUN_STATUSES:
             raise MissionStateError(
                 f"run {run.id} is already terminal ({run.status.value})"
@@ -765,7 +785,7 @@ class MissionService:
             )
         if run.status != RunStatus.CANCELLING:
             try:
-                run, _ = self.store.update_with_event(
+                run, _ = await self.store.update_with_event(
                     AgentRun,
                     run.id,
                     {"status": RunStatus.CANCELLING},
@@ -784,7 +804,7 @@ class MissionService:
                     exc,
                     stage="missions",
                 )
-                latest = self.store.get(AgentRun, run.id)
+                latest = await self.store.get(AgentRun, run.id)
                 if latest.status in _TERMINAL_RUN_STATUSES:
                     raise MissionStateError(
                         f"run {run.id} is already terminal ({latest.status.value})"
@@ -798,7 +818,7 @@ class MissionService:
                 task.cancel()
 
         if task is None or task.done():
-            cancelled = self._finalize_cancelled(run.id, clean_reason, actor_id)
+            cancelled = await self._finalize_cancelled(run.id, clean_reason, actor_id)
             await self._discard_finished_checkpoints([run.id])
             return cancelled
         try:
@@ -807,7 +827,7 @@ class MissionService:
             )
         except asyncio.CancelledError:
             # diagnostic-expected: operator cancellation is finalized as the requested state.
-            return self._finalize_cancelled(run.id, clean_reason, actor_id)
+            return await self._finalize_cancelled(run.id, clean_reason, actor_id)
         except asyncio.TimeoutError as caught_error:
             # CANCELLING is truthful while a provider ignores cancellation.
             record_caught_exception(
@@ -817,8 +837,8 @@ class MissionService:
                 caught_error,
                 stage="missions",
             )
-            return self.store.get(AgentRun, run.id)
-        return self.store.get(AgentRun, run.id)
+            return await self.store.get(AgentRun, run.id)
+        return await self.store.get(AgentRun, run.id)
 
     async def resume_after_approval(
         self, approval: Approval, *, actor_id: str = "system"
@@ -832,18 +852,18 @@ class MissionService:
             ApprovalStatus.CANCELLED,
         }:
             raise MissionStateError("approval does not contain a terminal decision")
-        run = self.store.get(AgentRun, approval.run_id)
+        run = await self.store.get(AgentRun, approval.run_id)
         if run.status != RunStatus.WAITING_APPROVAL:
             raise MissionStateError(
                 f"run {run.id} is not waiting for approval ({run.status.value})"
             )
         if not run.supervisor_provider_id:
             raise MissionStateError("approval run has no provider profile")
-        if self._approval_resume_recorded(run.id, approval.id):
+        if await self._approval_resume_recorded(run.id, approval.id):
             raise MissionStateError(
                 f"approval {approval.id} already resumed run {run.id}"
             )
-        profile = self.store.get(ProviderProfile, run.supervisor_provider_id)
+        profile = await self.store.get(ProviderProfile, run.supervisor_provider_id)
         provider = self.provider_factory(profile)
         response: dict[str, object] = {
             "approval_id": approval.id,
@@ -862,7 +882,7 @@ class MissionService:
             # A waiting run already holds its logical slot: it was admitted
             # under the cap when it started. Refusing the resume here would
             # strand a run whose operator decision is already durable.
-            resumed, _ = self.store.update_with_event(
+            resumed, _ = await self.store.update_with_event(
                 AgentRun,
                 run.id,
                 {
@@ -886,19 +906,19 @@ class MissionService:
             self._tasks[run.id] = task
             return resumed
 
-    def approval_resume_pending(self, approval: Approval) -> bool:
+    async def approval_resume_pending(self, approval: Approval) -> bool:
         """True while the run still waits and this decision never resumed it."""
 
-        run = self.store.get(AgentRun, approval.run_id)
+        run = await self.store.get(AgentRun, approval.run_id)
         if run.status != RunStatus.WAITING_APPROVAL:
             return False
-        return not self._approval_resume_recorded(run.id, approval.id)
+        return not (await self._approval_resume_recorded(run.id, approval.id))
 
-    def _approval_resume_recorded(self, run_id: str, approval_id: str) -> bool:
+    async def _approval_resume_recorded(self, run_id: str, approval_id: str) -> bool:
         key = f"run:{run_id}:approval:{approval_id}:resume"
         after_sequence = 0
         while True:
-            page = self.store.replay_events(
+            page = await self.store.replay_events(
                 run_id, after_sequence=after_sequence, limit=1_000
             )
             if any(event.idempotency_key == key for event in page):
@@ -948,30 +968,30 @@ class MissionService:
             if self.host_load is not None:
 
                 async def deferred(reason: str | None) -> None:
-                    await asyncio.to_thread(
-                        save_host_wait, self.store, AgentRun, queued.id, reason
-                    )
+                    await save_host_wait(self.store, AgentRun, queued.id, reason)
 
                 await self.host_load.wait(deferred)
-            current = self.store.get(AgentRun, queued.id)
+            current = await self.store.get(AgentRun, queued.id)
             if current.status == RunStatus.CANCELLING:
                 reason, actor = self._cancel_reasons.get(
                     queued.id, ("Stopped before mission start", "operator")
                 )
-                self._finalize_cancelled(queued.id, reason, actor)
+                (await self._finalize_cancelled(queued.id, reason, actor))
                 return
             if current.status != RunStatus.QUEUED:
                 raise MissionStateError(
                     f"run {current.id} cannot start from {current.status.value}"
                 )
             started_at = utc_now()
-            self.store.update(
-                AgentRun,
-                current.id,
-                {"status": RunStatus.PLANNING, "started_at": started_at},
-                expected_revision=current.revision,
+            (
+                await self.store.update(
+                    AgentRun,
+                    current.id,
+                    {"status": RunStatus.PLANNING, "started_at": started_at},
+                    expected_revision=current.revision,
+                )
             )
-            components = self._components(queued, provider)
+            components = await self._components(queued, provider)
             assert self.checkpoint_path is not None
             async with self.runtime_factory(
                 checkpoint_path=self.checkpoint_path,
@@ -1003,30 +1023,34 @@ class MissionService:
                     )
                     await self._await_graph_cleanup(exc)
                     raise
-            latest = self.store.get(AgentRun, queued.id)
+            latest = await self.store.get(AgentRun, queued.id)
             if latest.status not in _TERMINAL_RUN_STATUSES:
                 if state.get("__interrupt__"):
                     metadata = dict(latest.metadata)
                     metadata["waiting_approval"] = True
-                    self.store.update_with_event(
-                        AgentRun,
-                        latest.id,
-                        {
-                            "status": RunStatus.WAITING_APPROVAL,
-                            "metadata": metadata,
-                        },
-                        expected_revision=latest.revision,
-                        run_id=latest.id,
-                        event_type="run.waiting_approval",
-                        event_payload={
-                            "reason": "mission requires an operator decision"
-                        },
-                        actor_id="system",
-                        idempotency_key="run:waiting_approval",
+                    (
+                        await self.store.update_with_event(
+                            AgentRun,
+                            latest.id,
+                            {
+                                "status": RunStatus.WAITING_APPROVAL,
+                                "metadata": metadata,
+                            },
+                            expected_revision=latest.revision,
+                            run_id=latest.id,
+                            event_type="run.waiting_approval",
+                            event_payload={
+                                "reason": "mission requires an operator decision"
+                            },
+                            actor_id="system",
+                            idempotency_key="run:waiting_approval",
+                        )
                     )
                 else:
-                    self._finalize_failed(
-                        latest.id, "mission ended without a terminal result"
+                    (
+                        await self._finalize_failed(
+                            latest.id, "mission ended without a terminal result"
+                        )
                     )
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
@@ -1040,7 +1064,7 @@ class MissionService:
                 reason, actor = self._cancel_reasons.get(
                     queued.id, ("Mission background task was cancelled", "system")
                 )
-                self._finalize_cancelled(queued.id, reason, actor)
+                (await self._finalize_cancelled(queued.id, reason, actor))
         except Exception as exc:
             record_caught_exception(
                 "missions",
@@ -1049,16 +1073,16 @@ class MissionService:
                 exc,
                 stage="missions",
             )
-            latest = self.store.get(AgentRun, queued.id)
+            latest = await self.store.get(AgentRun, queued.id)
             if latest.status == RunStatus.CANCELLING:
                 reason, actor = self._cancel_reasons.get(
                     queued.id, ("Stopped by operator", "operator")
                 )
-                self._finalize_cancelled(queued.id, reason, actor)
+                (await self._finalize_cancelled(queued.id, reason, actor))
             elif latest.status not in _TERMINAL_RUN_STATUSES:
-                self._finalize_failed(queued.id, self._safe_error(exc))
+                (await self._finalize_failed(queued.id, self._safe_error(exc)))
         finally:
-            recurrence_source = self.store.get(AgentRun, queued.id)
+            recurrence_source = await self.store.get(AgentRun, queued.id)
             if recurrence_source.status in _TERMINAL_RUN_STATUSES:
                 self._revoke_browser_control(
                     recurrence_source.id,
@@ -1090,9 +1114,9 @@ class MissionService:
                 exc,
                 stage="recurrence",
             )
-            self._record_recurrence_failure(prior.id, self._safe_error(exc))
+            (await self._record_recurrence_failure(prior.id, self._safe_error(exc)))
             return
-        self._clear_recurrence_failure(prior.id, successor.id)
+        (await self._clear_recurrence_failure(prior.id, successor.id))
 
     async def _start_recurrence(self, prior: AgentRun, interval: int) -> AgentRun:
         return await self.start_mission(
@@ -1130,7 +1154,7 @@ class MissionService:
         response: dict[str, object],
     ) -> None:
         try:
-            components = self._components(run, provider)
+            components = await self._components(run, provider)
             assert self.checkpoint_path is not None
             async with self.runtime_factory(
                 checkpoint_path=self.checkpoint_path,
@@ -1150,34 +1174,38 @@ class MissionService:
                     )
                     await self._await_graph_cleanup(exc)
                     raise
-            latest = self.store.get(AgentRun, run.id)
+            latest = await self.store.get(AgentRun, run.id)
             if latest.status not in _TERMINAL_RUN_STATUSES:
                 if state.get("__interrupt__"):
-                    self.store.update_with_event(
-                        AgentRun,
-                        latest.id,
-                        {
-                            "status": RunStatus.WAITING_APPROVAL,
-                            "metadata": {
-                                **latest.metadata,
-                                "waiting_approval": True,
+                    (
+                        await self.store.update_with_event(
+                            AgentRun,
+                            latest.id,
+                            {
+                                "status": RunStatus.WAITING_APPROVAL,
+                                "metadata": {
+                                    **latest.metadata,
+                                    "waiting_approval": True,
+                                },
                             },
-                        },
-                        expected_revision=latest.revision,
-                        run_id=latest.id,
-                        event_type="run.waiting_approval",
-                        event_payload={
-                            "reason": "mission requires another operator decision"
-                        },
-                        actor_id="system",
-                        idempotency_key=(
-                            f"run:{latest.id}:waiting_approval:"
-                            f"{response.get('approval_id')}"
-                        ),
+                            expected_revision=latest.revision,
+                            run_id=latest.id,
+                            event_type="run.waiting_approval",
+                            event_payload={
+                                "reason": "mission requires another operator decision"
+                            },
+                            actor_id="system",
+                            idempotency_key=(
+                                f"run:{latest.id}:waiting_approval:"
+                                f"{response.get('approval_id')}"
+                            ),
+                        )
                     )
                 else:
-                    self._finalize_failed(
-                        latest.id, "resumed mission ended without a terminal result"
+                    (
+                        await self._finalize_failed(
+                            latest.id, "resumed mission ended without a terminal result"
+                        )
                     )
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
@@ -1191,7 +1219,7 @@ class MissionService:
                 reason, actor = self._cancel_reasons.get(
                     run.id, ("Mission background task was cancelled", "system")
                 )
-                self._finalize_cancelled(run.id, reason, actor)
+                (await self._finalize_cancelled(run.id, reason, actor))
         except Exception as exc:
             record_caught_exception(
                 "missions",
@@ -1200,14 +1228,14 @@ class MissionService:
                 exc,
                 stage="missions",
             )
-            latest = self.store.get(AgentRun, run.id)
+            latest = await self.store.get(AgentRun, run.id)
             if latest.status == RunStatus.CANCELLING:
                 reason, actor = self._cancel_reasons.get(
                     run.id, ("Stopped by operator", "operator")
                 )
-                self._finalize_cancelled(run.id, reason, actor)
+                (await self._finalize_cancelled(run.id, reason, actor))
             elif latest.status not in _TERMINAL_RUN_STATUSES:
-                self._finalize_failed(run.id, self._safe_error(exc))
+                (await self._finalize_failed(run.id, self._safe_error(exc)))
         finally:
             await self._discard_finished_checkpoints([run.id])
             async with self._lock:
@@ -1216,14 +1244,16 @@ class MissionService:
                     self._tasks.pop(run.id, None)
                 self._cancel_reasons.pop(run.id, None)
 
-    def _components(self, run: AgentRun, provider: ModelProvider) -> MissionComponents:
+    async def _components(
+        self, run: AgentRun, provider: ModelProvider
+    ) -> MissionComponents:
         tool_names = run.metadata.get("tool_names", [])
         if tool_names:
             if self.tool_components_factory is None:
                 raise MissionServiceUnavailable(
                     "tool mission runtime is not configured"
                 )
-            components = self.tool_components_factory(run, provider)
+            components = await call_async(self.tool_components_factory, run, provider)
             if not components.specialists:
                 raise MissionConfigurationError(
                     "tool mission did not produce any bounded specialists"
@@ -1234,11 +1264,13 @@ class MissionService:
         specialist = ModelSpecialist(
             provider,
             model=run.supervisor_model,
-            max_output_tokens=default_output_tokens(
-                self.store,
-                run.supervisor_provider_id,
-                run.supervisor_model or provider.config.default_model,
-                token_budget=run.budget.max_tokens,
+            max_output_tokens=(
+                await default_output_tokens(
+                    self.store,
+                    run.supervisor_provider_id,
+                    run.supervisor_model or provider.config.default_model,
+                    token_budget=run.budget.max_tokens,
+                )
             ),
         )
         stages = run.metadata.get("stages")
@@ -1251,44 +1283,47 @@ class MissionService:
             specialists={SpecialistRole.SCOPE_PLANNING: specialist},
         )
 
-    def _active_series_runs(
+    async def _active_series_runs(
         self, series_id: str, *, exclude_run_id: str
     ) -> list[AgentRun]:
         return [
             item
-            for item in self._all_runs()
+            async for item in self._all_runs()
             if str(item.metadata.get("series_id") or "") == series_id
             and item.id != exclude_run_id
             and item.status
             in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_APPROVAL}
         ]
 
-    def _all_runs(self) -> Iterator[AgentRun]:
+    async def _all_runs(self) -> AsyncIterator[AgentRun]:
         """Every readable run, one bounded page at a time (no 1,000-row horizon).
 
         Read at startup and when a series schedules its next occurrence; an
         unreadable run is skipped and recorded instead of stopping either.
         """
 
-        yield from self.store.iter_readable_entities(AgentRun)
+        async for _entity in self.store.iter_readable_entities(AgentRun):
+            yield _entity
 
-    def _record_capacity_deferral(self, run_id: str) -> None:
-        latest = self.store.get(AgentRun, run_id)
+    async def _record_capacity_deferral(self, run_id: str) -> None:
+        latest = await self.store.get(AgentRun, run_id)
         if latest.status != RunStatus.QUEUED:
             return
         try:
-            self.store.update_with_event(
-                AgentRun,
-                latest.id,
-                {"metadata": {**latest.metadata, "capacity_deferred": True}},
-                expected_revision=latest.revision,
-                run_id=latest.id,
-                event_type="run.scheduled_start_deferred",
-                event_payload={
-                    "reason": "local mission concurrency limit has been reached"
-                },
-                actor_id="system",
-                idempotency_key="run:scheduled_start_deferred",
+            (
+                await self.store.update_with_event(
+                    AgentRun,
+                    latest.id,
+                    {"metadata": {**latest.metadata, "capacity_deferred": True}},
+                    expected_revision=latest.revision,
+                    run_id=latest.id,
+                    event_type="run.scheduled_start_deferred",
+                    event_payload={
+                        "reason": "local mission concurrency limit has been reached"
+                    },
+                    actor_id="system",
+                    idempotency_key="run:scheduled_start_deferred",
+                )
             )
         except ConflictError as exc:
             # A concurrent stop request wins; the deferral note is only advisory.
@@ -1300,24 +1335,28 @@ class MissionService:
                 stage="scheduled",
             )
 
-    def _record_recurrence_failure(self, run_id: str, error: str) -> None:
-        latest = self.store.get(AgentRun, run_id)
+    async def _record_recurrence_failure(self, run_id: str, error: str) -> None:
+        latest = await self.store.get(AgentRun, run_id)
         if latest.metadata.get("recurrence_error") == error:
             return
-        self.store.update_with_event(
-            AgentRun,
-            latest.id,
-            {"metadata": {**latest.metadata, "recurrence_error": error}},
-            expected_revision=latest.revision,
-            run_id=latest.id,
-            event_type="run.recurrence_failed",
-            event_payload={"error": error},
-            actor_id="system",
-            idempotency_key=f"run:recurrence_failed:{latest.revision}",
+        (
+            await self.store.update_with_event(
+                AgentRun,
+                latest.id,
+                {"metadata": {**latest.metadata, "recurrence_error": error}},
+                expected_revision=latest.revision,
+                run_id=latest.id,
+                event_type="run.recurrence_failed",
+                event_payload={"error": error},
+                actor_id="system",
+                idempotency_key=f"run:recurrence_failed:{latest.revision}",
+            )
         )
 
-    def _clear_recurrence_failure(self, run_id: str, successor_run_id: str) -> None:
-        latest = self.store.get(AgentRun, run_id)
+    async def _clear_recurrence_failure(
+        self, run_id: str, successor_run_id: str
+    ) -> None:
+        latest = await self.store.get(AgentRun, run_id)
         if "recurrence_error" not in latest.metadata:
             return
         metadata = {
@@ -1325,28 +1364,32 @@ class MissionService:
             for key, value in latest.metadata.items()
             if key != "recurrence_error"
         }
-        self.store.update_with_event(
-            AgentRun,
-            latest.id,
-            {"metadata": metadata},
-            expected_revision=latest.revision,
-            run_id=latest.id,
-            event_type="run.recurrence_scheduled",
-            event_payload={"successor_run_id": successor_run_id},
-            actor_id="system",
-            idempotency_key=f"run:recurrence_scheduled:{successor_run_id}",
+        (
+            await self.store.update_with_event(
+                AgentRun,
+                latest.id,
+                {"metadata": metadata},
+                expected_revision=latest.revision,
+                run_id=latest.id,
+                event_type="run.recurrence_scheduled",
+                event_payload={"successor_run_id": successor_run_id},
+                actor_id="system",
+                idempotency_key=f"run:recurrence_scheduled:{successor_run_id}",
+            )
         )
 
-    def _finalize_cancelled(self, run_id: str, reason: str, actor_id: str) -> AgentRun:
-        run = self.store.get(AgentRun, run_id)
+    async def _finalize_cancelled(
+        self, run_id: str, reason: str, actor_id: str
+    ) -> AgentRun:
+        run = await self.store.get(AgentRun, run_id)
         if run.status == RunStatus.CANCELLED:
             return run
         if run.status in {RunStatus.COMPLETE, RunStatus.FAILED}:
             return run
         self._revoke_browser_control(run.id, reason, actor_id)
-        self._cancel_open_work(run, reason)
-        run = self.store.get(AgentRun, run_id)
-        cancelled, _ = self.store.update_with_event(
+        (await self._cancel_open_work(run, reason))
+        run = await self.store.get(AgentRun, run_id)
+        cancelled, _ = await self.store.update_with_event(
             AgentRun,
             run.id,
             {"status": RunStatus.CANCELLED, "completed_at": utc_now()},
@@ -1359,14 +1402,14 @@ class MissionService:
         )
         return cancelled
 
-    def _finalize_failed(self, run_id: str, error: str) -> AgentRun:
-        run = self.store.get(AgentRun, run_id)
+    async def _finalize_failed(self, run_id: str, error: str) -> AgentRun:
+        run = await self.store.get(AgentRun, run_id)
         if run.status in _TERMINAL_RUN_STATUSES:
             return run
         self._revoke_browser_control(run.id, error, "system")
-        self._fail_open_work(run, error)
-        run = self.store.get(AgentRun, run_id)
-        failed, _ = self.store.update_with_event(
+        (await self._fail_open_work(run, error))
+        run = await self.store.get(AgentRun, run_id)
+        failed, _ = await self.store.update_with_event(
             AgentRun,
             run.id,
             {
@@ -1402,13 +1445,13 @@ class MissionService:
                 stage="browser-automation-revoke",
             )
 
-    def _reconcile_interrupted_run(self, run_id: str) -> AgentRun:
+    async def _reconcile_interrupted_run(self, run_id: str) -> AgentRun:
         error = (
             "Nebula Core restarted while this API mission was active; "
             "the latest durable checkpoint will continue automatically"
         )
         for _ in range(3):
-            current = self.store.get(AgentRun, run_id)
+            current = await self.store.get(AgentRun, run_id)
             if (
                 current.status in _TERMINAL_RUN_STATUSES
                 and current.status != RunStatus.INTERRUPTED
@@ -1419,7 +1462,7 @@ class MissionService:
             if current.status == RunStatus.CANCELLING:
                 # The operator asked to stop this run before Core restarted.
                 # Honour that decision instead of resurrecting the checkpoint.
-                return self._finalize_cancelled(
+                return await self._finalize_cancelled(
                     current.id,
                     "Stopped by operator before Nebula Core restarted",
                     "operator",
@@ -1441,7 +1484,7 @@ class MissionService:
                 )
                 unresolved = [
                     call
-                    for call in self._run_tool_calls(current)
+                    async for call in self._run_tool_calls(current)
                     if self._mission_effect_unknown(call)
                 ]
                 interrupted_at = utc_now().isoformat()
@@ -1481,7 +1524,7 @@ class MissionService:
                         for call in unresolved
                     ],
                 }
-                queued, _ = self.store.update_with_event(
+                queued, _ = await self.store.update_with_event(
                     AgentRun,
                     current.id,
                     {
@@ -1535,7 +1578,7 @@ class MissionService:
                         self._tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
                         moved_to_active = True
                         break
-                current = self.store.get(AgentRun, run_id)
+                current = await self.store.get(AgentRun, run_id)
                 if current.status != RunStatus.QUEUED:
                     return
                 await asyncio.sleep(0.1)
@@ -1555,14 +1598,14 @@ class MissionService:
 
         for attempt in range(1, 4):
             try:
-                current = self.store.get(AgentRun, run_id)
+                current = await self.store.get(AgentRun, run_id)
                 if current.status in _TERMINAL_RUN_STATUSES:
                     return
                 recovery = current.metadata.get("restart_recovery")
                 recovery = dict(recovery) if isinstance(recovery, dict) else {}
                 generation = int(recovery.get("generation") or 0)
                 if current.status == RunStatus.QUEUED:
-                    current, _ = self.store.update_with_event(
+                    current, _ = await self.store.update_with_event(
                         AgentRun,
                         current.id,
                         {
@@ -1590,7 +1633,7 @@ class MissionService:
                             f"{generation}:{attempt}"
                         ),
                     )
-                components = self._components(current, provider)
+                components = await self._components(current, provider)
                 assert self.checkpoint_path is not None
                 async with self.runtime_factory(
                     checkpoint_path=self.checkpoint_path,
@@ -1599,7 +1642,7 @@ class MissionService:
                     specialists=components.specialists,
                 ) as runtime:
                     state = await runtime.recover(current.id)
-                latest = self.store.get(AgentRun, current.id)
+                latest = await self.store.get(AgentRun, current.id)
                 if latest.status in _TERMINAL_RUN_STATUSES:
                     latest_recovery = latest.metadata.get("restart_recovery")
                     latest_recovery = (
@@ -1607,66 +1650,72 @@ class MissionService:
                         if isinstance(latest_recovery, dict)
                         else {}
                     )
-                    self.store.update_with_event(
-                        AgentRun,
-                        latest.id,
-                        {
-                            "metadata": {
-                                **latest.metadata,
-                                "restart_recovery": {
-                                    **latest_recovery,
-                                    "state": latest.status.value,
-                                    "finished_at": utc_now().isoformat(),
-                                },
-                            }
-                        },
-                        expected_revision=latest.revision,
-                        run_id=latest.id,
-                        event_type="run.recovery_finished",
-                        event_payload={
-                            "summary": "automatic restart recovery finished",
-                            "status": latest.status.value,
-                        },
-                        actor_id="system",
-                        idempotency_key=(
-                            f"run:automatic_restart_recovery_finished:{generation}"
-                        ),
+                    (
+                        await self.store.update_with_event(
+                            AgentRun,
+                            latest.id,
+                            {
+                                "metadata": {
+                                    **latest.metadata,
+                                    "restart_recovery": {
+                                        **latest_recovery,
+                                        "state": latest.status.value,
+                                        "finished_at": utc_now().isoformat(),
+                                    },
+                                }
+                            },
+                            expected_revision=latest.revision,
+                            run_id=latest.id,
+                            event_type="run.recovery_finished",
+                            event_payload={
+                                "summary": "automatic restart recovery finished",
+                                "status": latest.status.value,
+                            },
+                            actor_id="system",
+                            idempotency_key=(
+                                f"run:automatic_restart_recovery_finished:{generation}"
+                            ),
+                        )
                     )
                     return
                 if latest.status not in _TERMINAL_RUN_STATUSES:
                     if state.get("__interrupt__"):
-                        self.store.update_with_event(
-                            AgentRun,
-                            latest.id,
-                            {
-                                "status": RunStatus.WAITING_APPROVAL,
-                                "metadata": {
-                                    **latest.metadata,
-                                    "waiting_approval": True,
-                                    "restart_recovery": {
-                                        **dict(
-                                            latest.metadata.get("restart_recovery")
-                                            or {}
-                                        ),
-                                        "state": "waiting_approval",
+                        (
+                            await self.store.update_with_event(
+                                AgentRun,
+                                latest.id,
+                                {
+                                    "status": RunStatus.WAITING_APPROVAL,
+                                    "metadata": {
+                                        **latest.metadata,
+                                        "waiting_approval": True,
+                                        "restart_recovery": {
+                                            **dict(
+                                                latest.metadata.get("restart_recovery")
+                                                or {}
+                                            ),
+                                            "state": "waiting_approval",
+                                        },
                                     },
                                 },
-                            },
-                            expected_revision=latest.revision,
-                            run_id=latest.id,
-                            event_type="run.waiting_approval",
-                            event_payload={
-                                "reason": "recovered mission requires a new operator decision"
-                            },
-                            actor_id="system",
-                            idempotency_key=(
-                                f"run:restart_recovery_waiting_approval:{generation}"
-                            ),
+                                expected_revision=latest.revision,
+                                run_id=latest.id,
+                                event_type="run.waiting_approval",
+                                event_payload={
+                                    "reason": "recovered mission requires a new operator decision"
+                                },
+                                actor_id="system",
+                                idempotency_key=(
+                                    f"run:restart_recovery_waiting_approval:{generation}"
+                                ),
+                            )
                         )
                     else:
-                        self._finalize_failed(
-                            latest.id,
-                            "automatic restart recovery ended without a terminal result",
+                        (
+                            await self._finalize_failed(
+                                latest.id,
+                                "automatic restart recovery ended without a terminal result",
+                            )
                         )
                 return
             except asyncio.CancelledError:
@@ -1681,38 +1730,42 @@ class MissionService:
                     exc,
                     stage="startup-recovery",
                 )
-                latest = self.store.get(AgentRun, run_id)
+                latest = await self.store.get(AgentRun, run_id)
                 if latest.status in _TERMINAL_RUN_STATUSES:
                     return
                 if attempt < 3:
                     recovery = latest.metadata.get("restart_recovery")
                     recovery = dict(recovery) if isinstance(recovery, dict) else {}
-                    self.store.update(
-                        AgentRun,
-                        latest.id,
-                        {
-                            "status": RunStatus.QUEUED,
-                            "metadata": {
-                                **latest.metadata,
-                                "restart_recovery": {
-                                    **recovery,
-                                    "state": "retrying",
-                                    "attempt": attempt,
-                                    "last_error": self._safe_error(exc),
+                    (
+                        await self.store.update(
+                            AgentRun,
+                            latest.id,
+                            {
+                                "status": RunStatus.QUEUED,
+                                "metadata": {
+                                    **latest.metadata,
+                                    "restart_recovery": {
+                                        **recovery,
+                                        "state": "retrying",
+                                        "attempt": attempt,
+                                        "last_error": self._safe_error(exc),
+                                    },
                                 },
                             },
-                        },
-                        expected_revision=latest.revision,
+                            expected_revision=latest.revision,
+                        )
                     )
                     await asyncio.sleep(0)
                     continue
-                self._finalize_failed(
-                    latest.id,
-                    f"automatic restart recovery failed after 3 attempts: {self._safe_error(exc)}",
+                (
+                    await self._finalize_failed(
+                        latest.id,
+                        f"automatic restart recovery failed after 3 attempts: {self._safe_error(exc)}",
+                    )
                 )
                 return
 
-    def reconcile_restart_effect(
+    async def reconcile_restart_effect(
         self,
         run_id: str,
         tool_call_id: str,
@@ -1729,7 +1782,7 @@ class MissionService:
         note = detail.strip()
         if not note:
             raise MissionStateError("reconciliation requires an operator note")
-        run = self.store.get(AgentRun, run_id)
+        run = await self.store.get(AgentRun, run_id)
         if run.revision != expected_revision:
             raise ConflictError("mission changed; reload before reconciling")
         recovery = run.metadata.get("restart_recovery")
@@ -1743,7 +1796,7 @@ class MissionService:
             raise ConflictError(
                 "tool call is not an unresolved outcome for this interrupted mission"
             )
-        call = self.store.get(ToolCall, tool_call_id)
+        call = await self.store.get(ToolCall, tool_call_id)
         if call.run_id != run.id:
             raise ConflictError("tool call does not belong to this mission")
         terminal = not self._mission_effect_unknown(call)
@@ -1763,7 +1816,7 @@ class MissionService:
                 "detail": note,
                 "verified": False,
             }
-            call = self.store.update(
+            call = await self.store.update(
                 ToolCall,
                 call.id,
                 {
@@ -1799,7 +1852,7 @@ class MissionService:
             "unresolved_tool_call_ids": remaining,
             "decisions": decisions,
         }
-        updated, _ = self.store.update_with_event(
+        updated, _ = await self.store.update_with_event(
             AgentRun,
             run.id,
             {"metadata": {**run.metadata, "restart_recovery": next_recovery}},
@@ -1831,35 +1884,39 @@ class MissionService:
             return call.started_at is not None and call.result is None
         return False
 
-    def _cancel_open_work(self, run: AgentRun, reason: str) -> None:
-        for task in self._run_tasks(run):
+    async def _cancel_open_work(self, run: AgentRun, reason: str) -> None:
+        async for task in self._run_tasks(run):
             if task.run_id != run.id or task.status in _TERMINAL_TASK_STATUSES:
                 continue
-            self.store.update_with_event(
-                Task,
-                task.id,
-                {"status": TaskStatus.CANCELLED, "completed_at": utc_now()},
-                expected_revision=task.revision,
-                run_id=run.id,
-                event_type="task.cancelled",
-                event_payload={"task_id": task.id, "reason": reason},
-                actor_id="system",
-                idempotency_key=f"task:{task.id}:service_cancelled",
+            (
+                await self.store.update_with_event(
+                    Task,
+                    task.id,
+                    {"status": TaskStatus.CANCELLED, "completed_at": utc_now()},
+                    expected_revision=task.revision,
+                    run_id=run.id,
+                    event_type="task.cancelled",
+                    event_payload={"task_id": task.id, "reason": reason},
+                    actor_id="system",
+                    idempotency_key=f"task:{task.id}:service_cancelled",
+                )
             )
-        for attempt in self._run_attempts(run):
+        async for attempt in self._run_attempts(run):
             if attempt.run_id != run.id or attempt.status in _TERMINAL_TASK_STATUSES:
                 continue
-            self.store.update(
-                AgentAttempt,
-                attempt.id,
-                {
-                    "status": TaskStatus.CANCELLED,
-                    "completed_at": utc_now(),
-                    "error": reason,
-                },
-                expected_revision=attempt.revision,
+            (
+                await self.store.update(
+                    AgentAttempt,
+                    attempt.id,
+                    {
+                        "status": TaskStatus.CANCELLED,
+                        "completed_at": utc_now(),
+                        "error": reason,
+                    },
+                    expected_revision=attempt.revision,
+                )
             )
-        for call in self._run_tool_calls(run):
+        async for call in self._run_tool_calls(run):
             if call.status in {
                 ToolCallStatus.COMPLETE,
                 ToolCallStatus.FAILED,
@@ -1867,89 +1924,98 @@ class MissionService:
                 ToolCallStatus.CANCELLED,
             }:
                 continue
-            self.store.update_with_event(
-                ToolCall,
-                call.id,
-                {
-                    "status": ToolCallStatus.CANCELLED,
-                    "completed_at": utc_now(),
-                    "error": reason,
-                },
-                expected_revision=call.revision,
-                run_id=run.id,
-                event_type="tool.cancelled",
-                event_payload={"tool_call_id": call.id, "reason": reason},
-                actor_id="system",
-                idempotency_key=f"tool:{call.id}:mission_cancelled",
+            (
+                await self.store.update_with_event(
+                    ToolCall,
+                    call.id,
+                    {
+                        "status": ToolCallStatus.CANCELLED,
+                        "completed_at": utc_now(),
+                        "error": reason,
+                    },
+                    expected_revision=call.revision,
+                    run_id=run.id,
+                    event_type="tool.cancelled",
+                    event_payload={"tool_call_id": call.id, "reason": reason},
+                    actor_id="system",
+                    idempotency_key=f"tool:{call.id}:mission_cancelled",
+                )
             )
 
-    def _fail_open_work(self, run: AgentRun, error: str) -> None:
-        for task in self._run_tasks(run):
+    async def _fail_open_work(self, run: AgentRun, error: str) -> None:
+        async for task in self._run_tasks(run):
             if task.run_id != run.id or task.status in _TERMINAL_TASK_STATUSES:
                 continue
-            self.store.update_with_event(
-                Task,
-                task.id,
-                {"status": TaskStatus.FAILED, "completed_at": utc_now()},
-                expected_revision=task.revision,
-                run_id=run.id,
-                event_type="task.failed",
-                event_payload={"task_id": task.id, "error": error},
-                actor_id="system",
-                idempotency_key=f"task:{task.id}:service_failed",
+            (
+                await self.store.update_with_event(
+                    Task,
+                    task.id,
+                    {"status": TaskStatus.FAILED, "completed_at": utc_now()},
+                    expected_revision=task.revision,
+                    run_id=run.id,
+                    event_type="task.failed",
+                    event_payload={"task_id": task.id, "error": error},
+                    actor_id="system",
+                    idempotency_key=f"task:{task.id}:service_failed",
+                )
             )
-        for attempt in self._run_attempts(run):
+        async for attempt in self._run_attempts(run):
             if attempt.run_id != run.id or attempt.status in _TERMINAL_TASK_STATUSES:
                 continue
-            self.store.update(
-                AgentAttempt,
-                attempt.id,
-                {
-                    "status": TaskStatus.FAILED,
-                    "completed_at": utc_now(),
-                    "error": error,
-                },
-                expected_revision=attempt.revision,
+            (
+                await self.store.update(
+                    AgentAttempt,
+                    attempt.id,
+                    {
+                        "status": TaskStatus.FAILED,
+                        "completed_at": utc_now(),
+                        "error": error,
+                    },
+                    expected_revision=attempt.revision,
+                )
             )
 
-    def _run_tasks(self, run: AgentRun) -> Iterator[Task]:
+    async def _run_tasks(self, run: AgentRun) -> AsyncIterator[Task]:
         offset = 0
         while True:
-            page = self.store.list_entities(
+            page = await self.store.list_entities(
                 Task,
                 engagement_id=run.engagement_id,
                 offset=offset,
                 limit=1_000,
             )
-            yield from (task for task in page if task.run_id == run.id)
+            for _entity in (task for task in page if task.run_id == run.id):
+                yield _entity
             if len(page) < 1_000:
                 return
             offset += len(page)
 
-    def _run_attempts(self, run: AgentRun) -> Iterator[AgentAttempt]:
+    async def _run_attempts(self, run: AgentRun) -> AsyncIterator[AgentAttempt]:
         offset = 0
         while True:
-            page = self.store.list_entities(
+            page = await self.store.list_entities(
                 AgentAttempt,
                 engagement_id=run.engagement_id,
                 offset=offset,
                 limit=1_000,
             )
-            yield from (attempt for attempt in page if attempt.run_id == run.id)
+            for _entity in (attempt for attempt in page if attempt.run_id == run.id):
+                yield _entity
             if len(page) < 1_000:
                 return
             offset += len(page)
 
-    def _run_tool_calls(self, run: AgentRun) -> Iterator[ToolCall]:
+    async def _run_tool_calls(self, run: AgentRun) -> AsyncIterator[ToolCall]:
         offset = 0
         while True:
-            page = self.store.list_entities(
+            page = await self.store.list_entities(
                 ToolCall,
                 engagement_id=run.engagement_id,
                 offset=offset,
                 limit=1_000,
             )
-            yield from (call for call in page if call.run_id == run.id)
+            for _entity in (call for call in page if call.run_id == run.id):
+                yield _entity
             if len(page) < 1_000:
                 return
             offset += len(page)
@@ -1978,7 +2044,7 @@ class MissionService:
                 )
                 for run_id in candidates:
                     try:
-                        run = self.store.get(AgentRun, run_id)
+                        run = await self.store.get(AgentRun, run_id)
                     except (
                         NotFoundError,
                         CorruptRecordError,

@@ -167,10 +167,10 @@ class ActionRegistry:
                 return "The selected resource changed. Refresh it before using this action."
         return None
 
-    def resolve(self, request: ActionResolutionRequest) -> list[ActionDescriptor]:
-        return self.resolve_many([request])[0]
+    async def resolve(self, request: ActionResolutionRequest) -> list[ActionDescriptor]:
+        return (await self.resolve_many([request]))[0]
 
-    def resolve_many(
+    async def resolve_many(
         self, requests: list[ActionResolutionRequest]
     ) -> list[list[ActionDescriptor]]:
         """Resolve independent result actions from one fresh, bounded metadata read."""
@@ -184,19 +184,21 @@ class ActionRegistry:
             }
         )
         rows: dict[str, EntityRow] = {}
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             for offset in range(0, len(ids), 100):
                 rows.update(
                     (row.id, row)
-                    for row in session.scalars(
-                        select(EntityRow)
-                        .where(EntityRow.id.in_(ids[offset : offset + 100]))
-                        .options(
-                            load_only(
-                                EntityRow.id,
-                                EntityRow.kind,
-                                EntityRow.engagement_id,
-                                EntityRow.revision,
+                    for row in (
+                        await session.scalars(
+                            select(EntityRow)
+                            .where(EntityRow.id.in_(ids[offset : offset + 100]))
+                            .options(
+                                load_only(
+                                    EntityRow.id,
+                                    EntityRow.kind,
+                                    EntityRow.engagement_id,
+                                    EntityRow.revision,
+                                )
                             )
                         )
                     )

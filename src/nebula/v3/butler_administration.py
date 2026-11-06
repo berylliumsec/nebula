@@ -94,7 +94,7 @@ class ButlerAdministration(ButlerData):
                 )
             )
         elif kind == "side_chats":
-            chat = self._chat(arguments["session_id"])
+            chat = await self._chat(arguments["session_id"])
             path = f"/api/v1/chat/sessions/{quote(chat.id, safe='')}/side-chats"
         elif kind == "harness_sessions":
             private_sessions = select(
@@ -115,19 +115,21 @@ class ButlerAdministration(ButlerData):
                     ]
                 ),
             )
-            with self.store.database.session() as database:
+            async with self.store.database.session() as database:
                 rows = [
                     HarnessSession.model_validate(row.payload)
-                    for row in database.scalars(
-                        select(EntityRow)
-                        .where(
-                            EntityRow.kind == HarnessSession.entity_kind,
-                            EntityRow.engagement_id == self.project_id,
-                            EntityRow.id.not_in(private_sessions),
+                    for row in (
+                        await database.scalars(
+                            select(EntityRow)
+                            .where(
+                                EntityRow.kind == HarnessSession.entity_kind,
+                                EntityRow.engagement_id == self.project_id,
+                                EntityRow.id.not_in(private_sessions),
+                            )
+                            .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
+                            .offset(arguments.get("page_offset", 0))
+                            .limit(21)
                         )
-                        .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
-                        .offset(arguments.get("page_offset", 0))
-                        .limit(21)
                     )
                 ]
             # Only the public roster: no account tokens, working directories,
@@ -171,8 +173,7 @@ class ButlerAdministration(ButlerData):
 
     async def search_resources(self, arguments: dict[str, Any]) -> dict[str, Any]:
         search = FederatedSearch(self.store, ActionRegistry(self.store))
-        result = await asyncio.to_thread(
-            search.search,
+        result = await search.search(
             query=arguments.get("query", ""),
             active_project=self.project_id,
             scope=SearchScope.ACTIVE,
@@ -187,13 +188,13 @@ class ButlerAdministration(ButlerData):
             "page_next_cursor": result.next_cursor,
         }
 
-    def _operator(self) -> str:
-        profile = OperatorProfileService(self.store).active_profile_or_none()
+    async def _operator(self) -> str:
+        profile = await OperatorProfileService(self.store).active_profile_or_none()
         return profile.id if profile else UNNAMED_OPERATOR
 
     async def guides(self, _arguments: dict[str, Any]) -> dict[str, Any]:
         return {
-            "operator_key": self._operator(),
+            "operator_key": (await self._operator()),
             "catalog": [
                 {"id": key, "label": title, "steps": _steps}
                 for key, title, _steps in GUIDES
@@ -208,8 +209,8 @@ class ButlerAdministration(ButlerData):
         }
 
     async def set_guide_progress(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._writable()
-        if self._operator() != arguments["operator_key"]:
+        (await self._writable())
+        if (await self._operator()) != arguments["operator_key"]:
             raise ValueError("active operator changed; read guide progress again")
         guide = arguments["guide_id"]
         steps = next(count for key, _title, count in GUIDES if key == guide)
@@ -231,7 +232,7 @@ class ButlerAdministration(ButlerData):
             ),
             None,
         )
-        if observed != saved or self._operator() != arguments["operator_key"]:
+        if observed != saved or (await self._operator()) != arguments["operator_key"]:
             raise ValueError(
                 "guide was changed but readback is uncertain; reread progress"
             )
@@ -243,7 +244,7 @@ class ButlerAdministration(ButlerData):
         }
 
     async def create_starter_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._writable()
+        (await self._writable())
         # Deliberately exclude hook registration: it enables a local program on
         # subsequent turns and stays in the operator's guide controls.
         kind = arguments["kind"]

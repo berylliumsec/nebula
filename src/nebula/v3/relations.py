@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import EntityRow, ResourceRelationRow
 from .domain import (
@@ -169,11 +169,11 @@ class ResourceRelationService:
             )
         return row
 
-    def create(
+    async def create(
         self, project_id: str, request: ResourceRelationCreate
     ) -> ResourceRelation:
         self._validate_shape(request.predicate, request.source, request.target)
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             source = self._validate_endpoint(session, request.source, project_id)
             target = self._validate_endpoint(session, request.target, project_id)
             now = utc_now()
@@ -195,14 +195,14 @@ class ResourceRelationService:
             )
             session.add(row)
             try:
-                session.flush()
+                (await session.flush())
             except IntegrityError as exc:
                 # diagnostic-expected: the unique edge constraint is the durable
                 # duplicate-prevention authority exposed as a revision conflict.
                 raise ConflictError("resource relation already exists") from exc
             return _relation(row)
 
-    def list_relations(
+    async def list_relations(
         self,
         project_id: str,
         *,
@@ -231,12 +231,14 @@ class ResourceRelationService:
         statement = statement.order_by(
             ResourceRelationRow.created_at, ResourceRelationRow.id
         ).limit(min(max(limit, 1), 500))
-        with self.store.database.session() as session:
-            return [_relation(row) for row in session.scalars(statement)]
+        async with self.store.database.session() as session:
+            return [_relation(row) for row in (await session.scalars(statement))]
 
-    def delete(self, project_id: str, relation_id: str, expected_revision: int) -> None:
-        with self.store.database.session() as session:
-            row = session.get(ResourceRelationRow, relation_id)
+    async def delete(
+        self, project_id: str, relation_id: str, expected_revision: int
+    ) -> None:
+        async with self.store.database.session() as session:
+            row = await session.get(ResourceRelationRow, relation_id)
             if row is None or row.project_id != project_id:
                 raise NotFoundError(f"resource relation not found: {relation_id}")
             if row.revision != expected_revision:
@@ -247,19 +249,19 @@ class ResourceRelationService:
                 row.predicate == RelationPredicate.INCLUDES.value
                 and row.source_kind == ResourceKind.REPORT.value
             ):
-                report = session.get(EntityRow, row.source_id)
+                report = await session.get(EntityRow, row.source_id)
                 if (
                     report is not None
                     and report.payload.get("status") == ReportStatus.FINAL.value
                 ):
                     raise ConflictError("final report relations are retained")
-            session.delete(row)
+            (await session.delete(row))
 
-    def reconcile(self, request: ResourceRelationSet) -> list[ResourceRelation]:
+    async def reconcile(self, request: ResourceRelationSet) -> list[ResourceRelation]:
         desired = {(target.kind.value, target.id): target for target in request.targets}
         if len(desired) != len(request.targets):
             raise ValueError("relation targets must be unique")
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             source = self._validate_endpoint(
                 session, request.source, request.project_id
             )
@@ -274,12 +276,15 @@ class ResourceRelationService:
                 self._validate_shape(request.predicate, request.source, target)
                 self._validate_endpoint(session, target, request.project_id)
             existing = list(
-                session.scalars(
-                    select(ResourceRelationRow).where(
-                        ResourceRelationRow.project_id == request.project_id,
-                        ResourceRelationRow.source_kind == request.source.kind.value,
-                        ResourceRelationRow.source_id == request.source.id,
-                        ResourceRelationRow.predicate == request.predicate.value,
+                (
+                    await session.scalars(
+                        select(ResourceRelationRow).where(
+                            ResourceRelationRow.project_id == request.project_id,
+                            ResourceRelationRow.source_kind
+                            == request.source.kind.value,
+                            ResourceRelationRow.source_id == request.source.id,
+                            ResourceRelationRow.predicate == request.predicate.value,
+                        )
                     )
                 )
             )
@@ -290,13 +295,13 @@ class ResourceRelationService:
                         and source.payload.get("status") == ReportStatus.FINAL.value
                     ):
                         raise ConflictError("final report relations are retained")
-                    session.delete(row)
+                    (await session.delete(row))
             present = {(row.target_kind, row.target_id) for row in existing}
             now = utc_now()
             for target in request.targets:
                 if (target.kind.value, target.id) in present:
                     continue
-                target_row = session.get(EntityRow, target.id)
+                target_row = await session.get(EntityRow, target.id)
                 session.add(
                     ResourceRelationRow(
                         id=str(uuid4()),
@@ -315,18 +320,23 @@ class ResourceRelationService:
                         updated_at=now,
                     )
                 )
-            session.flush()
+            (await session.flush())
             return [
                 _relation(row)
-                for row in session.scalars(
-                    select(ResourceRelationRow)
-                    .where(
-                        ResourceRelationRow.project_id == request.project_id,
-                        ResourceRelationRow.source_kind == request.source.kind.value,
-                        ResourceRelationRow.source_id == request.source.id,
-                        ResourceRelationRow.predicate == request.predicate.value,
+                for row in (
+                    await session.scalars(
+                        select(ResourceRelationRow)
+                        .where(
+                            ResourceRelationRow.project_id == request.project_id,
+                            ResourceRelationRow.source_kind
+                            == request.source.kind.value,
+                            ResourceRelationRow.source_id == request.source.id,
+                            ResourceRelationRow.predicate == request.predicate.value,
+                        )
+                        .order_by(
+                            ResourceRelationRow.created_at, ResourceRelationRow.id
+                        )
                     )
-                    .order_by(ResourceRelationRow.created_at, ResourceRelationRow.id)
                 )
             ]
 
@@ -458,8 +468,8 @@ class ResourceRelationService:
             ]
         return []
 
-    def _controlled_edge_rows(
-        self, session: Session, entity: Entity
+    async def _controlled_edge_rows(
+        self, session: AsyncSession, entity: Entity
     ) -> list[ResourceRelationRow]:
         """Page through every controlled edge; the public list cap must not apply."""
 
@@ -472,7 +482,11 @@ class ResourceRelationService:
         offset = 0
         while True:
             page = list(
-                session.scalars(statement.offset(offset).limit(LEGACY_EDGE_PAGE))
+                (
+                    await session.scalars(
+                        statement.offset(offset).limit(LEGACY_EDGE_PAGE)
+                    )
+                )
             )
             rows.extend(page)
             if len(page) < LEGACY_EDGE_PAGE:
@@ -527,7 +541,7 @@ class ResourceRelationService:
             }
         return {}
 
-    def sync_legacy_edges(self, session: Session, entity: Entity) -> None:
+    async def sync_legacy_edges(self, session: AsyncSession, entity: Entity) -> None:
         """Reconcile the controlled edges to the entity's arrays as a delta.
 
         Edges already present keep their rows and ids; only edges the arrays no
@@ -539,7 +553,8 @@ class ResourceRelationService:
 
         desired = self._desired_legacy_edges(entity)
         existing = {
-            _edge_key(row): row for row in self._controlled_edge_rows(session, entity)
+            _edge_key(row): row
+            for row in (await self._controlled_edge_rows(session, entity))
         }
         wanted = {
             (
@@ -553,7 +568,7 @@ class ResourceRelationService:
         }
         for key, row in existing.items():
             if key not in wanted:
-                session.delete(row)
+                (await session.delete(row))
         project_id = getattr(entity, "engagement_id")
         now = utc_now()
         for (
@@ -600,13 +615,13 @@ class ResourceRelationService:
                     updated_at=now,
                 )
             )
-        session.flush()
+        (await session.flush())
 
-    def create_legacy_entity(self, entity: Entity) -> Entity:
+    async def create_legacy_entity(self, entity: Entity) -> Entity:
         """Atomically create a compatibility entity and its authoritative edges."""
 
         self._desired_legacy_edges(entity)
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             row = EntityRow(
                 id=entity.id,
                 kind=entity.entity_kind,
@@ -619,21 +634,21 @@ class ResourceRelationService:
             )
             session.add(row)
             try:
-                session.flush()
-                self.sync_legacy_edges(session, entity)
+                (await session.flush())
+                (await self.sync_legacy_edges(session, entity))
             except IntegrityError as exc:
                 # diagnostic-expected: legacy create is one atomic conflict domain.
                 raise ConflictError(f"entity already exists: {entity.id}") from exc
             return entity
 
-    def replace_legacy_entity(
+    async def replace_legacy_entity(
         self, current: Entity, candidate: Entity, *, expected_revision: int
     ) -> Entity:
         """Atomically replace legacy fields and reconcile their edge projection."""
 
         self._desired_legacy_edges(candidate)
-        with self.store.database.session() as session:
-            row = session.get(EntityRow, current.id)
+        async with self.store.database.session() as session:
+            row = await session.get(EntityRow, current.id)
             if row is None or row.kind != current.entity_kind:
                 raise NotFoundError(
                     f"{current.entity_kind} entity not found: {current.id}"
@@ -657,7 +672,7 @@ class ResourceRelationService:
             for field, value in _entity_lookup_fields(updated).items():
                 setattr(row, field, value)
             try:
-                self.sync_legacy_edges(session, updated)
+                (await self.sync_legacy_edges(session, updated))
             except IntegrityError as exc:
                 # diagnostic-expected: a relations-API write raced this edit; the
                 # unique edge constraint reports it as a revision-style conflict.
@@ -666,13 +681,13 @@ class ResourceRelationService:
                 ) from exc
             return updated
 
-    def project_legacy(self, entity: Entity) -> Entity:
+    async def project_legacy(self, entity: Entity) -> Entity:
         """Project compatibility arrays from edges so they cannot be stale authority."""
 
-        return self.project_legacy_many([entity])[0]
+        return (await self.project_legacy_many([entity]))[0]
 
-    def project_legacy_many(self, entities: list[Entity]) -> list[Entity]:
-        """Enrich a page with bounded queries instead of a Session per result.
+    async def project_legacy_many(self, entities: list[Entity]) -> list[Entity]:
+        """Enrich a page with bounded queries instead of a AsyncSession per result.
 
         Group by owner and type so reciprocal finding edges and unrelated
         projects retain exactly the single-record projection rules. Chunk IDs
@@ -689,7 +704,7 @@ class ResourceRelationService:
         if not groups:
             return entities
         projected: dict[str, Entity] = {}
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             for group in groups.values():
                 for start in range(0, len(group), 250):
                     batch = group[start : start + 250]
@@ -705,7 +720,9 @@ class ResourceRelationService:
                             ResourceRelationRow.created_at, ResourceRelationRow.id
                         )
                     )
-                    for row in session.scalars(statement).yield_per(LEGACY_EDGE_PAGE):
+                    for row in (await session.scalars(statement)).yield_per(
+                        LEGACY_EDGE_PAGE
+                    ):
                         identity = (
                             row.target_id
                             if isinstance(batch[0], Finding)

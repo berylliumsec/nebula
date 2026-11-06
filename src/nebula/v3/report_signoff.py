@@ -37,10 +37,10 @@ class ReportSignoffRequest(NebulaModel):
     )
 
 
-def sign_off_report(
+async def sign_off_report(
     store: NebulaStore, report_id: str, request: ReportSignoffRequest
 ) -> Report:
-    report = store.get(Report, report_id)
+    report = await store.get(Report, report_id)
     if report.revision != request.expected_revision:
         raise ConflictError(
             f"revision conflict: expected {request.expected_revision}, "
@@ -49,7 +49,7 @@ def sign_off_report(
     if report.status != ReportStatus.REVIEW:
         raise ConflictError("only a report in review can be signed off")
 
-    operator = store.get(OperatorProfile, request.operator_id)
+    operator = await store.get(OperatorProfile, request.operator_id)
     if not operator.active:
         raise ConflictError("report sign-off requires the active operator profile")
 
@@ -63,10 +63,10 @@ def sign_off_report(
         "operator_display_name": operator.display_name,
         "report_revision": signed_revision,
     }
-    with store.transaction() as transaction:
-        _begin_signoff_write(store, transaction)
-        _validate_findings(transaction, report)
-        signed = transaction.update(
+    async with store.transaction() as transaction:
+        (await _begin_signoff_write(store, transaction))
+        (await _validate_findings(transaction, report))
+        signed = await transaction.update(
             Report,
             report.id,
             {
@@ -77,24 +77,28 @@ def sign_off_report(
             },
             expected_revision=report.revision,
         )
-        transaction.append_operation_event(
-            report.id,
-            Report.entity_kind,
-            report.engagement_id,
-            "report.signed_off",
-            {
-                "report_revision": signed_revision,
-                "signed_off_at": signed_at.isoformat(),
-                "operator_id": operator.id,
-            },
-            actor_id=operator.id,
-            idempotency_key=f"report-signoff:{report.id}:{signed_revision}",
-            occurred_at=signed_at,
+        (
+            await transaction.append_operation_event(
+                report.id,
+                Report.entity_kind,
+                report.engagement_id,
+                "report.signed_off",
+                {
+                    "report_revision": signed_revision,
+                    "signed_off_at": signed_at.isoformat(),
+                    "operator_id": operator.id,
+                },
+                actor_id=operator.id,
+                idempotency_key=f"report-signoff:{report.id}:{signed_revision}",
+                occurred_at=signed_at,
+            )
         )
     return signed
 
 
-def _begin_signoff_write(store: NebulaStore, transaction: StoreTransaction) -> None:
+async def _begin_signoff_write(
+    store: NebulaStore, transaction: StoreTransaction
+) -> None:
     """Take the write lock up front so the finding checks and the commit are one unit.
 
     SQLite only opens a transaction at the first write, so without this the
@@ -103,14 +107,14 @@ def _begin_signoff_write(store: NebulaStore, transaction: StoreTransaction) -> N
     """
 
     if store.database.engine.dialect.name == "sqlite":
-        transaction.session.execute(text("BEGIN IMMEDIATE"))
+        (await transaction.session.execute(text("BEGIN IMMEDIATE")))
 
 
-def _validate_findings(transaction: StoreTransaction, report: Report) -> None:
+async def _validate_findings(transaction: StoreTransaction, report: Report) -> None:
     """Re-check every selected finding inside the transaction that finalizes."""
 
     for finding_id in report.finding_ids:
-        row = transaction.session.get(EntityRow, finding_id)
+        row = await transaction.session.get(EntityRow, finding_id)
         if row is None or row.kind != Finding.entity_kind:
             raise ConflictError("report references a deleted finding")
         finding = Finding.model_validate(row.payload)

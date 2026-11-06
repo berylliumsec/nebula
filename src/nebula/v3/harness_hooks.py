@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import resolve_workspace
+
 import asyncio
 from typing import Any
 
@@ -26,7 +28,7 @@ async def run_turn_hooks(
 ) -> None:
     if not turn.chat_turn_id:
         return
-    chat_turn = runtime.store.get(ChatTurn, turn.chat_turn_id)
+    chat_turn = await runtime.store.get(ChatTurn, turn.chat_turn_id)
     snapshot = chat_turn.request_snapshot
     hooks = [
         NativeHookSnapshot.model_validate(item)
@@ -39,8 +41,10 @@ async def run_turn_hooks(
     )
     prior = [
         item
-        for item in runtime.store.list_session_entities(
-            NativeHookExecution, chat_turn.session_id
+        for item in (
+            await runtime.store.list_session_entities(
+                NativeHookExecution, chat_turn.session_id
+            )
         )
         if item.chat_turn_id == chat_turn.id and item.event_name == event_name
     ]
@@ -49,19 +53,21 @@ async def run_turn_hooks(
         "chat.turn.cancelled",
         "chat.turn.interrupted",
     }
-    actor = actor_id_for(
+    actor = await actor_id_for(
         runtime.store,
         owner_kind="chat",
         owner_id=chat_turn.session_id,
         chat_session_id=chat_turn.session_id,
     )
 
-    def observe() -> dict[str, Any]:
+    async def observe() -> dict[str, Any]:
         service = WorkspaceProvenanceService(runtime.store)
-        workspace = runtime.workspace_resolver(chat_turn.engagement_id)
+        workspace = await resolve_workspace(
+            runtime.workspace_resolver, chat_turn.engagement_id
+        )
 
-        def begin() -> Any:
-            return service.begin(
+        async def begin() -> Any:
+            return await service.begin(
                 workspace,
                 engagement_id=chat_turn.engagement_id,
                 scope_kind="turn",
@@ -73,8 +79,8 @@ async def run_turn_hooks(
                 chat_turn_id=chat_turn.id,
             )
 
-        def finish() -> Any:
-            return service.finish(
+        async def finish() -> Any:
+            return await service.finish(
                 workspace,
                 engagement_id=chat_turn.engagement_id,
                 scope_kind="turn",
@@ -82,16 +88,16 @@ async def run_turn_hooks(
             )
 
         if event_name == "chat.turn.started":
-            observation = begin()
+            observation = await begin()
         else:
             try:
-                observation = finish()
+                observation = await finish()
             except NotFoundError:  # diagnostic-expected: recovered or completion-only hook uses a same-state baseline
-                begin()
-                observation = finish()
+                (await begin())
+                observation = await finish()
         return service.receipt(observation)
 
-    provenance = await asyncio.to_thread(observe)
+    provenance = await observe()
     for hook in hooks:
         executions = [item for item in prior if item.hook_id == hook.id]
         existing = max(
@@ -144,7 +150,7 @@ async def finish_terminal_hooks(runtime: Any, turn_id: str) -> None:
     from .chat import _turn_end_hook_payload
     from .diagnostics import record_caught_exception
 
-    turn = runtime.store.get(HarnessTurn, turn_id)
+    turn = await runtime.store.get(HarnessTurn, turn_id)
     if not turn.chat_turn_id:
         return
     if turn.status not in {
@@ -155,7 +161,7 @@ async def finish_terminal_hooks(runtime: Any, turn_id: str) -> None:
         return
     # The shared runner records a late outcome if an in-flight process survives
     # cancellation. Fence that unknown outcome now; never claim it succeeded.
-    for execution in runtime.store.list_session_entities(
+    for execution in await runtime.store.list_session_entities(
         NativeHookExecution, turn.chat_session_id
     ):
         if (
@@ -163,15 +169,17 @@ async def finish_terminal_hooks(runtime: Any, turn_id: str) -> None:
             and execution.status == "running"
         ):
             try:
-                runtime.store.update(
-                    NativeHookExecution,
-                    execution.id,
-                    {
-                        "status": "interrupted",
-                        "completed_at": utc_now(),
-                        "error": "The harness turn ended before the hook outcome was known.",
-                    },
-                    expected_revision=execution.revision,
+                (
+                    await runtime.store.update(
+                        NativeHookExecution,
+                        execution.id,
+                        {
+                            "status": "interrupted",
+                            "completed_at": utc_now(),
+                            "error": "The harness turn ended before the hook outcome was known.",
+                        },
+                        expected_revision=execution.revision,
+                    )
                 )
             except (
                 ConflictError
@@ -179,8 +187,10 @@ async def finish_terminal_hooks(runtime: Any, turn_id: str) -> None:
                 pass
     unknown = [
         item.id
-        for item in runtime.store.list_session_entities(
-            NativeHookExecution, turn.chat_session_id
+        for item in (
+            await runtime.store.list_session_entities(
+                NativeHookExecution, turn.chat_session_id
+            )
         )
         if item.chat_turn_id == turn.chat_turn_id
         and item.side_effects != "none"
@@ -188,26 +198,28 @@ async def finish_terminal_hooks(runtime: Any, turn_id: str) -> None:
         and not (item.late_outcome and item.late_outcome.status == "complete")
     ]
     if unknown:
-        owner = runtime.store.get(ChatTurn, turn.chat_turn_id)
+        owner = await runtime.store.get(ChatTurn, turn.chat_turn_id)
         recovery = owner.request_snapshot.get("recovery", {})
-        runtime.store.update(
-            ChatTurn,
-            owner.id,
-            {
-                "request_snapshot": {
-                    **owner.request_snapshot,
-                    "recovery": {
-                        **recovery,
-                        "required": True,
-                        "cause": "harness_hook_interrupted",
-                        "unknown_hook_execution_ids": sorted(
-                            set(recovery.get("unknown_hook_execution_ids", []))
-                            | set(unknown)
-                        ),
-                    },
-                }
-            },
-            expected_revision=owner.revision,
+        (
+            await runtime.store.update(
+                ChatTurn,
+                owner.id,
+                {
+                    "request_snapshot": {
+                        **owner.request_snapshot,
+                        "recovery": {
+                            **recovery,
+                            "required": True,
+                            "cause": "harness_hook_interrupted",
+                            "unknown_hook_execution_ids": sorted(
+                                set(recovery.get("unknown_hook_execution_ids", []))
+                                | set(unknown)
+                            ),
+                        },
+                    }
+                },
+                expected_revision=owner.revision,
+            )
         )
     event = (
         "chat.turn.cancelled"

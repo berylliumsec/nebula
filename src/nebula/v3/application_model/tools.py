@@ -117,8 +117,7 @@ class ModelBroker:
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
         try:
             if invocation.tool_name == "model.transact":
-                output = await asyncio.to_thread(
-                    self.service.transact,
+                output = await self.service.transact(
                     self.engagement_id,
                     body,
                     producer="assistant",
@@ -153,12 +152,12 @@ class ModelBroker:
                 for operation in body.operations:
                     if operation.op == "put_relationship":
                         try:
-                            recovery["relationship_options"] = (
-                                self.service.relationship_options(
-                                    self.engagement_id,
-                                    operation.source,
-                                    operation.target,
-                                )
+                            recovery[
+                                "relationship_options"
+                            ] = await self.service.relationship_options(
+                                self.engagement_id,
+                                operation.source,
+                                operation.target,
                             )
                         except (ValueError, HTTPException):
                             # diagnostic-expected: unsaved endpoints use the schema recovery above.
@@ -196,14 +195,14 @@ def project_components(store, engagement_id, scope, workspace):
     )
 
 
-def standalone_components(store, engagement_id):
+async def standalone_components(store, engagement_id):
     """Graph-only access needs no command runtime or network scope configuration."""
     from pathlib import Path
     from ..domain import Engagement, ScopePolicy
 
-    project = store.get(Engagement, engagement_id)
+    project = await store.get(Engagement, engagement_id)
     scope = (
-        store.get(ScopePolicy, project.scope_policy_id)
+        (await store.get(ScopePolicy, project.scope_policy_id))
         if project.scope_policy_id
         else ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id)
     )

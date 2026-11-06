@@ -55,16 +55,18 @@ def working_notes_id(session_id: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"nebula:chat-working-notes:{session_id}"))
 
 
-def read_working_notes(store: NebulaStore, session_id: str) -> ChatWorkingNotes | None:
+async def read_working_notes(
+    store: NebulaStore, session_id: str
+) -> ChatWorkingNotes | None:
     try:
-        return store.get(ChatWorkingNotes, working_notes_id(session_id))
+        return await store.get(ChatWorkingNotes, working_notes_id(session_id))
     except (
         NotFoundError
     ):  # diagnostic-expected: the assistant has not written notes for this conversation
         return None
 
 
-def write_working_notes(
+async def write_working_notes(
     store: NebulaStore,
     *,
     engagement_id: str,
@@ -80,10 +82,10 @@ def write_working_notes(
 
     notes_id = working_notes_id(session_id)
     for _ in range(_WRITE_ATTEMPTS):
-        current = read_working_notes(store, session_id)
+        current = await read_working_notes(store, session_id)
         if current is None:
             try:
-                return store.create(
+                return await store.create(
                     ChatWorkingNotes(
                         id=notes_id,
                         engagement_id=engagement_id,
@@ -97,7 +99,7 @@ def write_working_notes(
         if current.engagement_id != engagement_id or current.session_id != session_id:
             raise ToolBrokerError("working notes belong to another conversation")
         try:
-            return store.update(
+            return await store.update(
                 ChatWorkingNotes,
                 notes_id,
                 {"content": content, "turn_id": turn_id},
@@ -231,7 +233,7 @@ class WriteNotesTool(InvocationAnalysisTool):
             )
         if not invocation.chat_session_id:
             raise ToolBrokerError("working notes belong to a conversation")
-        notes = write_working_notes(
+        notes = await write_working_notes(
             self.store,
             engagement_id=invocation.engagement_id,
             session_id=invocation.chat_session_id,

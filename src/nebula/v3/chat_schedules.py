@@ -53,26 +53,26 @@ class ChatScheduleService:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def get(self, session_id: str) -> ChatSchedule:
-        self.store.get(ChatSession, session_id)
-        matches = self.store.list_session_entities(ChatSchedule, session_id)
+    async def get(self, session_id: str) -> ChatSchedule:
+        (await self.store.get(ChatSession, session_id))
+        matches = await self.store.list_session_entities(ChatSchedule, session_id)
         if not matches:
             raise NotFoundError(f"chat schedule not found for session: {session_id}")
         return matches[0]
 
-    def create(self, session_id: str, body: ScheduleCreate) -> ChatSchedule:
-        session = self.store.get(ChatSession, session_id)
+    async def create(self, session_id: str, body: ScheduleCreate) -> ChatSchedule:
+        session = await self.store.get(ChatSession, session_id)
         if session.backend.value != "provider" or not session.provider_profile_id:
             raise ConflictError("schedules require a provider conversation")
         try:
-            self.get(session_id)
+            (await self.get(session_id))
         except (
             NotFoundError
         ):  # diagnostic-expected: absence is the precondition for creating a schedule
             pass
         else:
             raise ConflictError("conversation already has a schedule")
-        return self.store.create(
+        return await self.store.create(
             ChatSchedule(
                 id=str(uuid4()),
                 engagement_id=session.engagement_id,
@@ -84,8 +84,8 @@ class ChatScheduleService:
             )
         )
 
-    def write(self, session_id: str, body: ScheduleWrite) -> ChatSchedule:
-        schedule = self.get(session_id)
+    async def write(self, session_id: str, body: ScheduleWrite) -> ChatSchedule:
+        schedule = await self.get(session_id)
         if schedule.revision != body.expected_revision:
             raise ConflictError(
                 "schedule changed on another device; reload before retrying"
@@ -100,7 +100,7 @@ class ChatScheduleService:
                 changes["next_run_at"] = utc_now() + timedelta(
                     seconds=schedule.interval_seconds
                 )
-        updated = self.store.update(
+        updated = await self.store.update(
             ChatSchedule, schedule.id, changes, expected_revision=schedule.revision
         )
         if body.enabled:
@@ -109,55 +109,60 @@ class ChatScheduleService:
             # the occurrences it produces are visible.
             from .chat import unarchive_chat_session
 
-            unarchive_chat_session(self.store, session_id)
+            (await unarchive_chat_session(self.store, session_id))
         return updated
 
-    def pause_for_archive(self, session_id: str) -> None:
+    async def pause_for_archive(self, session_id: str) -> None:
         """Park an enabled schedule while its conversation is archived."""
 
         try:
-            schedule = self.get(session_id)
+            schedule = await self.get(session_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: most conversations have no schedule to pause
             return
         if not schedule.enabled:
             return
-        self.store.update(
-            ChatSchedule,
-            schedule.id,
-            {
-                "enabled": False,
-                "paused_by": "archive",
-                "skip_reason": ARCHIVED_SKIP_REASON,
-            },
-            expected_revision=schedule.revision,
+        (
+            await self.store.update(
+                ChatSchedule,
+                schedule.id,
+                {
+                    "enabled": False,
+                    "paused_by": "archive",
+                    "skip_reason": ARCHIVED_SKIP_REASON,
+                },
+                expected_revision=schedule.revision,
+            )
         )
 
-    def resume_after_unarchive(self, session_id: str) -> None:
+    async def resume_after_unarchive(self, session_id: str) -> None:
         """Resume a schedule that archiving paused; leave an operator's pause alone."""
 
         try:
-            schedule = self.get(session_id)
+            schedule = await self.get(session_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: most conversations have no schedule to resume
             return
         if schedule.enabled or schedule.paused_by != "archive":
             return
-        self.store.update(
-            ChatSchedule,
-            schedule.id,
-            {
-                "enabled": True,
-                "paused_by": None,
-                "skip_reason": None,
-                "next_run_at": utc_now() + timedelta(seconds=schedule.interval_seconds),
-            },
-            expected_revision=schedule.revision,
+        (
+            await self.store.update(
+                ChatSchedule,
+                schedule.id,
+                {
+                    "enabled": True,
+                    "paused_by": None,
+                    "skip_reason": None,
+                    "next_run_at": utc_now()
+                    + timedelta(seconds=schedule.interval_seconds),
+                },
+                expected_revision=schedule.revision,
+            )
         )
 
-    def turn_settings(self, session_id: str) -> ScheduledTurnSettings:
+    async def turn_settings(self, session_id: str) -> ScheduledTurnSettings:
         """Settings for a turn Core starts: what the operator last chose.
 
         Goal dispatch, goal continuation and scheduled occurrences have no
@@ -171,13 +176,15 @@ class ChatScheduleService:
         removed or disabled since are dropped rather than failing every turn.
         """
 
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         saved = session.metadata
-        turns = self.store.list_session_entities(ChatTurn, session_id)
+        turns = await self.store.list_session_entities(ChatTurn, session_id)
         latest = next((item for item in reversed(turns) if item.request_snapshot), None)
         snapshot = (
-            resolve_request_snapshot(
-                self.store, latest.request_snapshot, session_id=latest.session_id
+            (
+                await resolve_request_snapshot(
+                    self.store, latest.request_snapshot, session_id=latest.session_id
+                )
             )
             if latest is not None
             else {}
@@ -195,14 +202,14 @@ class ChatScheduleService:
             if not isinstance(server_id, str):
                 continue
             try:
-                server = self.store.get(McpServerProfile, server_id)
+                server = await self.store.get(McpServerProfile, server_id)
             except NotFoundError:  # diagnostic-expected: the server was removed since it was chosen; the turn runs without it
                 continue
             if server.enabled:
                 mcp_server_ids.append(server_id)
         hosts = snapshot.get("ssh_environment_snapshot")
         ssh_environment_ids = (
-            enabled_snapshot_ssh_ids(self.store, hosts)
+            (await enabled_snapshot_ssh_ids(self.store, hosts))
             if isinstance(hosts, list)
             else None
         )
@@ -230,18 +237,18 @@ class ChatScheduleService:
             allow_cloud_tool_results=tools_enabled,
         )
 
-    def due(self) -> list[ChatSchedule]:
+    async def due(self) -> list[ChatSchedule]:
         # Read every scheduler tick: an unreadable schedule is skipped and
         # recorded instead of stopping every other schedule from firing.
         now = utc_now()
         return [
             item
-            for item in self.store.iter_readable_entities(ChatSchedule)
+            async for item in self.store.iter_readable_entities(ChatSchedule)
             if item.enabled and item.next_run_at <= now
         ]
 
-    def skip(self, schedule: ChatSchedule, reason: str) -> ChatSchedule:
-        return self.store.update(
+    async def skip(self, schedule: ChatSchedule, reason: str) -> ChatSchedule:
+        return await self.store.update(
             ChatSchedule,
             schedule.id,
             {
@@ -253,10 +260,10 @@ class ChatScheduleService:
             expected_revision=schedule.revision,
         )
 
-    def record_run(
+    async def record_run(
         self, schedule: ChatSchedule, *, turn_id: str, status: str
     ) -> ChatSchedule:
-        return self.store.update(
+        return await self.store.update(
             ChatSchedule,
             schedule.id,
             {
@@ -269,7 +276,7 @@ class ChatScheduleService:
             expected_revision=schedule.revision,
         )
 
-    def record_outcome(
+    async def record_outcome(
         self, schedule_id: str, *, turn_id: str, status: str
     ) -> ChatSchedule | None:
         """Record how the occurrence ``record_run`` started has settled.
@@ -279,7 +286,7 @@ class ChatScheduleService:
         """
 
         try:
-            schedule = self.store.get(ChatSchedule, schedule_id)
+            schedule = await self.store.get(ChatSchedule, schedule_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: the schedule was removed while its occurrence ran
@@ -291,11 +298,11 @@ class ChatScheduleService:
             changes["skip_reason"] = (
                 "Scheduled occurrence failed; it was not retried overlapping."
             )
-        return self.store.update(
+        return await self.store.update(
             ChatSchedule, schedule.id, changes, expected_revision=schedule.revision
         )
 
-    def reconcile(self, schedule: ChatSchedule) -> ChatSchedule | None:
+    async def reconcile(self, schedule: ChatSchedule) -> ChatSchedule | None:
         """Retire a schedule whose conversation is gone; pause one whose provider is.
 
         Older releases left schedule rows behind when their conversation was
@@ -305,9 +312,9 @@ class ChatScheduleService:
         """
 
         try:
-            session = self.store.get(ChatSession, schedule.session_id)
+            session = await self.store.get(ChatSession, schedule.session_id)
         except NotFoundError:  # diagnostic-expected: the conversation was deleted; its schedule has nothing to run
-            self.store.delete(ChatSchedule, schedule.id)
+            (await self.store.delete(ChatSchedule, schedule.id))
             return None
         if (
             session.backend.value == "provider"
@@ -320,7 +327,7 @@ class ChatScheduleService:
             # The schedule follows the conversation: an operator who picks
             # another model or provider in the chat expects occurrences to use
             # it, and the UI offers no other way to repoint the schedule.
-            schedule = self.store.update(
+            schedule = await self.store.update(
                 ChatSchedule,
                 schedule.id,
                 {
@@ -330,9 +337,9 @@ class ChatScheduleService:
                 expected_revision=schedule.revision,
             )
         try:
-            self.store.get(ProviderProfile, schedule.provider_profile_id)
+            (await self.store.get(ProviderProfile, schedule.provider_profile_id))
         except NotFoundError:  # diagnostic-expected: the provider was removed; keep the schedule for the operator to repoint
-            return self.store.update(
+            return await self.store.update(
                 ChatSchedule,
                 schedule.id,
                 {
@@ -344,13 +351,13 @@ class ChatScheduleService:
             )
         return schedule
 
-    def revalidate(self, schedule: ChatSchedule) -> str | None:
-        session = self.store.get(ChatSession, schedule.session_id)
+    async def revalidate(self, schedule: ChatSchedule) -> str | None:
+        session = await self.store.get(ChatSession, schedule.session_id)
         if "archived_at" in session.metadata:
             return ARCHIVED_SKIP_REASON
         if session.backend.value != "provider" or not session.provider_profile_id:
             return "Conversation no longer runs on a provider; the schedule is paused until it does."
-        profile = self.store.get(ProviderProfile, schedule.provider_profile_id)
+        profile = await self.store.get(ProviderProfile, schedule.provider_profile_id)
         if not profile.enabled:
             return "Provider is disabled; the schedule is paused until it is enabled."
         return None

@@ -18,12 +18,12 @@ def model_router(service):
             raise HTTPException(422, str(exc)) from exc
 
     @router.get("/reset-preview")
-    def reset_preview(project: str):
-        return preview(service, project)
+    async def reset_preview(project: str):
+        return await preview(service, project)
 
     @router.post("/reset")
-    def start_over(project: str, request: GraphReset):
-        return reset(service, project, request)
+    async def start_over(project: str, request: GraphReset):
+        return await reset(service, project, request)
 
     @router.get("/graph")
     def graph(project: str):

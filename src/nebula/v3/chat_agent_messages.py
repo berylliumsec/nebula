@@ -86,7 +86,7 @@ _UNFINISHED = {
 }
 
 
-def resolve_agent_messaging_choice(
+async def resolve_agent_messaging_choice(
     store: NebulaStore,
     engagement_id: str,
     session: ChatSession | None,
@@ -102,7 +102,9 @@ def resolve_agent_messaging_choice(
         return requested
     if session is not None:
         return session.metadata.get("allow_agent_messaging") is True
-    return store.get(Engagement, engagement_id).assistant_defaults.allow_agent_messaging
+    return (
+        await store.get(Engagement, engagement_id)
+    ).assistant_defaults.allow_agent_messaging
 
 
 class AgentMessageService:
@@ -128,13 +130,13 @@ class AgentMessageService:
             and session.metadata.get("allow_agent_messaging") is True
         )
 
-    def _invoking_session(self, invocation: ToolInvocation) -> ChatSession:
+    async def _invoking_session(self, invocation: ToolInvocation) -> ChatSession:
         if not invocation.chat_session_id:
             raise ToolNotPermitted(
                 "agent messaging requires a chat session",
                 rule="agent_messages.chat_session",
             )
-        session = self.store.get(ChatSession, invocation.chat_session_id)
+        session = await self.store.get(ChatSession, invocation.chat_session_id)
         if not self._addressable(session):
             raise ToolNotPermitted(
                 "agent messaging is turned off for this conversation",
@@ -147,14 +149,14 @@ class AgentMessageService:
             )
         return session
 
-    def peers(self, session: ChatSession) -> list[dict[str, Any]]:
-        turns = self.store.chat_turn_status_rows(
+    async def peers(self, session: ChatSession) -> list[dict[str, Any]]:
+        turns = await self.store.chat_turn_status_rows(
             list(_UNFINISHED),
             engagement_id=session.engagement_id,
         )
         active = {turn.session_id: turn.status.value for turn in turns}
         peers: list[dict[str, Any]] = []
-        for candidate in self.store.chat_session_agent_rows(
+        for candidate in await self.store.chat_session_agent_rows(
             engagement_id=session.engagement_id,
         ):
             if candidate.id == session.id or not self._addressable(candidate):
@@ -172,43 +174,49 @@ class AgentMessageService:
             peers, key=lambda item: (item["title"].casefold(), item["session_id"])
         )
 
-    def pending(self, recipient_session_id: str) -> list[ChatAgentMessage]:
+    async def pending(self, recipient_session_id: str) -> list[ChatAgentMessage]:
         return sorted(
-            self.store.find_entities(
-                ChatAgentMessage,
-                {
-                    "recipient_session_id": recipient_session_id,
-                    "status": ChatAgentMessageStatus.PENDING.value,
-                },
+            (
+                await self.store.find_entities(
+                    ChatAgentMessage,
+                    {
+                        "recipient_session_id": recipient_session_id,
+                        "status": ChatAgentMessageStatus.PENDING.value,
+                    },
+                )
             ),
             key=lambda item: (item.created_at, item.id),
         )
 
-    def _mark_delivered(self, messages: Iterable[ChatAgentMessage]) -> None:
+    async def _mark_delivered(self, messages: Iterable[ChatAgentMessage]) -> None:
         for message in messages:
             for _ in range(3):
-                latest = self.store.get(ChatAgentMessage, message.id)
+                latest = await self.store.get(ChatAgentMessage, message.id)
                 if latest.status != ChatAgentMessageStatus.PENDING:
                     break
                 try:
-                    self.store.update(
-                        ChatAgentMessage,
-                        latest.id,
-                        {
-                            "status": ChatAgentMessageStatus.DELIVERED,
-                            "delivered_at": utc_now(),
-                        },
-                        expected_revision=latest.revision,
+                    (
+                        await self.store.update(
+                            ChatAgentMessage,
+                            latest.id,
+                            {
+                                "status": ChatAgentMessageStatus.DELIVERED,
+                                "delivered_at": utc_now(),
+                            },
+                            expected_revision=latest.revision,
+                        )
                     )
                     break
                 except ConflictError:  # diagnostic-expected: optimistic delivery retry
                     continue
 
-    def _views(self, messages: Iterable[ChatAgentMessage]) -> list[dict[str, Any]]:
+    async def _views(
+        self, messages: Iterable[ChatAgentMessage]
+    ) -> list[dict[str, Any]]:
         views: list[dict[str, Any]] = []
         for message in messages:
             try:
-                sender = self.store.get(ChatSession, message.sender_session_id)
+                sender = await self.store.get(ChatSession, message.sender_session_id)
                 sender_title = sender.title
             except (
                 NotFoundError
@@ -225,10 +233,10 @@ class AgentMessageService:
             )
         return views
 
-    def _items(self, recipient_session_id: str) -> list[DeliveryItem]:
-        messages = self.pending(recipient_session_id)
+    async def _items(self, recipient_session_id: str) -> list[DeliveryItem]:
+        messages = await self.pending(recipient_session_id)
         items: list[DeliveryItem] = []
-        for message, view in zip(messages, self._views(messages)):
+        for message, view in zip(messages, (await self._views(messages))):
 
             def make(
                 text: str,
@@ -269,7 +277,7 @@ class AgentMessageService:
             )
         return output
 
-    def inbox(
+    async def inbox(
         self,
         recipient_session_id: str,
         *,
@@ -286,8 +294,8 @@ class AgentMessageService:
         the vendor accepted it.
         """
 
-        recipient = self.store.get(ChatSession, recipient_session_id)
-        items = self._items(recipient.id)
+        recipient = await self.store.get(ChatSession, recipient_session_id)
+        items = await self._items(recipient.id)
 
         def render(views: list[dict[str, Any]], more: bool) -> dict[str, Any]:
             return self._render(views, more, harness=harness)
@@ -303,35 +311,35 @@ class AgentMessageService:
         results, left = pack_delivery(items, render, fits, force_first=harness)
         delivered = results[0].delivered if results else []
         if mark and delivered:
-            self._mark_delivered(item.source for item in delivered)
+            (await self._mark_delivered(item.source for item in delivered))
         return render(results[0].views if results else [], bool(left))
 
-    def mark_history_delivered(
+    async def mark_history_delivered(
         self, session_id: str, loaded_message_ids: Collection[str]
     ) -> None:
         """Mark only messages present in the provider turn's loaded transcript."""
 
         pending = [
             message
-            for message in self.pending(session_id)
+            for message in (await self.pending(session_id))
             if message.transcript_message_id in loaded_message_ids
         ]
         if pending:
-            self._mark_delivered(pending)
+            (await self._mark_delivered(pending))
 
-    def mark_message_ids_delivered(self, message_ids: Collection[str]) -> None:
+    async def mark_message_ids_delivered(self, message_ids: Collection[str]) -> None:
         """Mark the exact inbox snapshot inserted into a harness turn."""
 
         messages: list[ChatAgentMessage] = []
         for message_id in dict.fromkeys(message_ids):
             try:
-                messages.append(self.store.get(ChatAgentMessage, message_id))
+                messages.append((await self.store.get(ChatAgentMessage, message_id)))
             except NotFoundError:  # diagnostic-expected: stale inbox reference
                 continue
         if messages:
-            self._mark_delivered(messages)
+            (await self._mark_delivered(messages))
 
-    def routing_delivery(
+    async def routing_delivery(
         self, turn: ChatTurn, tool_names: Collection[str]
     ) -> CoreDelivery | None:
         """Unread peer messages for a working provider turn, as the results
@@ -340,7 +348,7 @@ class AgentMessageService:
 
         if "read_agent_messages" not in tool_names:
             return None
-        items = self._items(turn.session_id)
+        items = await self._items(turn.session_id)
         if not items:
             return None
         results, left = pack_delivery(
@@ -369,26 +377,26 @@ class AgentMessageService:
             "read_agent_messages", steps, lambda: self._mark_delivered(delivered)
         )
 
-    def list_output(self, invocation: ToolInvocation) -> dict[str, Any]:
-        session = self._invoking_session(invocation)
+    async def list_output(self, invocation: ToolInvocation) -> dict[str, Any]:
+        session = await self._invoking_session(invocation)
         return {
-            "agents": self.peers(session),
-            "unread": self._views(self.pending(session.id)),
+            "agents": (await self.peers(session)),
+            "unread": (await self._views((await self.pending(session.id)))),
             "note": "Use a session_id from this list with send_agent_message.",
         }
 
-    def read_output(self, invocation: ToolInvocation) -> dict[str, Any]:
-        return self.inbox(
-            self._invoking_session(invocation).id,
+    async def read_output(self, invocation: ToolInvocation) -> dict[str, Any]:
+        return await self.inbox(
+            (await self._invoking_session(invocation)).id,
             harness=invocation.runtime_session_kind == "harness",
         )
 
-    def _existing(
+    async def _existing(
         self, sender_session_id: str, idempotency_key: str | None
     ) -> ChatAgentMessage | None:
         if not idempotency_key:
             return None
-        matches = self.store.find_entities(
+        matches = await self.store.find_entities(
             ChatAgentMessage,
             {
                 "sender_session_id": sender_session_id,
@@ -403,7 +411,7 @@ class AgentMessageService:
         recipient_session_id: str,
         content: str,
     ) -> dict[str, Any]:
-        sender = self._invoking_session(invocation)
+        sender = await self._invoking_session(invocation)
         content = content.strip()
         # Refused before anything is stored, so these had no effect.
         if not content:
@@ -415,7 +423,7 @@ class AgentMessageService:
                 InvalidToolArguments("message must be at most 20000 characters")
             )
         try:
-            recipient = self.store.get(ChatSession, recipient_session_id)
+            recipient = await self.store.get(ChatSession, recipient_session_id)
         except NotFoundError as exc:
             raise refused_before_execution(
                 InvalidToolArguments("unknown peer agent session_id")
@@ -439,7 +447,7 @@ class AgentMessageService:
                 ).encode("utf-8")
             ).hexdigest()
         )
-        existing = self._existing(sender.id, key)
+        existing = await self._existing(sender.id, key)
         if existing is not None:
             return self._send_view(existing)
         message_id = str(
@@ -458,7 +466,7 @@ class AgentMessageService:
             idempotency_key=key,
         )
         for attempt in range(3):
-            current = self.store.get(ChatSession, recipient.id)
+            current = await self.store.get(ChatSession, recipient.id)
             if (
                 current.engagement_id != sender.engagement_id
                 or current.id == sender.id
@@ -469,7 +477,7 @@ class AgentMessageService:
                 raise refused_before_execution(
                     InvalidToolArguments("unknown peer agent session_id")
                 )
-            stored = self.store.list_session_entities(ChatMessage, recipient.id)
+            stored = await self.store.list_session_entities(ChatMessage, recipient.id)
             recorded = current.metadata.get("last_sequence")
             sequence = (
                 max(
@@ -493,24 +501,26 @@ class AgentMessageService:
                 },
             )
             try:
-                with self.store.transaction() as transaction:
-                    transaction.update(
-                        ChatSession,
-                        current.id,
-                        {
-                            "metadata": {
-                                **current.metadata,
-                                "message_count": sequence,
-                                "last_sequence": sequence,
-                            }
-                        },
-                        expected_revision=current.revision,
+                async with self.store.transaction() as transaction:
+                    (
+                        await transaction.update(
+                            ChatSession,
+                            current.id,
+                            {
+                                "metadata": {
+                                    **current.metadata,
+                                    "message_count": sequence,
+                                    "last_sequence": sequence,
+                                }
+                            },
+                            expected_revision=current.revision,
+                        )
                     )
-                    transaction.add(message)
-                    transaction.add(transcript)
+                    (await transaction.add(message))
+                    (await transaction.add(transcript))
                 break
             except ConflictError:
-                existing = self._existing(sender.id, key)
+                existing = await self._existing(sender.id, key)
                 if existing is not None:
                     return self._send_view(existing)
                 if attempt == 2:
@@ -522,9 +532,9 @@ class AgentMessageService:
                 f'Peer agent message from "{sender.title}" ({sender.id}):\n\n{content}',
             )
             if steered:
-                self._mark_delivered([message])
+                (await self._mark_delivered([message]))
         return {
-            **self._send_view(self.store.get(ChatAgentMessage, message.id)),
+            **self._send_view((await self.store.get(ChatAgentMessage, message.id))),
             "delivery": "steered" if steered else "queued",
             "note": (
                 "Delivered to its active turn."
@@ -555,9 +565,13 @@ class AgentMessageBroker:
     ) -> ToolExecutionResult:
         del scope, approval
         if invocation.tool_name == "list_agents":
-            return ToolExecutionResult(output=self.service.list_output(invocation))
+            return ToolExecutionResult(
+                output=(await self.service.list_output(invocation))
+            )
         if invocation.tool_name == "read_agent_messages":
-            return ToolExecutionResult(output=self.service.read_output(invocation))
+            return ToolExecutionResult(
+                output=(await self.service.read_output(invocation))
+            )
         if invocation.tool_name == "send_agent_message":
             return ToolExecutionResult(
                 output=await self.service.send(

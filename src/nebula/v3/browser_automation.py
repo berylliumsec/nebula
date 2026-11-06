@@ -261,10 +261,10 @@ class BrowserAutomationService:
         self.store = store
         self.policy = PolicyEngine()
 
-    def validate_autonomy(
+    async def validate_autonomy(
         self, engagement_id: str, request: BrowserAutonomyRequestModel
     ) -> BrowserSession:
-        session = self.store.get(BrowserSession, request.session_id)
+        session = await self.store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
             raise BrowserAutomationRequestError(
                 "browser session belongs to another Project"
@@ -280,16 +280,18 @@ class BrowserAutomationService:
             raise BrowserAutomationRequestError(
                 "autonomous browser tests require an active session"
             )
-        if not self.store.find_entities(
-            BrowserIdentity,
-            {"id": session.identity_id},
-            engagement_id=engagement_id,
-            limit=1,
+        if not (
+            await self.store.find_entities(
+                BrowserIdentity,
+                {"id": session.identity_id},
+                engagement_id=engagement_id,
+                limit=1,
+            )
         ):
             raise BrowserAutomationRequestError(
                 "browser session identity is unavailable"
             )
-        scope = self._scope(engagement_id)
+        scope = await self._scope(engagement_id)
         for target in request.targets:
             self._require_target(
                 scope, target, RiskClass.PASSIVE, "browser.autonomy.target"
@@ -311,19 +313,19 @@ class BrowserAutomationService:
                 )
         return session
 
-    def create_lease(
+    async def create_lease(
         self,
         run_id: str,
         engagement_id: str,
         request: BrowserAutonomyRequestModel,
         actor_id: str,
     ) -> BrowserAutomationLease:
-        run = self.store.get(AgentRun, run_id)
+        run = await self.store.get(AgentRun, run_id)
         if run.engagement_id != engagement_id:
             raise BrowserAutomationRequestError("mission belongs to another Project")
-        session = self.validate_autonomy(engagement_id, request)
-        scope = self._scope(engagement_id)
-        for existing in self.store.find_entities(
+        session = await self.validate_autonomy(engagement_id, request)
+        scope = await self._scope(engagement_id)
+        for existing in await self.store.find_entities(
             BrowserAutomationLease,
             {},
             engagement_id=engagement_id,
@@ -351,43 +353,47 @@ class BrowserAutomationService:
             expires_at=now + timedelta(seconds=request.duration_seconds),
             metadata={"created_by": actor_id, "autonomy_mode": "run_scoped"},
         )
-        return self._create(lease, "browser_automation_lease.created", actor_id)
+        return await self._create(lease, "browser_automation_lease.created", actor_id)
 
-    def status(
+    async def status(
         self, engagement_id: str, run_id: str | None = None
     ) -> BrowserAutomationStatus:
         # A status view shows the latest records of a run or Project; commands
         # alone can pass 1,000 in one lease.
-        leases = self.store.list_latest_entities(
+        leases = await self.store.list_latest_entities(
             BrowserAutomationLease,
             engagement_id=engagement_id,
             automation_run_id=run_id,
         )
-        leases = [self._reconcile_lease(item) for item in leases]
+        leases = [(await self._reconcile_lease(item)) for item in leases]
         lease_ids = {item.id for item in leases}
         commands = [
             item
-            for item in self.store.list_latest_entities(
-                BrowserCommand,
-                engagement_id=engagement_id,
-                automation_run_id=run_id,
+            for item in (
+                await self.store.list_latest_entities(
+                    BrowserCommand,
+                    engagement_id=engagement_id,
+                    automation_run_id=run_id,
+                )
             )
             if item.lease_id in lease_ids
         ]
         rules = [
-            self._reconcile_rule(item)
-            for item in self.store.list_latest_entities(
-                BrowserProxyRule,
-                engagement_id=engagement_id,
-                automation_run_id=run_id,
+            (await self._reconcile_rule(item))
+            for item in (
+                await self.store.list_latest_entities(
+                    BrowserProxyRule,
+                    engagement_id=engagement_id,
+                    automation_run_id=run_id,
+                )
             )
             if item.lease_id in lease_ids
         ]
         return BrowserAutomationStatus(leases=leases, commands=commands, rules=rules)
 
-    def active_lease_for_run(self, run_id: str) -> BrowserAutomationLease:
-        run = self.store.get(AgentRun, run_id)
-        leases = self.store.find_entities(
+    async def active_lease_for_run(self, run_id: str) -> BrowserAutomationLease:
+        run = await self.store.get(AgentRun, run_id)
+        leases = await self.store.find_entities(
             BrowserAutomationLease,
             {},
             engagement_id=run.engagement_id,
@@ -399,17 +405,17 @@ class BrowserAutomationService:
             raise BrowserAutomationRequestError(
                 "the mission has no browser automation lease"
             )
-        return self._active_lease(leases[0].id)
+        return await self._active_lease(leases[0].id)
 
-    def enqueue_command(
+    async def enqueue_command(
         self,
         lease_id: str,
         request: BrowserCommandCreateRequest,
         actor_id: str,
     ) -> BrowserCommand:
-        lease = self._active_lease(lease_id)
+        lease = await self._active_lease(lease_id)
         if request.idempotency_key:
-            existing = self._commands_for_lease(
+            existing = await self._commands_for_lease(
                 lease, idempotency_key=request.idempotency_key
             )
             if existing:
@@ -438,7 +444,7 @@ class BrowserAutomationService:
         ]
         for target in dict.fromkeys(targets):
             self._require_target(
-                self._scope(lease.engagement_id), target, risk, request.kind
+                (await self._scope(lease.engagement_id)), target, risk, request.kind
             )
             if not self._target_in_lease(target, lease.target_urls):
                 raise BrowserAutomationRequestError(
@@ -481,7 +487,7 @@ class BrowserAutomationService:
             raise BrowserAutomationRequestError(
                 "browser automation body budget is exhausted"
             )
-        updated = self.store.update(
+        updated = await self.store.update(
             BrowserAutomationLease,
             lease.id,
             {
@@ -505,25 +511,25 @@ class BrowserAutomationService:
             expires_at=min(updated.expires_at, now + timedelta(minutes=5)),
             idempotency_key=request.idempotency_key,
         )
-        return self._create(command, "browser_command.queued", actor_id)
+        return await self._create(command, "browser_command.queued", actor_id)
 
-    def claim_command(
+    async def claim_command(
         self, command_id: str, request: BrowserCommandClaimRequest
     ) -> BrowserCommand:
-        command = self.store.get(BrowserCommand, command_id)
+        command = await self.store.get(BrowserCommand, command_id)
         lease = None
         if command.status in {
             BrowserCommandStatus.QUEUED,
             BrowserCommandStatus.CLAIMED,
         }:
-            lease = self._active_lease(command.lease_id)
-            self._require_paired_desktop(lease, request.device_id)
+            lease = await self._active_lease(command.lease_id)
+            (await self._require_paired_desktop(lease, request.device_id))
         if (
             command.status == BrowserCommandStatus.CLAIMED
             and command.claim_expires_at is not None
             and command.claim_expires_at <= utc_now()
         ):
-            command = self._update_command(
+            command = await self._update_command(
                 command,
                 {
                     "status": BrowserCommandStatus.QUEUED,
@@ -540,7 +546,7 @@ class BrowserAutomationService:
             return command
         assert lease is not None
         if command.expires_at <= utc_now():
-            return self._update_command(
+            return await self._update_command(
                 command,
                 {
                     "status": BrowserCommandStatus.EXPIRED,
@@ -551,7 +557,7 @@ class BrowserAutomationService:
             )
         token = secrets.token_urlsafe(24)
         try:
-            return self._update_command(
+            return await self._update_command(
                 command,
                 {
                     "status": BrowserCommandStatus.CLAIMED,
@@ -568,20 +574,20 @@ class BrowserAutomationService:
             # Another paired worker won the optimistic claim race. Returning
             # its durable state makes retries idempotent without issuing a
             # second native action.
-            return self.store.get(BrowserCommand, command.id)
+            return await self.store.get(BrowserCommand, command.id)
 
-    def finish_command(
+    async def finish_command(
         self, command_id: str, request: BrowserCommandResultRequest
     ) -> BrowserCommand:
-        command = self.store.get(BrowserCommand, command_id)
+        command = await self.store.get(BrowserCommand, command_id)
         if command.status == BrowserCommandStatus.COMPLETE:
             return command
         if command.status != BrowserCommandStatus.CLAIMED:
             raise BrowserAutomationRequestError(
                 "only claimed browser commands can finish"
             )
-        lease = self._active_lease(command.lease_id)
-        self._require_paired_desktop(lease, request.device_id)
+        lease = await self._active_lease(command.lease_id)
+        (await self._require_paired_desktop(lease, request.device_id))
         if (
             command.claimed_by_device_id != request.device_id
             or command.claim_token != request.claim_token
@@ -598,7 +604,7 @@ class BrowserAutomationService:
             if request.state == "complete"
             else BrowserCommandStatus.FAILED
         )
-        return self._update_command(
+        return await self._update_command(
             command,
             {
                 "status": status,
@@ -610,12 +616,12 @@ class BrowserAutomationService:
             request.device_id,
         )
 
-    def revoke_run(self, run_id: str, reason: str, actor_id: str) -> int:
-        run = self.store.get(AgentRun, run_id)
+    async def revoke_run(self, run_id: str, reason: str, actor_id: str) -> int:
+        run = await self.store.get(AgentRun, run_id)
         count = 0
         lease_ids: set[str] = set()
         session_ids: set[str] = set()
-        for lease in self.store.find_entities(
+        for lease in await self.store.find_entities(
             BrowserAutomationLease,
             {},
             engagement_id=run.engagement_id,
@@ -627,92 +633,100 @@ class BrowserAutomationService:
                 BrowserAutomationLeaseStatus.REVOKED,
                 BrowserAutomationLeaseStatus.EXPIRED,
             }:
-                self._update_lease(
-                    lease,
-                    {
-                        "status": BrowserAutomationLeaseStatus.REVOKED,
-                        "revoked_at": utc_now(),
-                        "stop_reason": reason,
-                    },
-                    "browser_automation_lease.revoked",
-                    actor_id,
+                (
+                    await self._update_lease(
+                        lease,
+                        {
+                            "status": BrowserAutomationLeaseStatus.REVOKED,
+                            "revoked_at": utc_now(),
+                            "stop_reason": reason,
+                        },
+                        "browser_automation_lease.revoked",
+                        actor_id,
+                    )
                 )
                 count += 1
-            for command in self._commands_for_lease(
+            for command in await self._commands_for_lease(
                 lease, statuses=OPEN_COMMAND_STATUSES
             ):
-                self._update_command(
-                    command,
-                    {"status": BrowserCommandStatus.CANCELLED, "error": reason},
-                    "browser_command.cancelled",
-                    actor_id,
+                (
+                    await self._update_command(
+                        command,
+                        {"status": BrowserCommandStatus.CANCELLED, "error": reason},
+                        "browser_command.cancelled",
+                        actor_id,
+                    )
                 )
-        for rule in self.store.find_entities(
+        for rule in await self.store.find_entities(
             BrowserProxyRule,
             {},
             engagement_id=run.engagement_id,
             automation_run_id=run_id,
         ):
             if rule.lease_id in lease_ids and rule.enabled:
-                self._disable_rule(rule, reason, actor_id)
+                (await self._disable_rule(rule, reason, actor_id))
         for session_id in session_ids:
-            self._disable_session_proxy(session_id, reason, actor_id)
+            (await self._disable_session_proxy(session_id, reason, actor_id))
         return count
 
-    def _disable_session_proxy(
+    async def _disable_session_proxy(
         self, session_id: str, reason: str, actor_id: str
     ) -> None:
         """Make an emergency stop durable, not just a native worker signal."""
 
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         if not session.proxy_enabled and not session.proxy_trust_acknowledged:
             return
         try:
-            self.store.update_with_operation_event(
-                BrowserSession,
-                session.id,
-                {
-                    "proxy_enabled": False,
-                    "proxy_trust_acknowledged": False,
-                },
-                expected_revision=session.revision,
-                operation_id=session.id,
-                operation_kind="browser_session",
-                engagement_id=session.engagement_id,
-                event_type="browser_session.proxy_disabled_by_emergency_stop",
-                event_payload={"reason": reason},
-                actor_id=actor_id,
+            (
+                await self.store.update_with_operation_event(
+                    BrowserSession,
+                    session.id,
+                    {
+                        "proxy_enabled": False,
+                        "proxy_trust_acknowledged": False,
+                    },
+                    expected_revision=session.revision,
+                    operation_id=session.id,
+                    operation_kind="browser_session",
+                    engagement_id=session.engagement_id,
+                    event_type="browser_session.proxy_disabled_by_emergency_stop",
+                    event_payload={"reason": reason},
+                    actor_id=actor_id,
+                )
             )
         except (
             ConflictError
         ):  # diagnostic-expected: retry once against authoritative state
             # A concurrent tab sync or operator change wins the revision race;
             # reload and fail closed if the proxy is still durable-enabled.
-            current = self.store.get(BrowserSession, session.id)
+            current = await self.store.get(BrowserSession, session.id)
             if current.proxy_enabled or current.proxy_trust_acknowledged:
-                self.store.update_with_operation_event(
-                    BrowserSession,
-                    current.id,
-                    {
-                        "proxy_enabled": False,
-                        "proxy_trust_acknowledged": False,
-                    },
-                    expected_revision=current.revision,
-                    operation_id=current.id,
-                    operation_kind="browser_session",
-                    engagement_id=current.engagement_id,
-                    event_type="browser_session.proxy_disabled_by_emergency_stop",
-                    event_payload={"reason": reason},
-                    actor_id=actor_id,
+                (
+                    await self.store.update_with_operation_event(
+                        BrowserSession,
+                        current.id,
+                        {
+                            "proxy_enabled": False,
+                            "proxy_trust_acknowledged": False,
+                        },
+                        expected_revision=current.revision,
+                        operation_id=current.id,
+                        operation_kind="browser_session",
+                        engagement_id=current.engagement_id,
+                        event_type="browser_session.proxy_disabled_by_emergency_stop",
+                        event_payload={"reason": reason},
+                        actor_id=actor_id,
+                    )
                 )
 
-    def invalidate_scope_revision(
+    async def invalidate_scope_revision(
         self, engagement_id: str, revision: int, actor_id: str
     ) -> int:
         """Revoke every active browser lease pinned to an older scope revision."""
 
         count = 0
-        for lease in self.store.find_entities(
+        for lease in await self.store.find_entities(
             BrowserAutomationLease,
             {},
             engagement_id=engagement_id,
@@ -724,18 +738,22 @@ class BrowserAutomationService:
             ):
                 continue
             try:
-                self._update_lease(
-                    lease,
-                    {
-                        "status": BrowserAutomationLeaseStatus.REVOKED,
-                        "revoked_at": utc_now(),
-                        "stop_reason": "Project scope policy revision changed",
-                    },
-                    "browser_automation_lease.scope_invalidated",
-                    actor_id,
+                (
+                    await self._update_lease(
+                        lease,
+                        {
+                            "status": BrowserAutomationLeaseStatus.REVOKED,
+                            "revoked_at": utc_now(),
+                            "stop_reason": "Project scope policy revision changed",
+                        },
+                        "browser_automation_lease.scope_invalidated",
+                        actor_id,
+                    )
                 )
-                self._disable_lease_dependents(
-                    lease, "Project scope policy revision changed"
+                (
+                    await self._disable_lease_dependents(
+                        lease, "Project scope policy revision changed"
+                    )
                 )
                 count += 1
             except (
@@ -746,10 +764,10 @@ class BrowserAutomationService:
                 continue
         return count
 
-    def add_rule(
+    async def add_rule(
         self, lease_id: str, request: BrowserProxyRuleRequest, actor_id: str
     ) -> BrowserProxyRule:
-        lease = self._active_lease(lease_id)
+        lease = await self._active_lease(lease_id)
         if RiskClass.ACTIVE_SCAN not in lease.allowed_risk_classes:
             raise BrowserAutomationRequestError(
                 "proxy mutation requires active-scan authorization"
@@ -776,12 +794,12 @@ class BrowserAutomationService:
                 utc_now() + timedelta(seconds=request.duration_seconds),
             ),
         )
-        return self._create(rule, "browser_proxy_rule.created", actor_id)
+        return await self._create(rule, "browser_proxy_rule.created", actor_id)
 
-    def remove_rule(self, rule_id: str, actor_id: str) -> BrowserProxyRule:
-        rule = self.store.get(BrowserProxyRule, rule_id)
-        self._active_lease(rule.lease_id)
-        updated, _ = self.store.update_with_operation_event(
+    async def remove_rule(self, rule_id: str, actor_id: str) -> BrowserProxyRule:
+        rule = await self.store.get(BrowserProxyRule, rule_id)
+        (await self._active_lease(rule.lease_id))
+        updated, _ = await self.store.update_with_operation_event(
             BrowserProxyRule,
             rule.id,
             {
@@ -808,7 +826,7 @@ class BrowserAutomationService:
     ) -> BrowserCommand:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
-            command = self.store.get(BrowserCommand, command_id)
+            command = await self.store.get(BrowserCommand, command_id)
             if command.status in {
                 BrowserCommandStatus.COMPLETE,
                 BrowserCommandStatus.FAILED,
@@ -820,11 +838,11 @@ class BrowserAutomationService:
                 return command
             await asyncio.sleep(0.15)
 
-    def _scope(self, engagement_id: str) -> ScopePolicy:
-        engagement = self.store.get(Engagement, engagement_id)
+    async def _scope(self, engagement_id: str) -> ScopePolicy:
+        engagement = await self.store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
             raise BrowserAutomationRequestError("Project scope is not configured")
-        scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+        scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
         if scope.engagement_id != engagement_id:
             raise BrowserAutomationRequestError("Project scope ownership is invalid")
         return scope
@@ -990,8 +1008,10 @@ class BrowserAutomationService:
                 "browser automation accepts credential_ref, not reusable secret values"
             )
 
-    def _active_lease(self, lease_id: str) -> BrowserAutomationLease:
-        lease = self._reconcile_lease(self.store.get(BrowserAutomationLease, lease_id))
+    async def _active_lease(self, lease_id: str) -> BrowserAutomationLease:
+        lease = await self._reconcile_lease(
+            (await self.store.get(BrowserAutomationLease, lease_id))
+        )
         if lease.status != BrowserAutomationLeaseStatus.ACTIVE:
             raise BrowserAutomationRequestError(
                 f"browser automation lease is {lease.status.value}"
@@ -1000,11 +1020,13 @@ class BrowserAutomationService:
             raise BrowserAutomationRequestError("browser automation lease has expired")
         return lease
 
-    def _reconcile_lease(self, lease: BrowserAutomationLease) -> BrowserAutomationLease:
+    async def _reconcile_lease(
+        self, lease: BrowserAutomationLease
+    ) -> BrowserAutomationLease:
         if lease.status == BrowserAutomationLeaseStatus.ACTIVE:
             if lease.expires_at <= utc_now():
                 try:
-                    updated = self._update_lease(
+                    updated = await self._update_lease(
                         lease,
                         {
                             "status": BrowserAutomationLeaseStatus.EXPIRED,
@@ -1013,14 +1035,14 @@ class BrowserAutomationService:
                         "browser_automation_lease.expired",
                         "system",
                     )
-                    self._disable_lease_dependents(lease, "lease expired")
+                    (await self._disable_lease_dependents(lease, "lease expired"))
                     return updated
                 except (
                     ConflictError
                 ):  # diagnostic-expected: reload the winning expiry update
-                    return self.store.get(BrowserAutomationLease, lease.id)
+                    return await self.store.get(BrowserAutomationLease, lease.id)
             try:
-                current_scope = self._scope(lease.engagement_id)
+                current_scope = await self._scope(lease.engagement_id)
             except (
                 BrowserAutomationRequestError
             ):  # diagnostic-expected: absent scope revokes the lease below
@@ -1030,7 +1052,7 @@ class BrowserAutomationService:
                 or current_scope.revision != lease.scope_policy_revision
             ):
                 try:
-                    updated = self._update_lease(
+                    updated = await self._update_lease(
                         lease,
                         {
                             "status": BrowserAutomationLeaseStatus.REVOKED,
@@ -1040,17 +1062,19 @@ class BrowserAutomationService:
                         "browser_automation_lease.scope_invalidated",
                         "system",
                     )
-                    self._disable_lease_dependents(
-                        lease, "Project scope policy revision changed"
+                    (
+                        await self._disable_lease_dependents(
+                            lease, "Project scope policy revision changed"
+                        )
                     )
                     return updated
                 except (
                     ConflictError
                 ):  # diagnostic-expected: reload the winning revocation update
-                    return self.store.get(BrowserAutomationLease, lease.id)
+                    return await self.store.get(BrowserAutomationLease, lease.id)
         return lease
 
-    def _commands_for_lease(
+    async def _commands_for_lease(
         self,
         lease: BrowserAutomationLease,
         *,
@@ -1062,7 +1086,7 @@ class BrowserAutomationService:
         filters: dict[str, PayloadFilterValue] = {"lease_id": lease.id}
         if idempotency_key is not None:
             filters["idempotency_key"] = idempotency_key
-        return self.store.find_entities(
+        return await self.store.find_entities(
             BrowserCommand,
             filters,
             engagement_id=lease.engagement_id,
@@ -1071,26 +1095,30 @@ class BrowserAutomationService:
             automation_status=statuses,
         )
 
-    def _require_paired_desktop(
+    async def _require_paired_desktop(
         self, lease: BrowserAutomationLease, device_id: str
     ) -> None:
-        session = self.store.get(BrowserSession, lease.session_id)
+        session = await self.store.get(BrowserSession, lease.session_id)
         if session.device_owner != device_id:
             raise BrowserAutomationRequestError(
                 "browser commands can be claimed only by the paired desktop device"
             )
 
-    def _disable_lease_dependents(
+    async def _disable_lease_dependents(
         self, lease: BrowserAutomationLease, reason: str
     ) -> None:
-        for command in self._commands_for_lease(lease, statuses=OPEN_COMMAND_STATUSES):
-            self._update_command(
-                command,
-                {"status": BrowserCommandStatus.CANCELLED, "error": reason},
-                "browser_command.cancelled",
-                "system",
+        for command in await self._commands_for_lease(
+            lease, statuses=OPEN_COMMAND_STATUSES
+        ):
+            (
+                await self._update_command(
+                    command,
+                    {"status": BrowserCommandStatus.CANCELLED, "error": reason},
+                    "browser_command.cancelled",
+                    "system",
+                )
             )
-        for rule in self.store.find_entities(
+        for rule in await self.store.find_entities(
             BrowserProxyRule,
             {"lease_id": lease.id},
             engagement_id=lease.engagement_id,
@@ -1098,22 +1126,22 @@ class BrowserAutomationService:
             automation_session_id=lease.session_id,
         ):
             if rule.enabled:
-                self._disable_rule(rule, reason, "system")
+                (await self._disable_rule(rule, reason, "system"))
 
-    def _reconcile_rule(self, rule: BrowserProxyRule) -> BrowserProxyRule:
+    async def _reconcile_rule(self, rule: BrowserProxyRule) -> BrowserProxyRule:
         if not rule.enabled or rule.expires_at > utc_now():
             return rule
         try:
-            return self._disable_rule(rule, "proxy rule expired", "system")
+            return await self._disable_rule(rule, "proxy rule expired", "system")
         except (
             ConflictError
         ):  # diagnostic-expected: reload the winning rule-expiry update
-            return self.store.get(BrowserProxyRule, rule.id)
+            return await self.store.get(BrowserProxyRule, rule.id)
 
-    def _disable_rule(
+    async def _disable_rule(
         self, rule: BrowserProxyRule, reason: str, actor_id: str
     ) -> BrowserProxyRule:
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserProxyRule,
             rule.id,
             {"enabled": False, "disabled_at": utc_now(), "disabled_reason": reason},
@@ -1127,14 +1155,14 @@ class BrowserAutomationService:
         )
         return updated
 
-    def _update_lease(
+    async def _update_lease(
         self,
         lease: BrowserAutomationLease,
         changes: dict[str, Any],
         event_type: str,
         actor_id: str,
     ) -> BrowserAutomationLease:
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserAutomationLease,
             lease.id,
             changes,
@@ -1148,14 +1176,14 @@ class BrowserAutomationService:
         )
         return updated
 
-    def _update_command(
+    async def _update_command(
         self,
         command: BrowserCommand,
         changes: dict[str, Any],
         event_type: str,
         actor_id: str,
     ) -> BrowserCommand:
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserCommand,
             command.id,
             changes,
@@ -1173,8 +1201,8 @@ class BrowserAutomationService:
         )
         return updated
 
-    def _create(self, entity: Any, event_type: str, actor_id: str) -> Any:
-        created, _ = self.store.create_with_operation_event(
+    async def _create(self, entity: Any, event_type: str, actor_id: str) -> Any:
+        created, _ = await self.store.create_with_operation_event(
             entity,
             operation_id=entity.id,
             operation_kind=entity.entity_kind,

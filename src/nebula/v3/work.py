@@ -255,16 +255,16 @@ class WorkService:
         self.store = store
         self.changes = work_change_feed(store)
 
-    def enabled(self, engagement_id: str) -> bool:
-        return self.store.get(Engagement, engagement_id).work_enabled
+    async def enabled(self, engagement_id: str) -> bool:
+        return (await self.store.get(Engagement, engagement_id)).work_enabled
 
-    def active_agents(
+    async def active_agents(
         self, engagement_id: str | None = None
     ) -> list[WorkAgentActivity]:
         """The live Work roster used by the operator view and agent tool."""
 
         if engagement_id is not None:
-            project = self.store.get(Engagement, engagement_id)
+            project = await self.store.get(Engagement, engagement_id)
             if project.status == EngagementStatus.ARCHIVED:
                 return []
         active_statuses = [
@@ -275,7 +275,7 @@ class WorkService:
             ChatTurnStatus.FINALIZING,
             ChatTurnStatus.INTERRUPTED,
         ]
-        turns = self.store.chat_turn_status_rows(
+        turns = await self.store.chat_turn_status_rows(
             active_statuses,
             engagement_id=engagement_id,
         )
@@ -286,9 +286,11 @@ class WorkService:
         ]
         sessions = {
             session.id: session
-            for session in self.store.chat_session_agent_rows(
-                session_ids={turn.session_id for turn in turns},
-                include_temporary=True,
+            for session in (
+                await self.store.chat_session_agent_rows(
+                    session_ids={turn.session_id for turn in turns},
+                    include_temporary=True,
+                )
             )
         }
         activity: list[WorkAgentActivity] = []
@@ -308,8 +310,8 @@ class WorkService:
             if engagement_id is None:
                 project_status = project_statuses.get(session.engagement_id)
                 if project_status is None:
-                    project_status = self.store.get(
-                        Engagement, session.engagement_id
+                    project_status = (
+                        await self.store.get(Engagement, session.engagement_id)
                     ).status
                     project_statuses[session.engagement_id] = project_status
                 if project_status == EngagementStatus.ARCHIVED:
@@ -330,20 +332,22 @@ class WorkService:
             )
         return activity
 
-    def agent_roster(self, engagement_id: str) -> list[WorkAgentRosterEntry]:
+    async def agent_roster(self, engagement_id: str) -> list[WorkAgentRosterEntry]:
         """Read this project's live agents and their recorded open Work links."""
 
-        activity = self.active_agents(engagement_id)
+        activity = await self.active_agents(engagement_id)
         if not activity:
             return []
         items: list[WorkItem] = []
         offset = 0
-        while page := self.store.list_entities(
-            WorkItem,
-            engagement_id=engagement_id,
-            offset=offset,
-            limit=1_000,
-            newest_first=True,
+        while page := (
+            await self.store.list_entities(
+                WorkItem,
+                engagement_id=engagement_id,
+                offset=offset,
+                limit=1_000,
+                newest_first=True,
+            )
         ):
             items.extend(page)
             offset += len(page)
@@ -377,11 +381,11 @@ class WorkService:
             )
         return roster
 
-    def set_enabled(
+    async def set_enabled(
         self, engagement_id: str, enabled: bool, *, expected_revision: int | None = None
     ) -> Engagement:
         for _ in range(3):
-            project = self.store.get(Engagement, engagement_id)
+            project = await self.store.get(Engagement, engagement_id)
             if expected_revision is not None and project.revision != expected_revision:
                 raise ConflictError(
                     "project Work setting changed; read its current revision"
@@ -389,7 +393,7 @@ class WorkService:
             if project.work_enabled == enabled:
                 return project
             try:
-                updated = self.store.update(
+                updated = await self.store.update(
                     Engagement,
                     engagement_id,
                     {"work_enabled": enabled},
@@ -404,7 +408,7 @@ class WorkService:
                 continue
         raise ConflictError("project Work setting changed concurrently; retry")
 
-    def _session(
+    async def _session(
         self,
         engagement_id: str,
         session_id: str | None,
@@ -413,24 +417,26 @@ class WorkService:
     ) -> None:
         if session_id is None:
             return
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         if session.engagement_id == engagement_id:
             return
         if (
             allow_parent
-            and self.store.get(Engagement, engagement_id).parent_engagement_id
+            and (await self.store.get(Engagement, engagement_id)).parent_engagement_id
             == session.engagement_id
         ):
             return
         raise NotFoundError("conversation does not belong to this project")
 
-    def agent_project(self, engagement_id: str, project_name: str | None = None) -> str:
+    async def agent_project(
+        self, engagement_id: str, project_name: str | None = None
+    ) -> str:
         """Resolve this project or one directly linked child for a Work tool."""
-        if not self.enabled(engagement_id):
+        if not (await self.enabled(engagement_id)):
             raise ValueError("Work is off for this project")
         if not project_name:
             return engagement_id
-        projects = self.store.find_entities(
+        projects = await self.store.find_entities(
             Engagement,
             {"name": project_name, "parent_engagement_id": engagement_id},
             limit=2,
@@ -443,31 +449,31 @@ class WorkService:
             raise ValueError("Work is off for this project")
         return projects[0].id
 
-    def agent_item_project(self, engagement_id: str, item_id: str) -> str:
+    async def agent_item_project(self, engagement_id: str, item_id: str) -> str:
         """Allow a Work tool to use an item in its project or a direct child."""
-        if not self.enabled(engagement_id):
+        if not (await self.enabled(engagement_id)):
             raise ValueError("Work is off for this project")
-        item = self.store.get(WorkItem, item_id)
+        item = await self.store.get(WorkItem, item_id)
         if item.engagement_id == engagement_id:
             return engagement_id
-        project = self.store.get(Engagement, item.engagement_id)
+        project = await self.store.get(Engagement, item.engagement_id)
         if project.parent_engagement_id != engagement_id:
             raise NotFoundError("work item does not belong to this project")
         if not project.work_enabled:
             raise ValueError("Work is off for this project")
         return project.id
 
-    def get(self, engagement_id: str, item_id: str) -> WorkItem:
-        item = self.store.get(WorkItem, item_id)
+    async def get(self, engagement_id: str, item_id: str) -> WorkItem:
+        item = await self.store.get(WorkItem, item_id)
         if item.engagement_id != engagement_id:
             raise NotFoundError("work item does not belong to this project")
         return item
 
-    def list(
+    async def list(
         self, engagement_id: str, *, offset: int = 0, limit: int = 500
     ) -> list[WorkItem]:
-        self.store.get(Engagement, engagement_id)
-        return self.store.list_entities(
+        (await self.store.get(Engagement, engagement_id))
+        return await self.store.list_entities(
             WorkItem,
             engagement_id=engagement_id,
             offset=offset,
@@ -475,7 +481,7 @@ class WorkService:
             newest_first=True,
         )
 
-    def agent_list_page(
+    async def agent_list_page(
         self,
         engagement_id: str,
         *,
@@ -488,7 +494,7 @@ class WorkService:
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("offset must be nonnegative and limit between 1 and 100")
         envelope = envelope or {}
-        rows = self.list(engagement_id, offset=offset, limit=limit + 1)
+        rows = await self.list(engagement_id, offset=offset, limit=limit + 1)
         items: list[dict[str, object]] = []
         for item in rows[:limit]:
             summary = item.model_dump(mode="json", exclude={"description"})
@@ -513,7 +519,7 @@ class WorkService:
             "next_offset": offset + len(items) if len(rows) > len(items) else None,
         }
 
-    def agent_get_item(
+    async def agent_get_item(
         self,
         engagement_id: str,
         item_id: str,
@@ -523,7 +529,7 @@ class WorkService:
     ) -> dict[str, object]:
         """Read a Work item with its description in byte-fitted chunks."""
 
-        item = self.get(engagement_id, item_id)
+        item = await self.get(engagement_id, item_id)
         envelope = envelope or {}
         description = item.description
         if not 0 <= description_offset <= len(description):
@@ -552,11 +558,11 @@ class WorkService:
             raise ValueError("Work item metadata exceeds the model-delivery bound")
         return result
 
-    def updates(
+    async def updates(
         self, engagement_id: str, item_id: str, *, limit: int = 200
     ) -> builtins.list[WorkUpdate]:
-        self.get(engagement_id, item_id)
-        return self.store.find_entities(
+        (await self.get(engagement_id, item_id))
+        return await self.store.find_entities(
             WorkUpdate,
             {"item_id": item_id},
             engagement_id=engagement_id,
@@ -564,7 +570,7 @@ class WorkService:
             newest_first=True,
         )
 
-    def agent_updates_page(
+    async def agent_updates_page(
         self,
         engagement_id: str,
         item_id: str,
@@ -577,9 +583,9 @@ class WorkService:
 
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError("offset must be nonnegative and limit between 1 and 100")
-        self.get(engagement_id, item_id)
+        (await self.get(engagement_id, item_id))
         envelope = envelope or {}
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             WorkUpdate,
             {"item_id": item_id},
             engagement_id=engagement_id,
@@ -613,7 +619,7 @@ class WorkService:
             "next_offset": offset + len(updates) if len(rows) > len(updates) else None,
         }
 
-    def agent_get_update(
+    async def agent_get_update(
         self,
         engagement_id: str,
         item_id: str,
@@ -625,8 +631,8 @@ class WorkService:
     ) -> dict[str, object]:
         """Read exact check-in text in byte-fitted chunks."""
 
-        self.get(engagement_id, item_id)
-        update = self.store.get(WorkUpdate, update_id)
+        (await self.get(engagement_id, item_id))
+        update = await self.store.get(WorkUpdate, update_id)
         if update.engagement_id != engagement_id or update.item_id != item_id:
             raise NotFoundError("work check-in does not belong to this item")
         if field not in {"summary", "next_step", "blocker"}:
@@ -668,7 +674,7 @@ class WorkService:
             raise ValueError("Work check-in metadata exceeds the model-delivery bound")
         return result
 
-    def create(
+    async def create(
         self,
         engagement_id: str,
         data: WorkCreate,
@@ -677,13 +683,13 @@ class WorkService:
         source_session_id: str | None = None,
         notify: bool = True,
     ) -> WorkItem:
-        self.store.get(Engagement, engagement_id)
-        self._session(engagement_id, data.assignee_session_id)
-        self._session(engagement_id, source_session_id)
+        (await self.store.get(Engagement, engagement_id))
+        (await self._session(engagement_id, data.assignee_session_id))
+        (await self._session(engagement_id, source_session_id))
         if data.source_kind == "chat" and data.source_id:
-            self._session(engagement_id, data.source_id)
+            (await self._session(engagement_id, data.source_id))
         if data.source_kind == "mission" and data.source_id:
-            run = self.store.get(AgentRun, data.source_id)
+            run = await self.store.get(AgentRun, data.source_id)
             if run.engagement_id != engagement_id:
                 raise NotFoundError("mission does not belong to this project")
         if source_session_id is not None:
@@ -707,7 +713,7 @@ class WorkService:
         )
         if item_id:
             try:
-                return self.get(engagement_id, item_id)
+                return await self.get(engagement_id, item_id)
             except NotFoundError:
                 # diagnostic-expected: an unused request ID has no existing item.
                 pass
@@ -736,16 +742,18 @@ class WorkService:
             )
         )
         try:
-            created = self.store.create(item)
+            created = await self.store.create(item)
             if notify:
                 self.changes.publish()
             return created
         except ConflictError:
             if item_id:
-                return self.get(engagement_id, item_id)
+                return await self.get(engagement_id, item_id)
             raise
 
-    def patch(self, engagement_id: str, item_id: str, data: WorkPatch) -> WorkItem:
+    async def patch(
+        self, engagement_id: str, item_id: str, data: WorkPatch
+    ) -> WorkItem:
         changes = {
             key: value
             for key, value in data.model_dump(
@@ -753,9 +761,9 @@ class WorkService:
             ).items()
             if value is not None or key == "assignee_session_id"
         }
-        self._session(engagement_id, changes.get("assignee_session_id"))
+        (await self._session(engagement_id, changes.get("assignee_session_id")))
         for _ in range(1 if data.expected_revision is not None else 3):
-            item = self.get(engagement_id, item_id)
+            item = await self.get(engagement_id, item_id)
             if (
                 data.expected_revision is not None
                 and item.revision != data.expected_revision
@@ -764,7 +772,7 @@ class WorkService:
             if not changes:
                 return item
             try:
-                updated = self.store.update(
+                updated = await self.store.update(
                     WorkItem, item_id, changes, expected_revision=item.revision
                 )
                 self.changes.publish()
@@ -776,7 +784,7 @@ class WorkService:
                 continue
         raise ConflictError("work item changed concurrently; retry")
 
-    def check_in(
+    async def check_in(
         self,
         engagement_id: str,
         item_id: str,
@@ -790,13 +798,15 @@ class WorkService:
         allow_parent_source_session: bool = False,
         notify: bool = True,
     ) -> WorkUpdate:
-        self._session(
-            engagement_id,
-            source_session_id,
-            allow_parent=allow_parent_source_session,
+        (
+            await self._session(
+                engagement_id,
+                source_session_id,
+                allow_parent=allow_parent_source_session,
+            )
         )
         source_engagement_id = (
-            self.store.get(ChatSession, source_session_id).engagement_id
+            (await self.store.get(ChatSession, source_session_id)).engagement_id
             if source_session_id is not None
             else None
         )
@@ -812,7 +822,7 @@ class WorkService:
         )
         if update_id:
             try:
-                existing = self.store.get(WorkUpdate, update_id)
+                existing = await self.store.get(WorkUpdate, update_id)
                 if (
                     existing.engagement_id == engagement_id
                     and existing.item_id == item_id
@@ -823,7 +833,7 @@ class WorkService:
                 # diagnostic-expected: an unused request ID has no existing update.
                 pass
         for _ in range(3):
-            item = self.get(engagement_id, item_id)
+            item = await self.get(engagement_id, item_id)
             if (
                 data.expected_revision is not None
                 and item.revision != data.expected_revision
@@ -863,13 +873,15 @@ class WorkService:
                 )
             )
             try:
-                with self.store.transaction() as transaction:
-                    transaction.add(update)
-                    transaction.update(
-                        WorkItem,
-                        item.id,
-                        {"status": status, "last_update_at": update.created_at},
-                        expected_revision=item.revision,
+                async with self.store.transaction() as transaction:
+                    (await transaction.add(update))
+                    (
+                        await transaction.update(
+                            WorkItem,
+                            item.id,
+                            {"status": status, "last_update_at": update.created_at},
+                            expected_revision=item.revision,
+                        )
                     )
                 if notify:
                     self.changes.publish()
@@ -878,7 +890,7 @@ class WorkService:
                 # diagnostic-expected: concurrent check-ins retry after an ID lookup.
                 if update_id:
                     try:
-                        return self.store.get(WorkUpdate, update_id)
+                        return await self.store.get(WorkUpdate, update_id)
                     except NotFoundError:
                         # diagnostic-expected: the conflicting write was another item edit.
                         pass
@@ -886,14 +898,14 @@ class WorkService:
                     raise
         raise ConflictError("work item changed concurrently; retry")
 
-    def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:
+    async def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:
         """Create source-identified projects and Work without overwriting later edits."""
 
         actor_id = f"import:{batch.source}"
         results: list[WorkImportProjectResult] = []
         for project in batch.projects:
             if project.engagement_id is not None:
-                engagement = self.store.get(Engagement, project.engagement_id)
+                engagement = await self.store.get(Engagement, project.engagement_id)
             else:
                 identity = json.dumps(
                     [batch.source, project.external_id], separators=(",", ":")
@@ -902,7 +914,7 @@ class WorkService:
                     uuid5(NAMESPACE_URL, f"nebula:work-import-project:{identity}")
                 )
                 try:
-                    engagement = self.store.get(Engagement, project_id)
+                    engagement = await self.store.get(Engagement, project_id)
                 except NotFoundError:
                     # diagnostic-expected: this source project has not been imported yet.
                     candidate = Engagement(
@@ -920,14 +932,14 @@ class WorkService:
                         },
                     )
                     if project.parent_engagement_id is not None:
-                        self.store.get(Engagement, project.parent_engagement_id)
+                        (await self.store.get(Engagement, project.parent_engagement_id))
                     try:
-                        engagement = create_engagement_with_default_scope(
+                        engagement = await create_engagement_with_default_scope(
                             self.store, candidate
                         )
                     except ConflictError:
                         # diagnostic-expected: another importer created this source project.
-                        engagement = self.store.get(Engagement, project_id)
+                        engagement = await self.store.get(Engagement, project_id)
                 if engagement.metadata.get("work_import") != {
                     "source": batch.source,
                     "external_id": project.external_id,
@@ -941,7 +953,7 @@ class WorkService:
                     [project.external_id, entry.external_id], separators=(",", ":")
                 )
                 request_id = sha256(identity.encode("utf-8")).hexdigest()
-                item = self.create(
+                item = await self.create(
                     engagement.id,
                     WorkCreate(
                         title=entry.title,
@@ -957,7 +969,7 @@ class WorkService:
                 )
                 update_id = None
                 if entry.update is not None:
-                    update = self.check_in(
+                    update = await self.check_in(
                         engagement.id,
                         item.id,
                         WorkCheckIn(
@@ -989,14 +1001,17 @@ class WorkService:
         self.changes.publish("projects")
         return WorkImportResult(projects=results)
 
-    def update_projects(self, batch: WorkProjectBatchUpdate) -> WorkProjectBatchResult:
+    async def update_projects(
+        self, batch: WorkProjectBatchUpdate
+    ) -> WorkProjectBatchResult:
         """Link existing projects in bounded, atomic batches."""
 
         parent_id = batch.parent_engagement_id
         if parent_id is not None:
-            self.store.get(Engagement, parent_id)
+            (await self.store.get(Engagement, parent_id))
         projects = [
-            self.store.get(Engagement, project_id) for project_id in batch.project_ids
+            (await self.store.get(Engagement, project_id))
+            for project_id in batch.project_ids
         ]
         if parent_id is not None:
             for project in projects:
@@ -1008,11 +1023,11 @@ class WorkService:
                     if ancestor_id == project.id or ancestor_id in seen:
                         raise ConflictError("project hierarchy would contain a cycle")
                     seen.add(ancestor_id)
-                    ancestor_id = self.store.get(
-                        Engagement, ancestor_id
+                    ancestor_id = (
+                        await self.store.get(Engagement, ancestor_id)
                     ).parent_engagement_id
         updated = 0
-        with self.store.transaction() as transaction:
+        async with self.store.transaction() as transaction:
             for project in projects:
                 changes: dict[str, str | bool] = {}
                 if parent_id is not None and project.parent_engagement_id != parent_id:
@@ -1023,11 +1038,13 @@ class WorkService:
                 ):
                     changes["work_enabled"] = batch.work_enabled
                 if changes:
-                    transaction.update(
-                        Engagement,
-                        project.id,
-                        changes,
-                        expected_revision=project.revision,
+                    (
+                        await transaction.update(
+                            Engagement,
+                            project.id,
+                            changes,
+                            expected_revision=project.revision,
+                        )
                     )
                     updated += 1
         if updated:
@@ -1069,7 +1086,9 @@ class WorkRosterBroker:
                 "Work roster is limited to this project", rule="work.roster.project"
             )
         if invocation.chat_session_id is not None:
-            session = self.service.store.get(ChatSession, invocation.chat_session_id)
+            session = await self.service.store.get(
+                ChatSession, invocation.chat_session_id
+            )
             if session.engagement_id != invocation.engagement_id:
                 raise ToolNotPermitted(
                     "Work roster is limited to this project", rule="work.roster.project"
@@ -1078,7 +1097,9 @@ class WorkRosterBroker:
             output={
                 "agents": [
                     agent.model_dump(mode="json")
-                    for agent in self.service.agent_roster(invocation.engagement_id)
+                    for agent in (
+                        await self.service.agent_roster(invocation.engagement_id)
+                    )
                 ]
             }
         )
@@ -1133,41 +1154,45 @@ class WorkBroker:
         approval: object | None = None,
     ) -> ToolExecutionResult:
         del scope, approval
-        if not self.service.enabled(invocation.engagement_id):
+        if not (await self.service.enabled(invocation.engagement_id)):
             raise ValueError("Work is off for this project")
         actor_id = invocation.chat_session_id or invocation.run_id
         if invocation.tool_name == "work_list":
             list_request = WorkListRequest.model_validate(invocation.arguments)
-            target_id = self.service.agent_project(
+            target_id = await self.service.agent_project(
                 invocation.engagement_id,
                 list_request.project_name,
             )
             return ToolExecutionResult(
-                output=self.service.agent_list_page(
-                    target_id, offset=list_request.offset, limit=list_request.limit
+                output=(
+                    await self.service.agent_list_page(
+                        target_id, offset=list_request.offset, limit=list_request.limit
+                    )
                 )
             )
         if invocation.tool_name == "work_get":
             get_request = WorkGetRequest.model_validate(invocation.arguments)
-            target_id = self.service.agent_item_project(
+            target_id = await self.service.agent_item_project(
                 invocation.engagement_id, get_request.item_id
             )
             return ToolExecutionResult(
-                output=self.service.agent_get_item(
-                    target_id,
-                    get_request.item_id,
-                    description_offset=get_request.description_offset,
+                output=(
+                    await self.service.agent_get_item(
+                        target_id,
+                        get_request.item_id,
+                        description_offset=get_request.description_offset,
+                    )
                 )
             )
         if invocation.tool_name == "work_create":
-            target_id = self.service.agent_project(
+            target_id = await self.service.agent_project(
                 invocation.engagement_id,
                 invocation.arguments.get("project_name"),
             )
             data = WorkCreate.model_validate(
                 {k: v for k, v in invocation.arguments.items() if k != "project_name"}
             )
-            item = self.service.create(
+            item = await self.service.create(
                 target_id,
                 data,
                 actor_id=actor_id,
@@ -1180,7 +1205,7 @@ class WorkBroker:
             return ToolExecutionResult(output={"item": item.model_dump(mode="json")})
         if invocation.tool_name == "work_check_in":
             item_id = str(invocation.arguments["item_id"])
-            target_id = self.service.agent_item_project(
+            target_id = await self.service.agent_item_project(
                 invocation.engagement_id, item_id
             )
             check_in_data = WorkCheckIn.model_validate(
@@ -1190,7 +1215,7 @@ class WorkBroker:
                     if key != "item_id"
                 }
             )
-            update = self.service.check_in(
+            update = await self.service.check_in(
                 target_id,
                 item_id,
                 check_in_data,

@@ -6,6 +6,8 @@ observed account with active watched sessions and saves a compact receipt.
 
 from __future__ import annotations
 
+from .async_utils import async_done_callback
+
 import asyncio
 import hashlib
 from collections import defaultdict
@@ -64,16 +66,20 @@ def credit_state_id(engagement_id: str, key: str) -> str:
     return f"butler-credit:{_hash(engagement_id + ':' + key)}"
 
 
-def _candidate_watches(store: NebulaStore, management_ref: str) -> dict[str, list[str]]:
+async def _candidate_watches(
+    store: NebulaStore, management_ref: str
+) -> dict[str, list[str]]:
     """Find projects with an active Watch using this account's profile."""
 
     projects: dict[str, list[str]] = defaultdict(list)
     profiles: dict[str, ProviderProfile | None] = {}
-    for watch in store.iter_readable_entities(ButlerGoalWatch, {"closed_at": None}):
+    async for watch in store.iter_readable_entities(
+        ButlerGoalWatch, {"closed_at": None}
+    ):
         if watch.status not in _ACTIVE_GOALS:
             continue
         try:
-            session = store.get(ChatSession, watch.session_id)
+            session = await store.get(ChatSession, watch.session_id)
         except NotFoundError:
             # diagnostic-expected: a watch can outlive a deleted session;
             # the write transaction rechecks surviving project bindings.
@@ -86,7 +92,7 @@ def _candidate_watches(store: NebulaStore, management_ref: str) -> dict[str, lis
         provider_id = session.provider_profile_id
         if provider_id not in profiles:
             try:
-                profiles[provider_id] = store.get(ProviderProfile, provider_id)
+                profiles[provider_id] = await store.get(ProviderProfile, provider_id)
             except NotFoundError:
                 # diagnostic-expected: a deleted provider cannot be tied to
                 # this account, so skip its stale session binding.
@@ -102,7 +108,7 @@ def _candidate_watches(store: NebulaStore, management_ref: str) -> dict[str, lis
     return projects
 
 
-def _current_binding(
+async def _current_binding(
     transaction: StoreTransaction,
     *,
     engagement_id: str,
@@ -115,7 +121,7 @@ def _current_binding(
     session_ids: list[str] = []
     provider_ids: list[str] = []
     for watch_id in watch_ids:
-        watch = _entity_in_transaction(transaction, ButlerGoalWatch, watch_id)
+        watch = await _entity_in_transaction(transaction, ButlerGoalWatch, watch_id)
         if (
             watch is None
             or watch.engagement_id != engagement_id
@@ -123,8 +129,10 @@ def _current_binding(
             or watch.status not in _ACTIVE_GOALS
         ):
             continue
-        goal = _entity_in_transaction(transaction, ChatGoal, watch.goal_id)
-        session = _entity_in_transaction(transaction, ChatSession, watch.session_id)
+        goal = await _entity_in_transaction(transaction, ChatGoal, watch.goal_id)
+        session = await _entity_in_transaction(
+            transaction, ChatSession, watch.session_id
+        )
         if (
             goal is None
             or goal.engagement_id != engagement_id
@@ -134,7 +142,7 @@ def _current_binding(
             or not session.provider_profile_id
         ):
             continue
-        profile = _entity_in_transaction(
+        profile = await _entity_in_transaction(
             transaction, ProviderProfile, session.provider_profile_id
         )
         if (
@@ -154,7 +162,7 @@ def _current_binding(
     )
 
 
-def record_openrouter_credit(
+async def record_openrouter_credit(
     store: NebulaStore, *, snapshot: OpenRouterCreditSnapshot, management_ref: str
 ) -> int:
     """Commit each affected project's balance, event, and threshold transition."""
@@ -176,12 +184,14 @@ def record_openrouter_credit(
         snapshot.remaining_usd is not None and snapshot.remaining_usd <= LOW_CREDIT_USD
     )
     saved = 0
-    for engagement_id, watch_ids in _candidate_watches(store, management_ref).items():
-        with store.transaction(immediate=True) as transaction:
+    for engagement_id, watch_ids in (
+        await _candidate_watches(store, management_ref)
+    ).items():
+        async with store.transaction(immediate=True) as transaction:
             from .butler_oversight import project_stream_id
 
-            transaction.lock_operation_stream(project_stream_id(engagement_id))
-            goal_ids, session_ids, provider_ids = _current_binding(
+            (await transaction.lock_operation_stream(project_stream_id(engagement_id)))
+            goal_ids, session_ids, provider_ids = await _current_binding(
                 transaction,
                 engagement_id=engagement_id,
                 watch_ids=watch_ids,
@@ -190,7 +200,7 @@ def record_openrouter_credit(
             if not provider_ids:
                 continue
             state_id = credit_state_id(engagement_id, key)
-            previous = _entity_in_transaction(
+            previous = await _entity_in_transaction(
                 transaction, ButlerAccountCredit, state_id
             )
             if previous is not None and previous.observed_at > snapshot.observed_at:
@@ -210,55 +220,63 @@ def record_openrouter_credit(
                 "threshold_state": "at_or_below" if low else "above",
             }
             if previous is None:
-                transaction.add(
-                    ButlerAccountCredit(
-                        id=state_id,
-                        engagement_id=engagement_id,
-                        account_key=key,
-                        provider_id=provider_id,
-                        provider_ids=provider_ids,
-                        observation_key=observation_key,
-                        total_credits_usd=snapshot.total_credits_usd,
-                        total_usage_usd=snapshot.total_usage_usd,
-                        remaining_usd=snapshot.remaining_usd,
-                        observed_at=snapshot.observed_at,
-                        threshold_state="at_or_below" if low else "above",
+                (
+                    await transaction.add(
+                        ButlerAccountCredit(
+                            id=state_id,
+                            engagement_id=engagement_id,
+                            account_key=key,
+                            provider_id=provider_id,
+                            provider_ids=provider_ids,
+                            observation_key=observation_key,
+                            total_credits_usd=snapshot.total_credits_usd,
+                            total_usage_usd=snapshot.total_usage_usd,
+                            remaining_usd=snapshot.remaining_usd,
+                            observed_at=snapshot.observed_at,
+                            threshold_state="at_or_below" if low else "above",
+                        )
                     )
                 )
             else:
-                transaction.update(
-                    ButlerAccountCredit,
-                    state_id,
-                    state_values,
-                    expected_revision=previous.revision,
+                (
+                    await transaction.update(
+                        ButlerAccountCredit,
+                        state_id,
+                        state_values,
+                        expected_revision=previous.revision,
+                    )
                 )
             state_ref = ButlerEvidenceRef(
                 kind="resource", id=state_id, project_id=engagement_id
             )
-            _append_project_event(
-                transaction,
-                engagement_id=engagement_id,
-                event_type="resource.openrouter_balance_observed",
-                payload=ButlerEventPayload(
-                    project_id=engagement_id,
-                    source="openrouter_credits_api",
-                    actor_role="core",
-                    summary="OpenRouter account credits observed.",
-                    metrics={
-                        "provider_id": provider_id,
-                        "total_credits_usd": snapshot.total_credits_usd,
-                        "total_usage_usd": snapshot.total_usage_usd,
-                        "remaining_usd": snapshot.remaining_usd,
-                        "observed_at": snapshot.observed_at.isoformat(),
-                    },
-                    verification_state="provider_observed",
-                    evidence_refs=[state_ref],
-                ),
-                idempotency_key=f"openrouter-credit:{key}:{observation_key}",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=engagement_id,
+                    event_type="resource.openrouter_balance_observed",
+                    payload=ButlerEventPayload(
+                        project_id=engagement_id,
+                        source="openrouter_credits_api",
+                        actor_role="core",
+                        summary="OpenRouter account credits observed.",
+                        metrics={
+                            "provider_id": provider_id,
+                            "total_credits_usd": snapshot.total_credits_usd,
+                            "total_usage_usd": snapshot.total_usage_usd,
+                            "remaining_usd": snapshot.remaining_usd,
+                            "observed_at": snapshot.observed_at.isoformat(),
+                        },
+                        verification_state="provider_observed",
+                        evidence_refs=[state_ref],
+                    ),
+                    idempotency_key=f"openrouter-credit:{key}:{observation_key}",
+                    now=utc_now(),
+                )
             )
             record_id = incident_id(engagement_id, f"openrouter-low-credit:{key}")
-            incident = _entity_in_transaction(transaction, ButlerIncident, record_id)
+            incident = await _entity_in_transaction(
+                transaction, ButlerIncident, record_id
+            )
             impact = f"OpenRouter reports ${snapshot.remaining_usd:.2f} account credits remaining."
             if low:
                 if incident is None:
@@ -276,11 +294,11 @@ def record_openrouter_credit(
                         session_ids=session_ids,
                         observed_at=snapshot.observed_at,
                     )
-                    transaction.add(incident)
+                    (await transaction.add(incident))
                     event_type = "incident.opened"
                 else:
                     reopened = incident.status == "resolved"
-                    incident = transaction.update(
+                    incident = await transaction.update(
                         ButlerIncident,
                         record_id,
                         {
@@ -305,7 +323,7 @@ def record_openrouter_credit(
                     )
                     event_type = "incident.reopened" if reopened else "incident.updated"
             elif incident is not None and incident.status != "resolved":
-                incident = transaction.update(
+                incident = await transaction.update(
                     ButlerIncident,
                     record_id,
                     {
@@ -319,31 +337,33 @@ def record_openrouter_credit(
             else:
                 event_type = None
             if event_type is not None and incident is not None:
-                _append_project_event(
-                    transaction,
-                    engagement_id=engagement_id,
-                    event_type=event_type,
-                    payload=ButlerEventPayload(
-                        project_id=engagement_id,
-                        source="openrouter_credits_api",
-                        actor_role="core",
-                        summary=incident.summary
-                        if low
-                        else "OpenRouter account credits rose above $20.",
-                        metrics={"remaining_usd": snapshot.remaining_usd},
-                        verification_state="provider_observed",
-                        evidence_refs=[
-                            ButlerEvidenceRef(
-                                kind="incident",
-                                id=incident.id,
-                                project_id=engagement_id,
-                            ),
-                            state_ref,
-                        ],
-                        incident_key=incident.incident_key,
-                    ),
-                    idempotency_key=f"openrouter-credit-incident:{incident.id}:{observation_key}",
-                    now=utc_now(),
+                (
+                    await _append_project_event(
+                        transaction,
+                        engagement_id=engagement_id,
+                        event_type=event_type,
+                        payload=ButlerEventPayload(
+                            project_id=engagement_id,
+                            source="openrouter_credits_api",
+                            actor_role="core",
+                            summary=incident.summary
+                            if low
+                            else "OpenRouter account credits rose above $20.",
+                            metrics={"remaining_usd": snapshot.remaining_usd},
+                            verification_state="provider_observed",
+                            evidence_refs=[
+                                ButlerEvidenceRef(
+                                    kind="incident",
+                                    id=incident.id,
+                                    project_id=engagement_id,
+                                ),
+                                state_ref,
+                            ],
+                            incident_key=incident.incident_key,
+                        ),
+                        idempotency_key=f"openrouter-credit-incident:{incident.id}:{observation_key}",
+                        now=utc_now(),
+                    )
                 )
         saved += 1
     return saved
@@ -397,12 +417,12 @@ class OpenRouterCreditObserver:
             name=f"nebula-openrouter-credits-{provider_id[:24]}",
         )
         self._scheduled.add(task)
-        task.add_done_callback(self._scheduled.discard)
+        task.add_done_callback(async_done_callback(self._scheduled.discard))
 
     async def refresh(
         self, provider_id: str, *, force: bool = False
     ) -> OpenRouterCreditSnapshot:
-        profile = self.store.get(ProviderProfile, provider_id)
+        profile = await self.store.get(ProviderProfile, provider_id)
         if profile.provider_type != "openrouter":
             raise ValueError("account credits require an OpenRouter profile")
         reference = profile.openrouter_management_secret_ref
@@ -418,8 +438,7 @@ class OpenRouterCreditObserver:
             and utc_now() - recent.checked_at < AUTO_CHECK_INTERVAL
         ):
             if recent.status == "observed":
-                await asyncio.to_thread(
-                    record_openrouter_credit,
+                await record_openrouter_credit(
                     self.store,
                     snapshot=recent,
                     management_ref=reference,
@@ -436,10 +455,12 @@ class OpenRouterCreditObserver:
             )
             self._inflight[key] = task
             task.add_done_callback(
-                lambda completed: (
-                    self._inflight.pop(key, None)
-                    if self._inflight.get(key) is completed
-                    else None
+                async_done_callback(
+                    lambda completed: (
+                        self._inflight.pop(key, None)
+                        if self._inflight.get(key) is completed
+                        else None
+                    )
                 )
             )
         snapshot = await asyncio.shield(task)
@@ -452,8 +473,7 @@ class OpenRouterCreditObserver:
             profile, self.credentials, transport=self.transport
         )
         if snapshot.status == "observed":
-            await asyncio.to_thread(
-                record_openrouter_credit,
+            await record_openrouter_credit(
                 self.store,
                 snapshot=snapshot,
                 management_ref=reference,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 
 from .domain import PairedDeviceSession, RiskClass
@@ -52,9 +54,9 @@ class ButlerDevices:
             "app_version": device.app_version,
         }
 
-    def devices(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def devices(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             PairedDeviceSession,
             {"revoked_at": None},
             offset=offset,
@@ -65,8 +67,8 @@ class ButlerDevices:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def device(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        device = self.store.get(PairedDeviceSession, arguments["device_id"])
+    async def device(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        device = await self.store.get(PairedDeviceSession, arguments["device_id"])
         if device.revoked_at is not None:
             raise ValueError("paired device has been revoked; list current devices")
         return self._summary(device)
@@ -77,8 +79,8 @@ class ButlerDevices:
             "client_action": {"kind": "device_pair", "project_id": self.project_id},
         }
 
-    def revoke(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        device = self.device(arguments)
+    async def revoke(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        device = await self.device(arguments)
         if device["created_at"] != arguments["expected_created_at"]:
             raise ValueError("paired device changed; read its current identity")
         return {
@@ -134,7 +136,7 @@ class ButlerDevices:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

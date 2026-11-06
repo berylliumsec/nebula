@@ -137,21 +137,21 @@ class ButlerImprovementService:
         self.credentials = credentials
         self.mcp = mcp
 
-    def destinations(self, project_id: str) -> list[ButlerIssueDestination]:
-        self.store.get(Engagement, project_id)
-        return self.store.list_entities(
+    async def destinations(self, project_id: str) -> list[ButlerIssueDestination]:
+        (await self.store.get(Engagement, project_id))
+        return await self.store.list_entities(
             ButlerIssueDestination, engagement_id=project_id, limit=100
         )
 
-    def candidates(self, project_id: str) -> list[ButlerIssueCandidate]:
-        self.store.get(Engagement, project_id)
-        return self.store.list_entities(
+    async def candidates(self, project_id: str) -> list[ButlerIssueCandidate]:
+        (await self.store.get(Engagement, project_id))
+        return await self.store.list_entities(
             ButlerIssueCandidate, engagement_id=project_id, limit=100, newest_first=True
         )
 
-    def scans(self, project_id: str) -> list[ButlerIssueScan]:
-        self.store.get(Engagement, project_id)
-        return self.store.find_entities(
+    async def scans(self, project_id: str) -> list[ButlerIssueScan]:
+        (await self.store.get(Engagement, project_id))
+        return await self.store.find_entities(
             ButlerIssueScan,
             {"status": "held"},
             engagement_id=project_id,
@@ -159,29 +159,33 @@ class ButlerImprovementService:
             newest_first=True,
         )
 
-    def _scan_already_started(self, scan_id: str) -> bool:
+    async def _scan_already_started(self, scan_id: str) -> bool:
         try:
-            scan = self.store.get(ButlerIssueScan, scan_id)
+            scan = await self.store.get(ButlerIssueScan, scan_id)
         except NotFoundError:
             # diagnostic-expected: absence means this source has not been reviewed yet.
             return False
         if scan.status == "reviewing":
             # This project has one issue worker at a time. A receipt still in
             # reviewing on a later pass was interrupted; do not silently skip it.
-            self.store.update(
-                ButlerIssueScan,
-                scan.id,
-                {
-                    "status": "held",
-                    "reason": "review_interrupted",
-                },
-                expected_revision=scan.revision,
+            (
+                await self.store.update(
+                    ButlerIssueScan,
+                    scan.id,
+                    {
+                        "status": "held",
+                        "reason": "review_interrupted",
+                    },
+                    expected_revision=scan.revision,
+                )
             )
         return True
 
-    def _validate_destination(self, project_id: str, data: DestinationWrite) -> None:
-        self.store.get(Engagement, project_id)
-        profile = self.store.get(HarnessProfile, data.review_profile_id)
+    async def _validate_destination(
+        self, project_id: str, data: DestinationWrite
+    ) -> None:
+        (await self.store.get(Engagement, project_id))
+        profile = await self.store.get(HarnessProfile, data.review_profile_id)
         if not profile.enabled or profile.kind != HarnessKind.CODEX_APP_SERVER:
             raise ValueError("Select an enabled host Codex profile for issue review")
         if not profile.default_model:
@@ -196,7 +200,7 @@ class ButlerImprovementService:
         else:
             if not data.mcp_profile_id or data.credential_ref:
                 raise ValueError("MCP needs one server and no GitHub credential")
-            mcp = self.store.get(McpServerProfile, data.mcp_profile_id)
+            mcp = await self.store.get(McpServerProfile, data.mcp_profile_id)
             if not mcp.enabled or (
                 mcp.transport == McpTransport.STDIO and not mcp.trusted_stdio
             ):
@@ -207,29 +211,29 @@ class ButlerImprovementService:
                     "Issue MCP server must expose issue_target, issue_find, and issue_create"
                 )
 
-    def create_destination(
+    async def create_destination(
         self, project_id: str, data: DestinationWrite
     ) -> ButlerIssueDestination:
-        self._validate_destination(project_id, data)
-        row = self.store.create(
+        (await self._validate_destination(project_id, data))
+        row = await self.store.create(
             ButlerIssueDestination(
                 id=str(uuid4()), engagement_id=project_id, **data.model_dump()
             )
         )
         from .butler_oversight import _ensure_project_state
 
-        with self.store.transaction() as transaction:
-            _ensure_project_state(transaction, project_id)
+        async with self.store.transaction() as transaction:
+            (await _ensure_project_state(transaction, project_id))
         return row
 
-    def update_destination(
+    async def update_destination(
         self,
         project_id: str,
         destination_id: str,
         data: DestinationWrite,
         revision: int,
     ) -> ButlerIssueDestination:
-        current = self.store.get(ButlerIssueDestination, destination_id)
+        current = await self.store.get(ButlerIssueDestination, destination_id)
         if current.engagement_id != project_id:
             raise NotFoundError(destination_id)
         if (current.repository, current.publisher, current.mcp_profile_id) != (
@@ -240,8 +244,8 @@ class ButlerImprovementService:
             raise ValueError(
                 "Create a new destination to change the repository or issue tool"
             )
-        self._validate_destination(project_id, data)
-        return self.store.update(
+        (await self._validate_destination(project_id, data))
+        return await self.store.update(
             ButlerIssueDestination,
             destination_id,
             data.model_dump(),
@@ -311,7 +315,9 @@ class ButlerImprovementService:
     async def _mcp(
         self, destination: ButlerIssueDestination, tool: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        profile = self.store.get(McpServerProfile, destination.mcp_profile_id or "")
+        profile = await self.store.get(
+            McpServerProfile, destination.mcp_profile_id or ""
+        )
         if not profile.enabled or (
             profile.transport == McpTransport.STDIO and not profile.trusted_stdio
         ):
@@ -432,10 +438,10 @@ class ButlerImprovementService:
             raise ValueError("GitHub returned an issue for an unexpected repository")
         return str(row["number"]), issue_url
 
-    def _set_candidate(
+    async def _set_candidate(
         self, candidate: ButlerIssueCandidate, **values: Any
     ) -> ButlerIssueCandidate:
-        return self.store.update(
+        return await self.store.update(
             ButlerIssueCandidate,
             candidate.id,
             values,
@@ -443,9 +449,11 @@ class ButlerImprovementService:
         )
 
     async def publish(self, candidate: ButlerIssueCandidate) -> ButlerIssueCandidate:
-        destination = self.store.get(ButlerIssueDestination, candidate.destination_id)
+        destination = await self.store.get(
+            ButlerIssueDestination, candidate.destination_id
+        )
         if not destination.enabled or not destination.auto_publish:
-            return self._set_candidate(
+            return await self._set_candidate(
                 candidate, status="held", reason="automatic_publishing_not_granted"
             )
         try:
@@ -460,7 +468,7 @@ class ButlerImprovementService:
                 exc,
                 stage="issue-target",
             )
-            return self._set_candidate(
+            return await self._set_candidate(
                 candidate, status="held", reason="target_visibility_unavailable"
             )
         title, body = _outgoing(candidate)
@@ -482,7 +490,7 @@ class ButlerImprovementService:
         if visibility == "public" and not candidate.public_independent:
             reason = reason or "public_reproduction_not_independent"
         if reason:
-            return self._set_candidate(candidate, status="held", reason=reason)
+            return await self._set_candidate(candidate, status="held", reason=reason)
         try:
             existing = await self._find(destination, candidate.dedup_key)
         except Exception as exc:
@@ -493,11 +501,11 @@ class ButlerImprovementService:
                 exc,
                 stage="issue-lookup",
             )
-            return self._set_candidate(
+            return await self._set_candidate(
                 candidate, status="held", reason="duplicate_lookup_unavailable"
             )
         if existing:
-            return self._set_candidate(
+            return await self._set_candidate(
                 candidate,
                 status="published",
                 issue_id=existing[0],
@@ -507,10 +515,10 @@ class ButlerImprovementService:
         if candidate.status in {"uncertain", "publishing"}:
             # Search indexing and MCP lookups can lag a successful create. Never
             # auto-retry an ambiguous write just because lookup is empty.
-            return self._set_candidate(
+            return await self._set_candidate(
                 candidate, status="uncertain", reason="create_outcome_unconfirmed"
             )
-        candidate = self._set_candidate(candidate, status="publishing", reason="")
+        candidate = await self._set_candidate(candidate, status="publishing", reason="")
         try:
             issue_id, issue_url = await self._create(
                 destination, candidate, title, body
@@ -523,10 +531,10 @@ class ButlerImprovementService:
                 exc,
                 stage="issue-create",
             )
-            return self._set_candidate(
+            return await self._set_candidate(
                 candidate, status="uncertain", reason="create_outcome_unconfirmed"
             )
-        return self._set_candidate(
+        return await self._set_candidate(
             candidate, status="published", issue_id=issue_id, issue_url=issue_url
         )
 
@@ -537,17 +545,19 @@ class ButlerImprovementService:
         source_id: str,
         text: str,
     ) -> tuple[list[IssueDraft], str]:
-        profile = self.store.get(HarnessProfile, destination.review_profile_id)
+        profile = await self.store.get(HarnessProfile, destination.review_profile_id)
         if not profile.enabled or profile.kind != HarnessKind.CODEX_APP_SERVER:
             raise ValueError("selected host Codex profile is unavailable")
         known_keys = [
             row.problem_key
-            for row in self.store.find_entities(
-                ButlerIssueCandidate,
-                {"destination_id": destination.id},
-                engagement_id=destination.engagement_id,
-                limit=30,
-                newest_first=True,
+            for row in (
+                await self.store.find_entities(
+                    ButlerIssueCandidate,
+                    {"destination_id": destination.id},
+                    engagement_id=destination.engagement_id,
+                    limit=30,
+                    newest_first=True,
+                )
             )
         ]
         prompt = (
@@ -587,12 +597,12 @@ class ButlerImprovementService:
     ) -> None:
         scan_id = _id("butler-issue-scan", destination.id, kind, source_id)
         try:
-            self.store.get(ButlerIssueScan, scan_id)
+            (await self.store.get(ButlerIssueScan, scan_id))
             return
         except NotFoundError:
             # diagnostic-expected: the first review creates this receipt below.
             pass
-        scan = self.store.create(
+        scan = await self.store.create(
             ButlerIssueScan(
                 id=scan_id,
                 engagement_id=destination.engagement_id,
@@ -609,12 +619,12 @@ class ButlerImprovementService:
                 key = _dedup_key(destination.id, draft.problem_key)
                 candidate_id = _id("butler-issue", destination.id, key)
                 try:
-                    self.store.get(ButlerIssueCandidate, candidate_id)
+                    (await self.store.get(ButlerIssueCandidate, candidate_id))
                     continue
                 except NotFoundError:
                     # diagnostic-expected: no matching candidate exists yet.
                     pass
-                candidate = self.store.create(
+                candidate = await self.store.create(
                     ButlerIssueCandidate(
                         id=candidate_id,
                         engagement_id=destination.engagement_id,
@@ -634,14 +644,16 @@ class ButlerImprovementService:
                     )
                 )
                 await self.publish(candidate)
-            self.store.update(
-                ButlerIssueScan,
-                scan.id,
-                {
-                    "status": "reviewed",
-                    "review_turn_id": review_turn_id,
-                },
-                expected_revision=scan.revision,
+            (
+                await self.store.update(
+                    ButlerIssueScan,
+                    scan.id,
+                    {
+                        "status": "reviewed",
+                        "review_turn_id": review_turn_id,
+                    },
+                    expected_revision=scan.revision,
+                )
             )
         except Exception as exc:
             record_caught_exception(
@@ -651,18 +663,20 @@ class ButlerImprovementService:
                 exc,
                 stage="issue-source-review",
             )
-            self.store.update(
-                ButlerIssueScan,
-                scan.id,
-                {
-                    "status": "held",
-                    "reason": "review_or_publication_interrupted",
-                },
-                expected_revision=scan.revision,
+            (
+                await self.store.update(
+                    ButlerIssueScan,
+                    scan.id,
+                    {
+                        "status": "held",
+                        "reason": "review_or_publication_interrupted",
+                    },
+                    expected_revision=scan.revision,
+                )
             )
 
     async def process_project(self, project_id: str) -> None:
-        for destination in self.destinations(project_id):
+        for destination in await self.destinations(project_id):
             if not destination.enabled:
                 continue
             # Old saved transcripts are not replayed upon creating a destination.
@@ -670,7 +684,7 @@ class ButlerImprovementService:
             count = 0
             offset = 0
             while count < 3:
-                page = self.store.list_entities(
+                page = await self.store.list_entities(
                     ChatTurn,
                     engagement_id=project_id,
                     offset=offset,
@@ -689,8 +703,10 @@ class ButlerImprovementService:
                     ):
                         continue
                     try:
-                        session = self.store.get(ChatSession, turn.session_id)
-                        message = self.store.get(ChatMessage, turn.final_message_id)
+                        session = await self.store.get(ChatSession, turn.session_id)
+                        message = await self.store.get(
+                            ChatMessage, turn.final_message_id
+                        )
                     except NotFoundError:
                         # diagnostic-expected: an incomplete saved source is skipped without publication.
                         continue
@@ -703,7 +719,7 @@ class ButlerImprovementService:
                     scan_id = _id(
                         "butler-issue-scan", destination.id, "chat_turn", turn.id
                     )
-                    if self._scan_already_started(scan_id):
+                    if await self._scan_already_started(scan_id):
                         continue
                     await self._scan_source(
                         destination, "chat_turn", turn.id, message.content
@@ -712,7 +728,7 @@ class ButlerImprovementService:
                 offset += len(page)
                 if len(page) < 100:
                     break
-            for incident in self.store.list_entities(
+            for incident in await self.store.list_entities(
                 ButlerIncident, engagement_id=project_id, limit=100, newest_first=True
             ):
                 if count >= 3:
@@ -725,7 +741,7 @@ class ButlerImprovementService:
                 scan_id = _id(
                     "butler-issue-scan", destination.id, "incident", incident.id
                 )
-                if self._scan_already_started(scan_id):
+                if await self._scan_already_started(scan_id):
                     continue
                 await self._scan_source(
                     destination,
@@ -741,7 +757,7 @@ class ButlerImprovementService:
                     ),
                 )
                 count += 1
-            for candidate in self.store.find_entities(
+            for candidate in await self.store.find_entities(
                 ButlerIssueCandidate,
                 {"status": ["reviewed", "publishing", "uncertain", "held"]},
                 engagement_id=project_id,
@@ -753,10 +769,10 @@ class ButlerImprovementService:
                 ):
                     await self.publish(candidate)
 
-    def edit_candidate(
+    async def edit_candidate(
         self, project_id: str, candidate_id: str, data: DraftEdit
     ) -> ButlerIssueCandidate:
-        candidate = self.store.get(ButlerIssueCandidate, candidate_id)
+        candidate = await self.store.get(ButlerIssueCandidate, candidate_id)
         if candidate.engagement_id != project_id or candidate.status not in {
             "held",
             "reviewed",
@@ -764,7 +780,7 @@ class ButlerImprovementService:
             raise ValueError(
                 "Only a held or reviewed local draft in this project can be revised"
             )
-        return self.store.update(
+        return await self.store.update(
             ButlerIssueCandidate,
             candidate.id,
             {
@@ -780,16 +796,18 @@ def improvements_router(service: ButlerImprovementService, notify: Any) -> APIRo
     router = APIRouter(tags=["butler"])
 
     @router.get("/engagements/{project_id}/butler/issues")
-    def overview(project_id: str) -> dict[str, Any]:
+    async def overview(project_id: str) -> dict[str, Any]:
         return {
             "destinations": [
-                row.model_dump(mode="json") for row in service.destinations(project_id)
+                row.model_dump(mode="json")
+                for row in (await service.destinations(project_id))
             ],
             "candidates": [
-                row.model_dump(mode="json") for row in service.candidates(project_id)
+                row.model_dump(mode="json")
+                for row in (await service.candidates(project_id))
             ],
             "held_scans": [
-                row.model_dump(mode="json") for row in service.scans(project_id)
+                row.model_dump(mode="json") for row in (await service.scans(project_id))
             ],
         }
 
@@ -797,7 +815,7 @@ def improvements_router(service: ButlerImprovementService, notify: Any) -> APIRo
     async def github_repositories(
         project_id: str, credential_ref: str, page: int = 1
     ) -> dict[str, Any]:
-        service.store.get(Engagement, project_id)
+        (await service.store.get(Engagement, project_id))
         if not 1 <= page <= 20:
             raise HTTPException(400, "page must be 1 to 20")
         try:
@@ -808,23 +826,23 @@ def improvements_router(service: ButlerImprovementService, notify: Any) -> APIRo
             ) from exc
 
     @router.post("/engagements/{project_id}/butler/issues/destinations")
-    def create(project_id: str, data: DestinationWrite) -> dict[str, Any]:
+    async def create(project_id: str, data: DestinationWrite) -> dict[str, Any]:
         try:
-            row = service.create_destination(project_id, data)
+            row = await service.create_destination(project_id, data)
         except (ValueError, NotFoundError) as exc:
             raise HTTPException(400, str(exc)) from exc
         notify(project_id)
         return row.model_dump(mode="json")
 
     @router.put("/engagements/{project_id}/butler/issues/destinations/{destination_id}")
-    def update(
+    async def update(
         project_id: str,
         destination_id: str,
         data: DestinationWrite,
         expected_revision: int,
     ) -> dict[str, Any]:
         try:
-            row = service.update_destination(
+            row = await service.update_destination(
                 project_id, destination_id, data, expected_revision
             )
         except ConflictError as exc:
@@ -835,9 +853,11 @@ def improvements_router(service: ButlerImprovementService, notify: Any) -> APIRo
         return row.model_dump(mode="json")
 
     @router.patch("/engagements/{project_id}/butler/issues/candidates/{candidate_id}")
-    def revise(project_id: str, candidate_id: str, data: DraftEdit) -> dict[str, Any]:
+    async def revise(
+        project_id: str, candidate_id: str, data: DraftEdit
+    ) -> dict[str, Any]:
         try:
-            row = service.edit_candidate(project_id, candidate_id, data)
+            row = await service.edit_candidate(project_id, candidate_id, data)
         except ConflictError as exc:
             raise HTTPException(409, str(exc)) from exc
         except (ValueError, NotFoundError) as exc:

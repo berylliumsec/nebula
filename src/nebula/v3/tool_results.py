@@ -388,7 +388,7 @@ class ToolOutputService:
         self.search_seconds = search_seconds
         self.regex_deadline_seconds = regex_deadline_seconds
 
-    def search(
+    async def search(
         self,
         *,
         engagement_id: str,
@@ -409,10 +409,10 @@ class ToolOutputService:
             raise ToolOutputQueryError("context_lines must be between 0 and 5")
         if not 1 <= match_limit <= 100:
             raise ToolOutputQueryError("match_limit must be between 1 and 100")
-        call = self._authorized_call(
+        call = await self._authorized_call(
             engagement_id=engagement_id, owner_id=owner_id, tool_call_id=tool_call_id
         )
-        artifacts = self._call_artifacts(call)
+        artifacts = await self._call_artifacts(call)
         start_artifact, start_line = _decode_cursor(cursor)
         # The regex guard bounds one line; the search budget bounds the scan.
         matcher = _Matcher(
@@ -507,7 +507,7 @@ class ToolOutputService:
             "reason": reason,
         }
 
-    def read(
+    async def read(
         self,
         *,
         engagement_id: str,
@@ -521,7 +521,7 @@ class ToolOutputService:
             raise ToolOutputQueryError("starting_line must be at least 1")
         if not 1 <= line_count <= MAX_READ_LINES:
             raise ToolOutputQueryError("line_count must be between 1 and 200")
-        artifact = self._authorized_artifact(
+        artifact = await self._authorized_artifact(
             engagement_id=engagement_id,
             owner_id=owner_id,
             artifact_id=artifact_id,
@@ -611,11 +611,11 @@ class ToolOutputService:
         )
         return _read_page(artifact, starting_line, lines, read_cursor)
 
-    def _authorized_call(
+    async def _authorized_call(
         self, *, engagement_id: str, owner_id: str, tool_call_id: str
     ) -> ToolCall:
         try:
-            call = self.store.get(ToolCall, tool_call_id)
+            call = await self.store.get(ToolCall, tool_call_id)
         except NotFoundError as exc:
             raise ToolOutputAccessError("tool call is unavailable") from exc
         if call.engagement_id != engagement_id:
@@ -624,7 +624,7 @@ class ToolOutputService:
             return call
         if call.origin == ToolCallOrigin.CHAT and call.chat_session_id is not None:
             try:
-                owner = self.store.get(ChatTurn, owner_id)
+                owner = await self.store.get(ChatTurn, owner_id)
             except NotFoundError:  # diagnostic-expected: authorization fails closed
                 owner = None
             if (
@@ -635,11 +635,11 @@ class ToolOutputService:
                 return call
         raise ToolOutputAccessError("tool call is unavailable")
 
-    def _authorized_artifact(
+    async def _authorized_artifact(
         self, *, engagement_id: str, owner_id: str, artifact_id: str
     ) -> Artifact:
         try:
-            artifact = self.store.get(Artifact, artifact_id)
+            artifact = await self.store.get(Artifact, artifact_id)
         except NotFoundError as exc:
             raise ToolOutputAccessError("artifact is unavailable") from exc
         if artifact.engagement_id != engagement_id:
@@ -647,13 +647,17 @@ class ToolOutputService:
         call_id = artifact.metadata.get("tool_call_id")
         if not isinstance(call_id, str):
             raise ToolOutputAccessError("artifact is unavailable")
-        self._authorized_call(
-            engagement_id=engagement_id, owner_id=owner_id, tool_call_id=call_id
+        (
+            await self._authorized_call(
+                engagement_id=engagement_id, owner_id=owner_id, tool_call_id=call_id
+            )
         )
         return artifact
 
-    def _call_artifacts(self, call: ToolCall) -> list[Artifact]:
-        recorded = self.store.list_tool_call_artifacts(call.engagement_id, call.id)
+    async def _call_artifacts(self, call: ToolCall) -> list[Artifact]:
+        recorded = await self.store.list_tool_call_artifacts(
+            call.engagement_id, call.id
+        )
         identifiers = {artifact.id for artifact in recorded}
         artifacts = [
             artifact
@@ -1344,7 +1348,7 @@ def serialize_model_result(value: dict[str, Any]) -> str:
     )
 
 
-def preserve_oversized_model_result(
+async def preserve_oversized_model_result(
     value: dict[str, Any],
     *,
     store: NebulaStore,
@@ -1383,7 +1387,7 @@ def preserve_oversized_model_result(
         return incomplete("tool result artifact storage is unavailable")
     try:
         try:
-            call = store.get(ToolCall, tool_call_id)
+            call = await store.get(ToolCall, tool_call_id)
         except NotFoundError:  # diagnostic-expected: direct calls lack a record.
             call = None
         if call is not None and (
@@ -1395,7 +1399,9 @@ def preserve_oversized_model_result(
             return incomplete("tool result could not be linked to its owner")
         digest = hashlib.sha256(rendered).hexdigest()
         if call is not None:
-            for artifact in store.list_tool_call_artifacts(engagement_id, tool_call_id):
+            for artifact in await store.list_tool_call_artifacts(
+                engagement_id, tool_call_id
+            ):
                 if (
                     artifact.metadata.get("kind") == "model_result"
                     and artifact.sha256 == digest
@@ -1430,7 +1436,7 @@ def preserve_oversized_model_result(
                 )
             )
         try:
-            store.create_many(entities)
+            (await store.create_many(entities))
         except Exception:
             artifact_store.discard_new_blob(stored)
             raise

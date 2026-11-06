@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .chat_turn_headers import ChatTurnHeader, session_turn_headers
 from .database import EntityRow, OperationEventRow, SessionProjectionRow
@@ -43,17 +43,17 @@ def _recovery_pending(turn: ChatTurnHeader) -> bool:
     return turn.recovery_required or turn.automatic_retry_pending
 
 
-def session_state(
+async def session_state(
     store: NebulaStore, session: ChatSession, runtime=None
 ) -> dict[str, Any]:
     # Most callers poll an unchanged snapshot. Keep that common path read-only so
     # it does not queue behind (or block) harness event writes in SQLite.
-    with store.database.session() as database:
-        projected = _project(database, session.id, runtime)
+    async with store.database.session() as database:
+        projected = await _project(database, session.id, runtime)
         digest = hashlib.sha256(
             json.dumps(projected, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-        cached = database.get(SessionProjectionRow, session.id)
+        cached = await database.get(SessionProjectionRow, session.id)
         if cached is not None and cached.digest == digest:
             projected["revision"] = cached.revision
             return projected
@@ -62,19 +62,19 @@ def session_state(
     # PostgreSQL uses the existing per-key transaction advisory-lock boundary.
     # Always reread the selected session, never assign a new revision to stale
     # caller state. Competing readers of unchanged state share one revision.
-    with store.database.engine.connect() as connection:
-        store._begin_run_write(connection, f"session-state:{session.id}")
+    async with store.database.connection() as connection:
+        (await store._begin_run_write(connection, f"session-state:{session.id}"))
         try:
-            with Session(bind=connection) as database:
+            async with AsyncSession(bind=connection) as database:
                 # Re-project after acquiring the lock: another reader may have
                 # assigned the revision while this request was waiting.
-                projected = _project(database, session.id, runtime)
+                projected = await _project(database, session.id, runtime)
                 digest = hashlib.sha256(
                     json.dumps(
                         projected, sort_keys=True, separators=(",", ":")
                     ).encode()
                 ).hexdigest()
-                cached = database.get(SessionProjectionRow, session.id)
+                cached = await database.get(SessionProjectionRow, session.id)
                 if cached is None:
                     cached = SessionProjectionRow(
                         session_id=session.id, revision=1, digest=digest
@@ -83,23 +83,25 @@ def session_state(
                 elif cached.digest != digest:
                     cached.revision += 1
                     cached.digest = digest
-                database.flush()
+                (await database.flush())
                 projected["revision"] = cached.revision
-            connection.commit()
+            (await connection.commit())
             return projected
         except BaseException:
-            connection.rollback()
+            (await connection.rollback())
             raise
 
 
-def session_projection(store: NebulaStore, session: ChatSession) -> dict[str, Any]:
+async def session_projection(
+    store: NebulaStore, session: ChatSession
+) -> dict[str, Any]:
     """Pure view for catch-up: no connection observation or cached-state writes."""
-    with store.database.session() as database:
-        return _project(database, session.id)
+    async with store.database.session() as database:
+        return await _project(database, session.id)
 
 
-def _session_approvals(
-    database: Session,
+async def _session_approvals(
+    database: AsyncSession,
     session: ChatSession,
     turn_ids: list[str],
     approval_ids: list[str],
@@ -136,14 +138,16 @@ def _session_approvals(
         )
     found: dict[str, Approval] = {}
     for statement in statements:
-        for row in database.scalars(statement):
+        for row in await database.scalars(statement):
             if row.id not in found and row.engagement_id == session.engagement_id:
                 found[row.id] = Approval.model_validate(row.payload)
     return list(found.values())
 
 
-def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]:
-    row = database.get(EntityRow, session_id)
+async def _project(
+    database: AsyncSession, session_id: str, runtime=None
+) -> dict[str, Any]:
+    row = await database.get(EntityRow, session_id)
     if row is None or row.kind != ChatSession.entity_kind:
         raise NotFoundError(f"chat session not found: {session_id}")
     session = ChatSession.model_validate(row.payload)
@@ -152,11 +156,11 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
     # fields, which revision-keyed headers provide without parsing payloads.
     turns = [
         item
-        for item in session_turn_headers(database, session.id)
+        for item in (await session_turn_headers(database, session.id))
         if item.engagement_id == session.engagement_id
     ]
     turn_ids = [turn.id for turn in turns]
-    approvals = _session_approvals(
+    approvals = await _session_approvals(
         database,
         session,
         turn_ids,
@@ -164,23 +168,27 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
     )
     questions = [
         HarnessInteraction.model_validate(row.payload)
-        for row in database.scalars(
-            select(EntityRow).where(
-                EntityRow.kind == HarnessInteraction.entity_kind,
-                EntityRow.engagement_id == session.engagement_id,
-                EntityRow.chat_session_id == session.id,
+        for row in (
+            await database.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == HarnessInteraction.entity_kind,
+                    EntityRow.engagement_id == session.engagement_id,
+                    EntityRow.chat_session_id == session.id,
+                )
             )
         )
     ]
     harnesses = {
         row.id: HarnessTurn.model_validate(row.payload)
-        for row in database.scalars(
-            select(EntityRow).where(
-                EntityRow.kind == HarnessTurn.entity_kind,
-                EntityRow.engagement_id == session.engagement_id,
-                EntityRow.id.in_(
-                    [item.harness_turn_id for item in turns if item.harness_turn_id]
-                ),
+        for row in (
+            await database.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == HarnessTurn.entity_kind,
+                    EntityRow.engagement_id == session.engagement_id,
+                    EntityRow.id.in_(
+                        [item.harness_turn_id for item in turns if item.harness_turn_id]
+                    ),
+                )
             )
         )
     }
@@ -276,7 +284,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
             # Read the immutable ledger, not a running reservation or the
             # callback that released an approval waiter. Use the first observed
             # activity so later output chunks do not churn display revisions.
-            sequence = database.scalar(
+            sequence = await database.scalar(
                 select(func.min(OperationEventRow.sequence)).where(
                     OperationEventRow.operation_id == continuation["harness_turn_id"],
                     OperationEventRow.operation_kind == "harness_turn",
@@ -296,7 +304,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
     execution = turn.status if turn else "idle"
     if turn and _recovery_pending(turn):
         # Only an interrupted turn needs its full recovery record read.
-        interrupted = database.get(EntityRow, turn.id)
+        interrupted = await database.get(EntityRow, turn.id)
         resumes = interrupted is not None and core_resumes_interrupted_turn(
             ChatTurn.model_validate(interrupted.payload)
         )
@@ -338,7 +346,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
     busy = execution not in TERMINAL and execution != "idle"
     can_stop = busy
     if session.harness_profile_id:
-        profile_row = database.get(EntityRow, session.harness_profile_id)
+        profile_row = await database.get(EntityRow, session.harness_profile_id)
         profile = (
             HarnessProfile.model_validate(profile_row.payload)
             if profile_row and profile_row.kind == HarnessProfile.entity_kind

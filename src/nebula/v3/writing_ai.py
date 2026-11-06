@@ -88,7 +88,7 @@ class WritingAIService:
     async def transform(
         self, request: WritingTransformRequest
     ) -> WritingTransformResponse:
-        engagement = self.store.get(Engagement, request.engagement_id)
+        engagement = await self.store.get(Engagement, request.engagement_id)
         if request.backend_kind == "harness":
             return await self._transform_with_harness(engagement, request)
         if not request.provider_id or request.harness_profile_id:
@@ -97,7 +97,7 @@ class WritingAIService:
                 "provider writing requires provider_id and no harness_profile_id",
                 status_code=422,
             )
-        profile = self.store.get(ProviderProfile, request.provider_id)
+        profile = await self.store.get(ProviderProfile, request.provider_id)
         if not profile.enabled:
             raise WritingAIError("provider_unavailable", "provider profile is disabled")
         if profile.model_allowlist and request.model not in profile.model_allowlist:
@@ -120,7 +120,11 @@ class WritingAIService:
                 )
         try:
             provider = self.provider_factory(profile)
-            validate_engagement_provider_privacy(self.store, engagement, provider)
+            (
+                await validate_engagement_provider_privacy(
+                    self.store, engagement, provider
+                )
+            )
             model_request = ModelRequest(
                 model=request.model,
                 instructions=(
@@ -223,9 +227,11 @@ class WritingAIService:
                 "harness writing requires harness_profile_id and no provider_id",
                 status_code=422,
             )
-        profile = self.store.get(HarnessProfile, request.harness_profile_id)
-        self._validate_harness(
-            engagement, profile, request.model, request.cloud_confirmed
+        profile = await self.store.get(HarnessProfile, request.harness_profile_id)
+        (
+            await self._validate_harness(
+                engagement, profile, request.model, request.cloud_confirmed
+            )
         )
         prompt = (
             "Transform source.md and return the requested writing in plain Markdown. "
@@ -281,7 +287,7 @@ class WritingAIService:
             usage=turn.usage,
         )
 
-    def _validate_harness(
+    async def _validate_harness(
         self,
         engagement: Engagement,
         profile: HarnessProfile,
@@ -297,7 +303,7 @@ class WritingAIService:
                 status_code=422,
             )
         if engagement.scope_policy_id:
-            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
             if scope.local_only and not profile.privacy.local_only:
                 raise WritingAIError(
                     "privacy_denied",

@@ -1,22 +1,47 @@
 {
-  "change_digest": "cefe3750be4278a34267dee218052218c86cf0bbf643bd1ce8d81d29842780b1",
-  "reviewed_by": "Codex; independent fresh-context subagent reproduced the empty httpx.ReadTimeout string and TUI IndexError before repair",
-  "reason": "A Core /goal action POST can time out with an empty httpx error string; the terminal must stay open, show uncertain-outcome guidance, and avoid replay. Five focused Python cases cover the empty-error notice, the actual PTY command/error/recovery path, a paired TLS LAN Core goal and reconnect journey, and the bundled product-help digest/search.",
-  "exclusions": "The change is in the Python prompt_toolkit terminal and shell. Browser/mobile Playwright, frontend and native tests do not exercise this error path. The LAN Core fixture uses only synthetic data and inert runtimes; it does not touch operator conversations. A true 90-second network timeout is deterministically injected in the PTY instead of delaying a real Core mutation. Full suites are outside the focused-test policy.",
+  "change_digest": "d645f0b4064a43a5746b5f2f7a8a7ee9650389a17d06de05480b1e6cda80a97d",
+  "reviewed_by": "Codex; independent diagnosis of database blocking, harness-list cost, and goal runtime authority before implementation",
+  "reason": "Focused async database and recovery contracts on SQLite/PostgreSQL, real Core auth/chat/listing/Butler-memory entry points, bounded pools, revisions/events/claims, cancellation, runtime-switch activation and compaction consent, indexed harness title seeks, additive rollback, and frozen-driver dependencies. Includes 25 existing storage cases, 14 selected existing recovery/tool cases and one existing action-ledger case. Three UI mapping cases are selected. Additional runtime-switch regressions preserve later metadata and reject invalidated settings or dependency revisions; auxiliary SQLite tests reject synchronous drivers on the event loop.",
+  "exclusions": "No full suites. Browser acceptance and bundled product-knowledge rebuild remain blocked by denied runtime/model downloads. Corrected mixed-load and five-minute soak measurements exist for an earlier source hash; the chat admission performance gate has not passed. Remaining repository diagnostic/test callers require async API migration.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 0,
+    "python": 103,
+    "frontend": 3,
     "native": 0,
-    "playwright": 0
+    "playwright": 24
   },
   "python": [
-    "tests/test_terminal_tui.py::test_tui_shows_a_safe_problem_when_http_error_has_no_message",
-    "tests/test_terminal_pty.py::test_full_screen_goal_timeout_stays_open_and_requires_state_readback",
-    "tests/v3/test_terminal_core.py::test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli"
+    "tests/v3/test_async_database.py",
+    "tests/v3/test_async_storage.py",
+    "tests/v3/test_async_core.py",
+    "tests/v3/test_async_runtime_switching.py",
+    "tests/v3/test_async_postgresql.py",
+    "tests/v3/test_async_harness_queries.py",
+    "tests/v3/test_async_recovery.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_chat.py::test_restart_interrupts_turns_and_blocks_unknown_tool_replay",
+    "tests/v3/test_chat.py::test_restart_projects_late_recorded_tool_result_once",
+    "tests/v3/test_chat.py::test_restart_adopts_late_receipt_into_the_ledger_the_provider_replays",
+    "tests/v3/test_chat.py::test_tool_ledger_binds_provider_replay_intent_to_idempotent_call",
+    "tests/v3/test_chat.py::test_restart_allows_explicit_resume_when_no_tool_effect_is_unknown",
+    "tests/v3/test_chat.py::test_core_shutdown_leaves_an_inflight_provider_turn_recoverable",
+    "tests/v3/test_chat.py::test_core_restart_recovery_bounds_concurrent_provider_turns",
+    "tests/v3/test_chat.py::test_core_restart_recovery_retries_a_resume_that_could_not_be_admitted",
+    "tests/v3/test_chat.py::test_provider_turn_and_goal_have_one_durable_worker_owner",
+    "tests/v3/test_chat.py::test_goal_charges_compaction_usage_before_provider_response",
+    "tests/v3/test_chat_tool_loop.py::test_batched_safe_reads_overlap_and_commit_in_provider_order",
+    "tests/v3/test_chat_tool_loop.py::test_goal_exhaustion_after_routing_stops_before_tool_effect",
+    "tests/v3/test_tool_failures.py::test_broker_rejects_hash_before_execution_and_finishes_call",
+    "tests/v3/test_packaging.py::test_core_archive_requires_native_async_database_runtime",
+    "tests/v3/test_async_rollback.py",
+    "tests/v3/test_async_auxiliary_database.py",
+    "tests/v3/test_browserd.py::test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguous"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/asyncRuntimeSwitch.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:harness-provider-switch",
+    "area:provider-runtime-switch"
+  ]
 }

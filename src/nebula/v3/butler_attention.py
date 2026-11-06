@@ -119,7 +119,7 @@ def _details(
     )
 
 
-def record_attention_transition(
+async def record_attention_transition(
     transaction: StoreTransaction,
     before: Approval | HarnessInteraction | ChatQueue | None,
     after: Approval | HarnessInteraction | ChatQueue,
@@ -140,114 +140,130 @@ def record_attention_transition(
         key = _incident_key(kind, after.id, item_id)
         summary, impact, next_action, refs, sessions = _details(kind, after, item_id)
         record_id = incident_id(after.engagement_id, key)
-        existing = _entity_in_transaction(transaction, ButlerIncident, record_id)
+        existing = await _entity_in_transaction(transaction, ButlerIncident, record_id)
         if existing is None:
-            transaction.add(
-                ButlerIncident(
-                    id=record_id,
-                    engagement_id=after.engagement_id,
-                    incident_key=key,
-                    source=f"pending_{kind}",
-                    verification_state="core_observed",
-                    summary=summary,
-                    impact=impact,
-                    next_action=next_action,
-                    evidence_refs=[ref.model_dump() for ref in refs],
-                    session_ids=sessions,
-                    observed_at=now,
+            (
+                await transaction.add(
+                    ButlerIncident(
+                        id=record_id,
+                        engagement_id=after.engagement_id,
+                        incident_key=key,
+                        source=f"pending_{kind}",
+                        verification_state="core_observed",
+                        summary=summary,
+                        impact=impact,
+                        next_action=next_action,
+                        evidence_refs=[ref.model_dump() for ref in refs],
+                        session_ids=sessions,
+                        observed_at=now,
+                    )
                 )
             )
         elif existing.status == "resolved":
-            transaction.update(
-                ButlerIncident,
-                record_id,
-                {
-                    "status": "open",
-                    "observed_at": now,
-                    "resolved_at": None,
-                    "acknowledged_at": None,
-                },
-                expected_revision=existing.revision,
+            (
+                await transaction.update(
+                    ButlerIncident,
+                    record_id,
+                    {
+                        "status": "open",
+                        "observed_at": now,
+                        "resolved_at": None,
+                        "acknowledged_at": None,
+                    },
+                    expected_revision=existing.revision,
+                )
             )
         else:
             continue
-        _append_project_event(
-            transaction,
-            engagement_id=after.engagement_id,
-            event_type=f"review.{kind}_requested",
-            payload=ButlerEventPayload(
-                project_id=after.engagement_id,
-                session_id=sessions[0] if sessions else None,
-                source="core",
-                actor_role="core",
-                summary=summary,
-                metrics={
-                    "attention_id": item_id[:200],
-                    "source_revision": after.revision,
-                },
-                verification_state="core_observed",
-                evidence_refs=refs,
-                incident_key=key,
-            ),
-            idempotency_key=f"{key}:{after.revision}:pending",
-            now=now,
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=after.engagement_id,
+                event_type=f"review.{kind}_requested",
+                payload=ButlerEventPayload(
+                    project_id=after.engagement_id,
+                    session_id=sessions[0] if sessions else None,
+                    source="core",
+                    actor_role="core",
+                    summary=summary,
+                    metrics={
+                        "attention_id": item_id[:200],
+                        "source_revision": after.revision,
+                    },
+                    verification_state="core_observed",
+                    evidence_refs=refs,
+                    incident_key=key,
+                ),
+                idempotency_key=f"{key}:{after.revision}:pending",
+                now=now,
+            )
         )
     for item_id in previous.keys() - current.keys():
         kind = previous[item_id]["kind"]
         key = _incident_key(kind, after.id, item_id)
         record_id = incident_id(after.engagement_id, key)
-        existing = _entity_in_transaction(transaction, ButlerIncident, record_id)
+        existing = await _entity_in_transaction(transaction, ButlerIncident, record_id)
         if existing is None or existing.status == "resolved":
             continue
-        transaction.update(
-            ButlerIncident,
-            record_id,
-            {
-                "status": "resolved",
-                "resolved_at": now,
-            },
-            expected_revision=existing.revision,
+        (
+            await transaction.update(
+                ButlerIncident,
+                record_id,
+                {
+                    "status": "resolved",
+                    "resolved_at": now,
+                },
+                expected_revision=existing.revision,
+            )
         )
-        _append_project_event(
-            transaction,
-            engagement_id=after.engagement_id,
-            event_type="review.resolved",
-            payload=ButlerEventPayload(
-                project_id=after.engagement_id,
-                source="core",
-                actor_role="core",
-                summary="A pending review or question was resolved.",
-                verification_state="core_observed",
-                incident_key=key,
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="incident", id=record_id, project_id=after.engagement_id
-                    )
-                ],
-            ),
-            idempotency_key=f"{key}:{after.revision}:resolved",
-            now=now,
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=after.engagement_id,
+                event_type="review.resolved",
+                payload=ButlerEventPayload(
+                    project_id=after.engagement_id,
+                    source="core",
+                    actor_role="core",
+                    summary="A pending review or question was resolved.",
+                    verification_state="core_observed",
+                    incident_key=key,
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="incident",
+                            id=record_id,
+                            project_id=after.engagement_id,
+                        )
+                    ],
+                ),
+                idempotency_key=f"{key}:{after.revision}:resolved",
+                now=now,
+            )
         )
 
 
-def reconcile_attention(store: NebulaStore) -> None:
+async def reconcile_attention(store: NebulaStore) -> None:
     """Recover pending work created before this watcher was installed or restarted."""
 
-    def reconcile_entity(entity: Approval | HarnessInteraction | ChatQueue) -> None:
+    async def reconcile_entity(
+        entity: Approval | HarnessInteraction | ChatQueue,
+    ) -> None:
         if not _attention_items(entity):
             return
-        with store.transaction() as transaction:
-            record_attention_transition(transaction, None, entity)
+        async with store.transaction() as transaction:
+            (await record_attention_transition(transaction, None, entity))
 
-    for approval in store.iter_readable_entities(Approval):
-        reconcile_entity(approval)
-    for interaction in store.iter_readable_entities(HarnessInteraction):
-        reconcile_entity(interaction)
-    for queue in store.iter_readable_entities(ChatQueue):
-        reconcile_entity(queue)
+    async for approval in store.iter_readable_entities(Approval):
+        (await reconcile_entity(approval))
+    async for interaction in store.iter_readable_entities(HarnessInteraction):
+        (await reconcile_entity(interaction))
+    async for queue in store.iter_readable_entities(ChatQueue):
+        (await reconcile_entity(queue))
 
 
-def record_completed_goal_turn(transaction: StoreTransaction, turn: ChatTurn) -> None:
+async def record_completed_goal_turn(
+    transaction: StoreTransaction, turn: ChatTurn
+) -> None:
     """Queue a bounded semantic check of one saved agent reply."""
 
     if (
@@ -256,8 +272,8 @@ def record_completed_goal_turn(transaction: StoreTransaction, turn: ChatTurn) ->
         or not turn.final_message_id
     ):
         return
-    goal = _entity_in_transaction(transaction, ChatGoal, turn.goal_id)
-    session = _entity_in_transaction(transaction, ChatSession, turn.session_id)
+    goal = await _entity_in_transaction(transaction, ChatGoal, turn.goal_id)
+    session = await _entity_in_transaction(transaction, ChatSession, turn.session_id)
     if (
         goal is None
         or session is None
@@ -267,25 +283,29 @@ def record_completed_goal_turn(transaction: StoreTransaction, turn: ChatTurn) ->
     ):
         return
     project_id = turn.engagement_id
-    _append_project_event(
-        transaction,
-        engagement_id=project_id,
-        event_type="agent.turn_completed",
-        payload=ButlerEventPayload(
-            project_id=project_id,
-            goal_id=goal.id,
-            session_id=session.id,
-            source="core",
-            actor_role="subagent" if goal.parent_goal_id else "main_agent",
-            parent_goal_id=goal.parent_goal_id,
-            summary="A goal agent completed a turn; its saved reply may request review.",
-            metrics={"turn_revision": turn.revision},
-            verification_state="agent_reported",
-            evidence_refs=[
-                ButlerEvidenceRef(kind="goal", id=goal.id, project_id=project_id),
-                ButlerEvidenceRef(kind="chat_turn", id=turn.id, project_id=project_id),
-            ],
-        ),
-        idempotency_key=f"goal-turn:{turn.id}:completed",
-        now=utc_now(),
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=project_id,
+            event_type="agent.turn_completed",
+            payload=ButlerEventPayload(
+                project_id=project_id,
+                goal_id=goal.id,
+                session_id=session.id,
+                source="core",
+                actor_role="subagent" if goal.parent_goal_id else "main_agent",
+                parent_goal_id=goal.parent_goal_id,
+                summary="A goal agent completed a turn; its saved reply may request review.",
+                metrics={"turn_revision": turn.revision},
+                verification_state="agent_reported",
+                evidence_refs=[
+                    ButlerEvidenceRef(kind="goal", id=goal.id, project_id=project_id),
+                    ButlerEvidenceRef(
+                        kind="chat_turn", id=turn.id, project_id=project_id
+                    ),
+                ],
+            ),
+            idempotency_key=f"goal-turn:{turn.id}:completed",
+            now=utc_now(),
+        )
     )

@@ -66,7 +66,7 @@ def _same_failed_read(call: ToolCall, goal: ChatGoal, turn: ChatTurn) -> bool:
     )
 
 
-def record_completed_provider_turn(
+async def record_completed_provider_turn(
     transaction: StoreTransaction, completed_turn: ChatTurn
 ) -> bool:
     """Write a concern in the turn-completion transaction, or write nothing.
@@ -81,8 +81,8 @@ def record_completed_provider_turn(
         or completed_turn.status != ChatTurnStatus.COMPLETE
     ):
         return False
-    goal = _entity_in_transaction(transaction, ChatGoal, completed_turn.goal_id)
-    session = _entity_in_transaction(
+    goal = await _entity_in_transaction(transaction, ChatGoal, completed_turn.goal_id)
+    session = await _entity_in_transaction(
         transaction, ChatSession, completed_turn.session_id
     )
     if (
@@ -96,14 +96,16 @@ def record_completed_provider_turn(
     ):
         return False
     rows = (
-        transaction.session.execute(
-            select(EntityRow)
-            .where(
-                EntityRow.kind == ToolCall.entity_kind,
-                EntityRow.chat_session_id == session.id,
+        (
+            await transaction.session.execute(
+                select(EntityRow)
+                .where(
+                    EntityRow.kind == ToolCall.entity_kind,
+                    EntityRow.chat_session_id == session.id,
+                )
+                .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
+                .limit(4)
             )
-            .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
-            .limit(4)
         )
         .scalars()
         .all()
@@ -118,7 +120,9 @@ def record_completed_provider_turn(
         if call.chat_turn_id == completed_turn.id:
             turns.append(completed_turn)
         elif call.chat_turn_id:
-            previous = _entity_in_transaction(transaction, ChatTurn, call.chat_turn_id)
+            previous = await _entity_in_transaction(
+                transaction, ChatTurn, call.chat_turn_id
+            )
             if previous is None:
                 return False
             turns.append(previous)
@@ -156,7 +160,9 @@ def record_completed_provider_turn(
     project_id = goal.engagement_id
     key = f"read-only-repeat:{goal.id}:{first.id}"
     record_id = incident_id(project_id, key)
-    if _entity_in_transaction(transaction, ButlerIncident, record_id) is not None:
+    if (
+        await _entity_in_transaction(transaction, ButlerIncident, record_id)
+    ) is not None:
         return False
     ordered = list(reversed(calls[:3]))
     refs = [
@@ -167,48 +173,52 @@ def record_completed_provider_turn(
         ),
     ]
     now = utc_now()
-    transaction.add(
-        ButlerIncident(
-            id=record_id,
-            engagement_id=project_id,
-            incident_key=key,
-            source="repeated_read_only_tool_failure",
-            verification_state="core_observed",
-            summary=f"The same {first.tool_name} call failed in three separate turns.",
-            impact="Core observed three failures of this exact read-only invocation; broader goal progress is unknown.",
-            next_action="Ask the parent main agent to inspect the saved outcomes before repeating this call.",
-            evidence_refs=[ref.model_dump() for ref in refs],
-            evidence_summary=[
-                f"Attempt {index} ended with Core tool status failed."
-                for index in range(1, 4)
-            ],
-            goal_ids=[goal.id],
-            session_ids=[goal.session_id],
-            observed_at=now,
+    (
+        await transaction.add(
+            ButlerIncident(
+                id=record_id,
+                engagement_id=project_id,
+                incident_key=key,
+                source="repeated_read_only_tool_failure",
+                verification_state="core_observed",
+                summary=f"The same {first.tool_name} call failed in three separate turns.",
+                impact="Core observed three failures of this exact read-only invocation; broader goal progress is unknown.",
+                next_action="Ask the parent main agent to inspect the saved outcomes before repeating this call.",
+                evidence_refs=[ref.model_dump() for ref in refs],
+                evidence_summary=[
+                    f"Attempt {index} ended with Core tool status failed."
+                    for index in range(1, 4)
+                ],
+                goal_ids=[goal.id],
+                session_ids=[goal.session_id],
+                observed_at=now,
+            )
         )
     )
-    _append_project_event(
-        transaction,
-        engagement_id=project_id,
-        event_type="goal.read_only_tool_failures_repeated",
-        payload=ButlerEventPayload(
-            project_id=project_id,
-            goal_id=goal.id,
-            session_id=goal.session_id,
-            source="core",
-            actor_role="subagent" if goal.parent_goal_id else "main_agent",
-            parent_goal_id=goal.parent_goal_id,
-            summary=f"Core recorded three sequential failures of the same {first.tool_name} call in separate turns.",
-            metrics={
-                "tool_name": first.tool_name,
-                "attempts": 3,
-                "goal_revision": goal.revision,
-            },
-            verification_state="core_observed",
-            evidence_refs=refs,
-            incident_key=key,
-        ),
-        idempotency_key=f"read-only-repeat:{goal.id}:{first.id}",
-        now=now,
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=project_id,
+            event_type="goal.read_only_tool_failures_repeated",
+            payload=ButlerEventPayload(
+                project_id=project_id,
+                goal_id=goal.id,
+                session_id=goal.session_id,
+                source="core",
+                actor_role="subagent" if goal.parent_goal_id else "main_agent",
+                parent_goal_id=goal.parent_goal_id,
+                summary=f"Core recorded three sequential failures of the same {first.tool_name} call in separate turns.",
+                metrics={
+                    "tool_name": first.tool_name,
+                    "attempts": 3,
+                    "goal_revision": goal.revision,
+                },
+                verification_state="core_observed",
+                evidence_refs=refs,
+                incident_key=key,
+            ),
+            idempotency_key=f"read-only-repeat:{goal.id}:{first.id}",
+            now=now,
+        )
     )
     return True

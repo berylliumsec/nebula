@@ -7,35 +7,39 @@ from .domain import Approval, ApprovalContinuation, HarnessTurn, ToolCall, utc_n
 from .storage import ConflictError, readable_entities
 
 
-def pending_deliveries(store):
+async def pending_deliveries(store):
     # Read at startup: an unreadable approval is skipped and recorded, not
     # fatal to Core.
-    with store.database.session() as database:
+    async with store.database.session() as database:
         return readable_entities(
-            database.scalars(
-                select(EntityRow).where(
-                    EntityRow.kind == Approval.entity_kind,
-                    or_(
-                        EntityRow.payload["continuation"]["status"].as_string()
-                        == "pending",
-                        EntityRow.payload["continuation"]["adapter_status"].as_string()
-                        == "pending",
-                    ),
+            (
+                await database.scalars(
+                    select(EntityRow).where(
+                        EntityRow.kind == Approval.entity_kind,
+                        or_(
+                            EntityRow.payload["continuation"]["status"].as_string()
+                            == "pending",
+                            EntityRow.payload["continuation"][
+                                "adapter_status"
+                            ].as_string()
+                            == "pending",
+                        ),
+                    )
                 )
             ),
             Approval,
         )
 
 
-def approval_harness_turn(store, approval):
+async def approval_harness_turn(store, approval):
     """Resolve an exact binding, rejecting cross-project/turn references."""
     if not approval.tool_call_id:
         return None
-    call = store.get(ToolCall, approval.tool_call_id)
+    call = await store.get(ToolCall, approval.tool_call_id)
     turn_id = call.metadata.get("harness_turn_id")
     if not isinstance(turn_id, str):
         return None
-    turn = store.get(HarnessTurn, turn_id)
+    turn = await store.get(HarnessTurn, turn_id)
     if (
         call.engagement_id != approval.engagement_id
         or turn.engagement_id != approval.engagement_id
@@ -49,14 +53,14 @@ def approval_harness_turn(store, approval):
     return turn
 
 
-def record_delivery(store, approval_id, turn_id, status, detail=None):
-    current = store.get(Approval, approval_id)
+async def record_delivery(store, approval_id, turn_id, status, detail=None):
+    current = await store.get(Approval, approval_id)
     if current.continuation and current.continuation.harness_turn_id != turn_id:
         raise ConflictError("approval continuation belongs to another turn")
     continuation = current.continuation or ApprovalContinuation(harness_turn_id=turn_id)
     changes = {"status": status, "detail": detail, "updated_at": utc_now()}
     if status == "delivered" and continuation.progress_after_sequence is None:
-        changes["progress_after_sequence"] = _last_sequence(store, turn_id)
+        changes["progress_after_sequence"] = await _last_sequence(store, turn_id)
     if status == "failed":
         # An interrupted continuation does not erase a known waiter delivery.
         if continuation.status == "delivered":
@@ -66,7 +70,7 @@ def record_delivery(store, approval_id, turn_id, status, detail=None):
             changes["adapter_detail"] = (
                 "Adapter handoff was not acknowledged. No work was replayed."
             )
-    return store.update(
+    return await store.update(
         Approval,
         current.id,
         {
@@ -78,9 +82,13 @@ def record_delivery(store, approval_id, turn_id, status, detail=None):
     )
 
 
-def decision_delivery_intent(store, approval, turn):
+async def decision_delivery_intent(store, approval, turn):
     """Include adapter intent in the same durable update as the decision."""
-    call = store.get(ToolCall, approval.tool_call_id) if approval.tool_call_id else None
+    call = (
+        (await store.get(ToolCall, approval.tool_call_id))
+        if approval.tool_call_id
+        else None
+    )
     handoff = call.metadata.get("adapter_handoff") if call else None
     if handoff not in {"transport_write", "sdk_callback"}:
         handoff = None
@@ -91,24 +99,26 @@ def decision_delivery_intent(store, approval, turn):
     ).model_dump(mode="json")
 
 
-def _last_sequence(store, turn_id):
-    with store.database.session() as database:
+async def _last_sequence(store, turn_id):
+    async with store.database.session() as database:
         return int(
-            database.scalar(
-                select(func.max(OperationEventRow.sequence)).where(
-                    OperationEventRow.operation_id == turn_id,
-                    OperationEventRow.operation_kind == "harness_turn",
+            (
+                await database.scalar(
+                    select(func.max(OperationEventRow.sequence)).where(
+                        OperationEventRow.operation_id == turn_id,
+                        OperationEventRow.operation_kind == "harness_turn",
+                    )
                 )
             )
             or 0
         )
 
 
-def record_adapter_handoff(store, approval_id, turn_id, status):
+async def record_adapter_handoff(store, approval_id, turn_id, status):
     """Acknowledge only the original handoff, never retry or infer tool execution."""
     if status not in {"sent", "failed"}:
         raise ValueError("unsupported adapter handoff receipt")
-    current = store.get(Approval, approval_id)
+    current = await store.get(Approval, approval_id)
     continuation = current.continuation
     if continuation is None or continuation.harness_turn_id != turn_id:
         raise ConflictError("adapter handoff belongs to another turn")
@@ -121,7 +131,7 @@ def record_adapter_handoff(store, approval_id, turn_id, status):
         if status == "sent"
         else "The adapter handoff failed; delivery may be uncertain. No work was replayed."
     )
-    return store.update(
+    return await store.update(
         Approval,
         current.id,
         {
@@ -130,7 +140,7 @@ def record_adapter_handoff(store, approval_id, turn_id, status):
                     "status": "delivered",  # The adapter could only receive a fulfilled waiter.
                     "adapter_status": status,
                     "adapter_detail": detail,
-                    "progress_after_sequence": _last_sequence(store, turn_id),
+                    "progress_after_sequence": (await _last_sequence(store, turn_id)),
                     "updated_at": utc_now(),
                 }
             ).model_dump(mode="json"),

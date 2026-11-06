@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import async_done_callback, call_async
+
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -141,7 +145,7 @@ class ExecutionAIService:
         provider_factory: Callable[
             [ProviderProfile], ModelProvider
         ] = provider_from_profile,
-        operator_id: Callable[[], str] | None = None,
+        operator_id: (MaybeAsync[[], str] | None) = None,
         harness_runtime: HarnessRuntimeService | None = None,
     ) -> None:
         self.store = store
@@ -156,10 +160,10 @@ class ExecutionAIService:
     async def startup(self) -> None:
         # Only readable records: one unreadable row must not keep Core from
         # starting and settling the others.
-        for draft in self.store.iter_readable_entities(
+        async for draft in self.store.iter_readable_entities(
             GeneratedDraft, {"status": GeneratedDraftStatus.GENERATING.value}
         ):
-            failed = self.store.update(
+            failed = await self.store.update(
                 GeneratedDraft,
                 draft.id,
                 {
@@ -168,7 +172,11 @@ class ExecutionAIService:
                 },
                 expected_revision=draft.revision,
             )
-            self._event(failed, "generated_draft.failed", {"reason": "interrupted"})
+            (
+                await self._event(
+                    failed, "generated_draft.failed", {"reason": "interrupted"}
+                )
+            )
 
     async def shutdown(self) -> None:
         self._shutting_down = True
@@ -191,7 +199,7 @@ class ExecutionAIService:
         async with self._lock:
             provider: ModelProvider | None = None
             if request.backend_kind == "harness":
-                execution, backend_id = self._harness_context(
+                execution, backend_id = await self._harness_context(
                     execution_id,
                     harness_profile_id=request.harness_profile_id,
                     model=request.model,
@@ -202,7 +210,7 @@ class ExecutionAIService:
                     raise ExecutionAIError(
                         "configuration_invalid", "provider is required"
                     )
-                execution, profile, provider = self._provider_context(
+                execution, profile, provider = await self._provider_context(
                     execution_id,
                     provider_id=request.provider_id,
                     model=request.model,
@@ -210,8 +218,8 @@ class ExecutionAIService:
                     require_structured=False,
                 )
                 backend_id = profile.id
-            context, fingerprint, metadata = self._context(execution)
-            existing = self._deduplicated(
+            context, fingerprint, metadata = await self._context(execution)
+            existing = await self._deduplicated(
                 execution,
                 backend_id,
                 request.model,
@@ -241,9 +249,9 @@ class ExecutionAIService:
                         "automatic": request.automatic,
                     },
                 )
-                self.store.create(draft)
+                (await self.store.create(draft))
             else:
-                draft = self.store.update(
+                draft = await self.store.update(
                     GeneratedDraft,
                     existing.id,
                     {
@@ -262,14 +270,16 @@ class ExecutionAIService:
                     },
                     expected_revision=existing.revision,
                 )
-            self._event(
-                draft,
-                "generated_draft.generating",
-                {
-                    "provider_profile_id": backend_id,
-                    "model": request.model,
-                    "context_fingerprint": fingerprint,
-                },
+            (
+                await self._event(
+                    draft,
+                    "generated_draft.generating",
+                    {
+                        "provider_profile_id": backend_id,
+                        "model": request.model,
+                        "context_fingerprint": fingerprint,
+                    },
+                )
             )
             task = create_diagnostic_task(
                 self._generate_harness(draft.id, context)
@@ -281,7 +291,9 @@ class ExecutionAIService:
                 name=f"execution-note-{draft.id}",
             )
             self._tasks[draft.id] = task
-            task.add_done_callback(lambda _task: self._tasks.pop(draft.id, None))
+            task.add_done_callback(
+                async_done_callback(lambda _task: self._tasks.pop(draft.id, None))
+            )
             return draft
 
     async def generate_mission(
@@ -289,7 +301,7 @@ class ExecutionAIService:
     ) -> GeneratedDraft:
         """Generate the same opt-in follow-up from a completed Mission result."""
         async with self._lock:
-            run = self.store.get(AgentRun, run_id)
+            run = await self.store.get(AgentRun, run_id)
             if run.status not in {
                 RunStatus.COMPLETE,
                 RunStatus.FAILED,
@@ -301,7 +313,7 @@ class ExecutionAIService:
                 )
             provider: ModelProvider | None = None
             if request.backend_kind == "harness":
-                backend_id = self._validate_harness_backend(
+                backend_id = await self._validate_harness_backend(
                     engagement_id=run.engagement_id,
                     harness_profile_id=request.harness_profile_id,
                     model=request.model,
@@ -313,7 +325,7 @@ class ExecutionAIService:
                     raise ExecutionAIError(
                         "configuration_invalid", "provider is required"
                     )
-                profile, provider = self._validate_provider_backend(
+                profile, provider = await self._validate_provider_backend(
                     engagement_id=run.engagement_id,
                     provider_id=request.provider_id,
                     model=request.model,
@@ -321,11 +333,11 @@ class ExecutionAIService:
                 )
                 backend_id = profile.id
                 strict_structured_output = profile.capabilities.strict_structured_output
-            context, fingerprint, metadata = self._mission_context(run)
+            context, fingerprint, metadata = await self._mission_context(run)
             existing = next(
                 (
                     item
-                    for item in self._all_drafts()
+                    for item in (await self._all_drafts())
                     if item.execution_id == run.id
                     and item.provider_profile_id == backend_id
                     and item.model == request.model
@@ -349,7 +361,7 @@ class ExecutionAIService:
                 "automatic": request.automatic,
             }
             if existing is None:
-                draft = self.store.create(
+                draft = await self.store.create(
                     GeneratedDraft(
                         engagement_id=run.engagement_id,
                         execution_id=run.id,
@@ -361,7 +373,7 @@ class ExecutionAIService:
                     )
                 )
             else:
-                draft = self.store.update(
+                draft = await self.store.update(
                     GeneratedDraft,
                     existing.id,
                     {
@@ -374,15 +386,17 @@ class ExecutionAIService:
                     },
                     expected_revision=existing.revision,
                 )
-            self._event(
-                draft,
-                "generated_draft.generating",
-                {
-                    "provider_profile_id": backend_id,
-                    "model": request.model,
-                    "context_fingerprint": fingerprint,
-                    "source_kind": "mission",
-                },
+            (
+                await self._event(
+                    draft,
+                    "generated_draft.generating",
+                    {
+                        "provider_profile_id": backend_id,
+                        "model": request.model,
+                        "context_fingerprint": fingerprint,
+                        "source_kind": "mission",
+                    },
+                )
             )
             task = create_diagnostic_task(
                 self._generate_harness(draft.id, context)
@@ -394,16 +408,18 @@ class ExecutionAIService:
                 name=f"mission-note-{draft.id}",
             )
             self._tasks[draft.id] = task
-            task.add_done_callback(lambda _task: self._tasks.pop(draft.id, None))
+            task.add_done_callback(
+                async_done_callback(lambda _task: self._tasks.pop(draft.id, None))
+            )
             return draft
 
-    def get_config(self, engagement_id: str) -> PostToolAssistantConfig:
+    async def get_config(self, engagement_id: str) -> PostToolAssistantConfig:
         return PostToolAssistantConfig.model_validate(
-            self.read_config(engagement_id).model_dump(exclude={"revision"})
+            (await self.read_config(engagement_id)).model_dump(exclude={"revision"})
         )
 
-    def read_config(self, engagement_id: str) -> PostToolAssistantRead:
-        engagement = self.store.get(Engagement, engagement_id)
+    async def read_config(self, engagement_id: str) -> PostToolAssistantRead:
+        engagement = await self.store.get(Engagement, engagement_id)
         value = engagement.metadata.get("post_tool_assistant", {})
         config = PostToolAssistantConfig.model_validate(
             value if isinstance(value, dict) else {}
@@ -412,14 +428,14 @@ class ExecutionAIService:
             **config.model_dump(), revision=engagement.revision
         )
 
-    def set_config(
+    async def set_config(
         self,
         engagement_id: str,
         config: PostToolAssistantConfig,
         *,
         expected_revision: int | None = None,
     ) -> PostToolAssistantConfig:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         if config.suggest_next_steps or config.take_notes:
             identity = (
                 config.harness_profile_id
@@ -435,19 +451,21 @@ class ExecutionAIService:
             **engagement.metadata,
             "post_tool_assistant": config.model_dump(mode="json"),
         }
-        self.store.update(
-            Engagement,
-            engagement.id,
-            {"metadata": metadata},
-            expected_revision=expected_revision or engagement.revision,
+        (
+            await self.store.update(
+                Engagement,
+                engagement.id,
+                {"metadata": metadata},
+                expected_revision=expected_revision or engagement.revision,
+            )
         )
         return config
 
-    def list_results(self, engagement_id: str) -> list[GeneratedDraft]:
+    async def list_results(self, engagement_id: str) -> list[GeneratedDraft]:
         return sorted(
             [
                 item
-                for item in self._all_drafts()
+                for item in (await self._all_drafts())
                 if item.engagement_id == engagement_id
                 and item.prompt_version == PROMPT_VERSION
             ],
@@ -455,8 +473,8 @@ class ExecutionAIService:
             reverse=True,
         )
 
-    def dismiss_suggestion(self, draft_id: str) -> GeneratedDraft:
-        draft = self.store.get(GeneratedDraft, draft_id)
+    async def dismiss_suggestion(self, draft_id: str) -> GeneratedDraft:
+        draft = await self.store.get(GeneratedDraft, draft_id)
         if draft.status not in {
             GeneratedDraftStatus.READY,
             GeneratedDraftStatus.ACCEPTED,
@@ -468,37 +486,39 @@ class ExecutionAIService:
                 "only a ready or accepted suggestion can be dismissed "
                 f"(draft is {draft.status.value})",
             )
-        updated = self.store.update(
+        updated = await self.store.update(
             GeneratedDraft,
             draft.id,
             {
                 "metadata": {
                     **draft.metadata,
                     "dismissed": True,
-                    "dismissed_by": self.operator_id(),
+                    "dismissed_by": (await call_async(self.operator_id)),
                 }
             },
             expected_revision=draft.revision,
         )
-        self._event(updated, "generated_draft.suggestion_dismissed", {})
+        (await self._event(updated, "generated_draft.suggestion_dismissed", {}))
         return updated
 
-    def edit(self, draft_id: str, request: DraftEditRequest) -> GeneratedDraft:
-        draft = self.store.get(GeneratedDraft, draft_id)
+    async def edit(self, draft_id: str, request: DraftEditRequest) -> GeneratedDraft:
+        draft = await self.store.get(GeneratedDraft, draft_id)
         if draft.status != GeneratedDraftStatus.READY:
             raise ExecutionAIError("draft_state", "only a ready draft can be edited")
-        self._validate_evidence(draft, request.content)
-        updated = self.store.update(
+        (await self._validate_evidence(draft, request.content))
+        updated = await self.store.update(
             GeneratedDraft,
             draft.id,
             {"content": request.content},
             expected_revision=request.expected_revision,
         )
-        self._event(updated, "generated_draft.edited", {})
+        (await self._event(updated, "generated_draft.edited", {}))
         return updated
 
-    def accept(self, draft_id: str, request: DraftTransitionRequest) -> GeneratedDraft:
-        draft = self.store.get(GeneratedDraft, draft_id)
+    async def accept(
+        self, draft_id: str, request: DraftTransitionRequest
+    ) -> GeneratedDraft:
+        draft = await self.store.get(GeneratedDraft, draft_id)
         if draft.status == GeneratedDraftStatus.ACCEPTED:
             return draft
         if draft.status != GeneratedDraftStatus.READY or draft.content is None:
@@ -507,8 +527,8 @@ class ExecutionAIService:
             raise ConflictError(
                 f"revision conflict: expected {request.expected_revision}, found {draft.revision}"
             )
-        self._validate_evidence(draft, draft.content)
-        operator = self.operator_id()
+        (await self._validate_evidence(draft, draft.content))
+        operator = await call_async(self.operator_id)
         observation = Observation(
             engagement_id=draft.engagement_id,
             observation_type="ai_execution_note",
@@ -532,9 +552,9 @@ class ExecutionAIService:
                 "provenance": "ai-generated/operator-edited/operator-accepted",
             },
         )
-        with self.store.transaction() as transaction:
-            transaction.add(observation)
-            updated = transaction.update(
+        async with self.store.transaction() as transaction:
+            (await transaction.add(observation))
+            updated = await transaction.update(
                 GeneratedDraft,
                 draft.id,
                 {
@@ -544,33 +564,39 @@ class ExecutionAIService:
                 },
                 expected_revision=draft.revision,
             )
-        self._event(
-            updated,
-            "generated_draft.accepted",
-            {"observation_id": observation.id, "accepted_by": operator},
+        (
+            await self._event(
+                updated,
+                "generated_draft.accepted",
+                {"observation_id": observation.id, "accepted_by": operator},
+            )
         )
         return updated
 
-    def reject(self, draft_id: str, request: DraftTransitionRequest) -> GeneratedDraft:
-        draft = self.store.get(GeneratedDraft, draft_id)
+    async def reject(
+        self, draft_id: str, request: DraftTransitionRequest
+    ) -> GeneratedDraft:
+        draft = await self.store.get(GeneratedDraft, draft_id)
         if draft.status == GeneratedDraftStatus.REJECTED:
             return draft
         if draft.status != GeneratedDraftStatus.READY:
             raise ExecutionAIError("draft_state", "only a ready draft can be rejected")
-        updated = self.store.update(
+        updated = await self.store.update(
             GeneratedDraft,
             draft.id,
             {"status": GeneratedDraftStatus.REJECTED},
             expected_revision=request.expected_revision,
         )
-        self._event(
-            updated,
-            "generated_draft.rejected",
-            {"rejected_by": self.operator_id()},
+        (
+            await self._event(
+                updated,
+                "generated_draft.rejected",
+                {"rejected_by": (await call_async(self.operator_id))},
+            )
         )
         return updated
 
-    def attach_to_chat(
+    async def attach_to_chat(
         self, execution_id: str, request: ExecutionChatAttachRequest
     ) -> ExecutionChatAttachment:
         harness_session_id: str | None = None
@@ -581,14 +607,14 @@ class ExecutionAIService:
                     "harness chat attachment requires no provider_id",
                     status_code=422,
                 )
-            execution, backend_id = self._harness_context(
+            execution, backend_id = await self._harness_context(
                 execution_id,
                 harness_profile_id=request.harness_profile_id,
                 model=request.model,
                 cloud_confirmed=request.cloud_confirmed,
             )
             assert self.harness_runtime is not None
-            harness_session = self.harness_runtime.create_session(
+            harness_session = await self.harness_runtime.create_session(
                 engagement_id=execution.engagement_id,
                 profile_id=backend_id,
                 model=request.model,
@@ -602,7 +628,7 @@ class ExecutionAIService:
                     "provider chat attachment requires provider_id and no harness_profile_id",
                     status_code=422,
                 )
-            execution, profile, _provider = self._provider_context(
+            execution, profile, _provider = await self._provider_context(
                 execution_id,
                 provider_id=request.provider_id,
                 model=request.model,
@@ -610,7 +636,7 @@ class ExecutionAIService:
                 require_structured=False,
             )
             backend_id = profile.id
-        context, fingerprint, metadata = self._context(execution)
+        context, fingerprint, metadata = await self._context(execution)
         session = ChatSession(
             engagement_id=execution.engagement_id,
             title=f"Discuss execution {execution.id[:8]}",
@@ -660,14 +686,16 @@ class ExecutionAIService:
                     }
                 }
             )
-        self.store.create_many([session, message])
-        self.store.append_operation_event(
-            execution.id,
-            "execution",
-            execution.engagement_id,
-            "execution.chat_attached",
-            {"session_id": session.id, "context_fingerprint": fingerprint},
-            actor_id=self.operator_id(),
+        (await self.store.create_many([session, message]))
+        (
+            await self.store.append_operation_event(
+                execution.id,
+                "execution",
+                execution.engagement_id,
+                "execution.chat_attached",
+                {"session_id": session.id, "context_fingerprint": fingerprint},
+                actor_id=(await call_async(self.operator_id)),
+            )
         )
         return ExecutionChatAttachment(
             session=session,
@@ -679,7 +707,7 @@ class ExecutionAIService:
     async def _generate(
         self, draft_id: str, provider: ModelProvider, context: str
     ) -> None:
-        draft = self.store.get(GeneratedDraft, draft_id)
+        draft = await self.store.get(GeneratedDraft, draft_id)
         try:
             request = ModelRequest(
                 model=draft.model,
@@ -735,8 +763,8 @@ class ExecutionAIService:
                     "provider did not return the required strict draft schema",
                     status_code=502,
                 ) from exc
-            self._validate_evidence(draft, content)
-            ready = self.store.update(
+            (await self._validate_evidence(draft, content))
+            ready = await self.store.update(
                 GeneratedDraft,
                 draft.id,
                 {
@@ -748,15 +776,17 @@ class ExecutionAIService:
                 },
                 expected_revision=draft.revision,
             )
-            self._event(
-                ready,
-                "generated_draft.ready",
-                {
-                    "provider_request_id": response.provider_request_id,
-                    "usage": ready.usage.model_dump(mode="json")
-                    if ready.usage
-                    else None,
-                },
+            (
+                await self._event(
+                    ready,
+                    "generated_draft.ready",
+                    {
+                        "provider_request_id": response.provider_request_id,
+                        "usage": ready.usage.model_dump(mode="json")
+                        if ready.usage
+                        else None,
+                    },
+                )
             )
             if draft.metadata.get("take_notes") and draft.metadata.get("automatic"):
                 observation = Observation(
@@ -781,8 +811,8 @@ class ExecutionAIService:
                         "provenance": "ai-generated",
                     },
                 )
-                self.store.create(observation)
-                ready = self.store.update(
+                (await self.store.create(observation))
+                ready = await self.store.update(
                     GeneratedDraft,
                     ready.id,
                     {
@@ -799,9 +829,9 @@ class ExecutionAIService:
                 caught_error,
                 stage="execution_ai",
             )
-            current = self.store.get(GeneratedDraft, draft_id)
+            current = await self.store.get(GeneratedDraft, draft_id)
             if current.status == GeneratedDraftStatus.GENERATING:
-                failed = self.store.update(
+                failed = await self.store.update(
                     GeneratedDraft,
                     current.id,
                     {
@@ -814,7 +844,11 @@ class ExecutionAIService:
                     },
                     expected_revision=current.revision,
                 )
-                self._event(failed, "generated_draft.failed", {"reason": "cancelled"})
+                (
+                    await self._event(
+                        failed, "generated_draft.failed", {"reason": "cancelled"}
+                    )
+                )
             raise
         except Exception as exc:
             record_caught_exception(
@@ -824,7 +858,7 @@ class ExecutionAIService:
                 exc,
                 stage="execution_ai",
             )
-            current = self.store.get(GeneratedDraft, draft_id)
+            current = await self.store.get(GeneratedDraft, draft_id)
             if current.status == GeneratedDraftStatus.GENERATING:
                 detail = (
                     exc.detail
@@ -833,7 +867,7 @@ class ExecutionAIService:
                     if isinstance(exc, ProviderError)
                     else "draft generation failed; retry is safe"
                 )
-                failed = self.store.update(
+                failed = await self.store.update(
                     GeneratedDraft,
                     current.id,
                     {
@@ -842,12 +876,14 @@ class ExecutionAIService:
                     },
                     expected_revision=current.revision,
                 )
-                self._event(
-                    failed, "generated_draft.failed", {"reason": type(exc).__name__}
+                (
+                    await self._event(
+                        failed, "generated_draft.failed", {"reason": type(exc).__name__}
+                    )
                 )
 
     async def _generate_harness(self, draft_id: str, context: str) -> None:
-        draft = self.store.get(GeneratedDraft, draft_id)
+        draft = await self.store.get(GeneratedDraft, draft_id)
         try:
             if self.harness_runtime is None:
                 raise ExecutionAIError(
@@ -893,8 +929,8 @@ class ExecutionAIService:
             )
             decoded = json.loads(_json_object(turn.response or ""))
             content = GeneratedDraftContent.model_validate(decoded)
-            self._validate_evidence(draft, content)
-            ready = self.store.update(
+            (await self._validate_evidence(draft, content))
+            ready = await self.store.update(
                 GeneratedDraft,
                 draft.id,
                 {
@@ -906,7 +942,11 @@ class ExecutionAIService:
                 },
                 expected_revision=draft.revision,
             )
-            self._event(ready, "generated_draft.ready", {"harness_turn_id": turn.id})
+            (
+                await self._event(
+                    ready, "generated_draft.ready", {"harness_turn_id": turn.id}
+                )
+            )
             if draft.metadata.get("take_notes") and draft.metadata.get("automatic"):
                 observation = Observation(
                     engagement_id=draft.engagement_id,
@@ -926,27 +966,31 @@ class ExecutionAIService:
                         "provenance": "ai-generated",
                     },
                 )
-                self.store.create(observation)
-                self.store.update(
-                    GeneratedDraft,
-                    ready.id,
-                    {
-                        "status": GeneratedDraftStatus.ACCEPTED,
-                        "observation_id": observation.id,
-                    },
-                    expected_revision=ready.revision,
+                (await self.store.create(observation))
+                (
+                    await self.store.update(
+                        GeneratedDraft,
+                        ready.id,
+                        {
+                            "status": GeneratedDraftStatus.ACCEPTED,
+                            "observation_id": observation.id,
+                        },
+                        expected_revision=ready.revision,
+                    )
                 )
         except asyncio.CancelledError:
-            current = self.store.get(GeneratedDraft, draft_id)
+            current = await self.store.get(GeneratedDraft, draft_id)
             if current.status == GeneratedDraftStatus.GENERATING:
-                self.store.update(
-                    GeneratedDraft,
-                    current.id,
-                    {
-                        "status": GeneratedDraftStatus.FAILED,
-                        "error_detail": "harness analysis was cancelled; retry is safe",
-                    },
-                    expected_revision=current.revision,
+                (
+                    await self.store.update(
+                        GeneratedDraft,
+                        current.id,
+                        {
+                            "status": GeneratedDraftStatus.FAILED,
+                            "error_detail": "harness analysis was cancelled; retry is safe",
+                        },
+                        expected_revision=current.revision,
+                    )
                 )
             raise
         except Exception as exc:
@@ -957,19 +1001,21 @@ class ExecutionAIService:
                 exc,
                 stage="harness-analysis",
             )
-            current = self.store.get(GeneratedDraft, draft_id)
+            current = await self.store.get(GeneratedDraft, draft_id)
             if current.status == GeneratedDraftStatus.GENERATING:
-                self.store.update(
-                    GeneratedDraft,
-                    current.id,
-                    {
-                        "status": GeneratedDraftStatus.FAILED,
-                        "error_detail": str(exc)[:4000],
-                    },
-                    expected_revision=current.revision,
+                (
+                    await self.store.update(
+                        GeneratedDraft,
+                        current.id,
+                        {
+                            "status": GeneratedDraftStatus.FAILED,
+                            "error_detail": str(exc)[:4000],
+                        },
+                        expected_revision=current.revision,
+                    )
                 )
 
-    def _harness_context(
+    async def _harness_context(
         self,
         execution_id: str,
         *,
@@ -981,15 +1027,17 @@ class ExecutionAIService:
             raise ExecutionAIError(
                 "harness_unavailable", "an enabled harness is required", status_code=422
             )
-        execution = self.store.get(OperatorExecution, execution_id)
-        engagement = self.store.get(Engagement, execution.engagement_id)
-        profile = self.store.get(HarnessProfile, harness_profile_id)
-        self._validate_harness_profile(
-            engagement, profile, model=model, cloud_confirmed=cloud_confirmed
+        execution = await self.store.get(OperatorExecution, execution_id)
+        engagement = await self.store.get(Engagement, execution.engagement_id)
+        profile = await self.store.get(HarnessProfile, harness_profile_id)
+        (
+            await self._validate_harness_profile(
+                engagement, profile, model=model, cloud_confirmed=cloud_confirmed
+            )
         )
         return execution, profile.id
 
-    def _validate_harness_profile(
+    async def _validate_harness_profile(
         self,
         engagement: Engagement,
         profile: HarnessProfile,
@@ -1006,7 +1054,7 @@ class ExecutionAIService:
                 status_code=422,
             )
         if engagement.scope_policy_id:
-            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
             if scope.local_only and not profile.privacy.local_only:
                 raise ExecutionAIError(
                     "privacy_denied",
@@ -1025,7 +1073,7 @@ class ExecutionAIService:
                     status_code=428,
                 )
 
-    def _validate_harness_backend(
+    async def _validate_harness_backend(
         self,
         *,
         engagement_id: str,
@@ -1037,14 +1085,16 @@ class ExecutionAIService:
             raise ExecutionAIError(
                 "harness_unavailable", "an enabled harness is required", status_code=422
             )
-        engagement = self.store.get(Engagement, engagement_id)
-        profile = self.store.get(HarnessProfile, harness_profile_id)
-        self._validate_harness_profile(
-            engagement, profile, model=model, cloud_confirmed=cloud_confirmed
+        engagement = await self.store.get(Engagement, engagement_id)
+        profile = await self.store.get(HarnessProfile, harness_profile_id)
+        (
+            await self._validate_harness_profile(
+                engagement, profile, model=model, cloud_confirmed=cloud_confirmed
+            )
         )
         return profile.id
 
-    def _provider_context(
+    async def _provider_context(
         self,
         execution_id: str,
         *,
@@ -1053,9 +1103,9 @@ class ExecutionAIService:
         cloud_confirmed: bool,
         require_structured: bool,
     ) -> tuple[OperatorExecution, ProviderProfile, ModelProvider]:
-        execution = self.store.get(OperatorExecution, execution_id)
-        engagement = self.store.get(Engagement, execution.engagement_id)
-        profile = self.store.get(ProviderProfile, provider_id)
+        execution = await self.store.get(OperatorExecution, execution_id)
+        engagement = await self.store.get(Engagement, execution.engagement_id)
+        profile = await self.store.get(ProviderProfile, provider_id)
         if not profile.enabled:
             raise ExecutionAIError(
                 "provider_unavailable", "provider profile is disabled"
@@ -1086,7 +1136,11 @@ class ExecutionAIService:
                 )
         try:
             provider = self.provider_factory(profile)
-            validate_engagement_provider_privacy(self.store, engagement, provider)
+            (
+                await validate_engagement_provider_privacy(
+                    self.store, engagement, provider
+                )
+            )
         except ProviderPrivacyViolation as exc:
             record_caught_exception(
                 "executions",
@@ -1109,11 +1163,11 @@ class ExecutionAIService:
             ) from exc
         return execution, profile, provider
 
-    def _validate_provider_backend(
+    async def _validate_provider_backend(
         self, *, engagement_id: str, provider_id: str, model: str, cloud_confirmed: bool
     ) -> tuple[ProviderProfile, ModelProvider]:
-        engagement = self.store.get(Engagement, engagement_id)
-        profile = self.store.get(ProviderProfile, provider_id)
+        engagement = await self.store.get(Engagement, engagement_id)
+        profile = await self.store.get(ProviderProfile, provider_id)
         if not profile.enabled:
             raise ExecutionAIError(
                 "provider_unavailable", "provider profile is disabled"
@@ -1138,7 +1192,11 @@ class ExecutionAIService:
                 )
         try:
             provider = self.provider_factory(profile)
-            validate_engagement_provider_privacy(self.store, engagement, provider)
+            (
+                await validate_engagement_provider_privacy(
+                    self.store, engagement, provider
+                )
+            )
         except ProviderPrivacyViolation as exc:
             raise ExecutionAIError("privacy_denied", str(exc)) from exc
         except (ProviderError, ValueError) as exc:
@@ -1147,11 +1205,13 @@ class ExecutionAIService:
             ) from exc
         return profile, provider
 
-    def _mission_context(self, run: AgentRun) -> tuple[str, str, dict[str, Any]]:
+    async def _mission_context(self, run: AgentRun) -> tuple[str, str, dict[str, Any]]:
         attempts = [
             attempt
-            for attempt in self.store.find_entities(
-                AgentAttempt, {"run_id": run.id}, engagement_id=run.engagement_id
+            for attempt in (
+                await self.store.find_entities(
+                    AgentAttempt, {"run_id": run.id}, engagement_id=run.engagement_id
+                )
             )
             if attempt.output is not None
         ]
@@ -1218,8 +1278,10 @@ class ExecutionAIService:
             },
         )
 
-    def _context(self, execution: OperatorExecution) -> tuple[str, str, dict[str, Any]]:
-        source_artifact = self.store.get(Artifact, execution.source_artifact_id)
+    async def _context(
+        self, execution: OperatorExecution
+    ) -> tuple[str, str, dict[str, Any]]:
+        source_artifact = await self.store.get(Artifact, execution.source_artifact_id)
         if not self.artifact_store.verify(source_artifact):
             raise ExecutionAIError(
                 "artifact_integrity", "execution source failed integrity verification"
@@ -1234,7 +1296,7 @@ class ExecutionAIService:
         # the (operation_id, sequence) index: never the Project's whole log.
         after_sequence = 0
         while True:
-            events = self.store.replay_operation_events(
+            events = await self.store.replay_operation_events(
                 execution.id,
                 after_sequence=after_sequence,
                 limit=_OUTPUT_EVENT_PAGE,
@@ -1259,7 +1321,7 @@ class ExecutionAIService:
             ):
                 if not artifact_id:
                     continue
-                artifact = self.store.get(Artifact, artifact_id)
+                artifact = await self.store.get(Artifact, artifact_id)
                 if not self.artifact_store.verify(artifact):
                     raise ExecutionAIError(
                         "artifact_integrity",
@@ -1314,13 +1376,13 @@ class ExecutionAIService:
         }
         return encoded, fingerprint, metadata
 
-    def _validate_evidence(
+    async def _validate_evidence(
         self, draft: GeneratedDraft, content: GeneratedDraftContent
     ) -> None:
         if draft.metadata.get("source_kind") == "mission":
             allowed = set(draft.metadata.get("allowed_evidence_ids", []))
         else:
-            execution = self.store.get(OperatorExecution, draft.execution_id)
+            execution = await self.store.get(OperatorExecution, draft.execution_id)
             allowed = {execution.evidence_id} if execution.evidence_id else set()
         if not set(content.evidence_ids) <= allowed:
             raise ExecutionAIError(
@@ -1329,7 +1391,7 @@ class ExecutionAIService:
                 status_code=502,
             )
 
-    def _deduplicated(
+    async def _deduplicated(
         self,
         execution: OperatorExecution,
         provider_id: str,
@@ -1340,7 +1402,7 @@ class ExecutionAIService:
         suggest_next_steps: bool,
         take_notes: bool,
     ) -> GeneratedDraft | None:
-        for draft in self._all_drafts(execution.engagement_id):
+        for draft in await self._all_drafts(execution.engagement_id):
             if (
                 draft.execution_id == execution.id
                 and draft.provider_profile_id == provider_id
@@ -1354,23 +1416,27 @@ class ExecutionAIService:
                 return draft
         return None
 
-    def _event(
+    async def _event(
         self, draft: GeneratedDraft, event_type: str, payload: dict[str, Any]
     ) -> None:
-        self.store.append_operation_event(
-            draft.id,
-            "generated_draft",
-            draft.engagement_id,
-            event_type,
-            payload,
-            actor_id=self.operator_id(),
+        (
+            await self.store.append_operation_event(
+                draft.id,
+                "generated_draft",
+                draft.engagement_id,
+                event_type,
+                payload,
+                actor_id=(await call_async(self.operator_id)),
+            )
         )
 
-    def _all_drafts(self, engagement_id: str | None = None) -> list[GeneratedDraft]:
+    async def _all_drafts(
+        self, engagement_id: str | None = None
+    ) -> list[GeneratedDraft]:
         result: list[GeneratedDraft] = []
         offset = 0
         while True:
-            page = self.store.list_entities(
+            page = await self.store.list_entities(
                 GeneratedDraft,
                 engagement_id=engagement_id,
                 offset=offset,

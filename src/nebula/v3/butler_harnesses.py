@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 
 from .domain import (
@@ -82,19 +84,21 @@ class ButlerHarnesses:
             else HarnessAuthMode.SECRET_REF
         )
 
-    def harnesses(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def harnesses(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.list_entities(HarnessProfile, offset=offset, limit=51)
+        rows = await self.store.list_entities(HarnessProfile, offset=offset, limit=51)
         return {
             "harnesses": [self._summary(profile) for profile in rows[:50]],
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def harness(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._summary(self.store.get(HarnessProfile, arguments["harness_id"]))
+    async def harness(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._summary(
+            (await self.store.get(HarnessProfile, arguments["harness_id"]))
+        )
 
-    def attach(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        profile = self.store.get(HarnessProfile, arguments["harness_id"])
+    async def attach(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        profile = await self.store.get(HarnessProfile, arguments["harness_id"])
         if profile.revision != arguments["expected_revision"]:
             raise ValueError("harness changed; read its current revision")
         mode = self._credential_mode(profile)
@@ -146,7 +150,7 @@ class ButlerHarnesses:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

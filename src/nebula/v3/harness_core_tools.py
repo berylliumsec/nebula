@@ -6,6 +6,8 @@ same implementations, invocation ownership and policy as provider-chat tools.
 
 from __future__ import annotations
 
+from .async_utils import resolve_workspace
+
 import asyncio
 import hashlib
 import json
@@ -58,7 +60,7 @@ from .tools import (
 from .tool_results import MAX_EXCERPT_BYTES, serialize_model_result
 
 
-def core_components(
+async def core_components(
     runtime: Any, session: Any, harness_turn: Any
 ) -> RuntimeToolComponents | None:
     if (
@@ -68,20 +70,20 @@ def core_components(
     ):
         return None
     store = runtime.store
-    profile = store.get(HarnessProfile, session.harness_profile_id)
+    profile = await store.get(HarnessProfile, session.harness_profile_id)
     if not profile.privacy.local_only and not profile.privacy.permits_sensitive_data:
         return None
-    turn = store.get(ChatTurn, harness_turn.chat_turn_id)
+    turn = await store.get(ChatTurn, harness_turn.chat_turn_id)
     snapshot = turn.request_snapshot
     if not profile.privacy.local_only and not snapshot.get("remote_mcp_confirmed"):
         return None
-    project = store.get(Engagement, turn.engagement_id)
+    project = await store.get(Engagement, turn.engagement_id)
     scope = (
-        store.get(ScopePolicy, project.scope_policy_id)
+        (await store.get(ScopePolicy, project.scope_policy_id))
         if project.scope_policy_id
         else ScopePolicy(id=f"scope:{project.id}", engagement_id=project.id)
     )
-    workspace = runtime.workspace_resolver(project.id)
+    workspace = await resolve_workspace(runtime.workspace_resolver, project.id)
     components = notes_components(store, scope, workspace)
     components = combine_tool_components(
         components,
@@ -175,15 +177,17 @@ def core_components(
         components = combine_tool_components(components, selected)
     browser_id = snapshot.get("browser_session_id")
     if browser_id:
-        browser = store.get(BrowserSession, browser_id)
+        browser = await store.get(BrowserSession, browser_id)
         if browser.metadata.get("browser_companion_version") != 1:
             components = combine_tool_components(
                 components,
-                BrowserToolPlatform(store).chat_components(
-                    engagement_id=project.id, browser_session_id=browser_id
+                (
+                    await BrowserToolPlatform(store).chat_components(
+                        engagement_id=project.id, browser_session_id=browser_id
+                    )
                 ),
             )
-    chat = store.get(ChatSession, turn.session_id)
+    chat = await store.get(ChatSession, turn.session_id)
     if runtime.provider_subagents is not None and is_subagent_session(chat):
         components = combine_tool_components(
             components,
@@ -206,10 +210,10 @@ async def call_core_tool(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     """Dispatch through the provider broker, retaining ledger/approval ownership."""
-    active = runtime.store.get(type(turn), turn.id)
+    active = await runtime.store.get(type(turn), turn.id)
     from .domain import HarnessTurnStatus, ChatTurnStatus
 
-    chat_turn = runtime.store.get(ChatTurn, turn.chat_turn_id)
+    chat_turn = await runtime.store.get(ChatTurn, turn.chat_turn_id)
     if active.status not in {
         HarnessTurnStatus.RUNNING,
         HarnessTurnStatus.WAITING_APPROVAL,
@@ -297,7 +301,7 @@ async def call_core_tool(
             raise AmbiguousToolState(
                 "this Core tool already started; inspect its saved outcome before retrying"
             )
-        call = runtime.store.update(
+        call = await runtime.store.update(
             ToolCall,
             call.id,
             {"metadata": {**call.metadata, "core_dispatch_started": True}},
@@ -319,7 +323,7 @@ async def call_core_tool(
                 await runtime._wait_for_broker_approval(turn, required.approval)
                 from .domain import Approval
 
-                approval = runtime.store.get(Approval, required.approval.id)
+                approval = await runtime.store.get(Approval, required.approval.id)
                 result = await execute(approval)
             value = (
                 result.receipt.as_model_result()
@@ -330,14 +334,17 @@ async def call_core_tool(
             # larger outputs as artifacts rather than dropping recovery data.
             if len(json.dumps(value, ensure_ascii=False).encode()) > MAX_EXCERPT_BYTES:
                 result = await runtime.evidence_recorder.record(
-                    runtime.store.get(ToolCall, call.id), invocation, spec, result
+                    (await runtime.store.get(ToolCall, call.id)),
+                    invocation,
+                    spec,
+                    result,
                 )
                 value = result.receipt.as_model_result()
-            latest = runtime.store.get(ToolCall, call.id)
+            latest = await runtime.store.get(ToolCall, call.id)
             if latest.status != ToolCallStatus.COMPLETE or latest.result != value:
                 await ledger.transition(latest, ToolCallStatus.COMPLETE, result=value)
         except BaseException as exc:
-            latest = runtime.store.get(ToolCall, call.id)
+            latest = await runtime.store.get(ToolCall, call.id)
             if latest.status not in {
                 ToolCallStatus.COMPLETE,
                 ToolCallStatus.DENIED,
@@ -356,34 +363,38 @@ async def call_core_tool(
         and isinstance(value, dict)
         and value.get("accepted") is True
     ):
-        chat_turn = runtime.store.get(ChatTurn, turn.chat_turn_id)
-        runtime.store.update(
-            ChatTurn,
-            chat_turn.id,
-            {
-                "request_snapshot": {
-                    **chat_turn.request_snapshot,
-                    "goal_completion_proposal": arguments,
-                }
-            },
-            expected_revision=chat_turn.revision,
+        chat_turn = await runtime.store.get(ChatTurn, turn.chat_turn_id)
+        (
+            await runtime.store.update(
+                ChatTurn,
+                chat_turn.id,
+                {
+                    "request_snapshot": {
+                        **chat_turn.request_snapshot,
+                        "goal_completion_proposal": arguments,
+                    }
+                },
+                expected_revision=chat_turn.revision,
+            )
         )
     if name == "tool_catalog.load":
-        current = runtime.store.get(ChatTurn, turn.chat_turn_id)
+        current = await runtime.store.get(ChatTurn, turn.chat_turn_id)
         loaded = sorted(
             set(current.request_snapshot.get("core_loaded_tools", []))
             | set(arguments["names"])
         )
-        runtime.store.update(
-            ChatTurn,
-            current.id,
-            {
-                "request_snapshot": {
-                    **current.request_snapshot,
-                    "core_loaded_tools": loaded,
-                }
-            },
-            expected_revision=current.revision,
+        (
+            await runtime.store.update(
+                ChatTurn,
+                current.id,
+                {
+                    "request_snapshot": {
+                        **current.request_snapshot,
+                        "core_loaded_tools": loaded,
+                    }
+                },
+                expected_revision=current.revision,
+            )
         )
     encoded = serialize_model_result(value)
     return {

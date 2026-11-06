@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import async_done_callback, call_async
+
 import asyncio
 from collections.abc import Callable
 import math
@@ -135,13 +139,13 @@ class ReportCpuExecutor:
         /,
         *arguments: Any,
         input_bytes: int = 0,
-        on_start: Callable[[], None] | None = None,
+        on_start: (MaybeAsync[[], None] | None) = None,
     ) -> _T:
         if self._closed:
             raise CpuWorkerClosed("Background PDF workers are shutting down")
         if self.state == "disabled" and not self.enabled:
             if on_start is not None:
-                on_start()
+                await call_async(on_start)
             task = create_diagnostic_task(
                 asyncio.to_thread(function, *arguments),
                 feature="reports",
@@ -150,7 +154,7 @@ class ReportCpuExecutor:
                 name="report-cpu-legacy",
             )
             self._legacy.add(task)
-            task.add_done_callback(self._legacy.discard)
+            task.add_done_callback(async_done_callback(self._legacy.discard))
             return await asyncio.shield(task)
         if not self._accepting or self.pool is None:
             raise CpuWorkerBusy(

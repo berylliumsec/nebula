@@ -70,7 +70,7 @@ Settings assistant and the complete destination catalog.
 | Edit a goal's resume instruction | Chat → Goal → Edit goal shows the saved text; the current Core wording is the default. Saving it updates the goal by revision, and the next explicit Resume sends that text in the same conversation. Automatic continuation turns retain their separate Core instruction | Core goal record and resumed turn; goal editor owns the draft | Core unit, component, real Core and browser |
 | Recover a harness goal from model capacity | When a Core-owned harness goal turn stops because the selected model is overloaded, Core waits briefly and starts one new continuation in the same chat. It uses the saved goal and completed read-only receipts, never replays the failed prompt, and counts the new turn against goal budgets. A second overload, a write, an uncertain effect, or a policy refusal leaves the goal paused with its saved reason for review. The transcript and goal state survive refresh. This automatic behavior has no Settings control or alternate-provider action | Core turn ledger, goal revision and chat transcript | Focused Core tests and production LAN browser |
 | Complete a provider goal | A tool-enabled provider agent calls the offered `goal_complete` tool (`goal.complete` in Core) with a summary and concrete evidence after meeting the goal criteria. Core saves the completed goal with the final answer, labels the evidence agent-reported, and starts no further continuation; the goal panel shows the saved state after refresh | Core goal, turn ledger, final message and goal panel | Core unit and real Core browser |
-| Switch a saved harness chat to a provider | Chat → Assistant settings → Runtime → Provider checks the chosen provider and model, then Core changes the same chat's durable binding at an idle boundary. The chat ID, transcript, and paused goal stay in place; the next provider turn is saved there. An active response, running or blocked goal, working subagent, or queued follow-up gives an actionable refusal | Core chat binding and goal; React owns only the unsaved picker choice | Core unit, desktop/mobile browser, real Core and LAN |
+| Switch a saved harness chat to a provider | Chat → Assistant settings → Runtime → Provider checks the chosen provider and model, then Core changes the same chat's durable binding at an idle boundary. The chat ID, transcript, goal ID, budgets and goal status stay in place. A running goal follows the selected runtime at the next safe turn boundary. Core retains a pending selection while a response, unresolved action, child or authorized follow-up still owns work; paused and blocked goals remain so until explicitly resumed | Core chat binding and goal; React owns only the unsaved picker choice | Core unit, desktop/mobile browser, real Core and LAN |
 
 PostgreSQL storage migration is a host administration workflow. Butler can explain
 `nebula-core migrate-to-postgresql` and the procedure in
@@ -328,16 +328,23 @@ blocks the turn. When a plan is shared, Core includes it in a delegated
 subagent's task context; a harness-reported native plan is a fallback. Child
 agents inherit the planning preference and may share their own plan.
 Butler can save the main runtime and a provider or harness child runtime independently on the same chat.
-The saved choice becomes the bound runtime when a new message starts; Butler
-checks the resulting turn before reporting a goal resumed. Immediate messages
+Core applies an idle runtime selection to the same chat immediately. Active work
+keeps its recorded runtime; a separate pending selection activates at the next
+safe boundary. Butler reads the durable binding and pending state before reporting
+a switch or resumed goal. Immediate messages
 carry the same saved MCP servers and Plan choice as queued next messages.
 For a harness-to-provider change, opening the saved chat's Assistant settings
 and choosing Provider uses Core's runtime-switch preflight and apply actions.
-The switch is saved only after Core reads it back as a provider chat. It waits
-for the harness response and subagents to finish, and for the goal to be paused
-or settled with its follow-up queue clear. Provider turns then append to the
-same transcript and retain the original goal ID. Saving only a next-turn
-Assistant configuration is not proof that the backend binding changed.
+Core reports the active runtime separately from any saved pending selection.
+Activation waits for the response, unresolved approvals/recovery, subagents and
+previously authorized follow-ups to finish. A blocked goal without in-flight
+work does not prevent selection; paused and blocked goals keep their state.
+The running Core goal's next turn uses the activated runtime in the same chat.
+Refresh and reconnect retain the pending choice. If privacy, model availability
+or compaction consent changes, Review selection remains visible and the old
+backend is not used as a fallback. Explicit resume reconciles an older split
+between saved Assistant configuration and chat binding without requiring a new
+operator message. Native vendor goals remain separate.
 `nebula.work.require_plan` records a one-task request against an exact
 agent, goal, child, or turn, using a fresh target revision and concrete reason.
 An active harness turn reports that the directive takes effect next turn. The

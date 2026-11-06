@@ -7,6 +7,8 @@ operator created themselves (files in the project workspace); they never change 
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync, call_async
+
 import json
 import os
 import re
@@ -72,38 +74,39 @@ def progress_id(operator_key: str, guide_id: str) -> str:
 def guides_router(
     store: NebulaStore,
     operators: OperatorProfileService,
-    workspace_for: Callable[[str], Path],
+    workspace_for: (MaybeAsync[[str], Path]),
 ) -> APIRouter:
     router = APIRouter(tags=["guides"])
 
-    def operator_key() -> str:
-        active = operators.active_profile_or_none()
+    async def operator_key() -> str:
+        active = await operators.active_profile_or_none()
         return active.id if active else UNNAMED_OPERATOR
 
     @router.get("/guides/progress", response_model=list[GuideProgress])
-    def read_progress() -> list[GuideProgress]:
-        with store.database.session() as database:
-            rows = database.scalars(
+    async def read_progress() -> list[GuideProgress]:
+        async with store.database.session() as database:
+            rows = await database.scalars(
                 select(EntityRow)
                 .where(
                     EntityRow.kind == GuideProgress.entity_kind,
-                    EntityRow.payload["operator_key"].as_string() == operator_key(),
+                    EntityRow.payload["operator_key"].as_string()
+                    == (await operator_key()),
                 )
                 .order_by(EntityRow.created_at, EntityRow.id)
             )
             return [GuideProgress.model_validate(row.payload) for row in rows]
 
     @router.put("/guides/progress/{guide_id}", response_model=GuideProgress)
-    def write_progress(guide_id: str, body: GuideProgressWrite) -> GuideProgress:
+    async def write_progress(guide_id: str, body: GuideProgressWrite) -> GuideProgress:
         if not _valid_guide_id(guide_id):
             raise HTTPException(422, "Unknown guide identity")
-        key = operator_key()
+        key = await operator_key()
         if body.expected_operator_key is not None and body.expected_operator_key != key:
             raise ConflictError("Active operator changed; read guide progress again")
         identity = progress_id(key, guide_id)
         completed_at = utc_now() if body.status == "completed" else None
         if body.expected_revision == 0:
-            return store.create(
+            return await store.create(
                 GuideProgress(
                     id=identity,
                     operator_key=key,
@@ -113,8 +116,8 @@ def guides_router(
                     completed_at=completed_at,
                 )
             )
-        current = store.get(GuideProgress, identity)
-        return store.update(
+        current = await store.get(GuideProgress, identity)
+        return await store.update(
             GuideProgress,
             identity,
             {
@@ -131,11 +134,15 @@ def guides_router(
         )
 
     @router.delete("/guides/progress/{guide_id}", status_code=204)
-    def reset_progress(guide_id: str) -> Response:
+    async def reset_progress(guide_id: str) -> Response:
         if not _valid_guide_id(guide_id):
             raise HTTPException(422, "Unknown guide identity")
         try:
-            store.delete(GuideProgress, progress_id(operator_key(), guide_id))
+            (
+                await store.delete(
+                    GuideProgress, progress_id((await operator_key()), guide_id)
+                )
+            )
         except (
             NotFoundError
         ):  # diagnostic-expected: resetting an unstarted guide is a no-op
@@ -146,10 +153,14 @@ def guides_router(
         "/project-instructions",
         response_model=ProjectInstructionsStatus,
     )
-    def project_instructions_status(engagement_id: str) -> ProjectInstructionsStatus:
-        store.get(Engagement, engagement_id)
+    async def project_instructions_status(
+        engagement_id: str,
+    ) -> ProjectInstructionsStatus:
+        (await store.get(Engagement, engagement_id))
         try:
-            instructions = load_project_instructions(workspace_for(engagement_id))
+            instructions = load_project_instructions(
+                await call_async(workspace_for, engagement_id)
+            )
         except (
             ProjectInstructionsError,
             OSError,
@@ -169,9 +180,9 @@ def guides_router(
     @router.post(
         "/guides/starter-files", response_model=StarterFilesResult, status_code=201
     )
-    def create_starter_files(body: StarterFilesRequest) -> StarterFilesResult:
-        store.get(Engagement, body.engagement_id)
-        workspace = workspace_for(body.engagement_id).resolve()
+    async def create_starter_files(body: StarterFilesRequest) -> StarterFilesResult:
+        (await store.get(Engagement, body.engagement_id))
+        workspace = (await call_async(workspace_for, body.engagement_id)).resolve()
         files = starter_files(body.kind, body.name)
         write_new_files(workspace, files)
         return StarterFilesResult(kind=body.kind, paths=[path for path, _, _ in files])

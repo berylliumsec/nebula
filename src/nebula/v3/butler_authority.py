@@ -113,10 +113,12 @@ def authority_view(project_id: str, policy: ButlerAuthorityPolicy | None) -> dic
 EntityT = TypeVar("EntityT", bound=Entity)
 
 
-def _entity(transaction: Any, model: type[EntityT], entity_id: str) -> EntityT | None:
+async def _entity(
+    transaction: Any, model: type[EntityT], entity_id: str
+) -> EntityT | None:
     from .database import EntityRow
 
-    row = transaction.session.get(EntityRow, entity_id)
+    row = await transaction.session.get(EntityRow, entity_id)
     if row is None:
         return None
     if row.kind != model.entity_kind:
@@ -138,21 +140,25 @@ class ButlerAuthorityService:
         self.work = work
         self.memory_service = memory_service
 
-    def get(self, project_id: str) -> dict:
-        self.store.get(Engagement, project_id)
+    async def get(self, project_id: str) -> dict:
+        (await self.store.get(Engagement, project_id))
         return authority_view(
             project_id,
-            self.store.find_entity(ButlerAuthorityPolicy, "engagement_id", project_id),
+            (
+                await self.store.find_entity(
+                    ButlerAuthorityPolicy, "engagement_id", project_id
+                )
+            ),
         )
 
-    def _repeat_still_current(
+    async def _repeat_still_current(
         self, project_id: str, goal: ChatGoal, event_payload: ButlerEventPayload
     ) -> bool:
         refs = [ref for ref in event_payload.evidence_refs if ref.kind == "tool_call"]
         if len(refs) != 3 or any(ref.project_id != project_id for ref in refs):
             return False
         try:
-            last = self.store.get(ToolCall, refs[-1].id)
+            last = await self.store.get(ToolCall, refs[-1].id)
         except NotFoundError:
             # diagnostic-expected: missing cited evidence invalidates this pending action.
             return False
@@ -164,7 +170,7 @@ class ButlerAuthorityService:
             return False
         # The event is durable historical evidence. A later different, active,
         # or successful tool call means the exact repeat is no longer current.
-        for call in self.store.list_session_entities(
+        for call in await self.store.list_session_entities(
             ToolCall, goal.session_id, newest_first=True, limit=50
         ):
             if call.id == last.id:
@@ -183,7 +189,7 @@ class ButlerAuthorityService:
             ):
                 return False
             try:
-                turn = self.store.get(ChatTurn, call.chat_turn_id)
+                turn = await self.store.get(ChatTurn, call.chat_turn_id)
             except NotFoundError:
                 # diagnostic-expected: a missing cited turn cancels the stale request.
                 return False
@@ -195,12 +201,12 @@ class ButlerAuthorityService:
                 return False
         return False
 
-    def write(self, project_id: str, request: AuthorityWrite) -> dict:
-        project = self.store.get(Engagement, project_id)
+    async def write(self, project_id: str, request: AuthorityWrite) -> dict:
+        project = await self.store.get(Engagement, project_id)
         if project.status == EngagementStatus.ARCHIVED:
             raise ConflictError("Restore the project before changing Butler authority")
-        with self.store.transaction(immediate=True) as transaction:
-            previous = _entity(
+        async with self.store.transaction(immediate=True) as transaction:
+            previous = await _entity(
                 transaction, ButlerAuthorityPolicy, policy_id(project_id)
             )
             actual_revision = previous.revision if previous else 0
@@ -213,9 +219,9 @@ class ButlerAuthorityService:
                     authority=request.authority,
                     delegate_actions=request.delegate_actions,
                 )
-                transaction.add(saved)
+                (await transaction.add(saved))
             else:
-                saved = transaction.update(
+                saved = await transaction.update(
                     ButlerAuthorityPolicy,
                     previous.id,
                     {
@@ -224,37 +230,39 @@ class ButlerAuthorityService:
                     },
                     expected_revision=previous.revision,
                 )
-            _append_project_event(
-                transaction,
-                engagement_id=project_id,
-                event_type="butler.authority_changed",
-                payload=ButlerEventPayload(
-                    project_id=project_id,
-                    source="core",
-                    actor_role="core",
-                    summary=f"Operator set Butler authority to {saved.authority}.",
-                    metrics={
-                        "authority": saved.authority,
-                        "revision": saved.revision,
-                        "delegate_pause_granted": (
-                            "pause_urgent_machine_blocker" in saved.delegate_actions
-                        ),
-                    },
-                    verification_state="core_observed",
-                ),
-                idempotency_key=f"authority:{saved.id}:revision:{saved.revision}",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=project_id,
+                    event_type="butler.authority_changed",
+                    payload=ButlerEventPayload(
+                        project_id=project_id,
+                        source="core",
+                        actor_role="core",
+                        summary=f"Operator set Butler authority to {saved.authority}.",
+                        metrics={
+                            "authority": saved.authority,
+                            "revision": saved.revision,
+                            "delegate_pause_granted": (
+                                "pause_urgent_machine_blocker" in saved.delegate_actions
+                            ),
+                        },
+                        verification_state="core_observed",
+                    ),
+                    idempotency_key=f"authority:{saved.id}:revision:{saved.revision}",
+                    now=utc_now(),
+                )
             )
         return authority_view(project_id, saved)
 
-    def _can_act_in_project(self, project_id: str) -> bool:
-        project = self.store.get(Engagement, project_id)
+    async def _can_act_in_project(self, project_id: str) -> bool:
+        project = await self.store.get(Engagement, project_id)
         return project.status != EngagementStatus.ARCHIVED and project.work_enabled
 
-    def _source_event(
+    async def _source_event(
         self, project_id: str, decision: ButlerDecision
     ) -> OperationEvent:
-        events = self.store.replay_operation_events(
+        events = await self.store.replay_operation_events(
             project_stream_id(project_id),
             after_sequence=decision.source_sequence - 1,
             through_sequence=decision.source_sequence,
@@ -281,7 +289,7 @@ class ButlerAuthorityService:
             raise ConflictError("Butler decision source does not match its goal")
         return event
 
-    def _proposal(
+    async def _proposal(
         self,
         project_id: str,
         decision: ButlerDecision,
@@ -289,19 +297,19 @@ class ButlerAuthorityService:
     ) -> ButlerAction | None:
         if decision.engagement_id != project_id or decision.status != "reviewed":
             return None
-        if not self._can_act_in_project(project_id):
+        if not (await self._can_act_in_project(project_id)):
             return None
         if not _effective_actions(policy):
             return None
-        event = self._source_event(project_id, decision)
+        event = await self._source_event(project_id, decision)
         # A standing grant applies to subsequent observations only. Replaying
         # old Watch decisions after an upgrade or changing authority cannot
         # authorize a previously observed event retroactively.
         if policy is None or event.occurred_at < policy.updated_at:
             return None
         payload = ButlerEventPayload.model_validate(event.payload)
-        goal = self.store.get(ChatGoal, decision.goal_id)
-        session = self.store.get(ChatSession, decision.session_id)
+        goal = await self.store.get(ChatGoal, decision.goal_id)
+        session = await self.store.get(ChatSession, decision.session_id)
         if (
             goal.engagement_id != project_id
             or session.engagement_id != project_id
@@ -362,7 +370,7 @@ class ButlerAuthorityService:
                 )
                 for ref in decision.evidence_refs
             )
-            and self._repeat_still_current(project_id, goal, payload)
+            and (await self._repeat_still_current(project_id, goal, payload))
         ):
             kind = "request_parent_plan_reassessment"
         elif (
@@ -377,7 +385,7 @@ class ButlerAuthorityService:
             refs = [ref for ref in payload.evidence_refs if ref.kind == "agent_report"]
             if len(refs) != 1:
                 return None
-            report = self.store.get(ButlerAgentReport, refs[0].id)
+            report = await self.store.get(ButlerAgentReport, refs[0].id)
             if (
                 report.engagement_id != project_id
                 or report.goal_id != goal.id
@@ -419,8 +427,10 @@ class ButlerAuthorityService:
             ),
         )
 
-    def plan_next(self, project_id: str, worker_id: str) -> bool:
-        state = self.store.find_entity(ButlerProjectState, "engagement_id", project_id)
+    async def plan_next(self, project_id: str, worker_id: str) -> bool:
+        state = await self.store.find_entity(
+            ButlerProjectState, "engagement_id", project_id
+        )
         if (
             state is None
             or state.lease_owner != worker_id
@@ -428,7 +438,7 @@ class ButlerAuthorityService:
             or state.lease_expires_at <= utc_now()
         ):
             return False
-        events = self.store.replay_operation_events(
+        events = await self.store.replay_operation_events(
             project_stream_id(project_id),
             after_sequence=state.last_action_event_sequence,
             event_types=["butler.decision_recorded"],
@@ -445,15 +455,15 @@ class ButlerAuthorityService:
             or len(refs) != 1
         ):
             raise ConflictError("invalid Butler decision event")
-        decision = self.store.get(ButlerDecision, refs[0].id)
+        decision = await self.store.get(ButlerDecision, refs[0].id)
         if decision.engagement_id != project_id:
             raise ConflictError("Butler decision belongs to another project")
-        policy = self.store.find_entity(
+        policy = await self.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", project_id
         )
-        proposal = self._proposal(project_id, decision, policy)
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity(
+        proposal = await self._proposal(project_id, decision, policy)
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity(
                 transaction, ButlerProjectState, project_state_id(project_id)
             )
             if (
@@ -464,7 +474,7 @@ class ButlerAuthorityService:
                 or current.last_action_event_sequence >= event.sequence
             ):
                 return False
-            current_policy = _entity(
+            current_policy = await _entity(
                 transaction, ButlerAuthorityPolicy, policy_id(project_id)
             )
             if proposal is not None and (
@@ -476,22 +486,26 @@ class ButlerAuthorityService:
                 proposal = None
             if (
                 proposal is not None
-                and _entity(transaction, ButlerAction, proposal.id) is None
+                and (await _entity(transaction, ButlerAction, proposal.id)) is None
             ):
-                transaction.add(proposal)
-                _append_project_event(
-                    transaction,
-                    engagement_id=project_id,
-                    event_type="butler.action_planned",
-                    payload=self._action_event_payload(proposal, "planned"),
-                    idempotency_key=f"action:{proposal.id}:planned",
-                    now=utc_now(),
+                (await transaction.add(proposal))
+                (
+                    await _append_project_event(
+                        transaction,
+                        engagement_id=project_id,
+                        event_type="butler.action_planned",
+                        payload=self._action_event_payload(proposal, "planned"),
+                        idempotency_key=f"action:{proposal.id}:planned",
+                        now=utc_now(),
+                    )
                 )
-            transaction.update(
-                ButlerProjectState,
-                current.id,
-                {"last_action_event_sequence": event.sequence},
-                expected_revision=current.revision,
+            (
+                await transaction.update(
+                    ButlerProjectState,
+                    current.id,
+                    {"last_action_event_sequence": event.sequence},
+                    expected_revision=current.revision,
+                )
             )
         return True
 
@@ -535,12 +549,12 @@ class ButlerAuthorityService:
             ],
         )
 
-    def _cancel(self, action: ButlerAction, reason: str) -> None:
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity(transaction, ButlerAction, action.id)
+    async def _cancel(self, action: ButlerAction, reason: str) -> None:
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity(transaction, ButlerAction, action.id)
             if current is None or current.status != "planned":
                 return
-            updated = transaction.update(
+            updated = await transaction.update(
                 ButlerAction,
                 current.id,
                 {
@@ -550,21 +564,23 @@ class ButlerAuthorityService:
                 },
                 expected_revision=current.revision,
             )
-            _append_project_event(
-                transaction,
-                engagement_id=updated.engagement_id,
-                event_type="butler.action_cancelled",
-                payload=self._action_event_payload(updated, "cancelled"),
-                idempotency_key=f"action:{updated.id}:cancelled",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=updated.engagement_id,
+                    event_type="butler.action_cancelled",
+                    payload=self._action_event_payload(updated, "cancelled"),
+                    idempotency_key=f"action:{updated.id}:cancelled",
+                    now=utc_now(),
+                )
             )
 
-    def _hold(self, action: ButlerAction, reason: str) -> None:
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity(transaction, ButlerAction, action.id)
+    async def _hold(self, action: ButlerAction, reason: str) -> None:
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity(transaction, ButlerAction, action.id)
             if current is None or current.status != "planned":
                 return
-            updated = transaction.update(
+            updated = await transaction.update(
                 ButlerAction,
                 current.id,
                 {
@@ -574,52 +590,56 @@ class ButlerAuthorityService:
                 },
                 expected_revision=current.revision,
             )
-            _append_project_event(
-                transaction,
-                engagement_id=updated.engagement_id,
-                event_type="butler.action_held",
-                payload=self._action_event_payload(updated, "held"),
-                idempotency_key=f"action:{updated.id}:held",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=updated.engagement_id,
+                    event_type="butler.action_held",
+                    payload=self._action_event_payload(updated, "held"),
+                    idempotency_key=f"action:{updated.id}:held",
+                    now=utc_now(),
+                )
             )
 
-    def _defer_for_memory(self, action: ButlerAction) -> None:
+    async def _defer_for_memory(self, action: ButlerAction) -> None:
         """Keep a known-undelivered action retryable while memory is unavailable."""
 
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity(transaction, ButlerAction, action.id)
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity(transaction, ButlerAction, action.id)
             if current is None or current.status != "planned":
                 return
             outcome = {"reason": "memory_unavailable", "delivered": False}
             if current.outcome == outcome:
                 return
-            updated = transaction.update(
+            updated = await transaction.update(
                 ButlerAction,
                 current.id,
                 {"outcome": outcome},
                 expected_revision=current.revision,
             )
-            _append_project_event(
-                transaction,
-                engagement_id=updated.engagement_id,
-                event_type="butler.action_waiting_memory",
-                payload=self._action_event_payload(updated, "waiting for memory"),
-                idempotency_key=f"action:{updated.id}:waiting-memory",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=updated.engagement_id,
+                    event_type="butler.action_waiting_memory",
+                    payload=self._action_event_payload(updated, "waiting for memory"),
+                    idempotency_key=f"action:{updated.id}:waiting-memory",
+                    now=utc_now(),
+                )
             )
 
-    def _cancel_for_changed_precedent(
+    async def _cancel_for_changed_precedent(
         self, action: ButlerAction, decision: ButlerDecision, digest: str
     ) -> None:
         """Cancel before delivery and enqueue a fresh cited semantic review."""
 
-        source = self._source_event(action.engagement_id, decision)
+        source = await self._source_event(action.engagement_id, decision)
         original = ButlerEventPayload.model_validate(source.payload)
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity(transaction, ButlerAction, action.id)
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity(transaction, ButlerAction, action.id)
             if current is None or current.status != "planned":
                 return
-            updated = transaction.update(
+            updated = await transaction.update(
                 ButlerAction,
                 current.id,
                 {
@@ -632,81 +652,97 @@ class ButlerAuthorityService:
                 },
                 expected_revision=current.revision,
             )
-            _append_project_event(
-                transaction,
-                engagement_id=updated.engagement_id,
-                event_type="butler.action_cancelled",
-                payload=self._action_event_payload(updated, "cancelled"),
-                idempotency_key=f"action:{updated.id}:cancelled",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=updated.engagement_id,
+                    event_type="butler.action_cancelled",
+                    payload=self._action_event_payload(updated, "cancelled"),
+                    idempotency_key=f"action:{updated.id}:cancelled",
+                    now=utc_now(),
+                )
             )
             # Preserve the original source type, actor and verification state.
             # This is a Core re-review request, never a new agent observation.
-            _append_project_event(
-                transaction,
-                engagement_id=updated.engagement_id,
-                event_type=source.event_type,
-                payload=ButlerEventPayload(
-                    project_id=updated.engagement_id,
-                    goal_id=original.goal_id,
-                    session_id=original.session_id,
-                    source="core_recovery",
-                    causal_event_id=source.id,
-                    actor_role=original.actor_role,
-                    parent_goal_id=original.parent_goal_id,
-                    summary="Butler is reviewing the cited condition again because saved precedent changed.",
-                    metrics={
-                        **dict(list(original.metrics.items())[:15]),
-                        "precedent_recheck": True,
-                    },
-                    verification_state=original.verification_state,
-                    evidence_refs=original.evidence_refs,
-                    incident_key=original.incident_key,
-                ),
-                idempotency_key=f"precedent-recheck:{updated.id}:{digest}",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=updated.engagement_id,
+                    event_type=source.event_type,
+                    payload=ButlerEventPayload(
+                        project_id=updated.engagement_id,
+                        goal_id=original.goal_id,
+                        session_id=original.session_id,
+                        source="core_recovery",
+                        causal_event_id=source.id,
+                        actor_role=original.actor_role,
+                        parent_goal_id=original.parent_goal_id,
+                        summary="Butler is reviewing the cited condition again because saved precedent changed.",
+                        metrics={
+                            **dict(list(original.metrics.items())[:15]),
+                            "precedent_recheck": True,
+                        },
+                        verification_state=original.verification_state,
+                        evidence_refs=original.evidence_refs,
+                        incident_key=original.incident_key,
+                    ),
+                    idempotency_key=f"precedent-recheck:{updated.id}:{digest}",
+                    now=utc_now(),
+                )
             )
 
-    def _finish(
+    async def _finish(
         self, action: ButlerAction, status: str, outcome: dict[str, Any]
     ) -> None:
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity(transaction, ButlerAction, action.id)
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity(transaction, ButlerAction, action.id)
             if current is None or current.status != "dispatching":
                 return
-            updated = transaction.update(
+            updated = await transaction.update(
                 ButlerAction,
                 current.id,
                 {"status": status, "outcome": outcome, "finished_at": utc_now()},
                 expected_revision=current.revision,
             )
-            _append_project_event(
-                transaction,
-                engagement_id=updated.engagement_id,
-                event_type=f"butler.action_{status}",
-                payload=self._action_event_payload(updated, status),
-                idempotency_key=f"action:{updated.id}:{status}",
-                now=utc_now(),
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=updated.engagement_id,
+                    event_type=f"butler.action_{status}",
+                    payload=self._action_event_payload(updated, status),
+                    idempotency_key=f"action:{updated.id}:{status}",
+                    now=utc_now(),
+                )
             )
 
-    def _reconcile(self, action: ButlerAction) -> None:
+    async def _reconcile(self, action: ButlerAction) -> None:
         if action.action_type == "force_one_task_plan":
             try:
-                directive = self.store.get(
+                directive = await self.store.get(
                     ChatPlanDirective, plan_directive_id(action.idempotency_key)
                 )
             except NotFoundError:
                 # diagnostic-expected: a missing dispatch receipt is persisted as uncertain.
-                self._finish(action, "uncertain", {"reason": "dispatch_interrupted"})
+                (
+                    await self._finish(
+                        action, "uncertain", {"reason": "dispatch_interrupted"}
+                    )
+                )
             else:
                 if directive.engagement_id == action.engagement_id:
-                    self._finish(
-                        action,
-                        "applied",
-                        {"directive_id": directive.id, "status": directive.status},
+                    (
+                        await self._finish(
+                            action,
+                            "applied",
+                            {"directive_id": directive.id, "status": directive.status},
+                        )
                     )
                 else:
-                    self._finish(action, "uncertain", {"reason": "directive_mismatch"})
+                    (
+                        await self._finish(
+                            action, "uncertain", {"reason": "directive_mismatch"}
+                        )
+                    )
             return
         if action.action_type in {
             "request_parent_status",
@@ -714,38 +750,50 @@ class ButlerAuthorityService:
         }:
             item = self._queue_item(action)
             if item is not None:
-                self._finish(action, "dispatched", {"queue_item_id": item["id"]})
+                (
+                    await self._finish(
+                        action, "dispatched", {"queue_item_id": item["id"]}
+                    )
+                )
             else:
-                self._finish(action, "uncertain", {"reason": "dispatch_interrupted"})
+                (
+                    await self._finish(
+                        action, "uncertain", {"reason": "dispatch_interrupted"}
+                    )
+                )
             return
-        goal = self.store.get(ChatGoal, action.goal_id)
+        goal = await self.store.get(ChatGoal, action.goal_id)
         if (
             goal.engagement_id == action.engagement_id
             and goal.status == ChatGoalStatus.PAUSED
             and goal.blocked_reason == self._pause_reason(action)
         ):
-            self._finish(action, "applied", {"goal_id": goal.id})
+            (await self._finish(action, "applied", {"goal_id": goal.id}))
         else:
-            self._finish(action, "uncertain", {"reason": "dispatch_interrupted"})
+            (
+                await self._finish(
+                    action, "uncertain", {"reason": "dispatch_interrupted"}
+                )
+            )
 
     async def dispatch(self, action: ButlerAction, worker_id: str) -> None:
         if action.status == "dispatching":
-            self._reconcile(action)
+            (await self._reconcile(action))
             return
         if action.status != "planned":
             return
-        policy = self.store.find_entity(
+        policy = await self.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", action.engagement_id
         )
-        if not self._can_act_in_project(action.engagement_id):
-            self._cancel(action, "project_not_active")
+        if not (await self._can_act_in_project(action.engagement_id)):
+            (await self._cancel(action, "project_not_active"))
             return
         if action.action_type not in _effective_actions(policy):
-            self._cancel(action, "authority_changed")
+            (await self._cancel(action, "authority_changed"))
             return
         try:
-            decision = self.store.get(ButlerDecision, action.decision_id)
-            proposal = self._proposal(action.engagement_id, decision, policy)
+            decision = await self.store.get(ButlerDecision, action.decision_id)
+            proposal = await self._proposal(action.engagement_id, decision, policy)
         except (NotFoundError, ConflictError):
             # diagnostic-expected: source changes cancel the saved action below.
             proposal = None
@@ -754,25 +802,27 @@ class ButlerAuthorityService:
             or proposal.id != action.id
             or proposal.action_type != action.action_type
         ):
-            self._cancel(action, "source_changed")
+            (await self._cancel(action, "source_changed"))
             return
         if self.memory_service is not None:
             try:
-                current_precedent = read_precedents(
+                current_precedent = await read_precedents(
                     self.memory_service,
                     action.engagement_id,
                     decision.source_event_type,
                 )
             except Exception:
                 # diagnostic-expected: a failed precedent read durably defers this action.
-                self._defer_for_memory(action)
+                (await self._defer_for_memory(action))
                 return
             if decision.precedent_digest != current_precedent.digest:
-                self._cancel_for_changed_precedent(
-                    action, decision, current_precedent.digest
+                (
+                    await self._cancel_for_changed_precedent(
+                        action, decision, current_precedent.digest
+                    )
                 )
                 return
-        goal = self.store.get(ChatGoal, action.goal_id)
+        goal = await self.store.get(ChatGoal, action.goal_id)
         detail = self.work.chat_detail(action.engagement_id, action.source_session_id)
         target = detail.get("message_via_session_id")
         if action.action_type in {
@@ -780,25 +830,25 @@ class ButlerAuthorityService:
             "request_parent_plan_reassessment",
         }:
             if not target:
-                self._hold(action, "main_agent_unavailable")
+                (await self._hold(action, "main_agent_unavailable"))
                 return
             target_detail = self.work.chat_detail(action.engagement_id, target)
             if target_detail.get("kind") != "main":
-                self._hold(action, "main_agent_unavailable")
+                (await self._hold(action, "main_agent_unavailable"))
                 return
         elif action.action_type == "force_one_task_plan":
             target = goal.session_id
         else:
             if detail.get("kind") != "main" or goal.parent_goal_id:
-                self._cancel(action, "main_goal_required")
+                (await self._cancel(action, "main_goal_required"))
                 return
             target = goal.session_id
-        with self.store.transaction(immediate=True) as transaction:
-            state = _entity(
+        async with self.store.transaction(immediate=True) as transaction:
+            state = await _entity(
                 transaction, ButlerProjectState, project_state_id(action.engagement_id)
             )
-            current = _entity(transaction, ButlerAction, action.id)
-            current_policy = _entity(
+            current = await _entity(transaction, ButlerAction, action.id)
+            current_policy = await _entity(
                 transaction, ButlerAuthorityPolicy, policy_id(action.engagement_id)
             )
             if (
@@ -814,7 +864,7 @@ class ButlerAuthorityService:
                 or action.action_type not in _effective_actions(current_policy)
             ):
                 return
-            action = transaction.update(
+            action = await transaction.update(
                 ButlerAction,
                 current.id,
                 {
@@ -837,13 +887,15 @@ class ButlerAuthorityService:
                         "_directive_id": plan_directive_id(action.idempotency_key),
                     },
                 )
-                directive = self.store.get(
+                directive = await self.store.get(
                     ChatPlanDirective, receipt["directive"]["id"]
                 )
-                self._finish(
-                    action,
-                    "applied",
-                    {"directive_id": directive.id, "status": directive.status},
+                (
+                    await self._finish(
+                        action,
+                        "applied",
+                        {"directive_id": directive.id, "status": directive.status},
+                    )
                 )
             elif action.action_type in {
                 "request_parent_status",
@@ -888,19 +940,23 @@ class ButlerAuthorityService:
                     idempotency_key=action.idempotency_key,
                 )
                 if receipt["delivery"] == "held":
-                    self._finish(
-                        action,
-                        "held",
-                        {"reason": receipt["reason"], "delivered": False},
+                    (
+                        await self._finish(
+                            action,
+                            "held",
+                            {"reason": receipt["reason"], "delivered": False},
+                        )
                     )
                 else:
-                    self._finish(
-                        action,
-                        "dispatched",
-                        {
-                            "turn_id": receipt["turn_id"],
-                            "delivery": receipt["delivery"],
-                        },
+                    (
+                        await self._finish(
+                            action,
+                            "dispatched",
+                            {
+                                "turn_id": receipt["turn_id"],
+                                "delivery": receipt["delivery"],
+                            },
+                        )
                     )
             else:
                 await self.work.goal_action(
@@ -912,18 +968,18 @@ class ButlerAuthorityService:
                         "reason": self._pause_reason(action),
                     },
                 )
-                self._reconcile(action)
+                (await self._reconcile(action))
         except Exception:
             # The control may have committed immediately before the exception.
             # diagnostic-expected: reconcile records the observed outcome or uncertainty;
             # never blindly retry an uncertain external side effect.
-            self._reconcile(action)
+            (await self._reconcile(action))
 
     async def process_project(self, project_id: str, worker_id: str) -> None:
         for _ in range(20):
-            if not self.plan_next(project_id, worker_id):
+            if not (await self.plan_next(project_id, worker_id)):
                 break
-        actions = self.store.find_entities(
+        actions = await self.store.find_entities(
             ButlerAction,
             {"status": ["planned", "dispatching"]},
             engagement_id=project_id,
@@ -937,13 +993,13 @@ def authority_router(service: ButlerAuthorityService) -> APIRouter:
     router = APIRouter(tags=["butler"])
 
     @router.get("/engagements/{project_id}/butler/authority")
-    def get_authority(project_id: str) -> dict:
-        return service.get(project_id)
+    async def get_authority(project_id: str) -> dict:
+        return await service.get(project_id)
 
     @router.put("/engagements/{project_id}/butler/authority")
-    def put_authority(project_id: str, request: AuthorityWrite) -> dict:
+    async def put_authority(project_id: str, request: AuthorityWrite) -> dict:
         try:
-            return service.write(project_id, request)
+            return await service.write(project_id, request)
         except ConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

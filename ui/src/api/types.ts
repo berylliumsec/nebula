@@ -2020,6 +2020,8 @@ export interface ChatRuntimeSwitchPreflight {
   targetProviderId: Identifier;
   targetModel: string;
   compatible: boolean;
+  activation?: "immediate" | "after_active_work";
+  activationReason?: string;
   requiresCompactionConfirmation: boolean;
   confirmationToken?: string;
   reason?: string;
@@ -2433,6 +2435,15 @@ export interface NativeHookExecution {
   reconciliation?: Record<string, unknown>;
 }
 
+export interface PendingRuntimeSwitch {
+  id: string;
+  status: "waiting_for_idle" | "needs_review";
+  reason?: string;
+  backend: "provider" | "harness";
+  profileId: Identifier;
+  model: string;
+}
+
 export interface ChatSessionSummary {
   id: Identifier;
   engagementId: Identifier;
@@ -2452,6 +2463,7 @@ export interface ChatSessionSummary {
   isControlAssistant?: boolean;
   /** Core records chats created by Butler separately from ordinary conversations. */
   isButlerInitiated?: boolean;
+  pendingRuntimeSwitch?: PendingRuntimeSwitch;
   assistantConfig?: ChatAssistantConfig;
   planningEnabled?: boolean;
   inheritedMessageCount?: number;

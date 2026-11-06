@@ -58,7 +58,7 @@ class ButlerSessionReservation(NebulaModel):
         return self
 
 
-def reserve_butler_session(
+async def reserve_butler_session(
     store: NebulaStore,
     harness_runtime: HarnessRuntimeService,
     request: ButlerSessionReservation,
@@ -70,28 +70,32 @@ def reserve_butler_session(
     before commit leaves neither record; a crash afterward leaves both.
     """
 
-    project = store.get(Engagement, request.engagement_id)
+    project = await store.get(Engagement, request.engagement_id)
     scope = (
-        store.get(ScopePolicy, project.scope_policy_id)
+        (await store.get(ScopePolicy, project.scope_policy_id))
         if project.scope_policy_id
         else None
     )
-    resolve_mcp_profiles(
-        store,
-        request.mcp_server_ids,
-        engagement_id=request.engagement_id,
-        bypass_permissions=bool(scope and scope.bypass_permissions),
+    (
+        await resolve_mcp_profiles(
+            store,
+            request.mcp_server_ids,
+            engagement_id=request.engagement_id,
+            bypass_permissions=bool(scope and scope.bypass_permissions),
+        )
     )
-    with store.transaction() as transaction:
+    async with store.transaction() as transaction:
         dialect = transaction.session.get_bind().dialect.name
         if dialect == "sqlite":
-            transaction.session.execute(text("BEGIN IMMEDIATE"))
+            (await transaction.session.execute(text("BEGIN IMMEDIATE")))
         elif dialect == "postgresql":
-            transaction.session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-                {"project_id": f"butler-active-session:{request.engagement_id}"},
+            (
+                await transaction.session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+                    {"project_id": f"butler-active-session:{request.engagement_id}"},
+                )
             )
-        row = transaction.session.scalar(
+        row = await transaction.session.scalar(
             select(EntityRow)
             .where(
                 EntityRow.kind == ChatSession.entity_kind,
@@ -109,7 +113,7 @@ def reserve_butler_session(
 
         if request.backend == ChatBackend.PROVIDER:
             assert request.provider_id is not None
-            provider_profile = store.get(ProviderProfile, request.provider_id)
+            provider_profile = await store.get(ProviderProfile, request.provider_id)
             if not provider_profile.enabled:
                 raise ChatConfigurationError(
                     f"provider {request.provider_id!r} is disabled"
@@ -143,14 +147,18 @@ def reserve_butler_session(
             )
         else:
             assert request.harness_profile_id is not None
-            harness_profile = store.get(HarnessProfile, request.harness_profile_id)
-            harness_runtime._validate_harness_privacy(
-                request.engagement_id,
-                harness_profile,
-                request.mcp_server_ids,
-                allow_remote_mcp=request.allow_cloud_tool_results,
+            harness_profile = await store.get(
+                HarnessProfile, request.harness_profile_id
             )
-            session = harness_runtime.create_session(
+            (
+                await harness_runtime._validate_harness_privacy(
+                    request.engagement_id,
+                    harness_profile,
+                    request.mcp_server_ids,
+                    allow_remote_mcp=request.allow_cloud_tool_results,
+                )
+            )
+            session = await harness_runtime.create_session(
                 engagement_id=request.engagement_id,
                 profile_id=harness_profile.id,
                 model=request.model,
@@ -182,5 +190,5 @@ def reserve_butler_session(
                     ),
                 },
             )
-        transaction.add(chat)
+        (await transaction.add(chat))
         return chat

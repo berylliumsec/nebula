@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import async_done_callback, call_async
+
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -188,7 +192,7 @@ class ExecutionService:
         artifact_store: ArtifactStore,
         tool_platform: RuntimePlatform | None,
         data_root: str | Path,
-        operator_id: Callable[[], str] | None = None,
+        operator_id: (MaybeAsync[[], str] | None) = None,
         max_concurrency: int = 2,
     ) -> None:
         self.store = store
@@ -216,7 +220,7 @@ class ExecutionService:
 
         # Only readable records: one unreadable row must not keep Core from
         # starting and settling the others.
-        for execution in self.store.iter_readable_entities(
+        async for execution in self.store.iter_readable_entities(
             OperatorExecution,
             {
                 "status": [
@@ -229,7 +233,7 @@ class ExecutionService:
             await self._cleanup_container(execution)
             if await self._recover_spool(execution):
                 continue
-            updated = self.store.update(
+            updated = await self.store.update(
                 OperatorExecution,
                 execution.id,
                 {
@@ -240,11 +244,13 @@ class ExecutionService:
                 },
                 expected_revision=execution.revision,
             )
-            self._event(
-                updated,
-                "execution.interrupted",
-                {"status": updated.status.value, "error_code": "interrupted"},
-                key="startup-interrupted",
+            (
+                await self._event(
+                    updated,
+                    "execution.interrupted",
+                    {"status": updated.status.value, "error_code": "interrupted"},
+                    key="startup-interrupted",
+                )
             )
 
     async def _recover_spool(self, execution: OperatorExecution) -> bool:
@@ -322,8 +328,8 @@ class ExecutionService:
             )
         self._tasks.clear()
 
-    def capabilities(self, engagement_id: str) -> ExecutionCapabilities:
-        self.store.get(Engagement, engagement_id)
+    async def capabilities(self, engagement_id: str) -> ExecutionCapabilities:
+        (await self.store.get(Engagement, engagement_id))
         runtime_rows: list[ExecutionCapability] = []
         aliases_by_language = {
             "bash": ["bash", "shell"],
@@ -334,7 +340,7 @@ class ExecutionService:
             results: dict[bool, str | None] = {}
             for network in (False, True):
                 try:
-                    self._resolve(engagement_id, language, network=network)
+                    (await self._resolve(engagement_id, language, network=network))
                     results[network] = None
                 except (RuntimePlatformError, ExecutionServiceError) as exc:
                     record_caught_exception(
@@ -365,8 +371,8 @@ class ExecutionService:
         self, request: ExecutionPreflightRequest
     ) -> ExecutionPreflightResponse:
         try:
-            source, canonical = self._validated_source(request)
-            resolution = self._resolve(
+            source, canonical = await self._validated_source(request)
+            resolution = await self._resolve(
                 request.engagement_id,
                 canonical,
                 network=request.network.mode != ExecutionNetworkMode.NONE,
@@ -384,7 +390,7 @@ class ExecutionService:
                 "network": network.model_dump(mode="json"),
                 "limits": ExecutionLimitsSnapshot().model_dump(mode="json"),
                 "policy_rule": policy_rule,
-                "operator_id": self.operator_id(),
+                "operator_id": (await call_async(self.operator_id)),
             }
             preview_fingerprint = _digest_json(binding)
             expires = utc_now() + timedelta(seconds=PREVIEW_TTL_SECONDS)
@@ -442,7 +448,7 @@ class ExecutionService:
         # operations. A reset either sees this execution or completes before
         # the execution can be queued; there is no check/use race.
         async with self.engagement_lock(request.engagement_id), self._start_lock:
-            existing = self._execution_for_idempotency(
+            existing = await self._execution_for_idempotency(
                 request.engagement_id, request.client_idempotency_key
             )
             if existing is not None:
@@ -459,13 +465,15 @@ class ExecutionService:
                 raise ExecutionServiceError(
                     "preview_stale", "execution preview does not match the request"
                 )
-            if signed_binding.get("operator_id") != self.operator_id():
+            if signed_binding.get("operator_id") != (
+                await call_async(self.operator_id)
+            ):
                 raise ExecutionServiceError(
                     "preview_stale", "active operator changed after execution review"
                 )
             preview = await self.preflight(base)
             if not preview.allowed:
-                return self._record_denied_start(
+                return await self._record_denied_start(
                     request,
                     request_fingerprint=request_fingerprint,
                     signed_binding=signed_binding,
@@ -473,7 +481,7 @@ class ExecutionService:
                     error_detail=preview.detail,
                 )
             if preview.preview_fingerprint != request.preview_fingerprint:
-                return self._record_denied_start(
+                return await self._record_denied_start(
                     request,
                     request_fingerprint=request_fingerprint,
                     signed_binding=signed_binding,
@@ -485,7 +493,7 @@ class ExecutionService:
             assert preview.runtime is not None
             assert preview.network is not None
             assert preview.source_sha256 is not None
-            source, canonical = self._validated_source(base)
+            source, canonical = await self._validated_source(base)
             execution_id = str(uuid4())
             suffix = "py" if canonical == "python" else "sh"
             stored_source = self.artifact_store.put_bytes_with_status(
@@ -501,7 +509,7 @@ class ExecutionService:
             execution = OperatorExecution(
                 id=execution_id,
                 engagement_id=request.engagement_id,
-                operator_id=self.operator_id(),
+                operator_id=(await call_async(self.operator_id)),
                 origin=request.origin,
                 language=canonical,
                 source_sha256=preview.source_sha256,
@@ -516,7 +524,7 @@ class ExecutionService:
                 client_idempotency_key=request.client_idempotency_key,
             )
             try:
-                self.store.create_many([stored_source.artifact, execution])
+                (await self.store.create_many([stored_source.artifact, execution]))
             except Exception as caught_error:
                 record_caught_exception(
                     "executions",
@@ -527,11 +535,13 @@ class ExecutionService:
                 )
                 self.artifact_store.discard_new_blob(stored_source)
                 raise
-            self._event(
-                execution,
-                "execution.queued",
-                {"status": execution.status.value},
-                key="queued",
+            (
+                await self._event(
+                    execution,
+                    "execution.queued",
+                    {"status": execution.status.value},
+                    key="queued",
+                )
             )
             task = create_diagnostic_task(
                 self._execute(execution.id),
@@ -541,10 +551,12 @@ class ExecutionService:
                 name=f"operator-execution-{execution.id}",
             )
             self._tasks[execution.id] = task
-            task.add_done_callback(lambda _task: self._tasks.pop(execution.id, None))
+            task.add_done_callback(
+                async_done_callback(lambda _task: self._tasks.pop(execution.id, None))
+            )
             return execution
 
-    def _record_denied_start(
+    async def _record_denied_start(
         self,
         request: ExecutionStartRequest,
         *,
@@ -593,7 +605,7 @@ class ExecutionService:
         execution = OperatorExecution(
             id=execution_id,
             engagement_id=request.engagement_id,
-            operator_id=self.operator_id(),
+            operator_id=(await call_async(self.operator_id)),
             origin=request.origin,
             language=runtime.language,
             source_sha256=source_sha256,
@@ -612,7 +624,7 @@ class ExecutionService:
             completed_at=utc_now(),
         )
         try:
-            self.store.create_many([stored_source.artifact, execution])
+            (await self.store.create_many([stored_source.artifact, execution]))
         except Exception as caught_error:
             record_caught_exception(
                 "executions",
@@ -623,21 +635,23 @@ class ExecutionService:
             )
             self.artifact_store.discard_new_blob(stored_source)
             raise
-        self._event(
-            execution,
-            "execution.denied",
-            {
-                "status": execution.status.value,
-                "error_code": execution.error_code,
-            },
-            key="denied",
+        (
+            await self._event(
+                execution,
+                "execution.denied",
+                {
+                    "status": execution.status.value,
+                    "error_code": execution.error_code,
+                },
+                key="denied",
+            )
         )
         return execution
 
     async def cancel(
         self, execution_id: str, *, expected_revision: int | None = None
     ) -> OperatorExecution:
-        execution = self.store.get(OperatorExecution, execution_id)
+        execution = await self.store.get(OperatorExecution, execution_id)
         if expected_revision is not None and execution.revision != expected_revision:
             raise ExecutionServiceError(
                 "execution_revision_conflict",
@@ -646,24 +660,26 @@ class ExecutionService:
         if execution.status in TERMINAL_EXECUTION_STATUSES:
             return execution
         if execution.status != OperatorExecutionStatus.CANCELLING:
-            execution = self.store.update(
+            execution = await self.store.update(
                 OperatorExecution,
                 execution.id,
                 {"status": OperatorExecutionStatus.CANCELLING},
                 expected_revision=execution.revision,
             )
-            self._event(
-                execution,
-                "execution.cancelling",
-                {"status": execution.status.value},
-                key="cancelling",
+            (
+                await self._event(
+                    execution,
+                    "execution.cancelling",
+                    {"status": execution.status.value},
+                    key="cancelling",
+                )
             )
         task = self._tasks.get(execution.id)
         if task is not None:
             task.cancel()
         return execution
 
-    def list_executions(
+    async def list_executions(
         self,
         engagement_id: str,
         *,
@@ -685,7 +701,7 @@ class ExecutionService:
                 "execution date filters must include a timezone",
                 status_code=422,
             )
-        rows = self._all_executions(engagement_id)
+        rows = await self._all_executions(engagement_id)
         folded = query.casefold() if query else None
         operator_folded = operator_id.casefold() if operator_id else None
         filtered = [
@@ -710,10 +726,10 @@ class ExecutionService:
         filtered.sort(key=lambda row: (row.queued_at, row.id), reverse=True)
         return filtered[offset : offset + limit]
 
-    def output_bytes(
+    async def output_bytes(
         self, execution_id: str, stream: str, *, raw: bool
     ) -> tuple[bytes, str]:
-        execution = self.store.get(OperatorExecution, execution_id)
+        execution = await self.store.get(OperatorExecution, execution_id)
         field = {
             ("stdout", True): "stdout_artifact_id",
             ("stderr", True): "stderr_artifact_id",
@@ -725,7 +741,7 @@ class ExecutionService:
         artifact_id = getattr(execution, field)
         if not artifact_id:
             raise NotFoundError("execution output is not available")
-        artifact = self.store.get(Artifact, artifact_id)
+        artifact = await self.store.get(Artifact, artifact_id)
         if not self.artifact_store.verify(artifact):
             raise ExecutionServiceError(
                 "output_integrity", "execution output failed integrity verification"
@@ -736,18 +752,20 @@ class ExecutionService:
     def request_fingerprint(request: ExecutionPreflightRequest) -> str:
         return _digest_json(request.model_dump(mode="json"))
 
-    def _resolve(
+    async def _resolve(
         self, engagement_id: str, language: str, *, network: bool
     ) -> OperatorRuntimeResolution:
         if self.tool_platform is None:
             raise ExecutionServiceError(
                 "runner_unavailable", "Kali runtime execution is not configured"
             )
-        return self.tool_platform.resolve_operator_runtime(
+        return await self.tool_platform.resolve_operator_runtime(
             engagement_id, language, network=network
         )
 
-    def _validated_source(self, request: ExecutionPreflightRequest) -> tuple[str, str]:
+    async def _validated_source(
+        self, request: ExecutionPreflightRequest
+    ) -> tuple[str, str]:
         canonical = LANGUAGE_ALIASES.get(request.language.casefold())
         if canonical is None:
             raise ExecutionServiceError(
@@ -760,7 +778,7 @@ class ExecutionService:
             assert request.origin.block_ordinal is not None
             assert request.origin.block_sha256 is not None
             try:
-                message = self.store.get(ChatMessage, request.origin.message_id)
+                message = await self.store.get(ChatMessage, request.origin.message_id)
             except NotFoundError as exc:
                 record_caught_exception(
                     "executions",
@@ -815,7 +833,9 @@ class ExecutionService:
         elif request.origin.kind == ExecutionOriginKind.RERUN:
             assert request.origin.execution_id is not None
             try:
-                parent = self.store.get(OperatorExecution, request.origin.execution_id)
+                parent = await self.store.get(
+                    OperatorExecution, request.origin.execution_id
+                )
             except NotFoundError as exc:
                 record_caught_exception(
                     "executions",
@@ -834,7 +854,7 @@ class ExecutionService:
                 raise ExecutionServiceError(
                     "origin_mismatch", "rerun origin belongs to different input"
                 )
-            artifact = self.store.get(Artifact, parent.source_artifact_id)
+            artifact = await self.store.get(Artifact, parent.source_artifact_id)
             if not self.artifact_store.verify(artifact):
                 raise ExecutionServiceError(
                     "origin_mismatch", "rerun source failed integrity verification"
@@ -854,12 +874,12 @@ class ExecutionService:
     async def _network_snapshot(
         self, engagement_id: str, request: ExecutionNetworkRequest
     ) -> tuple[ExecutionNetworkSnapshot, str, str]:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
             raise ExecutionServiceError(
                 "policy_denied", "engagement requires a scope policy before execution"
             )
-        policy = self.store.get(ScopePolicy, engagement.scope_policy_id)
+        policy = await self.store.get(ScopePolicy, engagement.scope_policy_id)
         if request.mode == ExecutionNetworkMode.NONE:
             decision = PolicyEngine().evaluate(
                 policy,
@@ -936,11 +956,11 @@ class ExecutionService:
         )
 
     async def _execute(self, execution_id: str) -> None:
-        execution = self.store.get(OperatorExecution, execution_id)
+        execution = await self.store.get(OperatorExecution, execution_id)
         lock = self.engagement_lock(execution.engagement_id)
         try:
             async with lock, self._global_slots:
-                current = self.store.get(OperatorExecution, execution_id)
+                current = await self.store.get(OperatorExecution, execution_id)
                 if current.status == OperatorExecutionStatus.CANCELLING:
                     await self._terminal_without_output(
                         current,
@@ -958,7 +978,7 @@ class ExecutionService:
                 caught_error,
                 stage="executions",
             )
-            current = self.store.get(OperatorExecution, execution_id)
+            current = await self.store.get(OperatorExecution, execution_id)
             status = (
                 OperatorExecutionStatus.INTERRUPTED
                 if self._shutting_down
@@ -977,7 +997,7 @@ class ExecutionService:
                 exc,
                 stage="executions",
             )
-            current = self.store.get(OperatorExecution, execution_id)
+            current = await self.store.get(OperatorExecution, execution_id)
             if current.status not in TERMINAL_EXECUTION_STATUSES:
                 await self._terminal_without_output(
                     current,
@@ -989,7 +1009,7 @@ class ExecutionService:
     async def _run_isolated(self, execution: OperatorExecution) -> None:
         network_enabled = execution.network.mode != ExecutionNetworkMode.NONE
         scoped_network = execution.network.mode == ExecutionNetworkMode.SCOPED
-        resolution = self._resolve(
+        resolution = await self._resolve(
             execution.engagement_id, execution.language, network=network_enabled
         )
         if self._runtime_snapshot(resolution) != execution.runtime:
@@ -998,7 +1018,9 @@ class ExecutionService:
             )
         if scoped_network:
             assert execution.network.scope_policy_id is not None
-            policy = self.store.get(ScopePolicy, execution.network.scope_policy_id)
+            policy = await self.store.get(
+                ScopePolicy, execution.network.scope_policy_id
+            )
             if policy.revision != execution.network.scope_policy_revision:
                 raise ExecutionServiceError(
                     "preview_stale", "scope policy changed while execution was queued"
@@ -1010,7 +1032,7 @@ class ExecutionService:
                 raise ExecutionServiceError(
                     "preview_stale", "target DNS resolution changed while queued"
                 )
-        execution = self.store.update(
+        execution = await self.store.update(
             OperatorExecution,
             execution.id,
             {
@@ -1019,11 +1041,13 @@ class ExecutionService:
             },
             expected_revision=execution.revision,
         )
-        self._event(
-            execution,
-            "execution.running",
-            {"status": execution.status.value},
-            key="running",
+        (
+            await self._event(
+                execution,
+                "execution.running",
+                {"status": execution.status.value},
+                key="running",
+            )
         )
         spool_dir = self.spool_root / execution.id
         spool_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1052,16 +1076,18 @@ class ExecutionService:
                 display = redactors[stream].feed(decoded)
                 if display:
                     redacted_parts[stream].append(display)
-                    self._event(
-                        execution,
-                        f"execution.{stream}",
-                        {
-                            "stream": stream,
-                            "text": display,
-                            "raw_offset": offset,
-                            "raw_length": len(data),
-                            "raw_sha256": hashlib.sha256(data).hexdigest(),
-                        },
+                    (
+                        await self._event(
+                            execution,
+                            f"execution.{stream}",
+                            {
+                                "stream": stream,
+                                "text": display,
+                                "raw_offset": offset,
+                                "raw_length": len(data),
+                                "raw_sha256": hashlib.sha256(data).hexdigest(),
+                            },
+                        )
                     )
 
         environment: dict[str, str] = {}
@@ -1111,7 +1137,7 @@ class ExecutionService:
                 output_bytes=execution.limits.output_bytes_per_stream,
             ),
         )
-        source_artifact = self.store.get(Artifact, execution.source_artifact_id)
+        source_artifact = await self.store.get(Artifact, execution.source_artifact_id)
         source = self.artifact_store.read(source_artifact)
         # diagnostic-expected: the runner task is awaited and cancellation is drained below.
         runner_task = asyncio.create_task(
@@ -1160,10 +1186,12 @@ class ExecutionService:
                     display = redactors[stream].feed(tail) + redactors[stream].finish()
                     if display:
                         redacted_parts[stream].append(display)
-                        self._event(
-                            execution,
-                            f"execution.{stream}",
-                            {"stream": stream, "text": display, "final": True},
+                        (
+                            await self._event(
+                                execution,
+                                f"execution.{stream}",
+                                {"stream": stream, "text": display, "final": True},
+                            )
                         )
 
         async def finalize() -> None:
@@ -1272,7 +1300,7 @@ class ExecutionService:
         output_truncated: bool,
         workspace_changes: list[WorkspaceChange],
     ) -> OperatorExecution:
-        execution = self.store.get(OperatorExecution, execution_id)
+        execution = await self.store.get(OperatorExecution, execution_id)
         stored: list[StoredArtifact] = []
         try:
             stored.extend(
@@ -1387,11 +1415,11 @@ class ExecutionService:
                 "evidence_id": evidence.id if evidence else None,
                 "workspace_changes": workspace_changes[:1000],
             }
-            with self.store.transaction() as transaction:
-                transaction.add_all([item.artifact for item in stored])
+            async with self.store.transaction() as transaction:
+                (await transaction.add_all([item.artifact for item in stored]))
                 if evidence is not None:
-                    transaction.add(evidence)
-                updated = transaction.update(
+                    (await transaction.add(evidence))
+                updated = await transaction.update(
                     OperatorExecution,
                     execution.id,
                     changes,
@@ -1408,18 +1436,20 @@ class ExecutionService:
             for item in stored:
                 self.artifact_store.discard_new_blob(item)
             raise
-        self._event(
-            updated,
-            "execution.terminal",
-            {
-                "status": updated.status.value,
-                "exit_code": updated.exit_code,
-                "error_code": updated.error_code,
-                "output_truncated": updated.output_truncated,
-                "manifest_artifact_id": updated.manifest_artifact_id,
-                "evidence_id": updated.evidence_id,
-            },
-            key="terminal",
+        (
+            await self._event(
+                updated,
+                "execution.terminal",
+                {
+                    "status": updated.status.value,
+                    "exit_code": updated.exit_code,
+                    "error_code": updated.error_code,
+                    "output_truncated": updated.output_truncated,
+                    "manifest_artifact_id": updated.manifest_artifact_id,
+                    "evidence_id": updated.evidence_id,
+                },
+                key="terminal",
+            )
         )
         return updated
 
@@ -1430,7 +1460,7 @@ class ExecutionService:
         code: str,
         detail: str,
     ) -> OperatorExecution:
-        updated = self.store.update(
+        updated = await self.store.update(
             OperatorExecution,
             execution.id,
             {
@@ -1441,15 +1471,17 @@ class ExecutionService:
             },
             expected_revision=execution.revision,
         )
-        self._event(
-            updated,
-            "execution.terminal",
-            {"status": status.value, "error_code": code},
-            key="terminal",
+        (
+            await self._event(
+                updated,
+                "execution.terminal",
+                {"status": status.value, "error_code": code},
+                key="terminal",
+            )
         )
         return updated
 
-    def _event(
+    async def _event(
         self,
         execution: OperatorExecution,
         event_type: str,
@@ -1457,14 +1489,16 @@ class ExecutionService:
         *,
         key: str | None = None,
     ) -> None:
-        self.store.append_operation_event(
-            execution.id,
-            "execution",
-            execution.engagement_id,
-            event_type,
-            payload,
-            actor_id=execution.operator_id,
-            idempotency_key=(f"execution:{execution.id}:{key}" if key else None),
+        (
+            await self.store.append_operation_event(
+                execution.id,
+                "execution",
+                execution.engagement_id,
+                event_type,
+                payload,
+                actor_id=execution.operator_id,
+                idempotency_key=(f"execution:{execution.id}:{key}" if key else None),
+            )
         )
 
     def _sign_preview(
@@ -1519,21 +1553,21 @@ class ExecutionService:
             )
         return binding
 
-    def _execution_for_idempotency(
+    async def _execution_for_idempotency(
         self, engagement_id: str, key: str
     ) -> OperatorExecution | None:
-        for execution in self._all_executions(engagement_id):
+        for execution in await self._all_executions(engagement_id):
             if execution.client_idempotency_key == key:
                 return execution
         return None
 
-    def _all_executions(
+    async def _all_executions(
         self, engagement_id: str | None = None
     ) -> list[OperatorExecution]:
         rows: list[OperatorExecution] = []
         offset = 0
         while True:
-            page = self.store.list_entities(
+            page = await self.store.list_entities(
                 OperatorExecution,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -1546,7 +1580,7 @@ class ExecutionService:
 
     async def _cleanup_container(self, execution: OperatorExecution) -> None:
         try:
-            resolution = self._resolve(
+            resolution = await self._resolve(
                 execution.engagement_id,
                 execution.language,
                 network=execution.network.mode != ExecutionNetworkMode.NONE,

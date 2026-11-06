@@ -21,7 +21,7 @@ import shutil
 import socket
 import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from io import BytesIO
@@ -330,7 +330,7 @@ def build_chunks(
     return chunks
 
 
-def ingest_document(
+async def ingest_document(
     *,
     store: NebulaStore,
     artifact_store: ArtifactStore,
@@ -345,7 +345,7 @@ def ingest_document(
 ) -> KnowledgeSource:
     """Atomically persist an authoritative artifact and its retrieval source."""
 
-    store.get(Engagement, engagement_id)
+    (await store.get(Engagement, engagement_id))
     clean_name = safe_filename(filename)
     extracted = extract_document(data, filename=clean_name, media_type=media_type)
     stored = artifact_store.put_bytes_with_status(
@@ -392,7 +392,7 @@ def ingest_document(
         }
     )
     try:
-        store.create_many([stored.artifact, source])
+        (await store.create_many([stored.artifact, source]))
     except Exception as caught_error:
         record_caught_exception(
             "knowledge",
@@ -408,16 +408,16 @@ def ingest_document(
     try:
         knowledge_index.upsert_source(source, chunks)
     except KnowledgeIndexError as exc:
-        current = store.get(KnowledgeSource, source.id)
-        errored = store.update(
+        current = await store.get(KnowledgeSource, source.id)
+        errored = await store.update(
             KnowledgeSource,
             source.id,
             {"status": "error"},
             expected_revision=current.revision,
         )
         raise KnowledgeSourceIndexError(errored, exc) from exc
-    current = store.get(KnowledgeSource, source.id)
-    source = store.update(
+    current = await store.get(KnowledgeSource, source.id)
+    source = await store.update(
         KnowledgeSource,
         source.id,
         {"status": "ready"},
@@ -734,7 +734,7 @@ def _launch_chromium(
         ) from default_error
 
 
-def reindex_document(
+async def reindex_document(
     *,
     store: NebulaStore,
     artifact_store: ArtifactStore,
@@ -745,7 +745,7 @@ def reindex_document(
 ) -> KnowledgeSource:
     """Rebuild a knowledge index exclusively from its immutable artifact."""
 
-    source = store.get(KnowledgeSource, source_id)
+    source = await store.get(KnowledgeSource, source_id)
     if engagement_id is not None and source.engagement_id != engagement_id:
         raise InvalidDocumentError("knowledge source is not in the selected project")
     if expected_revision is not None and source.revision != expected_revision:
@@ -754,7 +754,7 @@ def reindex_document(
         )
     if not source.artifact_id:
         raise InvalidDocumentError("knowledge source has no authoritative artifact")
-    artifact = store.get(Artifact, source.artifact_id)
+    artifact = await store.get(Artifact, source.artifact_id)
     if artifact.engagement_id != source.engagement_id:
         raise ArtifactIntegrityError(
             "knowledge artifact ownership does not match source"
@@ -786,7 +786,7 @@ def reindex_document(
     )
     if knowledge_index is not None:
         metadata.pop("chunks", None)
-    indexing = store.update(
+    indexing = await store.update(
         KnowledgeSource,
         source.id,
         {
@@ -803,16 +803,18 @@ def reindex_document(
     try:
         knowledge_index.upsert_source(indexing, chunks)
     except KnowledgeIndexError:
-        current = store.get(KnowledgeSource, indexing.id)
-        store.update(
-            KnowledgeSource,
-            indexing.id,
-            {"status": "error"},
-            expected_revision=current.revision,
+        current = await store.get(KnowledgeSource, indexing.id)
+        (
+            await store.update(
+                KnowledgeSource,
+                indexing.id,
+                {"status": "error"},
+                expected_revision=current.revision,
+            )
         )
         raise
-    current = store.get(KnowledgeSource, indexing.id)
-    return store.update(
+    current = await store.get(KnowledgeSource, indexing.id)
+    return await store.update(
         KnowledgeSource,
         indexing.id,
         {"status": "ready"},
@@ -827,7 +829,7 @@ def knowledge_summary(source: KnowledgeSource) -> KnowledgeSource:
     return source.model_copy(update={"metadata": metadata})
 
 
-def ingest_library_item(
+async def ingest_library_item(
     *,
     store: NebulaStore,
     artifact_store: ArtifactStore,
@@ -881,7 +883,7 @@ def ingest_library_item(
         }
     )
     try:
-        store.create_many([stored.artifact, item])
+        (await store.create_many([stored.artifact, item]))
     except Exception:
         artifact_store.discard_new_blob(stored)
         raise
@@ -890,16 +892,16 @@ def ingest_library_item(
     try:
         knowledge_index.upsert_library_item(item, chunks)
     except KnowledgeIndexError as exc:
-        current = store.get(LibraryItem, item.id)
-        errored = store.update(
+        current = await store.get(LibraryItem, item.id)
+        errored = await store.update(
             LibraryItem,
             item.id,
             {"status": "error"},
             expected_revision=current.revision,
         )
         raise LibraryItemIndexError(errored, exc) from exc
-    current = store.get(LibraryItem, item.id)
-    return store.update(
+    current = await store.get(LibraryItem, item.id)
+    return await store.update(
         LibraryItem,
         item.id,
         {"status": "ready"},
@@ -907,7 +909,7 @@ def ingest_library_item(
     )
 
 
-def reindex_library_item(
+async def reindex_library_item(
     *,
     store: NebulaStore,
     artifact_store: ArtifactStore,
@@ -917,14 +919,14 @@ def reindex_library_item(
 ) -> LibraryItem:
     """Rebuild one global Library item from its immutable artifact."""
 
-    item = store.get(LibraryItem, item_id)
+    item = await store.get(LibraryItem, item_id)
     if expected_revision is not None and item.revision != expected_revision:
         raise ConflictError(
             f"revision conflict: expected {expected_revision}, found {item.revision}"
         )
     if not item.artifact_id:
         raise InvalidDocumentError("Library item has no authoritative artifact")
-    artifact = store.get(Artifact, item.artifact_id)
+    artifact = await store.get(Artifact, item.artifact_id)
     if artifact.engagement_id != GLOBAL_LIBRARY_ARTIFACT_OWNER:
         raise ArtifactIntegrityError("Library artifact ownership does not match item")
     if not artifact_store.verify(artifact):
@@ -957,7 +959,7 @@ def reindex_library_item(
     metadata["scope"] = "library"
     if knowledge_index is not None:
         metadata.pop("chunks", None)
-    indexing = store.update(
+    indexing = await store.update(
         LibraryItem,
         item.id,
         {
@@ -974,16 +976,18 @@ def reindex_library_item(
     try:
         knowledge_index.upsert_library_item(indexing, chunks)
     except KnowledgeIndexError:
-        current = store.get(LibraryItem, indexing.id)
-        store.update(
-            LibraryItem,
-            indexing.id,
-            {"status": "error"},
-            expected_revision=current.revision,
+        current = await store.get(LibraryItem, indexing.id)
+        (
+            await store.update(
+                LibraryItem,
+                indexing.id,
+                {"status": "error"},
+                expected_revision=current.revision,
+            )
         )
         raise
-    current = store.get(LibraryItem, indexing.id)
-    return store.update(
+    current = await store.get(LibraryItem, indexing.id)
+    return await store.update(
         LibraryItem,
         indexing.id,
         {"status": "ready"},
@@ -998,7 +1002,7 @@ def library_item_summary(item: LibraryItem) -> LibraryItem:
     return item.model_copy(update={"metadata": metadata})
 
 
-def migrate_inline_knowledge_indexes(
+async def migrate_inline_knowledge_indexes(
     *, store: NebulaStore, knowledge_index: KnowledgeIndex
 ) -> int:
     """Move pre-Chroma inline chunks into the persistent vector index.
@@ -1011,7 +1015,7 @@ def migrate_inline_knowledge_indexes(
     # Runs as Core starts: an unreadable record is skipped and recorded
     # rather than keeping Core from starting.
     migrated = 0
-    for source in store.iter_readable_entities(KnowledgeSource):
+    async for source in store.iter_readable_entities(KnowledgeSource):
         chunks = _inline_chunks(source.status, source.metadata)
         if chunks is None:
             continue
@@ -1019,14 +1023,16 @@ def migrate_inline_knowledge_indexes(
         metadata = dict(source.metadata)
         metadata.pop("chunks", None)
         metadata.update(knowledge_index.descriptor)
-        store.update(
-            KnowledgeSource,
-            source.id,
-            {"metadata": metadata},
-            expected_revision=source.revision,
+        (
+            await store.update(
+                KnowledgeSource,
+                source.id,
+                {"metadata": metadata},
+                expected_revision=source.revision,
+            )
         )
         migrated += 1
-    for item in store.iter_readable_entities(LibraryItem):
+    async for item in store.iter_readable_entities(LibraryItem):
         chunks = _inline_chunks(item.status, item.metadata)
         if chunks is None:
             continue
@@ -1034,11 +1040,13 @@ def migrate_inline_knowledge_indexes(
         metadata = dict(item.metadata)
         metadata.pop("chunks", None)
         metadata.update(knowledge_index.library_descriptor)
-        store.update(
-            LibraryItem,
-            item.id,
-            {"metadata": metadata},
-            expected_revision=item.revision,
+        (
+            await store.update(
+                LibraryItem,
+                item.id,
+                {"metadata": metadata},
+                expected_revision=item.revision,
+            )
         )
         migrated += 1
     return migrated

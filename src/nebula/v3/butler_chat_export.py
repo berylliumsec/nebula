@@ -26,8 +26,8 @@ class ButlerChatExport:
         self.store = store
         self.project_id = project_id
 
-    def prepare(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        chat = self.store.get(ChatSession, arguments["session_id"])
+    async def prepare(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        chat = await self.store.get(ChatSession, arguments["session_id"])
         if (
             chat.engagement_id != self.project_id
             or chat.metadata.get("control_assistant") is True
@@ -51,7 +51,7 @@ class ButlerChatExport:
 
     def actions(self) -> list[AnalysisTool]:
         async def run(arguments: dict[str, Any]) -> dict[str, Any]:
-            return self.prepare(arguments)
+            return await self.prepare(arguments)
 
         return [
             AnalysisTool(

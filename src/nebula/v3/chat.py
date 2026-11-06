@@ -6,6 +6,16 @@ but can never supply or broaden capabilities.
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from typing import AsyncIterator
+
+from .database import DatabaseBusyError
+
+from .async_utils import async_done_callback, call_async
+
+from .async_utils import resolve_workspace
+
 from .diagnostics import (
     create_diagnostic_task,
     new_error_id,
@@ -538,7 +548,7 @@ def _omitted_image_text(content: str, images: list[ChatContentBlock]) -> str:
     return content + "\n\n" + "\n".join(notes)
 
 
-def resolve_chat_model_content(
+async def resolve_chat_model_content(
     store: NebulaStore,
     artifact_store: ArtifactStore | None,
     message: ChatRequestMessage,
@@ -560,7 +570,7 @@ def resolve_chat_model_content(
     parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
     for block in images:
         assert block.artifact_id is not None
-        artifact = store.get(Artifact, block.artifact_id)
+        artifact = await store.get(Artifact, block.artifact_id)
         if (
             artifact.engagement_id != engagement_id
             or artifact.metadata.get("chat_image_original") is not True
@@ -568,15 +578,17 @@ def resolve_chat_model_content(
             raise ChatConfigurationError("chat image does not belong to this project")
         preview_id = block.metadata.get("preview_artifact_id")
         preview = (
-            store.get(Artifact, preview_id)
+            (await store.get(Artifact, preview_id))
             if isinstance(preview_id, str)
             else next(
                 (
                     candidate
-                    for candidate in store.find_entities(
-                        Artifact,
-                        {"parent_artifact_id": artifact.id},
-                        engagement_id=engagement_id,
+                    for candidate in (
+                        await store.find_entities(
+                            Artifact,
+                            {"parent_artifact_id": artifact.id},
+                            engagement_id=engagement_id,
+                        )
                     )
                     if candidate.metadata.get("chat_image_preview") is True
                 ),
@@ -775,6 +787,8 @@ class ChatRuntimeSwitchPreflight(NebulaModel):
     target_provider_id: str
     target_model: str
     compatible: bool
+    activation: Literal["immediate", "after_active_work"] = "immediate"
+    activation_reason: str | None = None
     requires_compaction_confirmation: bool = False
     confirmation_token: str | None = None
     reason: str | None = None
@@ -2612,24 +2626,26 @@ def _decoded_result(value: object) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
-def unarchive_chat_session(store: NebulaStore, session_id: str) -> None:
+async def unarchive_chat_session(store: NebulaStore, session_id: str) -> None:
     """Return an archived conversation to the active list when the operator writes to it."""
     for _ in range(3):
-        current = store.get(ChatSession, session_id)
+        current = await store.get(ChatSession, session_id)
         if "archived_at" not in current.metadata:
             return
         try:
-            store.update(
-                ChatSession,
-                session_id,
-                {
-                    "metadata": {
-                        key: value
-                        for key, value in current.metadata.items()
-                        if key != "archived_at"
-                    }
-                },
-                expected_revision=current.revision,
+            (
+                await store.update(
+                    ChatSession,
+                    session_id,
+                    {
+                        "metadata": {
+                            key: value
+                            for key, value in current.metadata.items()
+                            if key != "archived_at"
+                        }
+                    },
+                    expected_revision=current.revision,
+                )
             )
             return
         except (
@@ -2648,16 +2664,22 @@ class ChatService:
         tool_platform: RuntimePlatform | None = None,
         automation_tool_platform: AutomationToolPlatform | None = None,
         provider_factory: Callable[[ProviderProfile], ModelProvider] | None = None,
-        operator_id: Callable[[], str] | None = None,
+        operator_id: MaybeAsync[[], str] | None = None,
         knowledge_index: KnowledgeIndex | None = None,
         artifact_store: ArtifactStore | None = None,
-        workspace_resolver: Callable[[str], Path] | None = None,
+        workspace_resolver: MaybeAsync[[str], Path] | None = None,
         managed_skill_root: Path | None = None,
         worker_id: str | None = None,
-        tool_suggestion_client: Callable[[], JevClient | None] | None = None,
+        tool_suggestion_client: MaybeAsync[[], JevClient | None] | None = None,
         provider_usage_observer: Callable[[str], None] | None = None,
     ) -> None:
         self.store = store
+        from .runtime_switching import RuntimeSwitchService
+
+        self.runtime_switcher = RuntimeSwitchService(self)
+        store.runtime_switch_service = self.runtime_switcher
+        self.goal_dispatcher: MaybeAsync[[str, str], str | None] | None = None
+
         self.plans = ChatPlanService(store)
         self.work = WorkService(store)
         self.tool_suggestion_client = (
@@ -2717,20 +2739,20 @@ class ChatService:
             "skill selection requires an available project workspace"
         )
 
-    def _turn_history(self, turn: ChatTurn) -> list[dict[str, Any]]:
-        return self.turn_ledger.history(turn)
+    async def _turn_history(self, turn: ChatTurn) -> list[dict[str, Any]]:
+        return await self.turn_ledger.history(turn)
 
-    def _accepted_goal_completion(
+    async def _accepted_goal_completion(
         self, turn: ChatTurn
     ) -> GoalCompletionProposal | None:
         if turn.goal_id is None:
             return None
         return accepted_goal_completion(
-            self._turn_history(turn), goal_id=turn.goal_id, turn_id=turn.id
+            (await self._turn_history(turn)), goal_id=turn.goal_id, turn_id=turn.id
         )
 
-    def _turn_tool_call_ids(self, turn: ChatTurn) -> list[str]:
-        return self.turn_ledger.tool_call_ids(turn)
+    async def _turn_tool_call_ids(self, turn: ChatTurn) -> list[str]:
+        return await self.turn_ledger.tool_call_ids(turn)
 
     def start_optional_naming(
         self, coroutine: Any, *, session_id: str | None = None
@@ -2754,9 +2776,9 @@ class ChatService:
             if session_id is not None:
                 self._naming_sessions.discard(session_id)
 
-        task.add_done_callback(naming_finished)
+        task.add_done_callback(async_done_callback(naming_finished))
 
-    def _start_initial_naming(
+    async def _start_initial_naming(
         self, prepared: PreparedChat, assistant_response: str = ""
     ) -> None:
         """Name a durable first turn without waiting for that turn to finish."""
@@ -2765,7 +2787,7 @@ class ChatService:
         if not session_id:
             return
         try:
-            self.store.get(ChatSession, session_id)
+            (await self.store.get(ChatSession, session_id))
         except NotFoundError:  # diagnostic-expected: a pending new session is not durable until completion persistence
             return
         self.start_optional_naming(
@@ -2786,7 +2808,7 @@ class ChatService:
         # never keeps Core from starting.
         turns = [
             item
-            for item in self.store.iter_readable_entities(
+            async for item in self.store.iter_readable_entities(
                 ChatTurn, {"status": [status.value for status in active_statuses]}
             )
             if item.backend == ChatBackend.PROVIDER
@@ -2794,21 +2816,28 @@ class ChatService:
         for turn in turns:
             try:
                 for _ in range(3):
-                    latest = self.store.get(ChatTurn, turn.id)
+                    latest = await self.store.get(ChatTurn, turn.id)
                     if latest.status not in active_statuses:
                         break
                     try:
-                        self._interrupt_orphaned_turn(
-                            latest,
-                            list(
-                                self.store.iter_readable_entities(
-                                    ToolCall, {"chat_turn_id": latest.id}
-                                )
-                            ),
-                            self.list_turn_hook_executions(
-                                latest.id, readable_only=True
-                            ),
-                            cause="Core restarted",
+                        (
+                            await self._interrupt_orphaned_turn(
+                                latest,
+                                list(
+                                    [
+                                        item
+                                        async for item in self.store.iter_readable_entities(
+                                            ToolCall, {"chat_turn_id": latest.id}
+                                        )
+                                    ]
+                                ),
+                                (
+                                    await self.list_turn_hook_executions(
+                                        latest.id, readable_only=True
+                                    )
+                                ),
+                                cause="Core restarted",
+                            )
                         )
                     except (
                         ConflictError
@@ -2829,11 +2858,11 @@ class ChatService:
                     exc,
                     stage="startup-recovery",
                 )
-        for goal in self.store.iter_readable_entities(
+        async for goal in self.store.iter_readable_entities(
             ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
         ):
             try:
-                self._pause_goal_orphaned_by_restart(goal)
+                (await self._pause_goal_orphaned_by_restart(goal))
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -2845,13 +2874,13 @@ class ChatService:
         await self.subagents.reconcile_after_restart(preserve_graceful=True)
         # Before the restore, so no turn that already ended is restored.
         await self._settle_ended_admissions()
-        self._restore_queued_turns()
-        self.reconcile_waiting_callbacks()
+        (await self._restore_queued_turns())
+        (await self.reconcile_waiting_callbacks())
 
-    def _pause_goal_orphaned_by_restart(self, goal: ChatGoal) -> None:
+    async def _pause_goal_orphaned_by_restart(self, goal: ChatGoal) -> None:
         """Pause a running goal whose worker or turn the previous Core held."""
 
-        pending = self.pending_turn(goal.session_id)
+        pending = await self.pending_turn(goal.session_id)
         interrupted_recovery = (
             pending
             if pending is not None
@@ -2862,25 +2891,27 @@ class ChatService:
         if goal.execution_claim_id is None and interrupted_recovery is None:
             return
         paused_at = utc_now()
-        self.store.update(
-            ChatGoal,
-            goal.id,
-            {
-                "status": ChatGoalStatus.PAUSED,
-                "paused_at": paused_at,
-                "active_since": None,
-                "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
-                "blocked_reason": (
-                    interrupted_recovery.error
-                    if interrupted_recovery is not None
-                    else "Core restarted while this goal had an active worker. "
-                    "Review its latest turn before resuming."
-                ),
-                "execution_owner_id": None,
-                "execution_claim_id": None,
-                "execution_claimed_at": None,
-            },
-            expected_revision=goal.revision,
+        (
+            await self.store.update(
+                ChatGoal,
+                goal.id,
+                {
+                    "status": ChatGoalStatus.PAUSED,
+                    "paused_at": paused_at,
+                    "active_since": None,
+                    "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                    "blocked_reason": (
+                        interrupted_recovery.error
+                        if interrupted_recovery is not None
+                        else "Core restarted while this goal had an active worker. "
+                        "Review its latest turn before resuming."
+                    ),
+                    "execution_owner_id": None,
+                    "execution_claim_id": None,
+                    "execution_claimed_at": None,
+                },
+                expected_revision=goal.revision,
+            )
         )
 
     async def _settle_ended_admissions(self) -> None:
@@ -2891,7 +2922,7 @@ class ChatService:
         """
 
         try:
-            await asyncio.to_thread(self.provider_scheduler.settle)
+            await self.provider_scheduler.settle()
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -2901,7 +2932,7 @@ class ChatService:
                 stage="provider-queue-recovery",
             )
 
-    def _settle_admission(self, turn_id: str) -> None:
+    async def _settle_admission(self, turn_id: str) -> None:
         """Close an ended turn's queued or parked admission; never raises.
 
         The turn has already ended, and a failure here only leaves the
@@ -2909,7 +2940,7 @@ class ChatService:
         """
 
         try:
-            self.provider_scheduler.settle(turn_id)
+            (await self.provider_scheduler.settle(turn_id))
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -2919,7 +2950,7 @@ class ChatService:
                 stage="provider-queue-recovery",
             )
 
-    def _restore_queued_turns(self) -> None:
+    async def _restore_queued_turns(self) -> None:
         """Start again what the previous Core accepted but never admitted.
 
         A queued row is a new turn, or a parked one resumed after its approval
@@ -2927,10 +2958,10 @@ class ChatService:
         or the other turns restoring.
         """
 
-        for turn_id in self.provider_scheduler.recover():
+        for turn_id in await self.provider_scheduler.recover():
             try:
                 try:
-                    turn = self.store.get(ChatTurn, turn_id)
+                    turn = await self.store.get(ChatTurn, turn_id)
                 except NotFoundError as exc:
                     # The turn went with its conversation. Close the admission
                     # row so no later boot tries to restore it again.
@@ -2941,7 +2972,7 @@ class ChatService:
                         exc,
                         stage="startup-recovery",
                     )
-                    self.provider_scheduler.cancel(turn_id)
+                    (await self.provider_scheduler.cancel(turn_id))
                     continue
                 if turn.status not in {
                     ChatTurnStatus.QUEUED,
@@ -2949,7 +2980,7 @@ class ChatService:
                     ChatTurnStatus.WAITING_CALLBACK,
                 } or self.has_active_provider_turn(turn_id):
                     continue
-                self.start_provider_turn(self.prepare_resume(turn_id))
+                (await self.start_provider_turn((await self.prepare_resume(turn_id))))
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -2959,7 +2990,7 @@ class ChatService:
                     stage="startup-recovery",
                 )
 
-    def reconcile_waiting_callbacks(
+    async def reconcile_waiting_callbacks(
         self, candidates: Sequence[_CallbackWait] | None = None
     ) -> list[str]:
         """Resume process callback waits whose producer can no longer be live.
@@ -2972,27 +3003,29 @@ class ChatService:
         """
 
         if candidates is None:
-            self._reconcile_settled_callback_tool_calls()
-            candidates = self._callback_wait_candidates()
+            (await self._reconcile_settled_callback_tool_calls())
+            candidates = await self._callback_wait_candidates()
         resumed: list[str] = []
         for waiting_turn, pending_entry, execution in candidates:
             try:
-                latest = self.store.get(ChatTurn, waiting_turn.id)
+                latest = await self.store.get(ChatTurn, waiting_turn.id)
                 if latest.revision != waiting_turn.revision:
                     # The turn moved since it was read; the next pass rereads it.
                     continue
                 if execution is None:
-                    self.store.update(
-                        ChatTurn,
-                        latest.id,
-                        {
-                            "status": ChatTurnStatus.INTERRUPTED,
-                            "error": (
-                                "The background process record is no longer available. "
-                                "Review the command outcome before resuming."
-                            ),
-                        },
-                        expected_revision=latest.revision,
+                    (
+                        await self.store.update(
+                            ChatTurn,
+                            latest.id,
+                            {
+                                "status": ChatTurnStatus.INTERRUPTED,
+                                "error": (
+                                    "The background process record is no longer available. "
+                                    "Review the command outcome before resuming."
+                                ),
+                            },
+                            expected_revision=latest.revision,
+                        )
                     )
                     continue
             except Exception as exc:
@@ -3007,14 +3040,22 @@ class ChatService:
             if self.has_active_provider_turn(waiting_turn.id):
                 continue
             try:
-                self._materialize_callback_result(
-                    latest,
-                    pending_entry,
-                    execution,
-                    callback_received=bool(execution.metadata.get("results_received")),
+                (
+                    await self._materialize_callback_result(
+                        latest,
+                        pending_entry,
+                        execution,
+                        callback_received=bool(
+                            execution.metadata.get("results_received")
+                        ),
+                    )
                 )
                 resumed.append(
-                    self.start_provider_turn(self.prepare_resume(waiting_turn.id))
+                    (
+                        await self.start_provider_turn(
+                            (await self.prepare_resume(waiting_turn.id))
+                        )
+                    )
                 )
             except Exception as exc:
                 record_caught_exception(
@@ -3026,7 +3067,7 @@ class ChatService:
                 )
         return resumed
 
-    def _callback_wait_candidates(self) -> list[_CallbackWait]:
+    async def _callback_wait_candidates(self) -> list[_CallbackWait]:
         """Process callback waits whose producer can no longer deliver a result.
 
         Only turns still waiting for a callback are read, filtered in SQL, so
@@ -3036,19 +3077,19 @@ class ChatService:
         from .automation_runtime import AutomationRuntimeManager
 
         found: list[_CallbackWait] = []
-        for turn in self.store.iter_readable_entities(
+        async for turn in self.store.iter_readable_entities(
             ChatTurn, {"status": ChatTurnStatus.WAITING_CALLBACK.value}
         ):
             if turn.backend != ChatBackend.PROVIDER:
                 continue
             try:
-                history = self._turn_history(turn)
+                history = await self._turn_history(turn)
                 pending_entry = history[-1] if history else {}
                 process_id = pending_entry.get("process_id")
                 if not isinstance(process_id, str) or not process_id:
                     continue
                 try:
-                    execution = self.store.get(
+                    execution = await self.store.get(
                         CommandExecution,
                         AutomationRuntimeManager._execution_id(process_id),
                     )
@@ -3073,7 +3114,7 @@ class ChatService:
             found.append((turn, pending_entry, execution))
         return found
 
-    def _reconcile_settled_callback_tool_calls(self) -> None:
+    async def _reconcile_settled_callback_tool_calls(self) -> None:
         """Close callback tool rows even after their owning turn has settled.
 
         Starts from the tool calls still marked running, filtered in SQL,
@@ -3082,7 +3123,7 @@ class ChatService:
         """
 
         by_turn: dict[str, set[str]] = {}
-        for call in self.store.iter_readable_entities(
+        async for call in self.store.iter_readable_entities(
             ToolCall,
             {
                 "status": ToolCallStatus.RUNNING.value,
@@ -3093,7 +3134,7 @@ class ChatService:
                 by_turn.setdefault(call.chat_turn_id, set()).add(call.id)
         for turn_id, call_ids in by_turn.items():
             try:
-                self._reconcile_settled_callback_turn(turn_id, call_ids)
+                (await self._reconcile_settled_callback_turn(turn_id, call_ids))
             except Exception as exc:
                 # One turn whose records cannot be read must not stop the
                 # others' calls from closing.
@@ -3105,7 +3146,7 @@ class ChatService:
                     stage="callback-recovery",
                 )
 
-    def _reconcile_settled_callback_turn(
+    async def _reconcile_settled_callback_turn(
         self, turn_id: str, call_ids: set[str]
     ) -> None:
         """Close one turn's running callback calls whose producer has settled."""
@@ -3113,7 +3154,7 @@ class ChatService:
         from .automation_runtime import AutomationRuntimeManager
 
         try:
-            turn = self.store.get(ChatTurn, turn_id)
+            turn = await self.store.get(ChatTurn, turn_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: the turn was deleted with its conversation
@@ -3129,7 +3170,7 @@ class ChatService:
         ):
             # An actively driven turn owns its in-flight calls.
             return
-        history = self._turn_history(turn)
+        history = await self._turn_history(turn)
         open_steps = False
         for index, item in enumerate(history):
             if (
@@ -3149,7 +3190,7 @@ class ChatService:
             if not isinstance(process_id, str) or not process_id:
                 continue
             try:
-                execution = self.store.get(
+                execution = await self.store.get(
                     CommandExecution,
                     AutomationRuntimeManager._execution_id(process_id),
                 )
@@ -3163,26 +3204,28 @@ class ChatService:
             ):
                 open_steps = True
                 continue
-            self._finalize_callback_tool_call(
-                item,
-                execution,
-                callback_received=callback_received,
+            (
+                await self._finalize_callback_tool_call(
+                    item,
+                    execution,
+                    callback_received=callback_received,
+                )
             )
         if not open_steps:
             self._settled_callback_scans[turn.id] = turn.revision
 
-    def _stopped_turn_candidates(self) -> list[ChatTurn]:
+    async def _stopped_turn_candidates(self) -> list[ChatTurn]:
         """Interrupted provider turns that still own automatic recovery."""
 
         return [
             turn
-            for turn in self.store.iter_readable_entities(
+            async for turn in self.store.iter_readable_entities(
                 ChatTurn, {"status": ChatTurnStatus.INTERRUPTED.value}
             )
             if turn.backend == ChatBackend.PROVIDER and self._turn_is_pending(turn)
         ]
 
-    def resume_turns_stopped_by_core(
+    async def resume_turns_stopped_by_core(
         self, candidates: Sequence[ChatTurn] | None = None
     ) -> list[str]:
         """Automatically reconcile and resume turns owned by the previous Core.
@@ -3197,10 +3240,14 @@ class ChatService:
 
         resumed: list[str] = []
         goals = ChatGoalService(self.store)
-        stopped = self._stopped_turn_candidates() if candidates is None else candidates
+        stopped = (
+            (await self._stopped_turn_candidates())
+            if candidates is None
+            else candidates
+        )
         for saved in stopped:
             try:
-                if self._resume_stopped_turn(saved, goals):
+                if await self._resume_stopped_turn(saved, goals):
                     resumed.append(saved.id)
             except Exception as exc:
                 # One turn whose records cannot be read or written must not
@@ -3214,7 +3261,9 @@ class ChatService:
                 )
         return resumed
 
-    def _resume_stopped_turn(self, saved: ChatTurn, goals: ChatGoalService) -> bool:
+    async def _resume_stopped_turn(
+        self, saved: ChatTurn, goals: ChatGoalService
+    ) -> bool:
         """Reconcile and resume one turn the previous Core stopped; True if it resumed."""
 
         from .chat_goals import GoalWrite
@@ -3226,7 +3275,7 @@ class ChatService:
             return False
         recovery_subagent: ChatSubagent | None = None
         if saved.request_snapshot.get("subagent_child"):
-            records = self.store.find_entities(
+            records = await self.store.find_entities(
                 ChatSubagent, {"child_session_id": saved.session_id}
             )
             recovery_subagent = next(
@@ -3244,17 +3293,19 @@ class ChatService:
             )
             if recovery_subagent is None:
                 return False
-        pending = self.pending_turn(saved.session_id)
+        pending = await self.pending_turn(saved.session_id)
         if pending is None or pending.id != saved.id:
             return False
         # A result may have reached the ledger after shutdown parked
         # this turn. Adopt it first, then turn any remaining uncertainty
         # into provider-visible history without replaying the effect.
-        pending = self._auto_reconcile_restart_uncertainty(pending.id)
+        pending = await self._auto_reconcile_restart_uncertainty(pending.id)
         if not recoverable_after_core_restart(pending):
             return False
         recovery = pending.request_snapshot["recovery"]
-        goal = self.store.get(ChatGoal, saved.goal_id) if saved.goal_id else None
+        goal = (
+            (await self.store.get(ChatGoal, saved.goal_id)) if saved.goal_id else None
+        )
         if goal is not None and (
             goal.status != ChatGoalStatus.PAUSED
             or (
@@ -3267,9 +3318,9 @@ class ChatService:
                 # No later pass resumes it either, and the operator
                 # cannot resume the goal past it: settle the turn so
                 # the conversation takes the next message.
-                self._settle_unresumed_turn(pending.id, reason)
+                (await self._settle_unresumed_turn(pending.id, reason))
             return False
-        latest = self.store.update(
+        latest = await self.store.update(
             ChatTurn,
             pending.id,
             {
@@ -3284,20 +3335,26 @@ class ChatService:
             expected_revision=pending.revision,
         )
         try:
-            prepared = self.prepare_resume(latest.id)
+            prepared = await self.prepare_resume(latest.id)
             if recovery_subagent is not None:
                 if prepared.turn is None:
                     raise ChatHistoryConflict(
                         "subagent restart recovery lost its child turn"
                     )
-                self.subagents.fence_restart_resume(recovery_subagent.id, prepared.turn)
-            if goal is not None:
-                goals.write(
-                    saved.session_id,
-                    GoalWrite(expected_revision=goal.revision, action="resume"),
-                    allow_pending_recovery=True,
+                (
+                    await self.subagents.fence_restart_resume(
+                        recovery_subagent.id, prepared.turn
+                    )
                 )
-            self.start_provider_turn(prepared, automatic_recovery=True)
+            if goal is not None:
+                (
+                    await goals.write(
+                        saved.session_id,
+                        GoalWrite(expected_revision=goal.revision, action="resume"),
+                        allow_pending_recovery=True,
+                    )
+                )
+            (await self.start_provider_turn(prepared, automatic_recovery=True))
             return True
         except Exception as exc:
             record_caught_exception(
@@ -3307,22 +3364,24 @@ class ChatService:
                 exc,
                 stage="startup-recovery",
             )
-            self._retry_recovery_next_pass(saved.id)
+            (await self._retry_recovery_next_pass(saved.id))
             if goal is not None:
-                self._pause_running_session_goal(
-                    saved.session_id,
-                    "Automatic recovery is waiting for the next Core recovery pass.",
+                (
+                    await self._pause_running_session_goal(
+                        saved.session_id,
+                        "Automatic recovery is waiting for the next Core recovery pass.",
+                    )
                 )
         return False
 
-    def _retry_recovery_next_pass(self, turn_id: str) -> ChatTurn | None:
+    async def _retry_recovery_next_pass(self, turn_id: str) -> ChatTurn | None:
         """Leave a restart-recovery resume that could not start for the next pass.
 
         The turn is interrupted again with its automatic retry pending, unless
         it moved on or another worker claimed it (None).
         """
 
-        current = self.store.get(ChatTurn, turn_id)
+        current = await self.store.get(ChatTurn, turn_id)
         if (
             current.status
             not in (
@@ -3342,7 +3401,7 @@ class ChatService:
             if isinstance(current_recovery, dict)
             else current_recovery
         )
-        return self.store.update(
+        return await self.store.update(
             ChatTurn,
             current.id,
             {
@@ -3359,7 +3418,7 @@ class ChatService:
             expected_revision=current.revision,
         )
 
-    def _replayable_intent(
+    async def _replayable_intent(
         self, turn_id: str, intent: Mapping[str, Any]
     ) -> dict[str, Any]:
         """A ToolCall's recorded provider call with the replay state it names.
@@ -3374,7 +3433,7 @@ class ChatService:
         }
         reference = intent.get("ledger_event")
         recorded = (
-            self.turn_ledger.event(turn_id, reference)
+            (await self.turn_ledger.event(turn_id, reference))
             if isinstance(reference, str)
             else None
         )
@@ -3383,11 +3442,11 @@ class ChatService:
                 restored[key] = recorded[key]
         return restored
 
-    def _settle_unresumed_turn(self, turn_id: str, reason: str) -> None:
+    async def _settle_unresumed_turn(self, turn_id: str, reason: str) -> None:
         """Stop an interrupted turn that restart recovery will not resume."""
 
         try:
-            self.cancel_turn(turn_id, reason=reason)
+            (await self.cancel_turn(turn_id, reason=reason))
         except ConflictError as exc:  # diagnostic-expected: the turn changed concurrently; the next recovery pass rereads it
             record_caught_exception(
                 "chat",
@@ -3413,13 +3472,13 @@ class ChatService:
         # The same cleanup an operator stop does once the turn is cancelled.
         await self.subagents.stop_for_parent_turn(turn_id)
         await self.subagents.deliver_pending(
-            self.store.get(ChatTurn, turn_id).session_id
+            (await self.store.get(ChatTurn, turn_id)).session_id
         )
 
-    def _auto_reconcile_restart_uncertainty(self, turn_id: str) -> ChatTurn:
+    async def _auto_reconcile_restart_uncertainty(self, turn_id: str) -> ChatTurn:
         """Materialize unresolved restart effects as non-replayable observations."""
 
-        turn = self.reconcile_recorded_effects(turn_id)
+        turn = await self.reconcile_recorded_effects(turn_id)
         for _ in range(3):
             recovery = turn.request_snapshot.get("recovery")
             if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(
@@ -3448,7 +3507,7 @@ class ChatService:
                 and recovery.get("required") is False
             ):
                 return turn
-            history = list(self._turn_history(turn))
+            history = list((await self._turn_history(turn)))
             next_step = turn.next_step
             execution_count = turn.execution_tool_calls
             artifact_count = turn.artifact_queries
@@ -3461,7 +3520,7 @@ class ChatService:
             projected_tools: list[str] = []
             for call_id in unknown_tools:
                 try:
-                    call = self.store.get(ToolCall, call_id)
+                    call = await self.store.get(ToolCall, call_id)
                 except NotFoundError:  # diagnostic-expected: stale recovery reference
                     continue
                 if call.chat_turn_id != turn.id:
@@ -3489,7 +3548,7 @@ class ChatService:
                         "arguments": call.arguments,
                         "budget_class": call.metadata.get("budget_class", "execution"),
                     }
-                intent = self._replayable_intent(turn.id, intent)
+                intent = await self._replayable_intent(turn.id, intent)
                 existing = next(
                     (item for item in history if item.get("tool_call_id") == call.id),
                     None,
@@ -3518,16 +3577,18 @@ class ChatService:
                     item for item in history if item.get("tool_call_id") != call.id
                 ]
                 history.append(entry)
-                self.turn_ledger.import_legacy(turn)
+                (await self.turn_ledger.import_legacy(turn))
                 # Its own key: ``recorded-result:`` belongs to a trustworthy
                 # receipt adopted by read repair.
                 ledger_sequence = max(
                     ledger_sequence,
-                    self.turn_ledger.append(
-                        turn.id,
-                        entry,
-                        idempotency_key=f"restart-unknown:{call.id}",
-                        event_type="restart_unknown",
+                    (
+                        await self.turn_ledger.append(
+                            turn.id,
+                            entry,
+                            idempotency_key=f"restart-unknown:{call.id}",
+                            event_type="restart_unknown",
+                        )
                     ),
                 )
                 if existing is None:
@@ -3540,7 +3601,7 @@ class ChatService:
             rerun_tools: list[str] = []
             for call_id in dict.fromkeys(rerunnable_tools):
                 try:
-                    call = self.store.get(ToolCall, call_id)
+                    call = await self.store.get(ToolCall, call_id)
                 except NotFoundError:  # diagnostic-expected: stale recovery reference
                     continue
                 if (
@@ -3555,11 +3616,13 @@ class ChatService:
                 history.append(entry)
                 ledger_sequence = max(
                     ledger_sequence,
-                    self.turn_ledger.append(
-                        turn.id,
-                        entry,
-                        idempotency_key=f"restart-rerunnable:{call.id}",
-                        event_type="restart_rerunnable",
+                    (
+                        await self.turn_ledger.append(
+                            turn.id,
+                            entry,
+                            idempotency_key=f"restart-rerunnable:{call.id}",
+                            event_type="restart_rerunnable",
+                        )
                     ),
                 )
                 next_step = max(next_step, step + 1)
@@ -3625,7 +3688,7 @@ class ChatService:
                 )
                 changes["tool_history"] = history
             try:
-                turn = self.store.update(
+                turn = await self.store.update(
                     ChatTurn,
                     turn.id,
                     changes,
@@ -3633,7 +3696,7 @@ class ChatService:
                 )
                 return turn
             except ConflictError:  # diagnostic-expected: optimistic recovery retry
-                turn = self.reconcile_recorded_effects(turn.id)
+                turn = await self.reconcile_recorded_effects(turn.id)
         raise ChatHistoryConflict(
             "interrupted response changed repeatedly during automatic recovery"
         )
@@ -3691,7 +3754,7 @@ class ChatService:
         }
         return entry, step
 
-    def _interrupt_orphaned_turn(
+    async def _interrupt_orphaned_turn(
         self,
         turn: ChatTurn,
         calls: Iterable[ToolCall],
@@ -3712,7 +3775,7 @@ class ChatService:
         # project files changed nothing, so it can simply run again.
         projected = {
             str(entry["tool_call_id"])
-            for entry in self._turn_history(turn)
+            for entry in (await self._turn_history(turn))
             if entry.get("tool_call_id")
             and entry.get("status") in _PROJECTED_RESULT_STATUSES
         }
@@ -3746,15 +3809,17 @@ class ChatService:
         for execution in hook_executions:
             if execution.chat_turn_id == turn.id and execution.status == "running":
                 try:
-                    self.store.update(
-                        NativeHookExecution,
-                        execution.id,
-                        {
-                            "status": "interrupted",
-                            "completed_at": utc_now(),
-                            "error": f"{cause} before the hook outcome was known.",
-                        },
-                        expected_revision=execution.revision,
+                    (
+                        await self.store.update(
+                            NativeHookExecution,
+                            execution.id,
+                            {
+                                "status": "interrupted",
+                                "completed_at": utc_now(),
+                                "error": f"{cause} before the hook outcome was known.",
+                            },
+                            expected_revision=execution.revision,
+                        )
                     )
                 except ConflictError:  # diagnostic-expected: late hook outcome won
                     # The hook may have committed its result after the scan.
@@ -3788,7 +3853,7 @@ class ChatService:
                 "interrupted_at": utc_now().isoformat(),
             },
         }
-        interrupted = self.store.update(
+        interrupted = await self.store.update(
             ChatTurn,
             turn.id,
             {
@@ -3802,23 +3867,25 @@ class ChatService:
             expected_revision=turn.revision,
         )
         if turn.goal_id:
-            goal = self.store.get(ChatGoal, turn.goal_id)
+            goal = await self.store.get(ChatGoal, turn.goal_id)
             if goal.status == ChatGoalStatus.RUNNING:
                 paused_at = utc_now()
-                self.store.update(
-                    ChatGoal,
-                    goal.id,
-                    {
-                        "status": ChatGoalStatus.PAUSED,
-                        "paused_at": paused_at,
-                        "active_since": None,
-                        "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
-                        "blocked_reason": detail,
-                        "execution_owner_id": None,
-                        "execution_claim_id": None,
-                        "execution_claimed_at": None,
-                    },
-                    expected_revision=goal.revision,
+                (
+                    await self.store.update(
+                        ChatGoal,
+                        goal.id,
+                        {
+                            "status": ChatGoalStatus.PAUSED,
+                            "paused_at": paused_at,
+                            "active_since": None,
+                            "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                            "blocked_reason": detail,
+                            "execution_owner_id": None,
+                            "execution_claim_id": None,
+                            "execution_claimed_at": None,
+                        },
+                        expected_revision=goal.revision,
+                    )
                 )
         return interrupted
 
@@ -3837,7 +3904,9 @@ class ChatService:
             return call.started_at is not None
         return False
 
-    def _interrupt_turn_for_shutdown(self, prepared: PreparedChat) -> ChatTurn | None:
+    async def _interrupt_turn_for_shutdown(
+        self, prepared: PreparedChat
+    ) -> ChatTurn | None:
         """Leave an in-flight turn recoverable when Core itself is stopping.
 
         An operator Stop cancels a response; Core stopping is not a decision
@@ -3850,7 +3919,7 @@ class ChatService:
         turn = prepared.turn
         if turn is None:
             return None
-        latest = self.store.get(ChatTurn, turn.id)
+        latest = await self.store.get(ChatTurn, turn.id)
         if latest.status == ChatTurnStatus.INTERRUPTED:
             return latest
         if latest.status not in {ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING}:
@@ -3858,24 +3927,24 @@ class ChatService:
         if latest.execution_claim_id != prepared.execution_claim_id:
             return None
         calls: list[ToolCall] = []
-        for call_id in self._turn_tool_call_ids(latest):
+        for call_id in await self._turn_tool_call_ids(latest):
             try:
-                calls.append(self.store.get(ToolCall, call_id))
+                calls.append((await self.store.get(ToolCall, call_id)))
             except (
                 NotFoundError
             ):  # diagnostic-expected: a missing tool call has no outcome to reconcile
                 continue
-        interrupted = self._interrupt_orphaned_turn(
+        interrupted = await self._interrupt_orphaned_turn(
             latest,
             calls,
-            self.list_turn_hook_executions(latest.id),
+            (await self.list_turn_hook_executions(latest.id)),
             cause="Core stopped",
         )
         prepared.turn = interrupted
         prepared.execution_claim_id = None
         return interrupted
 
-    def _claim_execution(self, prepared: PreparedChat) -> None:
+    async def _claim_execution(self, prepared: PreparedChat) -> None:
         """Atomically fence one Core worker around a provider turn and its goal."""
 
         from .chat_goals import active_time_changes
@@ -3884,9 +3953,9 @@ class ChatService:
         if turn is None:
             return
         if prepared.execution_claim_id is not None:
-            self._assert_execution_owner(prepared)
+            (await self._assert_execution_owner(prepared))
             return
-        latest = self.store.get(ChatTurn, turn.id)
+        latest = await self.store.get(ChatTurn, turn.id)
         if latest.execution_claim_id is not None:
             raise ChatHistoryConflict(
                 "chat response is already owned by another Core worker"
@@ -3902,14 +3971,16 @@ class ChatService:
             )
         claim_id = str(uuid4())
         claimed_at = utc_now()
-        goal = self.store.get(ChatGoal, latest.goal_id) if latest.goal_id else None
+        goal = (
+            (await self.store.get(ChatGoal, latest.goal_id)) if latest.goal_id else None
+        )
         if goal is not None and goal.execution_claim_id is not None:
             raise ChatHistoryConflict(
                 "chat goal is already owned by another Core worker"
             )
         try:
-            with self.store.transaction() as transaction:
-                claimed_turn = transaction.update(
+            async with self.store.transaction() as transaction:
+                claimed_turn = await transaction.update(
                     ChatTurn,
                     latest.id,
                     {
@@ -3920,17 +3991,21 @@ class ChatService:
                     expected_revision=latest.revision,
                 )
                 if goal is not None:
-                    transaction.update(
-                        ChatGoal,
-                        goal.id,
-                        {
-                            "execution_owner_id": self.worker_id,
-                            "execution_claim_id": claim_id,
-                            "execution_claimed_at": claimed_at,
-                            # Producing a goal turn is active time.
-                            **active_time_changes(goal, working=True, now=claimed_at),
-                        },
-                        expected_revision=goal.revision,
+                    (
+                        await transaction.update(
+                            ChatGoal,
+                            goal.id,
+                            {
+                                "execution_owner_id": self.worker_id,
+                                "execution_claim_id": claim_id,
+                                "execution_claimed_at": claimed_at,
+                                # Producing a goal turn is active time.
+                                **active_time_changes(
+                                    goal, working=True, now=claimed_at
+                                ),
+                            },
+                            expected_revision=goal.revision,
+                        )
                     )
         except ConflictError as exc:
             raise ChatHistoryConflict(
@@ -3939,12 +4014,12 @@ class ChatService:
         prepared.turn = claimed_turn
         prepared.execution_claim_id = claim_id
 
-    def _assert_execution_owner(self, prepared: PreparedChat) -> ChatTurn:
+    async def _assert_execution_owner(self, prepared: PreparedChat) -> ChatTurn:
         turn = prepared.turn
         claim_id = prepared.execution_claim_id
         if turn is None or claim_id is None:
             raise ChatHistoryConflict("chat response has no active execution owner")
-        latest = self.store.get(ChatTurn, turn.id)
+        latest = await self.store.get(ChatTurn, turn.id)
         if (
             latest.execution_owner_id != self.worker_id
             or latest.execution_claim_id != claim_id
@@ -3953,7 +4028,7 @@ class ChatService:
                 "chat response ownership changed; stale worker output was discarded"
             )
         if latest.goal_id:
-            goal = self.store.get(ChatGoal, latest.goal_id)
+            goal = await self.store.get(ChatGoal, latest.goal_id)
             if (
                 goal.execution_owner_id != self.worker_id
                 or goal.execution_claim_id != claim_id
@@ -3964,35 +4039,39 @@ class ChatService:
         prepared.turn = latest
         return latest
 
-    def _release_execution(self, prepared: PreparedChat) -> None:
+    async def _release_execution(self, prepared: PreparedChat) -> None:
         from .chat_goals import ChatGoalService, active_time_changes
 
         turn = prepared.turn
         claim_id = prepared.execution_claim_id
         if turn is None or claim_id is None:
             return
-        latest = self.store.get(ChatTurn, turn.id)
+        latest = await self.store.get(ChatTurn, turn.id)
         if (
             latest.execution_owner_id != self.worker_id
             or latest.execution_claim_id != claim_id
         ):
             return
-        goal = self.store.get(ChatGoal, latest.goal_id) if latest.goal_id else None
+        goal = (
+            (await self.store.get(ChatGoal, latest.goal_id)) if latest.goal_id else None
+        )
         # A parked or settled turn stops the goal's active time unless one of
         # its subagents still works.
         idle_changes = (
             active_time_changes(
                 goal,
-                working=ChatGoalService(self.store).has_working_subagents(
-                    latest.session_id
+                working=(
+                    await ChatGoalService(self.store).has_working_subagents(
+                        latest.session_id
+                    )
                 ),
                 now=utc_now(),
             )
             if goal is not None
             else {}
         )
-        with self.store.transaction() as transaction:
-            prepared.turn = transaction.update(
+        async with self.store.transaction() as transaction:
+            prepared.turn = await transaction.update(
                 ChatTurn,
                 latest.id,
                 {
@@ -4007,20 +4086,22 @@ class ChatService:
                 and goal.execution_owner_id == self.worker_id
                 and goal.execution_claim_id == claim_id
             ):
-                transaction.update(
-                    ChatGoal,
-                    goal.id,
-                    {
-                        "execution_owner_id": None,
-                        "execution_claim_id": None,
-                        "execution_claimed_at": None,
-                        **idle_changes,
-                    },
-                    expected_revision=goal.revision,
+                (
+                    await transaction.update(
+                        ChatGoal,
+                        goal.id,
+                        {
+                            "execution_owner_id": None,
+                            "execution_claim_id": None,
+                            "execution_claimed_at": None,
+                            **idle_changes,
+                        },
+                        expected_revision=goal.revision,
+                    )
                 )
         prepared.execution_claim_id = None
 
-    def start_provider_turn(
+    async def start_provider_turn(
         self, prepared: PreparedChat, *, automatic_recovery: bool = False
     ) -> str:
         turn = prepared.turn
@@ -4029,7 +4110,7 @@ class ChatService:
         existing = self._active_provider_turns.get(turn.id)
         if existing is not None and not existing.done:
             raise ChatHistoryConflict("chat turn already has active work")
-        self.provider_scheduler.enqueue(turn)
+        (await self.provider_scheduler.enqueue(turn))
         if existing is not None and existing.cleanup_task is not None:
             existing.cleanup_task.cancel()
         runtime = _ActiveProviderTurn(
@@ -4040,7 +4121,9 @@ class ChatService:
                         "type": "queued",
                         "turn_id": turn.id,
                         "queued_at": (turn.queued_at or turn.created_at).isoformat(),
-                        "queue_position": self.provider_scheduler.position(turn.id),
+                        "queue_position": (
+                            await self.provider_scheduler.position(turn.id)
+                        ),
                         "capacity_lane": turn.capacity_lane,
                         "detail": turn.admission_reason or "Waiting for Core capacity",
                     },
@@ -4086,13 +4169,13 @@ class ChatService:
                 failure_message="A queued provider turn could not be admitted.",
                 name=f"nebula-provider-admission-{prepared.turn.id}",
             )
-            last_position = self.provider_scheduler.position(prepared.turn.id)
+            last_position = await self.provider_scheduler.position(prepared.turn.id)
             last_reason = self.provider_scheduler.queue_detail(prepared.turn.id)
             while not admission_task.done():
                 done, _ = await asyncio.wait({admission_task}, timeout=1.0)
                 if done:
                     break
-                position = self.provider_scheduler.position(prepared.turn.id)
+                position = await self.provider_scheduler.position(prepared.turn.id)
                 detail = self.provider_scheduler.queue_detail(prepared.turn.id)
                 if position == last_position and detail == last_reason:
                     continue
@@ -4117,8 +4200,8 @@ class ChatService:
                     runtime.condition.notify_all()
             admission = await admission_task
             runtime.admission = admission
-            prepared.turn = self.store.get(ChatTurn, prepared.turn.id)
-            self._claim_execution(prepared)
+            prepared.turn = await self.store.get(ChatTurn, prepared.turn.id)
+            (await self._claim_execution(prepared))
             async with runtime.condition:
                 runtime.events.append(
                     (
@@ -4194,9 +4277,9 @@ class ChatService:
         turn_id = prepared.turn.id
         try:
             try:
-                latest = self.store.get(ChatTurn, turn_id)
+                latest = await self.store.get(ChatTurn, turn_id)
             except NotFoundError:  # diagnostic-expected: the turn went with its conversation; only its admission remains
-                self._settle_admission(turn_id)
+                (await self._settle_admission(turn_id))
                 return error
             claim_id = prepared.execution_claim_id
             if (
@@ -4205,13 +4288,15 @@ class ChatService:
             ) or (not holds_admission and self.provider_scheduler.admitted(turn_id)):
                 return error
             if automatic_recovery:
-                retried = self._retry_recovery_next_pass(turn_id)
+                retried = await self._retry_recovery_next_pass(turn_id)
                 if retried is None:
                     return error
-                self.provider_scheduler.withdraw(turn_id)
-                self._pause_running_session_goal(
-                    latest.session_id,
-                    "Automatic recovery is waiting for the next Core recovery pass.",
+                (await self.provider_scheduler.withdraw(turn_id))
+                (
+                    await self._pause_running_session_goal(
+                        latest.session_id,
+                        "Automatic recovery is waiting for the next Core recovery pass.",
+                    )
                 )
                 return ChatError(retried.error or str(error))
             if latest.status not in {
@@ -4222,25 +4307,27 @@ class ChatService:
                 ChatTurnStatus.WAITING_CALLBACK,
             }:
                 # Ended, or interrupted and owned by restart recovery.
-                self._settle_admission(turn_id)
+                (await self._settle_admission(turn_id))
                 return error
             detail = (
                 f"Core could not start this response ({type(error).__name__}: "
                 f"{error}). Nothing ran for it after it was queued; send the "
                 "message again to retry."
             )[:1_000]
-            prepared.turn = self.store.update(
+            prepared.turn = await self.store.update(
                 ChatTurn,
                 latest.id,
                 {"status": ChatTurnStatus.FAILED, "error": detail},
                 expected_revision=latest.revision,
             )
-            self._release_execution(prepared)
-            self.provider_scheduler.withdraw(turn_id)
-            self.record_turn_outcome(turn_id)
-            self._pause_running_session_goal(
-                latest.session_id,
-                "Response could not start. Review the error, then resume the goal.",
+            (await self._release_execution(prepared))
+            (await self.provider_scheduler.withdraw(turn_id))
+            (await self.record_turn_outcome(turn_id))
+            (
+                await self._pause_running_session_goal(
+                    latest.session_id,
+                    "Response could not start. Review the error, then resume the goal.",
+                )
             )
             try:
                 await self.subagents.turn_settled(turn_id)
@@ -4359,8 +4446,8 @@ class ChatService:
             async with runtime.condition:
                 runtime.done = True
                 runtime.condition.notify_all()
-        self.provider_scheduler.cancel(turn_id)
-        cancelled = self.cancel_turn(turn_id)
+        (await self.provider_scheduler.cancel(turn_id))
+        cancelled = await self.cancel_turn(turn_id)
         await self._stop_callback_producers(cancelled)
         await self.subagents.stop_for_parent_turn(turn_id, reason=PARENT_STOPPED_NOTE)
         # Reports that finished while the turn was parked (waiting for
@@ -4384,8 +4471,7 @@ class ChatService:
             return
         from .automation_runtime import ProcessIORequest
 
-        executions = await asyncio.to_thread(
-            self.store.find_entities,
+        executions = await self.store.find_entities(
             CommandExecution,
             {
                 "metadata.chat_turn_id": turn.id,
@@ -4426,9 +4512,9 @@ class ChatService:
         if self.shutting_down:
             return
         try:
-            stopped = await asyncio.to_thread(self._stopped_turn_candidates)
+            stopped = await self._stopped_turn_candidates()
             if stopped:
-                self.resume_turns_stopped_by_core(stopped)
+                (await self.resume_turns_stopped_by_core(stopped))
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -4438,10 +4524,10 @@ class ChatService:
                 stage="restart-recovery",
             )
         try:
-            await asyncio.to_thread(self._reconcile_settled_callback_tool_calls)
-            waiting = await asyncio.to_thread(self._callback_wait_candidates)
+            await self._reconcile_settled_callback_tool_calls()
+            waiting = await self._callback_wait_candidates()
             if waiting:
-                self.reconcile_waiting_callbacks(waiting)
+                (await self.reconcile_waiting_callbacks(waiting))
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -4451,7 +4537,7 @@ class ChatService:
                 stage="callback-recovery",
             )
         try:
-            timed_waits = await asyncio.to_thread(self._goal_time_wait_candidates)
+            timed_waits = await self._goal_time_wait_candidates()
             for turn in timed_waits:
                 await self.subagents._resume_waiting_turn(turn)
         except Exception as exc:
@@ -4463,7 +4549,7 @@ class ChatService:
                 stage="goal-time-reminder",
             )
         try:
-            await asyncio.to_thread(self.reconcile_stale_approved_tool_calls)
+            await self.reconcile_stale_approved_tool_calls()
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -4484,7 +4570,7 @@ class ChatService:
                 stage="goal-recovery",
             )
 
-    def reconcile_stale_approved_tool_calls(self) -> list[str]:
+    async def reconcile_stale_approved_tool_calls(self) -> list[str]:
         """Settle chat tool calls approved for a turn that ended before they started.
 
         Nothing starts an approved call once its turn has ended, so without
@@ -4496,7 +4582,7 @@ class ChatService:
 
         cutoff = utc_now() - _STALE_APPROVED_CALL_AGE
         settled: list[str] = []
-        for call in self.store.iter_readable_entities(
+        async for call in self.store.iter_readable_entities(
             ToolCall,
             {
                 "status": ToolCallStatus.APPROVED.value,
@@ -4506,7 +4592,7 @@ class ChatService:
             if call.updated_at > cutoff:
                 continue
             try:
-                owners = self._approved_call_owner_states(call)
+                owners = await self._approved_call_owner_states(call)
             except Exception as exc:
                 # An owner record that cannot be read leaves only this call
                 # approved; the others still settle.
@@ -4521,49 +4607,51 @@ class ChatService:
             if not owners or any(state == "live" for state in owners.values()):
                 continue
             try:
-                self.store.update_with_event(
-                    ToolCall,
-                    call.id,
-                    {
-                        "status": ToolCallStatus.CANCELLED,
-                        "completed_at": utc_now(),
-                        "error": (
-                            "Approved, but its turn ended before the call reported "
-                            "a start. Core did not run it again; its effect is unknown."
-                        ),
-                        "metadata": {
-                            **call.metadata,
-                            "settled_without_start": {
-                                "reason": "owner_ended_before_start",
-                                "owners": owners,
-                                "effect": "unknown",
-                                "settled_at": utc_now().isoformat(),
+                (
+                    await self.store.update_with_event(
+                        ToolCall,
+                        call.id,
+                        {
+                            "status": ToolCallStatus.CANCELLED,
+                            "completed_at": utc_now(),
+                            "error": (
+                                "Approved, but its turn ended before the call reported "
+                                "a start. Core did not run it again; its effect is unknown."
+                            ),
+                            "metadata": {
+                                **call.metadata,
+                                "settled_without_start": {
+                                    "reason": "owner_ended_before_start",
+                                    "owners": owners,
+                                    "effect": "unknown",
+                                    "settled_at": utc_now().isoformat(),
+                                },
                             },
                         },
-                    },
-                    expected_revision=call.revision,
-                    run_id=call.run_id,
-                    event_type="tool.cancelled",
-                    event_payload={
-                        "tool_call_id": call.id,
-                        "status": ToolCallStatus.CANCELLED.value,
-                        "reason": "owner_ended_before_start",
-                    },
-                    actor_id="core",
-                    idempotency_key=f"tool:{call.id}:approved-owner-ended",
+                        expected_revision=call.revision,
+                        run_id=call.run_id,
+                        event_type="tool.cancelled",
+                        event_payload={
+                            "tool_call_id": call.id,
+                            "status": ToolCallStatus.CANCELLED.value,
+                            "reason": "owner_ended_before_start",
+                        },
+                        actor_id="core",
+                        idempotency_key=f"tool:{call.id}:approved-owner-ended",
+                    )
                 )
             except ConflictError:  # diagnostic-expected: the call changed concurrently; the next pass rereads it
                 continue
             settled.append(call.id)
         return settled
 
-    def _approved_call_owner_states(self, call: ToolCall) -> dict[str, str]:
+    async def _approved_call_owner_states(self, call: ToolCall) -> dict[str, str]:
         """Whether each turn that could still start ``call`` is live or ended."""
 
         owners: dict[str, str] = {}
         if call.chat_turn_id:
             try:
-                chat_turn = self.store.get(ChatTurn, call.chat_turn_id)
+                chat_turn = await self.store.get(ChatTurn, call.chat_turn_id)
             except NotFoundError:  # diagnostic-expected: the owning turn was deleted
                 owners[f"chat_turn:{call.chat_turn_id}"] = "missing"
             else:
@@ -4576,7 +4664,7 @@ class ChatService:
         harness_turn_id = call.metadata.get("harness_turn_id")
         if isinstance(harness_turn_id, str) and harness_turn_id:
             try:
-                harness_turn = self.store.get(HarnessTurn, harness_turn_id)
+                harness_turn = await self.store.get(HarnessTurn, harness_turn_id)
             except (
                 NotFoundError
             ):  # diagnostic-expected: the owning harness turn was deleted
@@ -4606,7 +4694,7 @@ class ChatService:
         prepared wins.
         """
 
-        candidates = await asyncio.to_thread(self._idle_running_goal_candidates)
+        candidates = await self._idle_running_goal_candidates()
         observed: dict[str, tuple[int, str | None, int | None]] = {}
         acted: list[str] = []
         for goal, latest in candidates:
@@ -4627,34 +4715,38 @@ class ChatService:
                 if dispatched is not None:
                     acted.append(goal.id)
                 continue
-            self._pause_running_session_goal(
-                goal.session_id,
-                f"The goal's latest response ended {latest.status.value} and "
-                "nothing is running for it. Review that response, then resume "
-                "the goal.",
+            (
+                await self._pause_running_session_goal(
+                    goal.session_id,
+                    f"The goal's latest response ended {latest.status.value} and "
+                    "nothing is running for it. Review that response, then resume "
+                    "the goal.",
+                )
             )
             acted.append(goal.id)
         self._idle_goal_observations = observed
         return acted
 
-    def _idle_running_goal_candidates(self) -> list[tuple[ChatGoal, ChatTurn | None]]:
+    async def _idle_running_goal_candidates(
+        self,
+    ) -> list[tuple[ChatGoal, ChatTurn | None]]:
         """Running provider goals with no claim, pending turn or working subagent."""
 
         from .chat_goals import ChatGoalService
 
         goals = ChatGoalService(self.store)
         found: list[tuple[ChatGoal, ChatTurn | None]] = []
-        for goal in self.store.iter_readable_entities(
+        async for goal in self.store.iter_readable_entities(
             ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
         ):
             if goal.execution_claim_id is not None:
                 continue
             try:
-                session = self.store.get(ChatSession, goal.session_id)
+                session = await self.store.get(ChatSession, goal.session_id)
                 if (
                     session.backend != ChatBackend.PROVIDER
                     or "archived_at" in session.metadata
-                    or self.pending_turn(goal.session_id) is not None
+                    or (await self.pending_turn(goal.session_id)) is not None
                 ):
                     continue
             except (NotFoundError, ChatHistoryConflict) as exc:
@@ -4668,10 +4760,10 @@ class ChatService:
                     stage="goal-recovery",
                 )
                 continue
-            if goals.has_working_subagents(goal.session_id):
+            if await goals.has_working_subagents(goal.session_id):
                 # Working subagents report back and continue the goal.
                 continue
-            latest = self.store.list_session_entities(
+            latest = await self.store.list_session_entities(
                 ChatTurn, goal.session_id, newest_first=True, limit=1
             )
             found.append((goal, latest[0] if latest else None))
@@ -4686,7 +4778,7 @@ class ChatService:
 
         schedules = ChatScheduleService(self.store)
         goals = ChatGoalService(self.store)
-        for schedule in schedules.due():
+        for schedule in await schedules.due():
             try:
                 await self._fire_schedule(schedule, schedules, goals)
             except (
@@ -4717,23 +4809,23 @@ class ChatService:
     ) -> None:
         from .storage import NotFoundError
 
-        reconciled = schedules.reconcile(schedule)
+        reconciled = await schedules.reconcile(schedule)
         if reconciled is None or not reconciled.enabled:
             return
         schedule = reconciled
-        reason = schedules.revalidate(schedule)
+        reason = await schedules.revalidate(schedule)
         if reason:
-            schedules.skip(schedule, reason)
+            (await schedules.skip(schedule, reason))
             return
-        if self.pending_turn(schedule.session_id) is not None:
-            schedules.skip(schedule, "Previous turn is still active.")
+        if (await self.pending_turn(schedule.session_id)) is not None:
+            (await schedules.skip(schedule, "Previous turn is still active."))
             return
         try:
-            goal = goals.get(schedule.session_id)
+            goal = await goals.get(schedule.session_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: missing goal is recorded as a schedule skip receipt
-            schedules.skip(schedule, "No conversation goal is available.")
+            (await schedules.skip(schedule, "No conversation goal is available."))
             return
         if goal.status != ChatGoalStatus.RUNNING:
             if goal.status == ChatGoalStatus.DRAFT:
@@ -4742,18 +4834,18 @@ class ChatService:
                 action = "Resume"
             else:
                 action = "a new goal"
-            schedules.skip(
-                schedule,
-                f"Goal is {goal.status.value}; scheduled work waits for {action}.",
+            (
+                await schedules.skip(
+                    schedule,
+                    f"Goal is {goal.status.value}; scheduled work waits for {action}.",
+                )
             )
             return
         # An occurrence runs with the tools, MCP servers, SSH hosts, hooks,
         # reasoning effort and subagents the operator last chose, exactly as a
         # manual send would.
-        settings = schedules.turn_settings(schedule.session_id)
+        settings = await schedules.turn_settings(schedule.session_id)
         try:
-            # prepare() wraps prepare_async() in asyncio.run(), which cannot be
-            # called from the scheduler's event loop.
             prepared = await self.prepare_async(
                 ChatCompletionRequest(
                     provider_id=schedule.provider_profile_id,
@@ -4784,13 +4876,19 @@ class ChatService:
             # Dispatched like goal auto-continue, never awaited here: the
             # scheduler tick also drives restart and callback recovery, which
             # a long occurrence must not hold up.
-            turn_id = self.start_provider_turn(prepared)
-            schedule = schedules.record_run(schedule, turn_id=turn_id, status="started")
+            turn_id = await self.start_provider_turn(prepared)
+            schedule = await schedules.record_run(
+                schedule, turn_id=turn_id, status="started"
+            )
             runtime = self._active_provider_turns.get(turn_id)
             if runtime is not None and runtime.task is not None:
                 schedule_id = schedule.id
                 runtime.task.add_done_callback(
-                    lambda _task: self._record_schedule_outcome(schedule_id, turn_id)
+                    async_done_callback(
+                        lambda _task: self._record_schedule_outcome(
+                            schedule_id, turn_id
+                        )
+                    )
                 )
         except Exception as exc:
             record_caught_exception(
@@ -4800,20 +4898,24 @@ class ChatService:
                 exc,
                 stage="schedule",
             )
-            schedules.skip(
-                schedule,
-                "Scheduled occurrence failed; it was not retried overlapping.",
+            (
+                await schedules.skip(
+                    schedule,
+                    "Scheduled occurrence failed; it was not retried overlapping.",
+                )
             )
 
-    def _record_schedule_outcome(self, schedule_id: str, turn_id: str) -> None:
+    async def _record_schedule_outcome(self, schedule_id: str, turn_id: str) -> None:
         """Record how a dispatched scheduled occurrence settled."""
 
         from .chat_schedules import ChatScheduleService
 
         try:
-            turn = self.store.get(ChatTurn, turn_id)
-            ChatScheduleService(self.store).record_outcome(
-                schedule_id, turn_id=turn_id, status=turn.status.value
+            turn = await self.store.get(ChatTurn, turn_id)
+            (
+                await ChatScheduleService(self.store).record_outcome(
+                    schedule_id, turn_id=turn_id, status=turn.status.value
+                )
             )
         except (NotFoundError, ConflictError) as exc:
             # diagnostic-expected: the schedule or conversation changed; the
@@ -4859,7 +4961,7 @@ class ChatService:
         ended: tuple[str, str] | None = None
         frame: tuple[str, dict[str, Any]] | None = None
         failure: BaseException | None = None
-        self._start_initial_naming(prepared)
+        (await self._start_initial_naming(prepared))
         try:
             try:
                 replay_saved = bool(prepared.inputs_persisted and prepared.turn)
@@ -4876,7 +4978,7 @@ class ChatService:
                                 "provider_id": prepared.provider_profile.id,
                                 "model": prepared.resolved_model,
                             }
-                            saved_reasoning = self.turn_reasoning(saved_turn)
+                            saved_reasoning = await self.turn_reasoning(saved_turn)
                             if saved_reasoning:
                                 runtime.events.append(
                                     (
@@ -4914,7 +5016,7 @@ class ChatService:
                     # Core is stopping, not the operator: keep the turn
                     # recoverable for the next boot instead of recording an
                     # operator stop.
-                    interrupted = self._interrupt_turn_for_shutdown(prepared)
+                    interrupted = await self._interrupt_turn_for_shutdown(prepared)
                     frame = (
                         "error",
                         {
@@ -4973,7 +5075,7 @@ class ChatService:
                 runtime.done = True
                 runtime.condition.notify_all()
             if turn is not None and (stopped or runtime.error is not None):
-                latest = self.store.get(ChatTurn, turn.id)
+                latest = await self.store.get(ChatTurn, turn.id)
                 if (
                     latest.status
                     not in {
@@ -4986,26 +5088,28 @@ class ChatService:
                     status = (
                         ChatTurnStatus.CANCELLED if stopped else ChatTurnStatus.FAILED
                     )
-                    self.store.update(
-                        ChatTurn,
-                        latest.id,
-                        {
-                            "status": status,
-                            "error": (
-                                "response stopped"
-                                if stopped
-                                else str(runtime.error)[:1_000]
-                            ),
-                        },
-                        expected_revision=latest.revision,
+                    (
+                        await self.store.update(
+                            ChatTurn,
+                            latest.id,
+                            {
+                                "status": status,
+                                "error": (
+                                    "response stopped"
+                                    if stopped
+                                    else str(runtime.error)[:1_000]
+                                ),
+                            },
+                            expected_revision=latest.revision,
+                        )
                     )
-                    self._release_execution(prepared)
+                    (await self._release_execution(prepared))
                     # The admission was released first, and parked if the
                     # turn was waiting then; the turn has ended since.
-                    self._settle_admission(latest.id)
+                    (await self._settle_admission(latest.id))
                 # Before subagent reports held for this turn are posted, so
                 # the note follows the operator's message it answers.
-                self.record_turn_outcome(turn.id)
+                (await self.record_turn_outcome(turn.id))
                 if stopped:
                     pause_reason = (
                         "Response stopped by the operator. Resume the goal when ready."
@@ -5017,9 +5121,11 @@ class ChatService:
                         "Response failed before the goal finished. Review the error, "
                         "then resume the goal."
                     )
-                self._pause_running_session_goal(
-                    turn.session_id,
-                    pause_reason,
+                (
+                    await self._pause_running_session_goal(
+                        turn.session_id,
+                        pause_reason,
+                    )
                 )
             if turn is not None:
                 try:
@@ -5065,22 +5171,32 @@ class ChatService:
         source = prepared.source_request
         if turn is None or not turn.goal_id:
             return None
-        latest = self.store.get(ChatTurn, turn.id)
+        latest = await self.store.get(ChatTurn, turn.id)
         if latest.status != ChatTurnStatus.COMPLETE:
             return None
-        goal = self.store.get(ChatGoal, turn.goal_id)
+        goal = await self.store.get(ChatGoal, turn.goal_id)
         if (
             goal.status != ChatGoalStatus.RUNNING
             or goal.execution_claim_id is not None
-            or self.pending_turn(turn.session_id) is not None
+            or (await self.pending_turn(turn.session_id)) is not None
         ):
             return None
         # The operator may have picked another model, effort or subagent
         # choice while the turn ran; the conversation holds that choice, the
         # settled turn does not.
-        session = self.store.get(ChatSession, turn.session_id)
+        session = await self.runtime_switcher.settle(turn.session_id)
+        if session is None:
+            return None
+        if session.backend != ChatBackend.PROVIDER:
+            if self.goal_dispatcher is not None:
+                return await call_async(
+                    self.goal_dispatcher, turn.session_id, _GOAL_CONTINUE_INSTRUCTION
+                )
+            return None
         try:
-            settings = ChatScheduleService(self.store).turn_settings(turn.session_id)
+            settings = await ChatScheduleService(self.store).turn_settings(
+                turn.session_id
+            )
             continued = await self.prepare_async(
                 ChatCompletionRequest(
                     provider_id=session.provider_profile_id or turn.provider_profile_id,
@@ -5131,7 +5247,7 @@ class ChatService:
                     stream=True,
                 )
             )
-            return self.start_provider_turn(continued)
+            return await self.start_provider_turn(continued)
         except ChatHistoryConflict:
             # diagnostic-expected: an operator message or another valid
             # continuation won the race; losing it is the intended outcome.
@@ -5147,12 +5263,14 @@ class ChatService:
             # Budget checks in prepare_async already pause with a precise reason.
             # Other failures must not leave an idle goal claiming to be running.
             try:
-                current = self.store.get(ChatGoal, goal.id)
+                current = await self.store.get(ChatGoal, goal.id)
                 if current.status == ChatGoalStatus.RUNNING:
-                    self._pause_running_session_goal(
-                        turn.session_id,
-                        "Automatic goal continuation could not start. Review the latest "
-                        "response and error, then resume the goal to retry.",
+                    (
+                        await self._pause_running_session_goal(
+                            turn.session_id,
+                            "Automatic goal continuation could not start. Review the latest "
+                            "response and error, then resume the goal to retry.",
+                        )
                     )
             except (
                 NotFoundError
@@ -5168,17 +5286,24 @@ class ChatService:
         from .chat_goals import ChatGoalService
         from .chat_schedules import ChatScheduleService
 
+        selected_session = await self.runtime_switcher.settle(session_id)
+        if selected_session is None:
+            return None
+        if selected_session.backend != ChatBackend.PROVIDER:
+            if self.goal_dispatcher is not None:
+                return await call_async(self.goal_dispatcher, session_id, instruction)
+            return None
         goals = ChatGoalService(self.store)
         try:
-            goal = goals.get(session_id)
+            goal = await goals.get(session_id)
             if (
                 goal.status != ChatGoalStatus.RUNNING
                 or goal.execution_claim_id is not None
-                or self.pending_turn(session_id) is not None
+                or (await self.pending_turn(session_id)) is not None
             ):
                 return None
-            session = self.store.get(ChatSession, session_id)
-            settings = ChatScheduleService(self.store).turn_settings(session_id)
+            session = await self.store.get(ChatSession, session_id)
+            settings = await ChatScheduleService(self.store).turn_settings(session_id)
             prepared = await self.prepare_async(
                 ChatCompletionRequest(
                     provider_id=session.provider_profile_id,
@@ -5203,10 +5328,12 @@ class ChatService:
                     stream=True,
                 )
             )
-            return self.start_provider_turn(prepared)
+            return await self.start_provider_turn(prepared)
         except ChatHistoryConflict:
             # diagnostic-expected: a user message or another lifecycle trigger
             # won the idle check; losing it is the intended outcome.
+            return None
+        except DatabaseBusyError:  # diagnostic-expected: capacity is retried by reconciliation without changing goal state.
             return None
         except Exception as exc:
             record_caught_exception(
@@ -5217,12 +5344,14 @@ class ChatService:
                 stage="goal-dispatch",
             )
             try:
-                current = goals.get(session_id)
+                current = await goals.get(session_id)
                 if current.status == ChatGoalStatus.RUNNING:
-                    self._pause_running_session_goal(
-                        session_id,
-                        "Goal work could not start. Review the provider or runtime "
-                        "error, then resume the goal to retry.",
+                    (
+                        await self._pause_running_session_goal(
+                            session_id,
+                            "Goal work could not start. Review the provider or runtime "
+                            "error, then resume the goal to retry.",
+                        )
                     )
             except NotFoundError:  # diagnostic-expected: goal removed concurrently
                 pass
@@ -5239,14 +5368,14 @@ class ChatService:
         ):
             self._active_provider_turns.pop(turn_id, None)
 
-    def _model_content(
+    async def _model_content(
         self,
         message: ChatRequestMessage,
         engagement_id: str | None,
         *,
         images_supported: bool,
     ) -> str | list[dict[str, Any]]:
-        return resolve_chat_model_content(
+        return await resolve_chat_model_content(
             self.store,
             self.artifact_store,
             message,
@@ -5254,17 +5383,16 @@ class ChatService:
             images_supported=images_supported,
         )
 
-    def prepare(self, request: ChatCompletionRequest) -> PreparedChat:
-        """Synchronous compatibility wrapper for non-ASGI callers and tests."""
+    async def prepare(self, request: ChatCompletionRequest) -> PreparedChat:
+        """Prepare a request on the caller's event loop."""
+        return await self.prepare_async(request)
 
-        return asyncio.run(self.prepare_async(request))
-
-    def harness_knowledge_context(
+    async def harness_knowledge_context(
         self, engagement_id: str, query: str, *, token_budget: int = 4_096
     ) -> HarnessKnowledgeContext:
         """Reuse engagement retrieval without provider planning or history replay."""
 
-        result = self.harness_knowledge_search(
+        result = await self.harness_knowledge_search(
             engagement_id,
             query,
             allow_local_only=True,
@@ -5288,7 +5416,7 @@ class ChatService:
             contains_local_only=any(chunk.local_only for chunk in chunks),
         )
 
-    def harness_knowledge_search(
+    async def harness_knowledge_search(
         self,
         engagement_id: str,
         query: str,
@@ -5307,9 +5435,9 @@ class ChatService:
         """
 
         clean_query = query.strip()
-        if not clean_query or not self._has_ready_knowledge(engagement_id):
+        if not clean_query or not (await self._has_ready_knowledge(engagement_id)):
             return HarnessKnowledgeSearchResult([])
-        chunks = self._retrieve(
+        chunks = await self._retrieve(
             engagement_id,
             [clean_query],
             redact=not allow_local_only,
@@ -5332,7 +5460,7 @@ class ChatService:
     async def prepare_async(self, request: ChatCompletionRequest) -> PreparedChat:
         started_at = utc_now()
         scoped_session = (
-            self.store.get(ChatSession, request.session_id)
+            (await self.store.get(ChatSession, request.session_id))
             if request.session_id
             else None
         )
@@ -5344,12 +5472,14 @@ class ChatService:
         )
         request = request.model_copy(
             update={
-                "allow_agent_messaging": resolve_agent_messaging_choice(
-                    self.store,
-                    messaging_project,
-                    scoped_session,
-                    request.allow_agent_messaging,
-                    control_assistant=request.control_assistant,
+                "allow_agent_messaging": (
+                    await resolve_agent_messaging_choice(
+                        self.store,
+                        messaging_project,
+                        scoped_session,
+                        request.allow_agent_messaging,
+                        control_assistant=request.control_assistant,
+                    )
                 )
                 if messaging_project
                 else False,
@@ -5378,7 +5508,7 @@ class ChatService:
             raise ChatConfigurationError(
                 "harness chat requests must be dispatched through HarnessRuntimeService"
             )
-        profile = self.store.get(ProviderProfile, request.provider_id)
+        profile = await self.store.get(ProviderProfile, request.provider_id)
         if not profile.enabled:
             raise ChatConfigurationError(
                 f"provider {request.provider_id!r} is disabled"
@@ -5402,24 +5532,26 @@ class ChatService:
             )
 
         if request.session_id:
-            session = self.store.get(ChatSession, request.session_id)
+            session = await self.store.get(ChatSession, request.session_id)
             if engagement_id and engagement_id != session.engagement_id:
                 raise ChatHistoryConflict(
                     "chat session does not belong to the requested engagement"
                 )
             engagement_id = session.engagement_id
-            if self.pending_turn(session.id) is not None:
+            if (await self.pending_turn(session.id)) is not None:
                 raise ChatHistoryConflict(
                     "chat session already has an active response; resume or resolve it before sending another message"
                 )
-            stored_messages = self._session_messages(session)
+            stored_messages = await self._session_messages(session)
             incoming, _ = self._merge_history(stored_messages, incoming)
             _, new_messages = self._merge_history(stored_messages, durable_incoming)
             # Peer messages are already present as system transcript entries, so
             # this turn receives them through canonical history. Mark them before
             # routing to avoid injecting the same content a second time.
-            self.agent_messages.mark_history_delivered(
-                session.id, {message.id for message in stored_messages}
+            (
+                await self.agent_messages.mark_history_delivered(
+                    session.id, {message.id for message in stored_messages}
+                )
             )
         else:
             new_messages = durable_incoming
@@ -5453,7 +5585,7 @@ class ChatService:
                 raise ChatConfigurationError(
                     "a goal turn requires an existing conversation"
                 )
-            goal = self.store.get(ChatGoal, request.goal_id)
+            goal = await self.store.get(ChatGoal, request.goal_id)
             if (
                 goal.session_id != session.id
                 or goal.engagement_id != session.engagement_id
@@ -5479,7 +5611,7 @@ class ChatService:
             ):
                 exhausted_reason = "Goal active-time budget is exhausted."
             if exhausted_reason is not None:
-                paused = self.store.update(
+                paused = await self.store.update(
                     ChatGoal,
                     goal.id,
                     {
@@ -5492,8 +5624,10 @@ class ChatService:
                     expected_revision=goal.revision,
                 )
                 if exhausted_reason == "Goal token budget is exhausted.":
-                    self.subagents.stop_goal_subagents_soon(
-                        paused, GOAL_BUDGET_STOP_NOTE
+                    (
+                        await self.subagents.stop_goal_subagents_soon(
+                            paused, GOAL_BUDGET_STOP_NOTE
+                        )
                     )
                 raise ChatConfigurationError(exhausted_reason.lower())
 
@@ -5505,8 +5639,10 @@ class ChatService:
         skill_snapshots = [
             SkillSnapshot.model_validate(item)
             for item in (
-                resolve_skill_snapshots(
-                    self.store, goal.skill_snapshots, session_id=goal.session_id
+                (
+                    await resolve_skill_snapshots(
+                        self.store, goal.skill_snapshots, session_id=goal.session_id
+                    )
                 )
                 if goal is not None
                 else []
@@ -5522,7 +5658,9 @@ class ChatService:
                     "skill selection requires a project conversation"
                 )
             try:
-                workspace = self.workspace_resolver(engagement_id)
+                workspace = await resolve_workspace(
+                    self.workspace_resolver, engagement_id
+                )
                 available_skills = discover_skills(
                     native_skill_roots(workspace, self.managed_skill_root)
                 )
@@ -5550,9 +5688,9 @@ class ChatService:
                         engagement_id=goal.engagement_id,
                         session_id=goal.session_id,
                     )
-                    with self.store.transaction() as transaction:
-                        stage_snapshot_parts(transaction, skill_parts)
-                        goal = transaction.update(
+                    async with self.store.transaction() as transaction:
+                        (await stage_snapshot_parts(transaction, skill_parts))
+                        goal = await transaction.update(
                             ChatGoal,
                             goal.id,
                             {"skill_snapshots": skill_entries},
@@ -5573,7 +5711,7 @@ class ChatService:
                 raise ChatConfigurationError("hook selection contains duplicates")
             try:
                 hook_catalog = discover_native_hooks(
-                    self.workspace_resolver(engagement_id)
+                    (await resolve_workspace(self.workspace_resolver, engagement_id))
                 )
                 hook_snapshots = [
                     snapshot_native_hook(hook_id, hook_catalog)
@@ -5605,7 +5743,7 @@ class ChatService:
             and engagement_id
             and (
                 session is None
-                or self.subagents.depth(session) < SUBAGENT_DEPTH_CEILING
+                or (await self.subagents.depth(session)) < SUBAGENT_DEPTH_CEILING
             )
         )
         child_runtime = None
@@ -5613,7 +5751,7 @@ class ChatService:
             request.subagent_provider_id or request.subagent_harness_profile_id
         ):
             assert engagement_id is not None
-            child_runtime = self.subagents.validate_harness_setting(
+            child_runtime = await self.subagents.validate_harness_setting(
                 engagement_id,
                 request.subagent_provider_id or "",
                 request.subagent_model or "",
@@ -5629,7 +5767,7 @@ class ChatService:
         )
         work_enabled = bool(
             engagement_id
-            and self.work.enabled(engagement_id)
+            and (await self.work.enabled(engagement_id))
             and not (session and session.metadata.get("side_chat") is True)
             and profile.tools_verified_for(selected_model)
         )
@@ -5666,7 +5804,7 @@ class ChatService:
         if session is not None and (
             session.provider_profile_id != profile.id or session.model != selected_model
         ):
-            switch = self.runtime_switch_preflight(
+            switch = await self.runtime_switch_preflight(
                 session.id,
                 ChatRuntimeSwitchPreflightRequest(
                     provider_id=profile.id,
@@ -5689,8 +5827,8 @@ class ChatService:
 
         engagement: Engagement | None = None
         if engagement_id:
-            engagement = self.store.get(Engagement, engagement_id)
-            self._enforce_engagement_privacy(engagement, provider)
+            engagement = await self.store.get(Engagement, engagement_id)
+            (await self._enforce_engagement_privacy(engagement, provider))
             if session is None:
                 pending_session = ChatSession(
                     id=request.session_id or str(uuid4()),
@@ -5723,8 +5861,10 @@ class ChatService:
         operator_decisions = (
             []
             if side_chat
-            else decision_snapshot(
-                self.store, session.id if session else None, engagement_id
+            else (
+                await decision_snapshot(
+                    self.store, session.id if session else None, engagement_id
+                )
             )
         )
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
@@ -5756,7 +5896,7 @@ class ChatService:
             )
             if self.butler_memory is not None and engagement_id is not None:
                 instructions += "\n\n" + BUTLER_MEMORY_INSTRUCTION
-                instructions += self.butler_memory.turn_context(
+                instructions += await self.butler_memory.turn_context(
                     engagement_id, request.messages[-1].content
                 )
         else:
@@ -5792,7 +5932,7 @@ class ChatService:
             )
             instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = (
-            None if side_chat else self._project_instructions(engagement_id)
+            None if side_chat else (await self._project_instructions(engagement_id))
         )
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
@@ -5809,14 +5949,15 @@ class ChatService:
             try:
                 bypass_permissions = False
                 if engagement_id:
-                    selected_engagement = self.store.get(Engagement, engagement_id)
+                    selected_engagement = await self.store.get(
+                        Engagement, engagement_id
+                    )
                     if selected_engagement.scope_policy_id:
-                        selected_scope = self.store.get(
+                        selected_scope = await self.store.get(
                             ScopePolicy, selected_engagement.scope_policy_id
                         )
                         bypass_permissions = selected_scope.bypass_permissions
-                mcp_profiles = await asyncio.to_thread(
-                    resolve_mcp_profiles,
+                mcp_profiles = await resolve_mcp_profiles(
                     self.store,
                     request.mcp_server_ids,
                     bypass_permissions=bypass_permissions,
@@ -5827,7 +5968,7 @@ class ChatService:
         ssh_environments: tuple[SshEnvironment, ...] = ()
         if request.tools_enabled or request.ssh_environment_ids:
             try:
-                ssh_environments = resolve_ssh_environments(
+                ssh_environments = await resolve_ssh_environments(
                     self.store, request.ssh_environment_ids
                 )
             except (NotFoundError, ValueError) as exc:
@@ -5844,13 +5985,13 @@ class ChatService:
             )
         browser_session_id = next(iter(browser_session_ids), None)
         companion_session_id = (
-            attached_session(self.store, engagement_id, request.session_id)
+            (await attached_session(self.store, engagement_id, request.session_id))
             if engagement_id and not settings_only
             else None
         )
         browser_session_id = browser_session_id or companion_session_id
         if browser_session_id:
-            selected_browser = self.store.get(BrowserSession, browser_session_id)
+            selected_browser = await self.store.get(BrowserSession, browser_session_id)
             if selected_browser.metadata.get("browser_companion_version") == 1 and (
                 selected_browser.metadata.get("assistant_paused", True)
                 or not profile.tools_verified_for(selected_model)
@@ -5870,8 +6011,8 @@ class ChatService:
         skill_resources_selected = any(item.resources for item in skill_snapshots)
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
-        web_search_selected = not side_chat and await asyncio.to_thread(
-            self._web_search_selected, engagement_id
+        web_search_selected = not side_chat and await self._web_search_selected(
+            engagement_id
         )
         settings_assistant_available = bool(
             settings_only
@@ -5952,15 +6093,14 @@ class ChatService:
             # catalog never turns tools on by itself, so a plain chat stays
             # one.
             catalog_profiles = (
-                await asyncio.to_thread(self._mcp_catalog, engagement_id, mcp_profiles)
+                await self._mcp_catalog(engagement_id, mcp_profiles)
                 if self.tool_platform is not None and request.allow_mcp_catalog
                 else ()
             )
             turn_id = str(uuid4())
             try:
                 extra_components = (
-                    await asyncio.to_thread(
-                        self.tool_platform.chat_components,
+                    await self.tool_platform.chat_components(
                         engagement_id=engagement_id,
                         turn_id=turn_id,
                         provider=provider,
@@ -5986,9 +6126,11 @@ class ChatService:
                 )
                 if request.tools_enabled:
                     assert self.automation_tool_platform is not None
-                    tool_components = self.automation_tool_platform.chat_components(
-                        engagement_id=engagement_id,
-                        extra_components=extra_components,
+                    tool_components = (
+                        await self.automation_tool_platform.chat_components(
+                            engagement_id=engagement_id,
+                            extra_components=extra_components,
+                        )
                     )
                 elif extra_components is not None:
                     tool_components = extra_components
@@ -6006,20 +6148,26 @@ class ChatService:
                         "no runtime capabilities were selected"
                     )
                 if browser_session_id is not None:
-                    browser_session = self.store.get(BrowserSession, browser_session_id)
+                    browser_session = await self.store.get(
+                        BrowserSession, browser_session_id
+                    )
                     browser_components = (
-                        companion_components(
-                            self.store,
-                            engagement_id,
-                            browser_session_id,
-                            artifact_store=self.artifact_store,
-                            image_supported=profile.capabilities.vision,
+                        (
+                            await companion_components(
+                                self.store,
+                                engagement_id,
+                                browser_session_id,
+                                artifact_store=self.artifact_store,
+                                image_supported=profile.capabilities.vision,
+                            )
                         )
                         if browser_session.metadata.get("browser_companion_version")
                         == 1
-                        else self.browser_tool_platform.chat_components(
-                            engagement_id=engagement_id,
-                            browser_session_id=browser_session_id,
+                        else (
+                            await self.browser_tool_platform.chat_components(
+                                engagement_id=engagement_id,
+                                browser_session_id=browser_session_id,
+                            )
                         )
                     )
                     tool_components = combine_tool_components(
@@ -6029,13 +6177,17 @@ class ChatService:
                 if model_context and not browser_session_id:
                     tool_components = combine_tool_components(
                         tool_components,
-                        standalone_components(self.store, engagement_id),
+                        (await standalone_components(self.store, engagement_id)),
                     )
                 if skill_resources_selected:
                     skill_components = skill_resource_components(
                         skill_snapshots,
                         engagement_id=engagement_id,
-                        workspace=self.workspace_resolver(engagement_id),
+                        workspace=(
+                            await resolve_workspace(
+                                self.workspace_resolver, engagement_id
+                            )
+                        ),
                         scope=tool_components.scope if tool_components else None,
                     )
                     if skill_components is not None:
@@ -6172,7 +6324,7 @@ class ChatService:
                             and request.allow_cloud_knowledge
                         )
                     )
-                    and self._has_ready_knowledge(engagement_id)
+                    and (await self._has_ready_knowledge(engagement_id))
                 )
                 if knowledge_search:
                     assert tool_components is not None
@@ -6311,7 +6463,7 @@ class ChatService:
                 # "thanks" or "ok, continue" has no subject a document could
                 # be about: no planning call, nothing attached.
                 and has_content(incoming[-1].content)
-                and self._has_ready_knowledge(engagement_id)
+                and (await self._has_ready_knowledge(engagement_id))
             ):
                 retrieval_queries = await self._plan_retrieval(
                     provider=provider,
@@ -6320,8 +6472,7 @@ class ChatService:
                 )
                 # Vector search and relevance scoring are CPU work: off the
                 # event loop that streams every other conversation.
-                engagement_chunks = await asyncio.to_thread(
-                    self._retrieve,
+                engagement_chunks = await self._retrieve(
                     engagement_id,
                     retrieval_queries,
                     redact=not provider.config.local,
@@ -6385,7 +6536,7 @@ class ChatService:
             # once the conversation is assembled, so the assembly leaves room
             # for them as it does for the tools.
             notes_block = (
-                working_notes_block(read_working_notes(self.store, session.id))
+                working_notes_block((await read_working_notes(self.store, session.id)))
                 if session is not None
                 else ""
             )
@@ -6433,7 +6584,7 @@ class ChatService:
                 )
             except ContextCapacityError as exc:
                 if goal is not None and exc.usage.total_tokens > 0:
-                    goal = self._charge_goal(
+                    goal = await self._charge_goal(
                         goal.id,
                         exc.usage,
                         exhausted_reason="Token budget exhausted during context compaction.",
@@ -6448,7 +6599,7 @@ class ChatService:
                 raise ChatConfigurationError(str(exc)) from exc
             except ContextCompactionError as exc:
                 if goal is not None and exc.usage.total_tokens > 0:
-                    goal = self._charge_goal(
+                    goal = await self._charge_goal(
                         goal.id,
                         exc.usage,
                         exhausted_reason="Token budget exhausted during context compaction.",
@@ -6462,7 +6613,7 @@ class ChatService:
                 )
                 raise ChatCompactionError(str(exc)) from exc
             if goal is not None and context_usage.total_tokens > 0:
-                goal = self._charge_goal(
+                goal = await self._charge_goal(
                     goal.id,
                     context_usage,
                     exhausted_reason="Token budget exhausted during context compaction.",
@@ -6485,10 +6636,12 @@ class ChatService:
                     [
                         ModelMessage(
                             role=message.role.value,
-                            content=self._model_content(
-                                message,
-                                engagement_id,
-                                images_supported=profile.capabilities.vision,
+                            content=(
+                                await self._model_content(
+                                    message,
+                                    engagement_id,
+                                    images_supported=profile.capabilities.vision,
+                                )
                             ),
                         )
                         for message in model_messages
@@ -6522,7 +6675,9 @@ class ChatService:
                     profile, model_request, notes_block, calibration
                 )
             if goal is not None:
-                model_request = self._fit_goal_request_budget(goal.id, model_request)
+                model_request = await self._fit_goal_request_budget(
+                    goal.id, model_request
+                )
             self._ensure_request_capacity(profile, model_request, calibration)
         except BaseException:  # diagnostic-expected: re-raised below
             if ranking is not None:
@@ -6746,10 +6901,10 @@ class ChatService:
             + (archive_reserved_tokens if conversation_search else 0),
         )
         if turn is not None:
-            self._persist_turn_inputs(prepared)
+            (await self._persist_turn_inputs(prepared))
         return prepared
 
-    def _fail_closed_turn(
+    async def _fail_closed_turn(
         self,
         prepared: PreparedChat,
         *,
@@ -6762,7 +6917,7 @@ class ChatService:
         if turn is None:
             return
         try:
-            latest = self.store.get(ChatTurn, turn.id)
+            latest = await self.store.get(ChatTurn, turn.id)
         except (
             NotFoundError
         ):  # diagnostic-expected: turn already deleted; nothing to fail closed
@@ -6778,15 +6933,15 @@ class ChatService:
         claim_id = prepared.execution_claim_id
         if claim_id is not None and latest.execution_claim_id not in {None, claim_id}:
             return
-        prepared.turn = self.store.update(
+        prepared.turn = await self.store.update(
             ChatTurn,
             latest.id,
             {"status": status, "error": error[:1_000]},
             expected_revision=latest.revision,
         )
-        self._release_execution(prepared)
+        (await self._release_execution(prepared))
         # A turn that ended before it was admitted leaves a queued admission.
-        self._settle_admission(latest.id)
+        (await self._settle_admission(latest.id))
 
     async def complete(self, prepared: PreparedChat) -> ChatCompletionResponse:
         ended: tuple[BaseException, str, ChatTurnStatus]
@@ -6797,16 +6952,16 @@ class ChatService:
                     prepared.turn is not None
                     and prepared.turn.status == ChatTurnStatus.QUEUED
                 ):
-                    self.provider_scheduler.enqueue(prepared.turn)
+                    (await self.provider_scheduler.enqueue(prepared.turn))
                     admission = await self.provider_scheduler.admit(prepared.turn.id)
-                    prepared.turn = self.store.get(ChatTurn, prepared.turn.id)
+                    prepared.turn = await self.store.get(ChatTurn, prepared.turn.id)
                 return await self._complete_claimed(prepared)
             except (
                 asyncio.CancelledError
             ) as exc:  # diagnostic-expected: re-raised below
                 if (
                     self.shutting_down
-                    and self._interrupt_turn_for_shutdown(prepared) is not None
+                    and (await self._interrupt_turn_for_shutdown(prepared)) is not None
                 ):
                     # Core stopping is not an operator stop. The turn takes
                     # the state a crash leaves, so the next boot resumes it
@@ -6821,13 +6976,15 @@ class ChatService:
             # the stop or failure that ended the turn.
             error, event_name, status = ended
             await self._run_terminal_native_hooks(prepared, event_name, detail)
-            self._fail_closed_turn(prepared, status=status, error=detail)
+            (await self._fail_closed_turn(prepared, status=status, error=detail))
             if prepared.turn is not None:
-                self.record_turn_outcome(prepared.turn.id)
+                (await self.record_turn_outcome(prepared.turn.id))
                 if isinstance(error, CompletionHookBlocked):
-                    self._pause_running_session_goal(
-                        prepared.turn.session_id,
-                        _completion_hook_goal_pause_reason(error),
+                    (
+                        await self._pause_running_session_goal(
+                            prepared.turn.session_id,
+                            _completion_hook_goal_pause_reason(error),
+                        )
                     )
             raise error
         finally:
@@ -6835,8 +6992,8 @@ class ChatService:
                 await admission.release(prepared.turn.id)
 
     async def _complete_claimed(self, prepared: PreparedChat) -> ChatCompletionResponse:
-        self._claim_execution(prepared)
-        self._start_initial_naming(prepared)
+        (await self._claim_execution(prepared))
+        (await self._start_initial_naming(prepared))
         await self._run_start_native_hooks(prepared)
         if prepared.tools_enabled:
             completed: ChatCompletionResponse | None = None
@@ -6857,17 +7014,17 @@ class ChatService:
             if completed is None:
                 raise ChatError("command response ended before final synthesis")
             return completed
-        request = self._fit_turn_goal_request(
+        request = await self._fit_turn_goal_request(
             prepared, _tool_free_request(prepared.model_request)
         )
         response = await self._complete_final_answer_with_recovery(prepared, request)
         if prepared.turn is not None:
-            self._assert_execution_owner(prepared)
+            (await self._assert_execution_owner(prepared))
         response = await self._completion_hook_feedback(prepared, request, response)
-        completion = self._completion(prepared, response)
-        self._persist(prepared, completion)
-        self._start_initial_naming(prepared, completion.message.content)
-        self._release_execution(prepared)
+        completion = await self._completion(prepared, response)
+        (await self._persist(prepared, completion))
+        (await self._start_initial_naming(prepared, completion.message.content))
+        (await self._release_execution(prepared))
         self._schedule_precompaction(prepared)
         return completion
 
@@ -6877,7 +7034,9 @@ class ChatService:
         recoveries: list[str] = []
         while True:
             try:
-                request = self._with_current_goal_time_instruction(prepared, request)
+                request = await self._with_current_goal_time_instruction(
+                    prepared, request
+                )
                 self._record_provider_request(prepared, request)
                 response = await prepared.provider.complete(request)
                 break
@@ -6896,7 +7055,7 @@ class ChatService:
         self._record_provider_response(prepared, response)
         return response
 
-    def _with_current_goal_time_instruction(
+    async def _with_current_goal_time_instruction(
         self, prepared: PreparedChat, request: ModelRequest
     ) -> ModelRequest:
         """Refresh a timed goal's warning at each model step of a long turn."""
@@ -6904,7 +7063,7 @@ class ChatService:
         turn = prepared.turn
         if turn is None or turn.goal_id is None:
             return request
-        goal = self.store.get(ChatGoal, turn.goal_id)
+        goal = await self.store.get(ChatGoal, turn.goal_id)
         instructions = request.instructions or ""
         for old in (
             _GOAL_TIME_TEN_MINUTE_REMINDER,
@@ -6916,14 +7075,14 @@ class ChatService:
         if instructions == (request.instructions or ""):
             return request
         updated = request.model_copy(update={"instructions": instructions})
-        return self._fit_turn_goal_request(prepared, updated)
+        return await self._fit_turn_goal_request(prepared, updated)
 
-    def _goal_time_wait_due(self, turn: ChatTurn, now: datetime) -> bool:
+    async def _goal_time_wait_due(self, turn: ChatTurn, now: datetime) -> bool:
         """A parked subagent wait crossed a goal warning threshold."""
 
         if turn.goal_id is None:
             return False
-        goal = self.store.get(ChatGoal, turn.goal_id)
+        goal = await self.store.get(ChatGoal, turn.goal_id)
         if goal.status != ChatGoalStatus.RUNNING or goal.time_budget_seconds is None:
             return False
         before = goal.active_elapsed_seconds(turn.updated_at)
@@ -6937,19 +7096,19 @@ class ChatService:
             for seconds in (10 * 60, 5 * 60)
         )
 
-    def _goal_time_wait_candidates(self) -> list[ChatTurn]:
+    async def _goal_time_wait_candidates(self) -> list[ChatTurn]:
         """Read only parked subagent waits that need a timed goal reminder."""
 
         now = utc_now()
         found: list[ChatTurn] = []
-        for turn in self.store.iter_readable_entities(
+        async for turn in self.store.iter_readable_entities(
             ChatTurn, {"status": ChatTurnStatus.WAITING_CALLBACK.value}
         ):
             if turn.backend != ChatBackend.PROVIDER or turn.goal_id is None:
                 continue
-            if self.subagents.pending_wait(turn) is None:
+            if (await self.subagents.pending_wait(turn)) is None:
                 continue
-            if self._goal_time_wait_due(turn, now):
+            if await self._goal_time_wait_due(turn, now):
                 found.append(turn)
         return found
 
@@ -7000,9 +7159,13 @@ class ChatService:
             )
             if isinstance(feedback, dict) and feedback.get("recheck") is False:
                 raise CompletionHookBlocked(
-                    self.store.get(NativeHookExecution, str(feedback["execution_id"]))
+                    (
+                        await self.store.get(
+                            NativeHookExecution, str(feedback["execution_id"])
+                        )
+                    )
                 )
-            completion = self._completion(prepared, response)
+            completion = await self._completion(prepared, response)
             await self._run_native_hooks(
                 prepared,
                 "chat.turn.completed",
@@ -7015,7 +7178,7 @@ class ChatService:
 
         attempt = 0
         while True:
-            completion = self._completion(prepared, response)
+            completion = await self._completion(prepared, response)
             try:
                 await self._run_native_hooks(
                     prepared,
@@ -7034,17 +7197,23 @@ class ChatService:
                     for hook in prepared.hook_snapshots
                     if "chat.turn.completed" in hook.manifest.events
                 )
-                if attempt >= self._completion_hook_recheck_limit(
-                    prepared.turn, replayable=replayable
+                if attempt >= (
+                    await self._completion_hook_recheck_limit(
+                        prepared.turn, replayable=replayable
+                    )
                 ):
-                    self._record_completion_hook_decision(prepared, blocked, response)
+                    (
+                        await self._record_completion_hook_decision(
+                            prepared, blocked, response
+                        )
+                    )
                     raise
                 execution = blocked.execution
                 if prepared.turn is not None:
-                    turn = self._refresh_turn(prepared.turn)
+                    turn = await self._refresh_turn(prepared.turn)
                     if attempt == 0:
-                        turn = self._add_usage(turn, response)
-                    turn = self.store.update(
+                        turn = await self._add_usage(turn, response)
+                    turn = await self.store.update(
                         ChatTurn,
                         turn.id,
                         {
@@ -7094,7 +7263,7 @@ class ChatService:
                         },
                     }
                 )
-                retry = self._fit_turn_goal_request(prepared, retry)
+                retry = await self._fit_turn_goal_request(prepared, retry)
                 self._ensure_request_capacity(
                     prepared.provider_profile, retry, prepared.estimate_calibration
                 )
@@ -7102,11 +7271,15 @@ class ChatService:
                     prepared, retry
                 )
                 if prepared.turn is not None:
-                    prepared.turn = self._add_usage(
-                        self._refresh_turn(prepared.turn), response
+                    prepared.turn = await self._add_usage(
+                        (await self._refresh_turn(prepared.turn)), response
                     )
                 if not replayable:
-                    self._record_completion_hook_decision(prepared, blocked, response)
+                    (
+                        await self._record_completion_hook_decision(
+                            prepared, blocked, response
+                        )
+                    )
                     raise blocked
                 attempt += 1
 
@@ -7120,21 +7293,21 @@ class ChatService:
         attempt = feedback.get("attempt")
         return attempt if isinstance(attempt, int) and attempt > 0 else 1
 
-    def _running_goal_for_hook_feedback(self, turn: ChatTurn | None) -> bool:
+    async def _running_goal_for_hook_feedback(self, turn: ChatTurn | None) -> bool:
         if turn is None or turn.goal_id is None:
             return False
         try:
             return (
-                self.store.get(ChatGoal, turn.goal_id).status == ChatGoalStatus.RUNNING
-            )
+                await self.store.get(ChatGoal, turn.goal_id)
+            ).status == ChatGoalStatus.RUNNING
         except NotFoundError:
             # diagnostic-expected: a deleted goal cannot receive hook feedback.
             return False
 
-    def _completion_hook_recheck_limit(
+    async def _completion_hook_recheck_limit(
         self, turn: ChatTurn | None, *, replayable: bool
     ) -> int:
-        if replayable and self._running_goal_for_hook_feedback(turn):
+        if replayable and (await self._running_goal_for_hook_feedback(turn)):
             return _RUNNING_GOAL_COMPLETION_HOOK_RECHECKS
         return 1
 
@@ -7178,8 +7351,10 @@ class ChatService:
                 prepared, request
             )
             if prepared.turn is not None:
-                turn = self._add_usage(self._refresh_turn(prepared.turn), response)
-                prepared.turn = self.store.update(
+                turn = await self._add_usage(
+                    (await self._refresh_turn(prepared.turn)), response
+                )
+                prepared.turn = await self.store.update(
                     ChatTurn,
                     turn.id,
                     {
@@ -7205,7 +7380,7 @@ class ChatService:
                 stage="chat.turn.started",
             )
 
-    def _route_after_completion_hook(
+    async def _route_after_completion_hook(
         self,
         prepared: PreparedChat,
         blocked: CompletionHookBlocked,
@@ -7215,19 +7390,21 @@ class ChatService:
 
         if prepared.turn is None:
             raise blocked
-        turn = self._refresh_turn(prepared.turn)
+        turn = await self._refresh_turn(prepared.turn)
         replayable = not any(
             hook.manifest.side_effects != "none"
             for hook in prepared.hook_snapshots
             if "chat.turn.completed" in hook.manifest.events
         )
         attempt = self._completion_hook_attempt(turn)
-        if attempt >= self._completion_hook_recheck_limit(turn, replayable=replayable):
-            self._record_completion_hook_decision(prepared, blocked, response)
+        if attempt >= (
+            await self._completion_hook_recheck_limit(turn, replayable=replayable)
+        ):
+            (await self._record_completion_hook_decision(prepared, blocked, response))
             raise blocked
         execution = blocked.execution
         feedback = _blocked_hook_model_output(execution)
-        turn = self.store.update(
+        turn = await self.store.update(
             ChatTurn,
             turn.id,
             {
@@ -7249,7 +7426,7 @@ class ChatService:
         prepared.turn = turn
         return turn
 
-    def _record_completion_hook_decision(
+    async def _record_completion_hook_decision(
         self,
         prepared: PreparedChat,
         blocked: CompletionHookBlocked,
@@ -7259,12 +7436,12 @@ class ChatService:
 
         if prepared.turn is None:
             return
-        turn = self._refresh_turn(prepared.turn)
+        turn = await self._refresh_turn(prepared.turn)
         execution = blocked.execution
         feedback = sanitize_display_text(
             redact_text(execution.stdout or execution.stderr or str(blocked))
         ).strip()[:_HOOK_MODEL_FEEDBACK_CHARS]
-        turn = self.store.update(
+        turn = await self.store.update(
             ChatTurn,
             turn.id,
             {
@@ -7355,9 +7532,9 @@ class ChatService:
         while current_problem is not None:
             turn = prepared.turn
             if turn is not None:
-                self._assert_execution_owner(prepared)
-                turn = self._add_usage(self._refresh_turn(turn), current)
-                turn = self.store.update(
+                (await self._assert_execution_owner(prepared))
+                turn = await self._add_usage((await self._refresh_turn(turn)), current)
+                turn = await self.store.update(
                     ChatTurn,
                     turn.id,
                     {
@@ -7372,7 +7549,7 @@ class ChatService:
                 )
                 prepared.turn = turn
             attempts += 1
-            allowed, delay = self._may_retry_final_answer(prepared, attempts)
+            allowed, delay = await self._may_retry_final_answer(prepared, attempts)
             if not allowed:
                 if fallback is None:
                     raise _final_answer_exhausted(current_problem)
@@ -7382,7 +7559,7 @@ class ChatService:
                 )
             if delay:
                 await asyncio.sleep(delay)
-            retry_request = self._final_answer_recovery_request(
+            retry_request = await self._final_answer_recovery_request(
                 prepared, request, current_problem
             )
             current = await self._complete_with_context_recovery(
@@ -7401,8 +7578,10 @@ class ChatService:
             )
             current_problem = _final_answer_problem(current)
         if prepared.turn is not None:
-            self._assert_execution_owner(prepared)
-            prepared.turn = self._add_usage(self._refresh_turn(prepared.turn), current)
+            (await self._assert_execution_owner(prepared))
+            prepared.turn = await self._add_usage(
+                (await self._refresh_turn(prepared.turn)), current
+            )
         return current.model_copy(update={"reasoning": reasoning, "usage": usage})
 
     async def _stream_with_context_recovery(
@@ -7412,7 +7591,9 @@ class ChatService:
         while True:
             output_started = False
             try:
-                request = self._with_current_goal_time_instruction(prepared, request)
+                request = await self._with_current_goal_time_instruction(
+                    prepared, request
+                )
                 self._record_provider_request(prepared, request)
                 async for event in prepared.provider.stream(request):
                     if (
@@ -7450,7 +7631,7 @@ class ChatService:
                     str(request.metadata.get("context_length_recovery") or "1")
                 )
 
-    def _canonical_request_messages(
+    async def _canonical_request_messages(
         self, prepared: PreparedChat
     ) -> tuple[list[ChatRequestMessage], list[ChatMessage]]:
         """The conversation a request is assembled from, and its stored messages.
@@ -7460,7 +7641,7 @@ class ChatService:
         """
 
         canonical = (
-            self._session_messages(prepared.session)
+            (await self._session_messages(prepared.session))
             if prepared.session is not None
             else []
         )
@@ -7511,12 +7692,20 @@ class ChatService:
         prepared.estimate_calibration = None
         # prepared.turn lags the routing loop by a step; the guard below needs
         # the turn as it is.
-        turn = self._refresh_turn(prepared.turn) if prepared.turn is not None else None
+        turn = (
+            (await self._refresh_turn(prepared.turn))
+            if prepared.turn is not None
+            else None
+        )
         if turn is not None and failed_request.tool_results and allow_clearing:
-            cleared = self._cleared_tool_history_retry(prepared, turn, failed_request)
+            cleared = await self._cleared_tool_history_retry(
+                prepared, turn, failed_request
+            )
             if cleared is not None:
                 return cleared
-        if turn is not None and (turn.execution_tool_calls or self._turn_history(turn)):
+        if turn is not None and (
+            turn.execution_tool_calls or (await self._turn_history(turn))
+        ):
             # Clearing cannot shrink the tool history further, so the
             # conversation ahead of it is compacted instead; the ledger is
             # replayed as it is and no tool runs again.
@@ -7540,8 +7729,12 @@ class ChatService:
         refreshed = await self._refresh_context_metadata(
             prepared.provider_profile.id, prepared.provider, prepared.resolved_model
         )
-        messages, canonical = self._canonical_request_messages(prepared)
-        goal = self.store.get(ChatGoal, turn.goal_id) if turn and turn.goal_id else None
+        messages, canonical = await self._canonical_request_messages(prepared)
+        goal = (
+            (await self.store.get(ChatGoal, turn.goal_id))
+            if turn and turn.goal_id
+            else None
+        )
         budget = ContextCallBudget(
             max_tokens=(
                 max(0, goal.token_budget - goal.usage.total_tokens)
@@ -7588,7 +7781,7 @@ class ChatService:
                 f"that mandatory input still cannot fit: {exc}"
             ) from exc
         if goal is not None and usage.total_tokens:
-            goal = self._charge_goal(
+            goal = await self._charge_goal(
                 goal.id,
                 usage,
                 exhausted_reason="Token budget exhausted during context recovery.",
@@ -7619,10 +7812,12 @@ class ChatService:
                     [
                         ModelMessage(
                             role=item.role.value,
-                            content=self._model_content(
-                                item,
-                                prepared.engagement_id,
-                                images_supported=refreshed.capabilities.vision,
+                            content=(
+                                await self._model_content(
+                                    item,
+                                    prepared.engagement_id,
+                                    images_supported=refreshed.capabilities.vision,
+                                )
                             ),
                         )
                         for item in model_messages
@@ -7656,7 +7851,7 @@ class ChatService:
         )
         prepared.session = session or prepared.session
         if turn is not None:
-            latest = self._refresh_turn(turn)
+            latest = await self._refresh_turn(turn)
             compact_snapshot, snapshot_parts = split_request_snapshot(
                 {
                     **latest.request_snapshot,
@@ -7670,9 +7865,9 @@ class ChatService:
                 engagement_id=latest.engagement_id,
                 session_id=latest.session_id,
             )
-            with self.store.transaction() as transaction:
-                stage_snapshot_parts(transaction, snapshot_parts)
-                prepared.turn = transaction.update(
+            async with self.store.transaction() as transaction:
+                (await stage_snapshot_parts(transaction, snapshot_parts))
+                prepared.turn = await transaction.update(
                     ChatTurn,
                     latest.id,
                     {"request_snapshot": compact_snapshot},
@@ -7720,12 +7915,14 @@ class ChatService:
         ):
             return None
         prepared.midturn_compactions.add(key)
-        messages, canonical = self._canonical_request_messages(prepared)
+        messages, canonical = await self._canonical_request_messages(prepared)
         if not canonical:
             return None
         base = prepared.model_request
         instructions = base.instructions or ""
-        notes_block = working_notes_block(read_working_notes(self.store, session.id))
+        notes_block = working_notes_block(
+            (await read_working_notes(self.store, session.id))
+        )
         conversation_tokens = estimate_messages(base.messages, instructions)
         limits = self._request_limits(prepared.provider_profile, request)
         # What the request adds beside the conversation: the rest of the
@@ -7781,7 +7978,7 @@ class ChatService:
                 - archive_reserved,
             ),
         )
-        goal = self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
+        goal = (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
         budget = ContextCallBudget(
             max_tokens=(
                 max(0, goal.token_budget - goal.usage.total_tokens)
@@ -7827,10 +8024,12 @@ class ChatService:
             )
         except (ContextCapacityError, ContextCompactionError) as exc:
             if goal is not None and exc.usage.total_tokens > 0:
-                self._charge_goal(
-                    goal.id,
-                    exc.usage,
-                    exhausted_reason="Token budget exhausted during context compaction.",
+                (
+                    await self._charge_goal(
+                        goal.id,
+                        exc.usage,
+                        exhausted_reason="Token budget exhausted during context compaction.",
+                    )
                 )
             record_caught_exception(
                 "chat",
@@ -7849,7 +8048,7 @@ class ChatService:
             )
             return None
         if goal is not None and usage.total_tokens > 0:
-            goal = self._charge_goal(
+            goal = await self._charge_goal(
                 goal.id,
                 usage,
                 exhausted_reason="Token budget exhausted during context compaction.",
@@ -7862,10 +8061,12 @@ class ChatService:
             [
                 ModelMessage(
                     role=item.role.value,
-                    content=self._model_content(
-                        item,
-                        prepared.engagement_id,
-                        images_supported=prepared.provider_profile.capabilities.vision,
+                    content=(
+                        await self._model_content(
+                            item,
+                            prepared.engagement_id,
+                            images_supported=prepared.provider_profile.capabilities.vision,
+                        )
                     ),
                 )
                 for item in model_messages
@@ -7903,7 +8104,7 @@ class ChatService:
             prepared.tool_components = combine_tool_components(
                 components, self._conversation_search_components(components, session.id)
             )
-        latest = self._refresh_turn(turn)
+        latest = await self._refresh_turn(turn)
         compact_snapshot, snapshot_parts = split_request_snapshot(
             {
                 **latest.request_snapshot,
@@ -7918,9 +8119,9 @@ class ChatService:
             engagement_id=latest.engagement_id,
             session_id=latest.session_id,
         )
-        with self.store.transaction() as transaction:
-            stage_snapshot_parts(transaction, snapshot_parts)
-            updated = transaction.update(
+        async with self.store.transaction() as transaction:
+            (await stage_snapshot_parts(transaction, snapshot_parts))
+            updated = await transaction.update(
                 ChatTurn,
                 latest.id,
                 {"request_snapshot": compact_snapshot},
@@ -7979,12 +8180,14 @@ class ChatService:
                     "model_id": prepared.resolved_model,
                 },
             )
-        _, replay_entries = self._compacted_turn_history(
+        _, replay_entries = await self._compacted_turn_history(
             turn,
             self._request_limits(prepared.provider_profile, failed_request),
             messages=prepared.model_request.messages,
         )
-        replayed = self._replayed_tool_history(prepared, turn, entries=replay_entries)
+        replayed = await self._replayed_tool_history(
+            prepared, turn, entries=replay_entries
+        )
         prepared.cleared_tool_calls.update(result.call_id for result in replayed[:-1])
         # The provider refused even the cleared request: earlier reasoning
         # goes as well.
@@ -7994,19 +8197,19 @@ class ChatService:
             update={"messages": prepared.model_request.messages, "tool_results": []}
         )
 
-        def assembled() -> ModelRequest:
+        async def assembled() -> ModelRequest:
             request = template.model_copy(
                 update={"messages": prepared.model_request.messages}
             )
-            request = self._with_tool_history(prepared, turn, request)
+            request = await self._with_tool_history(prepared, turn, request)
             return self._with_completion_hook_feedback(request, turn)
 
         updated = await self._compact_mid_turn(
-            prepared, turn, assembled(), cause="provider_rejected"
+            prepared, turn, (await assembled()), cause="provider_rejected"
         )
         if updated is None:
             return None
-        retry = assembled()
+        retry = await assembled()
         return retry.model_copy(
             update={
                 "metadata": {
@@ -8045,12 +8248,12 @@ class ChatService:
                 exc,
                 stage="chat",
             )
-            return self.store.get(ProviderProfile, profile.id)
+            return await self.store.get(ProviderProfile, profile.id)
 
     async def _refresh_context_metadata(
         self, profile_id: str, provider: ModelProvider, model: str
     ) -> ProviderProfile:
-        profile = self.store.get(ProviderProfile, profile_id)
+        profile = await self.store.get(ProviderProfile, profile_id)
         descriptors = [
             dict(item)
             for item in profile.metadata.get("model_descriptors", [])
@@ -8124,7 +8327,7 @@ class ChatService:
         # so the refreshed descriptor is merged onto the current revision, not
         # the one read before the call.
         try:
-            return self._write_refreshed_descriptor(
+            return await self._write_refreshed_descriptor(
                 profile_id, model, descriptor, route_catalog_revision
             )
         except ConflictError as exc:
@@ -8136,18 +8339,18 @@ class ChatService:
                 exc,
                 stage="chat",
             )
-        return self._write_refreshed_descriptor(
+        return await self._write_refreshed_descriptor(
             profile_id, model, descriptor, route_catalog_revision
         )
 
-    def _write_refreshed_descriptor(
+    async def _write_refreshed_descriptor(
         self,
         profile_id: str,
         model: str,
         descriptor: dict[str, Any],
         route_catalog_revision: str,
     ) -> ProviderProfile:
-        latest = self.store.get(ProviderProfile, profile_id)
+        latest = await self.store.get(ProviderProfile, profile_id)
         metadata = dict(latest.metadata)
         descriptors = [
             dict(item)
@@ -8164,7 +8367,7 @@ class ChatService:
             descriptors.append(dict(descriptor))
         metadata["model_descriptors"] = descriptors
         metadata["route_catalog_revision"] = route_catalog_revision
-        return self.store.update(
+        return await self.store.update(
             ProviderProfile,
             latest.id,
             {"metadata": metadata},
@@ -8174,13 +8377,13 @@ class ChatService:
     async def stream(
         self, prepared: PreparedChat
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        self._claim_execution(prepared)
+        (await self._claim_execution(prepared))
         if prepared.turn is not None:
-            session = self.store.get(ChatSession, prepared.turn.session_id)
-            if prepared.turn.request_snapshot.get(
-                "plan_behavior"
-            ) == "advisory" and self.plans.requested(prepared.turn, session):
-                plan = self.plans.ensure(prepared.turn, session)
+            session = await self.store.get(ChatSession, prepared.turn.session_id)
+            if prepared.turn.request_snapshot.get("plan_behavior") == "advisory" and (
+                await self.plans.requested(prepared.turn, session)
+            ):
+                plan = await self.plans.ensure(prepared.turn, session)
                 if (
                     plan is not None
                     and plan.directive_id
@@ -8209,9 +8412,11 @@ class ChatService:
         if (
             prepared.tools_enabled
             and prepared.turn is not None
-            and self.plans.required(
-                prepared.turn,
-                self.store.get(ChatSession, prepared.turn.session_id),
+            and (
+                await self.plans.required(
+                    prepared.turn,
+                    (await self.store.get(ChatSession, prepared.turn.session_id)),
+                )
             )
         ):
             async for item in self._stream_tool_turn(
@@ -8231,7 +8436,7 @@ class ChatService:
                 yield item
             return
         completed = False
-        request = self._fit_turn_goal_request(
+        request = await self._fit_turn_goal_request(
             prepared, _tool_free_request(prepared.model_request)
         )
         answer = _StreamedAnswer()
@@ -8299,7 +8504,7 @@ class ChatService:
                     )
             if event.type == StreamEventType.COMPLETED:
                 if prepared.turn is not None:
-                    self._assert_execution_owner(prepared)
+                    (await self._assert_execution_owner(prepared))
                 if event.response is None:
                     raise ChatError("provider stream completed without a response")
                 response = await self._recover_final_answer(
@@ -8311,7 +8516,7 @@ class ChatService:
                 response = await self._completion_hook_feedback(
                     prepared, request, response
                 )
-                completion = self._completion(prepared, response)
+                completion = await self._completion(prepared, response)
                 held_tail = answer.held_tail(completion.message.content)
                 visible_completion = (
                     completion.message.content
@@ -8328,9 +8533,9 @@ class ChatService:
                             "delta": visible_completion,
                         },
                     )
-                self._persist(prepared, completion)
-                self._start_initial_naming(prepared, completion.message.content)
-                self._release_execution(prepared)
+                (await self._persist(prepared, completion))
+                (await self._start_initial_naming(prepared, completion.message.content))
+                (await self._release_execution(prepared))
                 self._schedule_precompaction(prepared)
                 payload = completion.model_dump(mode="json")
                 payload["type"] = "done"
@@ -8349,8 +8554,8 @@ class ChatService:
 
         from .tool_results import WorkspaceOutputService
 
-        session = self.store.get(ChatSession, turn.session_id)
-        plan = self.plans.ensure(turn, session)
+        session = await self.store.get(ChatSession, turn.session_id)
+        plan = await self.plans.ensure(turn, session)
         if plan is None or plan.phase == "execution":
             return None
         if plan.phase == "blocked":
@@ -8402,11 +8607,13 @@ class ChatService:
                 }
             )
             response = await self._complete_routing_step(prepared, request)
-            turn = self._add_usage(self._assert_execution_owner(prepared), response)
+            turn = await self._add_usage(
+                (await self._assert_execution_owner(prepared)), response
+            )
             prepared.turn = turn
             if not response.tool_calls:
                 if response.text.strip() and not results:
-                    self.plans.answer_without_tools(turn.id)
+                    (await self.plans.answer_without_tools(turn.id))
                     return response
                 break
             for index, call in enumerate(response.tool_calls):
@@ -8415,12 +8622,14 @@ class ChatService:
                 if call.name == "plan.submit":
                     try:
                         submission = PlanSubmission.model_validate(call.arguments)
-                        self.plans.submit(
-                            plan,
-                            submission,
-                            available_tools=set(components.specs),
-                            native_categories=set(),
-                            workspace=Path(components.workspace),
+                        (
+                            await self.plans.submit(
+                                plan,
+                                submission,
+                                available_tools=set(components.specs),
+                                native_categories=set(),
+                                workspace=Path(components.workspace),
+                            )
                         )
                         return None
                     except (ValueError, PlanningBlocked) as exc:
@@ -8433,7 +8642,9 @@ class ChatService:
                         output = await asyncio.wait_for(
                             asyncio.to_thread(method, **call.arguments), timeout=5
                         )
-                        plan = self.plans.record_discovery(plan, call.name, output)
+                        plan = await self.plans.record_discovery(
+                            plan, call.name, output
+                        )
                     except Exception as exc:
                         record_caught_exception(
                             "chat",
@@ -8494,19 +8705,21 @@ class ChatService:
                         provider_metadata=call.provider_metadata,
                     )
                 )
-        self.plans.block(
-            turn.id,
-            "The planner did not submit a valid plan within its bounded discovery phase.",
+        (
+            await self.plans.block(
+                turn.id,
+                "The planner did not submit a valid plan within its bounded discovery phase.",
+            )
         )
         raise PlanningBlocked(
             "The planner did not submit a valid plan within its bounded discovery phase."
         )
 
-    def _plan_execution_instructions(self, turn_id: str) -> str:
-        plan = self.plans.for_turn(turn_id)
+    async def _plan_execution_instructions(self, turn_id: str) -> str:
+        plan = await self.plans.for_turn(turn_id)
         if plan is None or plan.phase != "execution":
             return ""
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = await self.store.get(ChatTurn, turn_id)
         detail = {
             "version": plan.plan_version,
             "steps": plan.steps,
@@ -8549,19 +8762,19 @@ class ChatService:
         # Set when the final synthesis asks for a tool the turn can still run.
         route_again = False
         try:
-            turn = self._refresh_turn(turn)
-            session = self.store.get(ChatSession, turn.session_id)
-            if self.plans.required(turn, session):
-                plan = self.plans.ensure(turn, session)
+            turn = await self._refresh_turn(turn)
+            session = await self.store.get(ChatSession, turn.session_id)
+            if await self.plans.required(turn, session):
+                plan = await self.plans.ensure(turn, session)
                 if plan is not None and plan.phase != "execution":
                     yield (
                         "task_plan",
                         {"type": "task_plan", "plan": plan.model_dump(mode="json")},
                     )
                     direct = await self._plan_provider_turn(prepared, turn, components)
-                    turn = self._refresh_turn(turn)
+                    turn = await self._refresh_turn(turn)
                     if direct is not None:
-                        answered_plan = self.plans.for_turn(turn.id)
+                        answered_plan = await self.plans.for_turn(turn.id)
                         if answered_plan is not None:
                             yield (
                                 "task_plan",
@@ -8575,7 +8788,7 @@ class ChatService:
                         ):
                             yield item
                         return
-                    latest_plan = self.plans.for_turn(turn.id)
+                    latest_plan = await self.plans.for_turn(turn.id)
                     if latest_plan is not None:
                         yield (
                             "task_plan",
@@ -8589,10 +8802,10 @@ class ChatService:
             if turn.status == ChatTurnStatus.WAITING_APPROVAL:
                 async for item in self._resume_pending_call(prepared, turn, components):
                     if item[0] == "_continued":
-                        turn = self._refresh_turn(turn)
+                        turn = await self._refresh_turn(turn)
                         continue
                     yield item
-                turn = self._refresh_turn(turn)
+                turn = await self._refresh_turn(turn)
                 if turn.status in {
                     ChatTurnStatus.WAITING_APPROVAL,
                     ChatTurnStatus.WAITING_CALLBACK,
@@ -8600,15 +8813,15 @@ class ChatService:
                     # Still paused, or the approved call turned out to be a
                     # background command that now waits for its LAN callback.
                     prepared.turn = turn
-                    self._release_execution(prepared)
+                    (await self._release_execution(prepared))
                     return
             if turn.status == ChatTurnStatus.WAITING_CALLBACK:
                 async for item in self._resume_callback_result(prepared, turn):
                     yield item
-                turn = self._refresh_turn(turn)
+                turn = await self._refresh_turn(turn)
                 if turn.status == ChatTurnStatus.WAITING_CALLBACK:
                     prepared.turn = turn
-                    self._release_execution(prepared)
+                    (await self._release_execution(prepared))
                     return
 
             catalog_receipt = catalog_snapshot(turn.request_snapshot)
@@ -8623,11 +8836,11 @@ class ChatService:
             route_deviated = False
             while (
                 turn.status != ChatTurnStatus.FINALIZING
-                and self._accepted_goal_completion(turn) is None
+                and (await self._accepted_goal_completion(turn)) is None
             ):
-                session = self.store.get(ChatSession, turn.session_id)
-                if self.plans.required(turn, session):
-                    plan = self.plans.ensure(turn, session)
+                session = await self.store.get(ChatSession, turn.session_id)
+                if await self.plans.required(turn, session):
+                    plan = await self.plans.ensure(turn, session)
                     if plan is not None and plan.phase != "execution":
                         batched_calls = []
                         yield (
@@ -8637,9 +8850,9 @@ class ChatService:
                         direct = await self._plan_provider_turn(
                             prepared, turn, components
                         )
-                        turn = self._refresh_turn(turn)
+                        turn = await self._refresh_turn(turn)
                         if direct is not None:
-                            answered_plan = self.plans.for_turn(turn.id)
+                            answered_plan = await self.plans.for_turn(turn.id)
                             if answered_plan is not None:
                                 yield (
                                     "task_plan",
@@ -8653,7 +8866,7 @@ class ChatService:
                             ):
                                 yield item
                             return
-                        latest_plan = self.plans.for_turn(turn.id)
+                        latest_plan = await self.plans.for_turn(turn.id)
                         if latest_plan is not None:
                             yield (
                                 "task_plan",
@@ -8724,17 +8937,21 @@ class ChatService:
                     available_names = {spec.name for spec in available_specs}
                     delivered_events: list[tuple[str, dict[str, Any]]] = []
                     for delivery in (
-                        self.subagents.routing_delivery(turn, available_names),
-                        self.agent_messages.routing_delivery(turn, available_names),
+                        (await self.subagents.routing_delivery(turn, available_names)),
+                        (
+                            await self.agent_messages.routing_delivery(
+                                turn, available_names
+                            )
+                        ),
                     ):
                         if delivery is None:
                             continue
                         for output, summary in delivery.results:
-                            turn, events = self._subagent_delivery_step(
+                            turn, events = await self._subagent_delivery_step(
                                 turn, components, delivery.tool_name, output, summary
                             )
                             delivered_events.extend(events)
-                        delivery.commit()
+                        (await call_async(delivery.commit))
                     for delivered in delivered_events:
                         yield delivered
                     routing = prepared.model_request.model_copy(
@@ -8746,7 +8963,7 @@ class ChatService:
                             + "\n\n"
                             + (prepared.model_request.instructions or "")
                             + catalog_instructions(catalog_receipt, components.specs)
-                            + self._plan_execution_instructions(turn.id),
+                            + (await self._plan_execution_instructions(turn.id)),
                             "tools": self._routing_tools(available_specs),
                             "tool_choice": ToolChoice.AUTO,
                             # A model may batch independent calls into one
@@ -8757,7 +8974,7 @@ class ChatService:
                         }
                     )
                     assembled = routing
-                    routing = self._with_tool_history(
+                    routing = await self._with_tool_history(
                         prepared, turn, assembled, compact_for_room=True
                     )
                     if prepared.room_due:
@@ -8779,7 +8996,9 @@ class ChatService:
                             turn = compacted
                             components = prepared.tool_components or components
                             continue
-                        routing = self._with_tool_history(prepared, turn, assembled)
+                        routing = await self._with_tool_history(
+                            prepared, turn, assembled
+                        )
                     routing = self._with_completion_hook_feedback(routing, turn)
                     if routing.tool_results and not self._fits_request_capacity(
                         prepared.provider_profile,
@@ -8803,7 +9022,7 @@ class ChatService:
                             continue
                         # The replayed steps themselves are what no longer
                         # fit: all but the newest fold into the checkpoint.
-                        if self._fold_deeper(
+                        if await self._fold_deeper(
                             prepared,
                             turn,
                             routing,
@@ -8829,11 +9048,11 @@ class ChatService:
                             metadata={
                                 "provider": prepared.provider_profile.id,
                                 "model_id": prepared.resolved_model,
-                                "tool_steps": len(self._turn_history(turn)),
+                                "tool_steps": len((await self._turn_history(turn))),
                             },
                         )
                         break
-                    routing = self._fit_turn_goal_request(prepared, routing)
+                    routing = await self._fit_turn_goal_request(prepared, routing)
                     self._ensure_request_capacity(
                         prepared.provider_profile,
                         routing,
@@ -8842,7 +9061,7 @@ class ChatService:
                     requested_at = utc_now()
                     response = await self._complete_routing_step(prepared, routing)
                     responded_at = utc_now()
-                    turn = self._assert_execution_owner(prepared)
+                    turn = await self._assert_execution_owner(prepared)
                     thought = _reasoning_step_delta(
                         bool(
                             turn.reasoning
@@ -8864,7 +9083,9 @@ class ChatService:
                         )
                         else ""
                     )
-                    turn = self._add_usage(turn, response, content_delta=prose_delta)
+                    turn = await self._add_usage(
+                        turn, response, content_delta=prose_delta
+                    )
                     if thought:
                         # The model explains each tool it reaches for. Without
                         # this the transcript shows thinking only for the
@@ -8897,7 +9118,7 @@ class ChatService:
                                 "provider": prepared.provider_profile.id,
                                 "model_id": prepared.resolved_model,
                                 "finish_reason": response.finish_reason or "",
-                                "tool_steps": len(self._turn_history(turn)),
+                                "tool_steps": len((await self._turn_history(turn))),
                             },
                         )
                         try:
@@ -8908,7 +9129,7 @@ class ChatService:
                         except (
                             CompletionHookBlocked
                         ) as blocked:  # diagnostic-expected: route hook feedback
-                            turn = self._route_after_completion_hook(
+                            turn = await self._route_after_completion_hook(
                                 prepared, blocked, response
                             )
                             continue
@@ -8929,14 +9150,14 @@ class ChatService:
                         except (
                             CompletionHookBlocked
                         ) as blocked:  # diagnostic-expected: route hook feedback
-                            turn = self._route_after_completion_hook(
+                            turn = await self._route_after_completion_hook(
                                 prepared, blocked, answer
                             )
                             continue
                         return
                     if (
                         turn.goal_id is not None
-                        and self.store.get(ChatGoal, turn.goal_id).status
+                        and (await self.store.get(ChatGoal, turn.goal_id)).status
                         != ChatGoalStatus.RUNNING
                     ):
                         raise ChatError(
@@ -9019,33 +9240,35 @@ class ChatService:
                     # call Core cannot validate never reaches the broker.
                     batched_calls = _with_provider_timing(
                         _with_replay_state(
-                            self._routing_batch(
-                                response,
-                                turn,
-                                budgeted_names,
-                                deferred_names,
-                                set(components.specs),
-                                [spec.name for spec in available_specs],
+                            (
+                                await self._routing_batch(
+                                    response,
+                                    turn,
+                                    budgeted_names,
+                                    deferred_names,
+                                    set(components.specs),
+                                    [spec.name for spec in available_specs],
+                                )
                             ),
                             response,
                         ),
-                        group=self.turn_ledger.next_provider_group(turn.id),
+                        group=(await self.turn_ledger.next_provider_group(turn.id)),
                         requested_at=requested_at,
                         responded_at=responded_at,
                     )
                 # Validate the whole batch before any parallel member starts.
                 # This also catches a Butler directive that arrived after the
                 # model request but before dispatch.
-                session = self.store.get(ChatSession, turn.session_id)
-                if self.plans.required(turn, session):
-                    self.plans.ensure(turn, session)
+                session = await self.store.get(ChatSession, turn.session_id)
+                if await self.plans.required(turn, session):
+                    (await self.plans.ensure(turn, session))
                     try:
                         for pending in batched_calls:
                             if (
                                 pending.refusal is None
                                 and pending.call.name != "finish_response"
                             ):
-                                self.plans.guard(turn.id, pending.call.name)
+                                (await self.plans.guard(turn.id, pending.call.name))
                     except PlanningBlocked:
                         # diagnostic-expected: the saved plan moved to replanning before dispatch.
                         batched_calls = []
@@ -9080,7 +9303,7 @@ class ChatService:
                     # still needs.
                     batched_calls = []
                     continue
-                self._assert_execution_owner(prepared)
+                (await self._assert_execution_owner(prepared))
                 known_spec = components.specs.get(call.name)
                 if known_spec is not None:
                     if "cwd" in known_spec.path_arguments:
@@ -9092,13 +9315,13 @@ class ChatService:
                     )
                     call = call.model_copy(update={"arguments": normalized_arguments})
                 if refusal is None and _replays_restart_unknown(
-                    self._turn_history(turn), call
+                    (await self._turn_history(turn)), call
                 ):
                     refusal = _RESTART_UNKNOWN_REPLAY_REFUSAL
                 issued_call_id: str | None = None
                 if routed.repeated_id:
                     if refusal is None and _replays_a_run_call(
-                        self._turn_history(turn), call
+                        (await self._turn_history(turn)), call
                     ):
                         refusal = _REPLAYED_CALL_REFUSAL
                     # Two results under one id are ambiguous to the model and
@@ -9113,7 +9336,7 @@ class ChatService:
                 # resumed turn keeps its count (see search_allowance).
                 spent = (
                     turn_search_allowance_spent(
-                        self._turn_history(turn),
+                        (await self._turn_history(turn)),
                         call.name,
                         str(call.arguments.get("query") or ""),
                         response_group=routed.replay.get("response_group"),
@@ -9122,7 +9345,7 @@ class ChatService:
                     else None
                 )
                 if refusal is not None or spent is not None:
-                    turn, refused_events = self._refused_tool_step(
+                    turn, refused_events = await self._refused_tool_step(
                         turn,
                         known_spec,
                         call,
@@ -9174,12 +9397,14 @@ class ChatService:
                     entry["issued_call_id"] = issued_call_id
                 entry.update(routed.replay)
                 intent_event = f"intent:{step}:{call.id}"
-                self.turn_ledger.import_legacy(turn)
-                self.turn_ledger.append(
-                    turn.id,
-                    {**entry, "status": "running"},
-                    idempotency_key=intent_event,
-                    event_type="started",
+                (await self.turn_ledger.import_legacy(turn))
+                (
+                    await self.turn_ledger.append(
+                        turn.id,
+                        {**entry, "status": "running"},
+                        idempotency_key=intent_event,
+                        event_type="started",
+                    )
                 )
                 invocation = ToolInvocation(
                     engagement_id=prepared.engagement_id,
@@ -9200,7 +9425,7 @@ class ChatService:
                     searched = (
                         discovery_calls(
                             item
-                            for item in self._turn_history(turn)
+                            for item in (await self._turn_history(turn))
                             # The ledger already holds this call's running
                             # intent; count only the calls before it.
                             if item.get("step") != step
@@ -9236,7 +9461,7 @@ class ChatService:
                             "approval_id": paused.approval.id,
                         }
                     )
-                    turn = self._save_tool_step(
+                    turn = await self._save_tool_step(
                         turn,
                         entry,
                         status=ChatTurnStatus.WAITING_APPROVAL,
@@ -9252,7 +9477,7 @@ class ChatService:
                         },
                     )
                     prepared.turn = turn
-                    self._release_execution(prepared)
+                    (await self._release_execution(prepared))
                     return
                 except SubagentWaitPending as waiting:  # diagnostic-expected: subagent wait is control flow that pauses the turn durably
                     entry.update(
@@ -9262,7 +9487,7 @@ class ChatService:
                             "result_summary": waiting.summary,
                         }
                     )
-                    turn = self._save_tool_step(
+                    turn = await self._save_tool_step(
                         turn, entry, status=ChatTurnStatus.WAITING_CALLBACK
                     )
                     yield (
@@ -9279,7 +9504,7 @@ class ChatService:
                         },
                     )
                     prepared.turn = turn
-                    self._release_execution(prepared)
+                    (await self._release_execution(prepared))
                     return
                 except PolicyDenied as exc:
                     record_caught_exception(
@@ -9330,7 +9555,7 @@ class ChatService:
                         }
                     )
                 else:
-                    fields, waiting_callback = self._tool_result_entry(
+                    fields, waiting_callback = await self._tool_result_entry(
                         result,
                         invocation=invocation,
                         spec=spec,
@@ -9340,7 +9565,7 @@ class ChatService:
                     entry.update(fields)
                     receipt = result.receipt
                     if waiting_callback and receipt is not None:
-                        turn = self._save_tool_step(
+                        turn = await self._save_tool_step(
                             turn,
                             entry,
                             status=ChatTurnStatus.WAITING_CALLBACK,
@@ -9359,9 +9584,9 @@ class ChatService:
                             },
                         )
                         prepared.turn = turn
-                        self._release_execution(prepared)
+                        (await self._release_execution(prepared))
                         return
-                turn = self._save_tool_step(turn, entry)
+                turn = await self._save_tool_step(turn, entry)
                 yield (
                     "tool_completed",
                     {
@@ -9380,20 +9605,22 @@ class ChatService:
                         "step": step,
                     },
                 )
-                if self._accepted_goal_completion(turn) is not None:
+                if (await self._accepted_goal_completion(turn)) is not None:
                     # A completion proposal ends tool routing. The final
                     # answer and goal transition commit in one transaction.
                     break
 
-            turn = self.store.update(
+            turn = await self.store.update(
                 ChatTurn,
                 turn.id,
                 {"status": ChatTurnStatus.FINALIZING, "approval_id": None},
                 expected_revision=turn.revision,
             )
-            operator_help_chunks = self._tool_operator_help(prepared, turn)
+            operator_help_chunks = await self._tool_operator_help(prepared, turn)
             # Unused on-demand tools stay out of the synthesis inventory too.
-            loaded_names = loaded_tool_names(catalog_receipt, self._turn_history(turn))
+            loaded_names = loaded_tool_names(
+                catalog_receipt, (await self._turn_history(turn))
+            )
             # The replayed history calls functions, so the synthesis declares
             # them, with calling off. Without declarations models call
             # functions the request never declared or print their native call
@@ -9407,7 +9634,9 @@ class ChatService:
                 if spec.name not in deferred_names
             )
 
-            def synthesis_request(help_chunks: list[_RetrievedChunk]) -> ModelRequest:
+            async def synthesis_request(
+                help_chunks: list[_RetrievedChunk],
+            ) -> ModelRequest:
                 # The turn as it is when asked: a compaction updates it.
                 current = turn
                 assert current is not None
@@ -9427,14 +9656,14 @@ class ChatService:
                             + _reference_instructions(
                                 help_chunks, trusted_operator_help=True
                             )
-                            + self._plan_execution_instructions(current.id)
+                            + (await self._plan_execution_instructions(current.id))
                         ),
                         "tools": synthesis_tools,
                         "tool_choice": ToolChoice.NONE,
                         "parallel_tool_calls": False,
                     }
                 )
-                request = self._with_tool_history(prepared, current, request)
+                request = await self._with_tool_history(prepared, current, request)
                 return self._with_completion_hook_feedback(request, current)
 
             def fits_capacity(request: ModelRequest) -> bool:
@@ -9447,30 +9676,30 @@ class ChatService:
             # first, then the conversation ahead of the tool history is
             # compacted; only a request that still cannot fit fails, saying
             # what does not.
-            final_request = synthesis_request(operator_help_chunks)
+            final_request = await synthesis_request(operator_help_chunks)
             if operator_help_chunks and not fits_capacity(final_request):
                 operator_help_chunks = []
-                final_request = synthesis_request(operator_help_chunks)
+                final_request = await synthesis_request(operator_help_chunks)
             if not fits_capacity(final_request):
                 compacted = await self._compact_mid_turn(
                     prepared, turn, final_request, cause="final_answer"
                 )
                 if compacted is not None:
                     turn = compacted
-                    final_request = synthesis_request(operator_help_chunks)
+                    final_request = await synthesis_request(operator_help_chunks)
             # Then the replay: the newest step stays whole if it can, and
             # otherwise every step answers from its checkpoint receipt.
             for keep in (1, 0):
                 if fits_capacity(final_request):
                     break
-                if self._fold_deeper(
+                if await self._fold_deeper(
                     prepared,
                     turn,
                     final_request,
                     recent_groups=keep,
                     cause="final_answer",
                 ):
-                    final_request = synthesis_request(operator_help_chunks)
+                    final_request = await synthesis_request(operator_help_chunks)
             if not fits_capacity(final_request):
                 limits = self._request_limits(prepared.provider_profile, final_request)
                 raise ChatConfigurationError(
@@ -9497,7 +9726,7 @@ class ChatService:
                 if (chunk.citation.source_id, chunk.citation.chunk_id)
                 not in known_citations
             )
-            final_request = self._fit_turn_goal_request(prepared, final_request)
+            final_request = await self._fit_turn_goal_request(prepared, final_request)
             self._ensure_request_capacity(
                 prepared.provider_profile,
                 final_request,
@@ -9505,7 +9734,7 @@ class ChatService:
             )
             synthesized_from = prepared.model_request
             completed = False
-            routing_thoughts = self.turn_reasoning(turn)
+            routing_thoughts = await self.turn_reasoning(turn)
             recovery_attempts = 0
             # An answer the model wrote before a tool call that was rejected.
             # The turn asks again, and ends on this if the attempts run out.
@@ -9515,8 +9744,8 @@ class ChatService:
                     # A context recovery reassembled the conversation: a
                     # later attempt asks with it, not the request it replaced.
                     synthesized_from = prepared.model_request
-                    final_request = self._fit_turn_goal_request(
-                        prepared, synthesis_request(operator_help_chunks)
+                    final_request = await self._fit_turn_goal_request(
+                        prepared, (await synthesis_request(operator_help_chunks))
                     )
                 attempt_completed = False
                 tool_call_rejected = False
@@ -9582,8 +9811,8 @@ class ChatService:
                                 "provider final synthesis omitted its response"
                             )
                         attempt_completed = True
-                        turn = self._assert_execution_owner(prepared)
-                        turn = self._add_usage(turn, event.response)
+                        turn = await self._assert_execution_owner(prepared)
+                        turn = await self._add_usage(turn, event.response)
                         prepared.turn = turn
                         synthesis = event.response
                         problem = (
@@ -9596,7 +9825,7 @@ class ChatService:
                                 synthesis.text
                             ):
                                 fallback_answer = synthesis
-                            turn = self.store.update(
+                            turn = await self.store.update(
                                 ChatTurn,
                                 turn.id,
                                 {
@@ -9623,7 +9852,7 @@ class ChatService:
                                 # afford. Loop harnesses run such a call, so the
                                 # turn routes once more instead of asking again
                                 # for an answer the model does not have yet.
-                                turn = self.store.update(
+                                turn = await self.store.update(
                                     ChatTurn,
                                     turn.id,
                                     {
@@ -9653,7 +9882,7 @@ class ChatService:
                                 route_again = True
                                 break
                             recovery_attempts += 1
-                            allowed, delay = self._may_retry_final_answer(
+                            allowed, delay = await self._may_retry_final_answer(
                                 prepared, recovery_attempts
                             )
                             if allowed:
@@ -9663,8 +9892,10 @@ class ChatService:
                                     # stays open and the operator keeps its
                                     # partial state.
                                     await asyncio.sleep(delay)
-                                final_request = self._final_answer_recovery_request(
-                                    prepared, final_request, problem
+                                final_request = (
+                                    await self._final_answer_recovery_request(
+                                        prepared, final_request, problem
+                                    )
                                 )
                                 break
                             if fallback_answer is None:
@@ -9678,12 +9909,12 @@ class ChatService:
                         except (
                             CompletionHookBlocked
                         ) as blocked:  # diagnostic-expected: route hook feedback
-                            turn = self._route_after_completion_hook(
+                            turn = await self._route_after_completion_hook(
                                 prepared, blocked, synthesis
                             )
                             route_again = True
                             break
-                        completion = self._completion(prepared, synthesis)
+                        completion = await self._completion(prepared, synthesis)
                         final_delta = _reasoning_step_delta(
                             turn.content, _operator_answer_text(synthesis.text)
                         )
@@ -9698,10 +9929,14 @@ class ChatService:
                                     "delta": final_delta,
                                 },
                             )
-                        self._persist(prepared, completion)
+                        (await self._persist(prepared, completion))
                         turn = prepared.turn or turn
-                        self._start_initial_naming(prepared, completion.message.content)
-                        self._release_execution(prepared)
+                        (
+                            await self._start_initial_naming(
+                                prepared, completion.message.content
+                            )
+                        )
+                        (await self._release_execution(prepared))
                         self._schedule_precompaction(prepared)
                         payload = completion.model_dump(mode="json")
                         payload["type"] = "done"
@@ -9723,9 +9958,9 @@ class ChatService:
             if self.shutting_down:
                 # Core is stopping, not the operator: park the turn for the
                 # next boot instead of recording an operator stop.
-                self._interrupt_turn_for_shutdown(prepared)
+                (await self._interrupt_turn_for_shutdown(prepared))
                 raise
-            latest = self._refresh_turn(turn)
+            latest = await self._refresh_turn(turn)
             if (
                 latest.status
                 not in {
@@ -9734,13 +9969,18 @@ class ChatService:
                 }
                 and latest.execution_claim_id == prepared.execution_claim_id
             ):
-                self.store.update(
-                    ChatTurn,
-                    latest.id,
-                    {"status": ChatTurnStatus.CANCELLED, "error": "response stopped"},
-                    expected_revision=latest.revision,
+                (
+                    await self.store.update(
+                        ChatTurn,
+                        latest.id,
+                        {
+                            "status": ChatTurnStatus.CANCELLED,
+                            "error": "response stopped",
+                        },
+                        expected_revision=latest.revision,
+                    )
                 )
-                self._release_execution(prepared)
+                (await self._release_execution(prepared))
             raise
 
         except Exception as exc:
@@ -9751,7 +9991,7 @@ class ChatService:
                 exc,
                 stage="chat",
             )
-            latest = self._refresh_turn(turn)
+            latest = await self._refresh_turn(turn)
             if (
                 latest.status
                 not in {
@@ -9761,16 +10001,18 @@ class ChatService:
                 }
                 and latest.execution_claim_id == prepared.execution_claim_id
             ):
-                self.store.update(
-                    ChatTurn,
-                    latest.id,
-                    {
-                        "status": ChatTurnStatus.FAILED,
-                        "error": str(exc)[:1_000],
-                    },
-                    expected_revision=latest.revision,
+                (
+                    await self.store.update(
+                        ChatTurn,
+                        latest.id,
+                        {
+                            "status": ChatTurnStatus.FAILED,
+                            "error": str(exc)[:1_000],
+                        },
+                        expected_revision=latest.revision,
+                    )
                 )
-                self._release_execution(prepared)
+                (await self._release_execution(prepared))
             raise
         if route_again:
             # The turn is routing again and still holds its execution claim.
@@ -9880,7 +10122,7 @@ class ChatService:
         response = await self._completion_hook_feedback(
             prepared, prepared.model_request, response
         )
-        completion = self._completion(prepared, response)
+        completion = await self._completion(prepared, response)
         yield (
             "delta",
             {
@@ -9893,9 +10135,9 @@ class ChatService:
                 ),
             },
         )
-        self._persist(prepared, completion)
-        self._start_initial_naming(prepared, completion.message.content)
-        self._release_execution(prepared)
+        (await self._persist(prepared, completion))
+        (await self._start_initial_naming(prepared, completion.message.content))
+        (await self._release_execution(prepared))
         self._schedule_precompaction(prepared)
         payload = completion.model_dump(mode="json")
         payload["type"] = "done"
@@ -9941,20 +10183,24 @@ class ChatService:
                 f"{limits.input_capacity})"
             )
 
-    def _fit_turn_goal_request(
+    async def _fit_turn_goal_request(
         self, prepared: PreparedChat, request: ModelRequest
     ) -> ModelRequest:
         turn = prepared.turn
         if turn is None:
             return request
         if turn.goal_id:
-            return self._fit_goal_request_budget(turn.goal_id, request)
+            return await self._fit_goal_request_budget(turn.goal_id, request)
         # A subagent spends its parent goal's tokens, so the goal's remaining
         # budget bounds each of its requests too.
-        goal_id = self.subagents.child_goal_id(turn)
-        return self._fit_subagent_goal_budget(goal_id, request) if goal_id else request
+        goal_id = await self.subagents.child_goal_id(turn)
+        return (
+            (await self._fit_subagent_goal_budget(goal_id, request))
+            if goal_id
+            else request
+        )
 
-    def _fit_subagent_goal_budget(
+    async def _fit_subagent_goal_budget(
         self, goal_id: str, request: ModelRequest
     ) -> ModelRequest:
         """Fit a subagent's request inside its parent goal's remaining tokens.
@@ -9965,7 +10211,7 @@ class ChatService:
         """
 
         try:
-            goal = self.store.get(ChatGoal, goal_id)
+            goal = await self.store.get(ChatGoal, goal_id)
         except NotFoundError:  # diagnostic-expected: the goal was removed; nothing bounds the subagent any more
             return request
         if goal.token_budget is None:
@@ -9979,7 +10225,7 @@ class ChatService:
             if goal.status == ChatGoalStatus.RUNNING:
                 paused_at = utc_now()
                 try:
-                    goal = self.store.update(
+                    goal = await self.store.update(
                         ChatGoal,
                         goal.id,
                         {
@@ -9997,7 +10243,11 @@ class ChatService:
                 except ConflictError:  # diagnostic-expected: another turn moved the goal first; this subagent stops regardless
                     pass
                 else:
-                    self.subagents.stop_goal_subagents_soon(goal, GOAL_BUDGET_STOP_NOTE)
+                    (
+                        await self.subagents.stop_goal_subagents_soon(
+                            goal, GOAL_BUDGET_STOP_NOTE
+                        )
+                    )
             raise ChatConfigurationError(
                 "the goal's token budget cannot fit this subagent's next provider "
                 "request"
@@ -10007,7 +10257,7 @@ class ChatService:
             update={"max_output_tokens": min(requested_output, available_output)}
         )
 
-    def _may_retry_final_answer(
+    async def _may_retry_final_answer(
         self, prepared: PreparedChat, attempts: int
     ) -> tuple[bool, float]:
         """Whether to ask once more for the missing answer, and how long to wait.
@@ -10025,7 +10275,7 @@ class ChatService:
         if turn is None or not turn.goal_id:
             return False, 0.0
         try:
-            goal = self.store.get(ChatGoal, turn.goal_id)
+            goal = await self.store.get(ChatGoal, turn.goal_id)
         except NotFoundError as exc:
             # diagnostic-expected: a deleted goal simply stops the retries.
             record_caught_exception(
@@ -10044,11 +10294,11 @@ class ChatService:
         ):
             return False, 0.0
         if attempts - _FINAL_ANSWER_RETRY_LIMIT >= _GOAL_FINAL_ANSWER_STALL_LIMIT:
-            self._block_stalled_goal(goal, attempts)
+            (await self._block_stalled_goal(goal, attempts))
             return False, 0.0
         return True, _final_answer_backoff_seconds(attempts)
 
-    def _block_stalled_goal(self, goal: ChatGoal, attempts: int) -> None:
+    async def _block_stalled_goal(self, goal: ChatGoal, attempts: int) -> None:
         """Stop a goal whose provider will not answer, saying so in its own terms."""
 
         reason = (
@@ -10057,17 +10307,19 @@ class ChatService:
             "or choose another model."
         )
         try:
-            self.store.update(
-                ChatGoal,
-                goal.id,
-                {
-                    "status": ChatGoalStatus.BLOCKED,
-                    "blocked_reason": reason,
-                    "active_since": None,
-                    "elapsed_seconds": goal.active_elapsed_seconds(),
-                    "consecutive_stalls": max(3, goal.consecutive_stalls),
-                },
-                expected_revision=goal.revision,
+            (
+                await self.store.update(
+                    ChatGoal,
+                    goal.id,
+                    {
+                        "status": ChatGoalStatus.BLOCKED,
+                        "blocked_reason": reason,
+                        "active_since": None,
+                        "elapsed_seconds": goal.active_elapsed_seconds(),
+                        "consecutive_stalls": max(3, goal.consecutive_stalls),
+                    },
+                    expected_revision=goal.revision,
+                )
             )
         except (ConflictError, NotFoundError) as exc:
             # diagnostic-expected: the operator moved the goal first; theirs wins.
@@ -10079,7 +10331,7 @@ class ChatService:
                 stage="chat",
             )
 
-    def _final_answer_recovery_request(
+    async def _final_answer_recovery_request(
         self,
         prepared: PreparedChat,
         request: ModelRequest,
@@ -10132,18 +10384,18 @@ class ChatService:
             available = max(1, limits.context_window - estimate_model_request(retry))
             max_output_tokens = min(desired, limits.max_output_tokens, available)
         retry = retry.model_copy(update={"max_output_tokens": max_output_tokens})
-        retry = self._fit_turn_goal_request(prepared, retry)
+        retry = await self._fit_turn_goal_request(prepared, retry)
         self._ensure_request_capacity(
             prepared.provider_profile, retry, prepared.estimate_calibration
         )
         return retry
 
-    def _fit_goal_request_budget(
+    async def _fit_goal_request_budget(
         self, goal_id: str, request: ModelRequest
     ) -> ModelRequest:
         """Reserve estimated input and bounded output inside remaining goal tokens."""
 
-        goal = self.store.get(ChatGoal, goal_id)
+        goal = await self.store.get(ChatGoal, goal_id)
         if goal.status != ChatGoalStatus.RUNNING:
             raise ChatConfigurationError(
                 "goal must be running before provider dispatch"
@@ -10154,7 +10406,7 @@ class ChatService:
         available_output = remaining - estimate_model_request(request)
         if available_output < 1:
             paused_at = utc_now()
-            paused = self.store.update(
+            paused = await self.store.update(
                 ChatGoal,
                 goal.id,
                 {
@@ -10168,7 +10420,11 @@ class ChatService:
                 },
                 expected_revision=goal.revision,
             )
-            self.subagents.stop_goal_subagents_soon(paused, GOAL_BUDGET_STOP_NOTE)
+            (
+                await self.subagents.stop_goal_subagents_soon(
+                    paused, GOAL_BUDGET_STOP_NOTE
+                )
+            )
             raise ChatConfigurationError(
                 "goal token budget cannot fit the next provider request"
             )
@@ -10177,12 +10433,12 @@ class ChatService:
             update={"max_output_tokens": min(requested_output, available_output)}
         )
 
-    def _tool_operator_help(
+    async def _tool_operator_help(
         self, prepared: PreparedChat, turn: ChatTurn
     ) -> list[_RetrievedChunk]:
         failed_entries = [
             entry
-            for entry in self._turn_history(turn)
+            for entry in (await self._turn_history(turn))
             if entry.get("status") in {"failed", "denied"}
         ]
         if not failed_entries:
@@ -10199,7 +10455,7 @@ class ChatService:
         # observed error excerpt needed to choose the matching runbook.
         queries.extend(
             str(entry.get("provider_result", ""))
-            for entry in self._turn_history(turn)
+            for entry in (await self._turn_history(turn))
             if entry.get("budget_class") == "artifact_query"
             and entry.get("provider_result")
         )
@@ -10218,7 +10474,7 @@ class ChatService:
             queries, token_budget=token_budget, observed_failure=True
         )
 
-    def _replayed_tool_history(
+    async def _replayed_tool_history(
         self,
         prepared: PreparedChat,
         turn: ChatTurn,
@@ -10232,8 +10488,8 @@ class ChatService:
         every call. Older screenshots are not resent.
         """
 
-        history = self._provider_tool_history(turn, entries=entries)
-        screenshot = self._browser_screenshot(prepared, turn)
+        history = await self._provider_tool_history(turn, entries=entries)
+        screenshot = await self._browser_screenshot(prepared, turn)
         if screenshot is None:
             return history
         call_id, parts = screenshot
@@ -10301,7 +10557,7 @@ class ChatService:
         )
         return request
 
-    def _compacted_turn_history(
+    async def _compacted_turn_history(
         self,
         turn: ChatTurn,
         limits: ContextLimits,
@@ -10322,13 +10578,15 @@ class ChatService:
 
         sent = _sent_notes_revision(messages)
 
-        def notes() -> dict[str, Any] | None:
-            current = checkpoint_notes(read_working_notes(self.store, turn.session_id))
+        async def notes() -> dict[str, Any] | None:
+            current = checkpoint_notes(
+                (await read_working_notes(self.store, turn.session_id))
+            )
             if current is not None and current.get("revision") == sent:
                 return None
             return current
 
-        return self.turn_ledger.compacted_history(
+        return await self.turn_ledger.compacted_history(
             turn,
             advance=advance,
             recent_groups=recent_groups,
@@ -10337,7 +10595,7 @@ class ChatService:
             working_notes=notes,
         )
 
-    def _fold_deeper(
+    async def _fold_deeper(
         self,
         prepared: PreparedChat,
         turn: ChatTurn,
@@ -10356,8 +10614,8 @@ class ChatService:
         Whether the checkpoint advanced.
         """
 
-        before = self.turn_ledger.latest_checkpoint(turn.id)
-        checkpoint, _ = self._compacted_turn_history(
+        before = await self.turn_ledger.latest_checkpoint(turn.id)
+        checkpoint, _ = await self._compacted_turn_history(
             turn,
             self._request_limits(prepared.provider_profile, request),
             advance=True,
@@ -10419,7 +10677,7 @@ class ChatService:
         block = min(target - target // 2, max(working // 10, 8_000))
         return max(block, CLEARING_HEADROOM_STEPS * step)
 
-    def _with_tool_history(
+    async def _with_tool_history(
         self,
         prepared: PreparedChat,
         turn: ChatTurn,
@@ -10476,13 +10734,15 @@ class ChatService:
         # Responses whose replayed reasoning this turn has let go.
         thoughtless = prepared.reasoning_dropped
 
-        def replayed(
+        async def replayed(
             checkpoint: TurnCheckpoint | None, entries: list[dict[str, Any]]
         ) -> ModelRequest:
             return request.model_copy(
                 update={
-                    "tool_results": self._replayed_tool_history(
-                        prepared, turn, entries=entries
+                    "tool_results": (
+                        await self._replayed_tool_history(
+                            prepared, turn, entries=entries
+                        )
                     ),
                     "messages": (
                         request.messages
@@ -10511,18 +10771,18 @@ class ChatService:
                 update={"tool_results": _budgeted_reasoning(results, dropped)}
             )
 
-        def receipts_for(entries: list[dict[str, Any]]) -> list[ModelToolResult]:
-            return self._provider_tool_history(
+        async def receipts_for(entries: list[dict[str, Any]]) -> list[ModelToolResult]:
+            return await self._provider_tool_history(
                 turn, cleared=len(entries), entries=entries
             )
 
-        checkpoint, replay_entries = self._compacted_turn_history(
+        checkpoint, replay_entries = await self._compacted_turn_history(
             turn, limits, messages=request.messages
         )
-        fitted = replayed(checkpoint, replay_entries)
+        fitted = await replayed(checkpoint, replay_entries)
         if not fitted.tool_results:
             return fitted
-        receipts = receipts_for(replay_entries)
+        receipts = await receipts_for(replay_entries)
         current = cleared(fitted, receipts, sticky)
         prepared.tool_step_tokens = _step_tokens(fitted, calibration)
         if measured(current) <= target:
@@ -10661,20 +10921,20 @@ class ChatService:
 
         candidates, earlier, clearing, plan = ladder(fitted, receipts)
         if not short and plan(target - headroom, False) is not None:
-            advanced, advanced_entries = self._compacted_turn_history(
+            advanced, advanced_entries = await self._compacted_turn_history(
                 turn, limits, advance=True, messages=request.messages
             )
             if advanced is not None and advanced != checkpoint:
                 checkpoint, replay_entries = advanced, advanced_entries
-                fitted = replayed(checkpoint, replay_entries)
-                receipts = receipts_for(replay_entries)
+                fitted = await replayed(checkpoint, replay_entries)
+                receipts = await receipts_for(replay_entries)
                 current = cleared(fitted, receipts, sticky)
                 if not fitted.tool_results or measured(current) <= target - headroom:
                     return current
                 candidates, earlier, clearing, plan = ladder(fitted, receipts)
         decided = choose(current, candidates, clearing, plan, folded=False)
         if decided is None:
-            advanced, advanced_entries = self._compacted_turn_history(
+            advanced, advanced_entries = await self._compacted_turn_history(
                 turn,
                 limits,
                 advance=True,
@@ -10683,8 +10943,8 @@ class ChatService:
             )
             if advanced is not None and advanced != checkpoint:
                 checkpoint, replay_entries = advanced, advanced_entries
-                fitted = replayed(checkpoint, replay_entries)
-                receipts = receipts_for(replay_entries)
+                fitted = await replayed(checkpoint, replay_entries)
+                receipts = await receipts_for(replay_entries)
                 current = cleared(fitted, receipts, sticky)
                 if not fitted.tool_results:
                     return current
@@ -10807,7 +11067,7 @@ class ChatService:
             )
         return cleared(fitted, receipts, sticky)
 
-    def _cleared_tool_history_retry(
+    async def _cleared_tool_history_retry(
         self, prepared: PreparedChat, turn: ChatTurn, failed_request: ModelRequest
     ) -> ModelRequest | None:
         """One retry of a rejected tool-turn request with its older results cut.
@@ -10818,17 +11078,19 @@ class ChatService:
         None when clearing cannot make the request smaller.
         """
 
-        _, replay_entries = self._compacted_turn_history(
+        _, replay_entries = await self._compacted_turn_history(
             turn,
             self._request_limits(prepared.provider_profile, failed_request),
             messages=prepared.model_request.messages,
         )
-        whole = self._replayed_tool_history(prepared, turn, entries=replay_entries)
+        whole = await self._replayed_tool_history(
+            prepared, turn, entries=replay_entries
+        )
         if [result.call_id for result in whole] != [
             result.call_id for result in failed_request.tool_results
         ]:
             return None
-        receipts = self._provider_tool_history(
+        receipts = await self._provider_tool_history(
             turn, cleared=len(whole), entries=replay_entries
         )
         rejected = estimate_model_request(failed_request)
@@ -10875,7 +11137,7 @@ class ChatService:
                 return retry
         return None
 
-    def _browser_screenshot(
+    async def _browser_screenshot(
         self, prepared: PreparedChat, turn: ChatTurn
     ) -> tuple[str, list[dict[str, Any]]] | None:
         """The turn's newest browser screenshot and the call that captured it."""
@@ -10885,7 +11147,7 @@ class ChatService:
             or not prepared.provider_profile.capabilities.vision
         ):
             return None
-        for entry in reversed(self._turn_history(turn)):
+        for entry in reversed((await self._turn_history(turn))):
             if (
                 entry.get("name") != "browser.companion"
                 or entry.get("status") != "complete"
@@ -10895,7 +11157,7 @@ class ChatService:
                 artifact_id = reference.get("artifact_id")
                 if not isinstance(artifact_id, str):
                     continue
-                artifact = self.store.get(Artifact, artifact_id)
+                artifact = await self.store.get(Artifact, artifact_id)
                 if (
                     artifact.engagement_id != turn.engagement_id
                     or artifact.source != "browser.companion"
@@ -10944,7 +11206,7 @@ class ChatService:
         ranked_sources: list[str] = []
         if suggestions_enabled(scope):
             receipt = await suggest_tools(
-                self.tool_suggestion_client(),
+                (await call_async(self.tool_suggestion_client)),
                 deferred=deferred_specs,
                 operator_messages=operator_messages,
                 skills=skills,
@@ -11102,13 +11364,13 @@ class ChatService:
     ) -> tuple[ChatTurn, list[tuple[str, dict[str, Any]]]]:
         """Run an explicitly safe wave, then commit results in provider order."""
 
-        self._assert_execution_owner(prepared)
+        (await self._assert_execution_owner(prepared))
         engagement_id = prepared.engagement_id
         if engagement_id is None:
             raise ChatConfigurationError(
                 "parallel tool execution requires a project engagement"
             )
-        self.turn_ledger.import_legacy(turn)
+        (await self.turn_ledger.import_legacy(turn))
         work: list[tuple[ModelToolCall, Any, dict[str, Any], ToolInvocation]] = []
         events: list[tuple[str, dict[str, Any]]] = []
         for offset, routed in enumerate(wave):
@@ -11142,11 +11404,13 @@ class ChatService:
                 **routed.replay,
             }
             intent_event = f"intent:{step}:{call.id}"
-            self.turn_ledger.append(
-                turn.id,
-                entry,
-                idempotency_key=intent_event,
-                event_type="started",
+            (
+                await self.turn_ledger.append(
+                    turn.id,
+                    entry,
+                    idempotency_key=intent_event,
+                    event_type="started",
+                )
             )
             invocation = ToolInvocation(
                 engagement_id=engagement_id,
@@ -11208,7 +11472,7 @@ class ChatService:
                     }
                 )
             else:
-                fields, waiting_callback = self._tool_result_entry(
+                fields, waiting_callback = await self._tool_result_entry(
                     result,
                     invocation=invocation,
                     spec=spec,
@@ -11227,7 +11491,7 @@ class ChatService:
                             "result_summary": "Parallel-safe tool violated its completion contract",
                         }
                     )
-            turn = self._save_tool_step(turn, entry)
+            turn = await self._save_tool_step(turn, entry)
             events.append(
                 (
                     "tool_completed",
@@ -11250,7 +11514,7 @@ class ChatService:
             )
         return turn, events
 
-    def _routing_batch(
+    async def _routing_batch(
         self,
         response: ModelResponse,
         turn: ChatTurn,
@@ -11270,7 +11534,7 @@ class ChatService:
 
         seen = {
             str(entry["model_call_id"])
-            for entry in self._turn_history(turn)
+            for entry in (await self._turn_history(turn))
             if entry.get("model_call_id")
         }
         # Any call in a response the output limit cut off may have lost the
@@ -11353,7 +11617,7 @@ class ChatService:
             batch.append(_RoutedCall(call, provider_call, refusal, repeated_id))
         return batch
 
-    def _refused_tool_step(
+    async def _refused_tool_step(
         self,
         turn: ChatTurn,
         spec: Any,
@@ -11422,7 +11686,7 @@ class ChatService:
             **({"issued_call_id": issued_call_id} if issued_call_id else {}),
             **(replay or {}),
         }
-        turn = self._save_tool_step(turn, entry)
+        turn = await self._save_tool_step(turn, entry)
         common = {
             "turn_id": turn.id,
             "tool_call_id": durable_call_id,
@@ -11450,7 +11714,7 @@ class ChatService:
             ),
         ]
 
-    def _provider_tool_history(
+    async def _provider_tool_history(
         self,
         turn: ChatTurn,
         *,
@@ -11460,7 +11724,7 @@ class ChatService:
         """The turn's calls and results; the oldest ``cleared`` carry receipts."""
 
         history: list[ModelToolResult] = []
-        for entry in self._turn_history(turn) if entries is None else entries:
+        for entry in (await self._turn_history(turn)) if entries is None else entries:
             persisted = entry.get("provider_result")
             if not isinstance(persisted, (dict, str)):
                 continue
@@ -11499,7 +11763,7 @@ class ChatService:
             )
         return history
 
-    def _mcp_catalog(
+    async def _mcp_catalog(
         self, engagement_id: str, selected: Sequence[McpServerProfile]
     ) -> tuple[McpServerProfile, ...]:
         """Usable MCP servers the operator did not select, for on-demand use.
@@ -11510,22 +11774,22 @@ class ChatService:
         none recorded.
         """
 
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
         if not on_demand_enabled(scope):
             return ()
-        return catalog_mcp_profiles(
+        return await catalog_mcp_profiles(
             self.store,
             exclude={item.id for item in selected},
             bypass_permissions=scope.bypass_permissions,
             engagement_id=engagement_id,
         )
 
-    def _web_search_selected(self, engagement_id: str | None) -> bool:
+    async def _web_search_selected(self, engagement_id: str | None) -> bool:
         """Whether this project opted into the local search runtime.
 
         Read from the store rather than asked of the tool platform: whether a
@@ -11536,10 +11800,10 @@ class ChatService:
         if engagement_id is None or self.tool_platform is None:
             return False
         try:
-            engagement = self.store.get(Engagement, engagement_id)
+            engagement = await self.store.get(Engagement, engagement_id)
             if not engagement.scope_policy_id:
                 return False
-            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
         except NotFoundError as exc:  # diagnostic-expected: absent project scope
             record_caught_exception(
                 "chat",
@@ -11551,10 +11815,10 @@ class ChatService:
             return False
         return web_search_enabled(scope)
 
-    def _refresh_turn(self, turn: ChatTurn) -> ChatTurn:
-        return self.store.get(ChatTurn, turn.id)
+    async def _refresh_turn(self, turn: ChatTurn) -> ChatTurn:
+        return await self.store.get(ChatTurn, turn.id)
 
-    def _add_usage(
+    async def _add_usage(
         self, turn: ChatTurn, response: ModelResponse, *, content_delta: str = ""
     ) -> ChatTurn:
         """Record one model response's usage and thinking, and any prose
@@ -11576,22 +11840,24 @@ class ChatService:
         changes: dict[str, Any] = {"usage": usage, **reasoning_changes}
         if content_delta:
             changes["content"] = turn.content + content_delta
-        with self.store.transaction() as transaction:
-            stage_snapshot_parts(transaction, reasoning_parts)
-            updated = transaction.update(
+        async with self.store.transaction() as transaction:
+            (await stage_snapshot_parts(transaction, reasoning_parts))
+            updated = await transaction.update(
                 ChatTurn,
                 turn.id,
                 changes,
                 expected_revision=turn.revision,
             )
         if turn.goal_id:
-            self._charge_goal(
-                turn.goal_id,
-                ChatTokenUsage.model_validate(response.usage.model_dump()),
+            (
+                await self._charge_goal(
+                    turn.goal_id,
+                    ChatTokenUsage.model_validate(response.usage.model_dump()),
+                )
             )
         elif updated.request_snapshot.get("subagent_child"):
             try:
-                self.subagents.charge_child_usage(updated)
+                (await self.subagents.charge_child_usage(updated))
             except Exception as exc:  # diagnostic-expected: the round's settle charges whatever this debit missed
                 record_caught_exception(
                     "chat",
@@ -11652,7 +11918,7 @@ class ChatService:
             "request_snapshot": {**turn.request_snapshot, REASONING_PARTS_KEY: sealed},
         }, [part]
 
-    def turn_reasoning(self, turn: ChatTurn) -> str:
+    async def turn_reasoning(self, turn: ChatTurn) -> str:
         """Every thought the turn has had, oldest first, within its bound."""
 
         sealed = turn.request_snapshot.get(REASONING_PARTS_KEY)
@@ -11666,7 +11932,7 @@ class ChatService:
                 if text is not None:
                     self._sealed_reasoning.move_to_end(part_id)
             if text is None:
-                value = load_snapshot_part(
+                value = await load_snapshot_part(
                     self.store, part_id, session_id=turn.session_id
                 )
                 text = value if isinstance(value, str) else ""
@@ -11679,7 +11945,7 @@ class ChatService:
             texts.append(turn.reasoning)
         return "\n\n".join(texts)[-_REASONING_LIMIT:]
 
-    def _charge_goal(
+    async def _charge_goal(
         self,
         goal_id: str,
         usage: ChatTokenUsage,
@@ -11693,7 +11959,7 @@ class ChatService:
         """
 
         write = transaction.update if transaction is not None else self.store.update
-        goal = self.store.get(ChatGoal, goal_id)
+        goal = await self.store.get(ChatGoal, goal_id)
         combined = _added_usage(goal.usage, usage)
         # Usage is always recorded, but only a running goal pauses on the
         # budget: a goal the operator cancelled, completed, paused or blocked
@@ -11704,7 +11970,7 @@ class ChatService:
             and combined.total_tokens >= goal.token_budget
         ):
             paused_at = utc_now()
-            paused = write(
+            paused = await write(
                 ChatGoal,
                 goal.id,
                 {
@@ -11719,16 +11985,20 @@ class ChatService:
             )
             # Its subagents spend the same budget, so they stop with it. The
             # stop runs as a task, after a caller's transaction has committed.
-            self.subagents.stop_goal_subagents_soon(paused, GOAL_BUDGET_STOP_NOTE)
+            (
+                await self.subagents.stop_goal_subagents_soon(
+                    paused, GOAL_BUDGET_STOP_NOTE
+                )
+            )
             return paused
-        return write(
+        return await write(
             ChatGoal,
             goal.id,
             {"usage": combined},
             expected_revision=goal.revision,
         )
 
-    def _subagent_delivery_step(
+    async def _subagent_delivery_step(
         self,
         turn: ChatTurn,
         components: Any,
@@ -11762,7 +12032,7 @@ class ChatService:
             "result_summary": summary,
             **({"display_name": spec.display_name} if spec.display_name else {}),
         }
-        turn = self._save_tool_step(turn, entry)
+        turn = await self._save_tool_step(turn, entry)
         common = {
             "turn_id": turn.id,
             "tool_call_id": durable_call_id,
@@ -11790,7 +12060,7 @@ class ChatService:
             ),
         ]
 
-    def _save_tool_step(
+    async def _save_tool_step(
         self,
         turn: ChatTurn,
         entry: dict[str, Any],
@@ -11798,8 +12068,8 @@ class ChatService:
         status: ChatTurnStatus = ChatTurnStatus.ROUTING,
         approval_id: str | None = None,
     ) -> ChatTurn:
-        self.turn_ledger.import_legacy(turn)
-        sequence = self.turn_ledger.append(turn.id, entry)
+        (await self.turn_ledger.import_legacy(turn))
+        sequence = await self.turn_ledger.append(turn.id, entry)
         changes: dict[str, Any] = {
             "status": status,
             "next_step": turn.next_step + 1,
@@ -11828,14 +12098,14 @@ class ChatService:
                     "tool_history": [*turn.tool_history, entry],
                 }
             )
-        return self.store.update(
+        return await self.store.update(
             ChatTurn,
             turn.id,
             changes,
             expected_revision=turn.revision,
         )
 
-    def _update_tool_step(
+    async def _update_tool_step(
         self,
         turn: ChatTurn,
         entry: dict[str, Any],
@@ -11843,8 +12113,8 @@ class ChatService:
         status: ChatTurnStatus,
         approval_id: str | None = None,
     ) -> ChatTurn:
-        self.turn_ledger.import_legacy(turn)
-        sequence = self.turn_ledger.append(turn.id, entry)
+        (await self.turn_ledger.import_legacy(turn))
+        sequence = await self.turn_ledger.append(turn.id, entry)
         changes: dict[str, Any] = {
             "status": status,
             "ledger_sequence": sequence,
@@ -11852,7 +12122,7 @@ class ChatService:
         }
         if turn.queued_at is None:
             changes["tool_history"] = [*turn.tool_history[:-1], entry]
-        return self.store.update(
+        return await self.store.update(
             ChatTurn,
             turn.id,
             changes,
@@ -11879,7 +12149,7 @@ class ChatService:
             return True
         return result.output.get("timed_out") is True
 
-    def _tool_result_entry(
+    async def _tool_result_entry(
         self,
         result: Any,
         *,
@@ -11928,7 +12198,7 @@ class ChatService:
                     artifact_id=result.result_artifact_id,
                 )
             model_result = failure
-        model_result, preserved_artifact_id = preserve_oversized_model_result(
+        model_result, preserved_artifact_id = await preserve_oversized_model_result(
             model_result,
             store=self.store,
             artifact_store=self.artifact_store,
@@ -11994,10 +12264,10 @@ class ChatService:
         turn: ChatTurn,
         components: RuntimeToolComponents | AutomationToolComponents,
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        if not turn.approval_id or not self._turn_history(turn):
+        if not turn.approval_id or not (await self._turn_history(turn)):
             raise ChatError("pending command turn is missing its approval checkpoint")
-        approval = self.store.get(Approval, turn.approval_id)
-        entry = dict(self._turn_history(turn)[-1])
+        approval = await self.store.get(Approval, turn.approval_id)
+        entry = dict((await self._turn_history(turn))[-1])
         if entry.get("status") != "waiting_approval":
             raise ChatError("pending command turn has an invalid tool checkpoint")
         if approval.status == ApprovalStatus.PENDING:
@@ -12074,7 +12344,7 @@ class ChatService:
                 }
             )
         else:
-            fields, waiting_callback = self._tool_result_entry(
+            fields, waiting_callback = await self._tool_result_entry(
                 result,
                 invocation=invocation,
                 spec=components.specs[invocation.tool_name],
@@ -12088,7 +12358,7 @@ class ChatService:
                 # results to Core. Park the turn exactly as a fresh execution
                 # does; routing again now would answer with no output and the
                 # webhook would find nothing waiting for it.
-                turn = self._update_tool_step(
+                turn = await self._update_tool_step(
                     turn,
                     entry,
                     status=ChatTurnStatus.WAITING_CALLBACK,
@@ -12107,9 +12377,9 @@ class ChatService:
                         or "Waiting for the command to POST results.",
                     },
                 )
-                self._release_execution(prepared)
+                (await self._release_execution(prepared))
                 return
-        turn = self._update_tool_step(
+        turn = await self._update_tool_step(
             turn,
             entry,
             status=ChatTurnStatus.ROUTING,
@@ -12136,9 +12406,9 @@ class ChatService:
     async def _resume_callback_result(
         self, prepared: PreparedChat, turn: ChatTurn
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        if not self._turn_history(turn):
+        if not (await self._turn_history(turn)):
             raise ChatError("pending callback turn is missing its tool checkpoint")
-        entry = dict(self._turn_history(turn)[-1])
+        entry = dict((await self._turn_history(turn))[-1])
         if entry.get("status") != "waiting_callback":
             raise ChatError("pending callback turn has an invalid tool checkpoint")
         wait = entry.get("subagent_wait")
@@ -12152,7 +12422,7 @@ class ChatService:
         from .automation_runtime import AutomationRuntimeManager
 
         execution_id = AutomationRuntimeManager._execution_id(process_id)
-        execution = self.store.get(CommandExecution, execution_id)
+        execution = await self.store.get(CommandExecution, execution_id)
         callback_received = bool(execution.metadata.get("results_received"))
         producer_terminal = self._callback_producer_terminal(execution)
         if not callback_received and not producer_terminal:
@@ -12169,7 +12439,7 @@ class ChatService:
                 },
             )
             return
-        turn, entry, output = self._materialize_callback_result(
+        turn, entry, output = await self._materialize_callback_result(
             turn,
             entry,
             execution,
@@ -12194,7 +12464,7 @@ class ChatService:
             },
         )
 
-    def _materialize_callback_result(
+    async def _materialize_callback_result(
         self,
         turn: ChatTurn,
         entry: dict[str, Any],
@@ -12205,7 +12475,7 @@ class ChatService:
         """Commit one callback outcome before any competing wake can route."""
 
         entry = dict(entry)
-        output, failed = self._finalize_callback_tool_call(
+        output, failed = await self._finalize_callback_tool_call(
             entry,
             execution,
             callback_received=callback_received,
@@ -12218,14 +12488,14 @@ class ChatService:
                 "artifacts": output.get("artifacts") or [],
             }
         )
-        turn = self._update_tool_step(
+        turn = await self._update_tool_step(
             turn,
             entry,
             status=ChatTurnStatus.ROUTING,
         )
         return turn, entry, output
 
-    def _finalize_callback_tool_call(
+    async def _finalize_callback_tool_call(
         self,
         entry: dict[str, Any],
         execution: CommandExecution,
@@ -12235,7 +12505,7 @@ class ChatService:
         """Project a terminal callback producer into its durable tool row."""
 
         if callback_received:
-            output = self._callback_receipt(entry, execution).as_model_result()
+            output = (await self._callback_receipt(entry, execution)).as_model_result()
             failed = execution.status != CommandExecutionStatus.COMPLETED
         else:
             summary = (
@@ -12273,7 +12543,7 @@ class ChatService:
                 "tool_call_id": entry["tool_call_id"],
                 "artifacts": [
                     item.model_dump(mode="json")
-                    for item in self._callback_artifact_refs(execution)
+                    for item in (await self._callback_artifact_refs(execution))
                 ],
             }
             failed = True
@@ -12282,25 +12552,27 @@ class ChatService:
         tool_call_id = entry.get("tool_call_id")
         if isinstance(tool_call_id, str):
             try:
-                call = self.store.get(ToolCall, tool_call_id)
+                call = await self.store.get(ToolCall, tool_call_id)
                 if call.status not in {
                     ToolCallStatus.COMPLETE,
                     ToolCallStatus.FAILED,
                     ToolCallStatus.DENIED,
                     ToolCallStatus.CANCELLED,
                 }:
-                    self.store.update(
-                        ToolCall,
-                        call.id,
-                        {
-                            "status": ToolCallStatus.FAILED
-                            if failed
-                            else ToolCallStatus.COMPLETE,
-                            "completed_at": utc_now(),
-                            "result": output,
-                            "error": execution.error or output.get("problem"),
-                        },
-                        expected_revision=call.revision,
+                    (
+                        await self.store.update(
+                            ToolCall,
+                            call.id,
+                            {
+                                "status": ToolCallStatus.FAILED
+                                if failed
+                                else ToolCallStatus.COMPLETE,
+                                "completed_at": utc_now(),
+                                "result": output,
+                                "error": execution.error or output.get("problem"),
+                            },
+                            expected_revision=call.revision,
+                        )
                     )
             except Exception as exc:
                 record_caught_exception(
@@ -12312,7 +12584,7 @@ class ChatService:
                 )
         return output, failed
 
-    def _callback_receipt(
+    async def _callback_receipt(
         self, entry: dict[str, Any], execution: CommandExecution
     ) -> ToolResultReceipt:
         """The ``nebula.tool-result/v2`` receipt a posted callback completes.
@@ -12332,7 +12604,7 @@ class ChatService:
             if completed
             else "The command reported failure without a summary."
         )
-        refs = self._callback_artifact_refs(execution)
+        refs = await self._callback_artifact_refs(execution)
         warnings: list[str] = []
         if (
             execution.metadata.get("results_stdout")
@@ -12372,7 +12644,7 @@ class ChatService:
             next_actions=["tool_output.search", "tool_output.read"] if refs else [],
         )
 
-    def _callback_artifact_refs(
+    async def _callback_artifact_refs(
         self, execution: CommandExecution
     ) -> list[ToolArtifactRef]:
         """What a background command posted to its callback and what it captured."""
@@ -12408,7 +12680,7 @@ class ChatService:
             if not isinstance(identifier, str) or not identifier:
                 continue
             try:
-                artifact = self.store.get(Artifact, identifier)
+                artifact = await self.store.get(Artifact, identifier)
             except (
                 NotFoundError
             ):  # diagnostic-expected: a receipt names only artifacts that still exist
@@ -12432,8 +12704,8 @@ class ChatService:
         entry: dict[str, Any],
         wait: dict[str, Any],
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        time_reminder_due = self._goal_time_wait_due(turn, utc_now())
-        if not self.subagents.wait_ready(wait) and not time_reminder_due:
+        time_reminder_due = await self._goal_time_wait_due(turn, utc_now())
+        if not (await self.subagents.wait_ready(wait)) and not time_reminder_due:
             yield (
                 "callback_required",
                 {
@@ -12447,7 +12719,7 @@ class ChatService:
                 },
             )
             return
-        output, summary = self.subagents.wait_result(wait)
+        output, summary = await self.subagents.wait_result(wait)
         if time_reminder_due:
             output["goal_time_reminder"] = True
             summary += "; goal time reminder due"
@@ -12459,7 +12731,7 @@ class ChatService:
                 "result_summary": summary,
             }
         )
-        turn = self._update_tool_step(
+        turn = await self._update_tool_step(
             turn,
             entry,
             status=ChatTurnStatus.ROUTING,
@@ -12483,7 +12755,7 @@ class ChatService:
             },
         )
 
-    def continue_after_tool_callback(self, process_id: str) -> str | None:
+    async def continue_after_tool_callback(self, process_id: str) -> str | None:
         """Resume a provider turn after a callback or terminal producer state."""
 
         from .automation_runtime import AutomationRuntimeManager
@@ -12492,15 +12764,15 @@ class ChatService:
             # Core is stopping. The next boot reconciles this wait exactly as
             # it does after a crash, instead of starting work mid-teardown.
             return None
-        execution = self.store.get(
+        execution = await self.store.get(
             CommandExecution, AutomationRuntimeManager._execution_id(process_id)
         )
         turn_id = execution.metadata.get("chat_turn_id")
         if not isinstance(turn_id, str) or not turn_id:
             return None
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = await self.store.get(ChatTurn, turn_id)
         if turn.status != ChatTurnStatus.WAITING_CALLBACK:
-            self._attach_late_callback_receipt(execution)
+            (await self._attach_late_callback_receipt(execution))
             return None
         if turn.backend != ChatBackend.PROVIDER:
             return None
@@ -12510,10 +12782,10 @@ class ChatService:
             return None
         if self.has_active_provider_turn(turn.id):
             return turn.id
-        prepared = self.prepare_resume(turn.id)
-        return self.start_provider_turn(prepared)
+        prepared = await self.prepare_resume(turn.id)
+        return await self.start_provider_turn(prepared)
 
-    def _attach_late_callback_receipt(self, execution: CommandExecution) -> None:
+    async def _attach_late_callback_receipt(self, execution: CommandExecution) -> None:
         """Keep a receipt that arrived after its wait settled as ledger evidence.
 
         The call was already settled as an unknown effect and the turn moved
@@ -12527,7 +12799,7 @@ class ChatService:
         ):
             return
         try:
-            call = self.store.get(ToolCall, tool_call_id)
+            call = await self.store.get(ToolCall, tool_call_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: the call was removed with its conversation
@@ -12540,24 +12812,26 @@ class ChatService:
         ):
             return
         try:
-            self.store.update(
-                ToolCall,
-                call.id,
-                {
-                    "metadata": {
-                        **call.metadata,
-                        "late_callback_receipt": {
-                            "process_id": execution.process_id,
-                            "status": execution.status.value,
-                            "exit_code": execution.exit_code,
-                            "summary": str(
-                                execution.metadata.get("results_summary") or ""
-                            )[:1_000],
-                            "received_at": utc_now().isoformat(),
-                        },
-                    }
-                },
-                expected_revision=call.revision,
+            (
+                await self.store.update(
+                    ToolCall,
+                    call.id,
+                    {
+                        "metadata": {
+                            **call.metadata,
+                            "late_callback_receipt": {
+                                "process_id": execution.process_id,
+                                "status": execution.status.value,
+                                "exit_code": execution.exit_code,
+                                "summary": str(
+                                    execution.metadata.get("results_summary") or ""
+                                )[:1_000],
+                                "received_at": utc_now().isoformat(),
+                            },
+                        }
+                    },
+                    expected_revision=call.revision,
+                )
             )
         except ConflictError:  # diagnostic-expected: a concurrent writer updated the call; the receipt stays on the process record
             return
@@ -12580,8 +12854,8 @@ class ChatService:
             CommandExecutionStatus.INTERRUPTED,
         }
 
-    def prepare_resume(self, turn_id: str) -> PreparedChat:
-        turn = self.reconcile_recorded_effects(turn_id)
+    async def prepare_resume(self, turn_id: str) -> PreparedChat:
+        turn = await self.reconcile_recorded_effects(turn_id)
         final_answer_recovery_value = turn.request_snapshot.get("final_answer_recovery")
         final_answer_recovery: dict[str, Any] | None = (
             dict(final_answer_recovery_value)
@@ -12633,7 +12907,7 @@ class ChatService:
                     "interrupted response has an unknown hook outcome; reconcile it before resume"
                 )
 
-        def activate_recovery(candidate: ChatTurn) -> ChatTurn:
+        async def activate_recovery(candidate: ChatTurn) -> ChatTurn:
             if retrying_final_answer:
                 if final_answer_recovery is None:
                     raise ChatHistoryConflict("final-answer recovery state is missing")
@@ -12644,7 +12918,7 @@ class ChatService:
                     and not isinstance(operator_retries, bool)
                     else 0
                 )
-                resumed = self.store.update(
+                resumed = await self.store.update(
                     ChatTurn,
                     candidate.id,
                     {
@@ -12667,11 +12941,11 @@ class ChatService:
                 )
                 # The answer takes the failure note's place; if this attempt
                 # fails too, it records a new one.
-                self._withdraw_turn_outcome(resumed)
+                (await self._withdraw_turn_outcome(resumed))
                 return resumed
             if not recovering:
                 return candidate
-            return self.store.update(
+            return await self.store.update(
                 ChatTurn,
                 candidate.id,
                 {
@@ -12689,16 +12963,16 @@ class ChatService:
                 expected_revision=candidate.revision,
             )
 
-        session = self.store.get(ChatSession, turn.session_id)
+        session = await self.store.get(ChatSession, turn.session_id)
         settings_only = session.metadata.get("control_assistant") is True
         if turn.provider_profile_id is None:
             raise ChatConfigurationError("chat turn no longer identifies a provider")
-        profile = self.store.get(ProviderProfile, turn.provider_profile_id)
+        profile = await self.store.get(ProviderProfile, turn.provider_profile_id)
         if not profile.enabled:
             raise ChatConfigurationError("the chat provider is no longer enabled")
         provider = self.provider_factory(profile)
         # The write-once request values live beside the turn row.
-        snapshot = resolve_request_snapshot(
+        snapshot = await resolve_request_snapshot(
             self.store, turn.request_snapshot, session_id=turn.session_id
         )
         model_request = ModelRequest.model_validate(snapshot.get("model_request"))
@@ -12727,7 +13001,7 @@ class ChatService:
         ]
         if not turn.tools_enabled:
             resolved_model = provider.require(model_request)
-            turn = activate_recovery(turn)
+            turn = await activate_recovery(turn)
             return PreparedChat(
                 provider=provider,
                 provider_profile=profile,
@@ -12740,7 +13014,7 @@ class ChatService:
                 ),
                 session=session,
                 pending_session=None,
-                stored_messages=self._session_messages(session),
+                stored_messages=(await self._session_messages(session)),
                 new_messages=[],
                 context_usage=ChatTokenUsage.model_validate(
                     turn.request_snapshot.get("context_usage", {})
@@ -12776,22 +13050,24 @@ class ChatService:
                 turn.request_snapshot.get("include_oci_tools", True)
             )
             extra_components = (
-                self.tool_platform.chat_components(
-                    engagement_id=turn.engagement_id,
-                    turn_id=turn.id,
-                    provider=provider,
-                    model=turn.model,
-                    mcp_profiles=mcp_profiles,
-                    ssh_environments=ssh_environments,
-                    include_oci=False,
-                    allow_empty=True,
-                    settings_assistant=settings_only,
+                (
+                    await self.tool_platform.chat_components(
+                        engagement_id=turn.engagement_id,
+                        turn_id=turn.id,
+                        provider=provider,
+                        model=turn.model,
+                        mcp_profiles=mcp_profiles,
+                        ssh_environments=ssh_environments,
+                        include_oci=False,
+                        allow_empty=True,
+                        settings_assistant=settings_only,
+                    )
                 )
                 if (
                     settings_only
                     or mcp_profiles
                     or ssh_environments
-                    or self._web_search_selected(turn.engagement_id)
+                    or (await self._web_search_selected(turn.engagement_id))
                 )
                 and self.tool_platform is not None
                 else None
@@ -12799,7 +13075,7 @@ class ChatService:
             components: RuntimeToolComponents | AutomationToolComponents | None
             if include_commands:
                 assert self.automation_tool_platform is not None
-                components = self.automation_tool_platform.chat_components(
+                components = await self.automation_tool_platform.chat_components(
                     engagement_id=turn.engagement_id,
                     extra_components=extra_components,
                 )
@@ -12807,19 +13083,25 @@ class ChatService:
                 components = extra_components
             browser_session_id = turn.request_snapshot.get("browser_session_id")
             if isinstance(browser_session_id, str):
-                browser_session = self.store.get(BrowserSession, browser_session_id)
+                browser_session = await self.store.get(
+                    BrowserSession, browser_session_id
+                )
                 browser_components = (
-                    companion_components(
-                        self.store,
-                        turn.engagement_id,
-                        browser_session_id,
-                        artifact_store=self.artifact_store,
-                        image_supported=profile.capabilities.vision,
+                    (
+                        await companion_components(
+                            self.store,
+                            turn.engagement_id,
+                            browser_session_id,
+                            artifact_store=self.artifact_store,
+                            image_supported=profile.capabilities.vision,
+                        )
                     )
                     if browser_session.metadata.get("browser_companion_version") == 1
-                    else self.browser_tool_platform.chat_components(
-                        engagement_id=turn.engagement_id,
-                        browser_session_id=browser_session_id,
+                    else (
+                        await self.browser_tool_platform.chat_components(
+                            engagement_id=turn.engagement_id,
+                            browser_session_id=browser_session_id,
+                        )
                     )
                 )
                 components = combine_tool_components(components, browser_components)
@@ -12828,7 +13110,8 @@ class ChatService:
                 and not browser_session_id
             ):
                 components = combine_tool_components(
-                    components, standalone_components(self.store, turn.engagement_id)
+                    components,
+                    (await standalone_components(self.store, turn.engagement_id)),
                 )
             skill_snapshots = [
                 SkillSnapshot.model_validate(item)
@@ -12838,7 +13121,11 @@ class ChatService:
                 skill_resource_components(
                     skill_snapshots,
                     engagement_id=turn.engagement_id,
-                    workspace=self.workspace_resolver(turn.engagement_id),
+                    workspace=(
+                        await resolve_workspace(
+                            self.workspace_resolver, turn.engagement_id
+                        )
+                    ),
                     scope=components.scope if components else None,
                 )
                 if skill_snapshots
@@ -12851,7 +13138,9 @@ class ChatService:
                     components.workspace
                     if components is not None
                     else Path(
-                        self.store.get(Engagement, turn.engagement_id).workspace_path
+                        (
+                            await self.store.get(Engagement, turn.engagement_id)
+                        ).workspace_path
                         or "."
                     ).resolve()
                 )
@@ -12874,8 +13163,8 @@ class ChatService:
                             components.workspace
                             if components is not None
                             else Path(
-                                self.store.get(
-                                    Engagement, turn.engagement_id
+                                (
+                                    await self.store.get(Engagement, turn.engagement_id)
                                 ).workspace_path
                                 or "."
                             ).resolve()
@@ -12893,8 +13182,8 @@ class ChatService:
                             components.workspace
                             if components is not None
                             else Path(
-                                self.store.get(
-                                    Engagement, turn.engagement_id
+                                (
+                                    await self.store.get(Engagement, turn.engagement_id)
                                 ).workspace_path
                                 or "."
                             ).resolve()
@@ -12912,8 +13201,8 @@ class ChatService:
                             components.workspace
                             if components is not None
                             else Path(
-                                self.store.get(
-                                    Engagement, turn.engagement_id
+                                (
+                                    await self.store.get(Engagement, turn.engagement_id)
                                 ).workspace_path
                                 or "."
                             ).resolve()
@@ -12931,8 +13220,8 @@ class ChatService:
                             components.workspace
                             if components is not None
                             else Path(
-                                self.store.get(
-                                    Engagement, turn.engagement_id
+                                (
+                                    await self.store.get(Engagement, turn.engagement_id)
                                 ).workspace_path
                                 or "."
                             ).resolve()
@@ -13026,7 +13315,7 @@ class ChatService:
                 "automation runtime or scope changed while the response was paused"
             )
         resolved_model = provider.require(model_request)
-        turn = activate_recovery(turn)
+        turn = await activate_recovery(turn)
         return PreparedChat(
             provider=provider,
             provider_profile=profile,
@@ -13037,7 +13326,7 @@ class ChatService:
             project_workspace_path=turn.request_snapshot.get("project_workspace_path"),
             session=session,
             pending_session=None,
-            stored_messages=self._session_messages(session),
+            stored_messages=(await self._session_messages(session)),
             new_messages=[],
             context_usage=ChatTokenUsage.model_validate(
                 turn.request_snapshot.get("context_usage", {})
@@ -13074,7 +13363,7 @@ class ChatService:
         ):
             # Only tool hooks were selected; they observe their own calls.
             return
-        actor_id = actor_id_for(
+        actor_id = await actor_id_for(
             self.store,
             owner_kind="chat",
             owner_id=session.id,
@@ -13084,8 +13373,7 @@ class ChatService:
         try:
             # Git status and dirty-file hashing take seconds on a busy
             # checkout; off the event loop they stall only this turn.
-            workspace_provenance = await asyncio.to_thread(
-                self._observe_turn_workspace,
+            workspace_provenance = await self._observe_turn_workspace(
                 engagement_id=prepared.engagement_id,
                 session_id=session.id,
                 turn_id=turn.id,
@@ -13108,7 +13396,7 @@ class ChatService:
             }
         executions = [
             item
-            for item in self.list_turn_hook_executions(turn.id)
+            for item in (await self.list_turn_hook_executions(turn.id))
             if item.event_name == event_name
         ]
         ended_turn = event_name in _ENDED_TURN_HOOK_FINISH_REASONS
@@ -13175,7 +13463,7 @@ class ChatService:
                     f"{outcome.error or outcome.status}"
                 )
 
-    def _observe_turn_workspace(
+    async def _observe_turn_workspace(
         self,
         *,
         engagement_id: str,
@@ -13186,11 +13474,11 @@ class ChatService:
     ) -> dict[str, Any]:
         """Begin or finish the turn's workspace observation; return its receipt."""
 
-        workspace = self.workspace_resolver(engagement_id)
+        workspace = await resolve_workspace(self.workspace_resolver, engagement_id)
         provenance = WorkspaceProvenanceService(self.store)
 
-        def begin() -> WorkspaceProvenanceObservation:
-            return provenance.begin(
+        async def begin() -> WorkspaceProvenanceObservation:
+            return await provenance.begin(
                 workspace,
                 engagement_id=engagement_id,
                 scope_kind="turn",
@@ -13202,8 +13490,8 @@ class ChatService:
                 chat_turn_id=turn_id,
             )
 
-        def finish() -> WorkspaceProvenanceObservation:
-            return provenance.finish(
+        async def finish() -> WorkspaceProvenanceObservation:
+            return await provenance.finish(
                 workspace,
                 engagement_id=engagement_id,
                 scope_kind="turn",
@@ -13211,13 +13499,13 @@ class ChatService:
             )
 
         if starting:
-            observation = begin()
+            observation = await begin()
         else:
             try:
-                observation = finish()
+                observation = await finish()
             except NotFoundError:  # diagnostic-expected: recovery without a start observation uses a same-state baseline
-                begin()
-                observation = finish()
+                (await begin())
+                observation = await finish()
         return provenance.receipt(observation)
 
     @staticmethod
@@ -13271,7 +13559,7 @@ class ChatService:
             },
         )
 
-    def list_turn_hook_executions(
+    async def list_turn_hook_executions(
         self, turn_id: str, *, readable_only: bool = False
     ) -> list[NativeHookExecution]:
         """Return every durable hook attempt for a turn from its chat projection.
@@ -13280,27 +13568,33 @@ class ChatService:
         recovery passes that must not stop at one bad row.
         """
 
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = await self.store.get(ChatTurn, turn_id)
         executions = [
             item
-            for item in self.store.list_session_entities(
-                NativeHookExecution, turn.session_id, readable_only=readable_only
+            for item in (
+                await self.store.list_session_entities(
+                    NativeHookExecution, turn.session_id, readable_only=readable_only
+                )
             )
             if item.chat_turn_id == turn.id
         ]
         return sorted(executions, key=lambda item: (item.started_at, item.id))
 
-    def list_session_hook_executions(
+    async def list_session_hook_executions(
         self, session_id: str
     ) -> list[NativeHookExecution]:
         """Return hook attempts for the pending or latest provider turn."""
 
-        pending = self.pending_turn(session_id)
+        pending = await self.pending_turn(session_id)
         if pending is not None:
-            return self.list_turn_hook_executions(pending.id)
-        turns = self.store.list_session_entities(ChatTurn, session_id)
+            return await self.list_turn_hook_executions(pending.id)
+        turns = await self.store.list_session_entities(ChatTurn, session_id)
         latest = max(turns, key=lambda item: (item.created_at, item.id), default=None)
-        return self.list_turn_hook_executions(latest.id) if latest is not None else []
+        return (
+            (await self.list_turn_hook_executions(latest.id))
+            if latest is not None
+            else []
+        )
 
     async def _run_terminal_native_hooks(
         self, prepared: PreparedChat, event_name: str, detail: str
@@ -13343,28 +13637,28 @@ class ChatService:
             return True
         return turn.recovery_required or turn.automatic_retry_pending
 
-    def pending_turn(self, session_id: str) -> ChatTurn | None:
-        self.store.get(ChatSession, session_id)
+    async def pending_turn(self, session_id: str) -> ChatTurn | None:
+        (await self.store.get(ChatSession, session_id))
         # Browsers poll this; only the blocking turn's payload is read in full.
-        with self.store.database.session() as database:
+        async with self.store.database.session() as database:
             active = [
                 item
-                for item in session_turn_headers(
-                    database, session_id, newest_first=False
+                for item in (
+                    await session_turn_headers(database, session_id, newest_first=False)
                 )
                 if self._header_is_pending(item)
             ]
         if len(active) > 1:
             raise ChatHistoryConflict("chat session has multiple active turns")
-        return self.reconcile_recorded_effects(active[0].id) if active else None
+        return (await self.reconcile_recorded_effects(active[0].id)) if active else None
 
-    def reconcile_recorded_effects(self, turn_id: str) -> ChatTurn:
+    async def reconcile_recorded_effects(self, turn_id: str) -> ChatTurn:
         """Repair interrupted turn projections from durable tool and hook facts."""
 
-        self._reconcile_recorded_tool_results(turn_id)
-        return self._reconcile_recorded_hook_outcomes(turn_id)
+        (await self._reconcile_recorded_tool_results(turn_id))
+        return await self._reconcile_recorded_hook_outcomes(turn_id)
 
-    def _reconcile_recorded_tool_results(self, turn_id: str) -> ChatTurn:
+    async def _reconcile_recorded_tool_results(self, turn_id: str) -> ChatTurn:
         """Project terminal tool receipts into an interrupted turn, exactly once.
 
         The broker and turn history commit separately. A result may be saved
@@ -13375,7 +13669,7 @@ class ChatService:
         """
 
         for _ in range(3):
-            turn = self.store.get(ChatTurn, turn_id)
+            turn = await self.store.get(ChatTurn, turn_id)
             recovery = turn.request_snapshot.get("recovery")
             if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(
                 recovery, dict
@@ -13384,7 +13678,7 @@ class ChatService:
             unknown = recovery.get("unknown_tool_call_ids")
             if not isinstance(unknown, list) or not unknown:
                 return turn
-            history = list(self._turn_history(turn))
+            history = list((await self._turn_history(turn)))
             settled: list[str] = []
             next_step = turn.next_step
             execution_count = turn.execution_tool_calls
@@ -13394,7 +13688,7 @@ class ChatService:
                 if not isinstance(call_id, str):
                     continue
                 try:
-                    call = self.store.get(ToolCall, call_id)
+                    call = await self.store.get(ToolCall, call_id)
                 except NotFoundError:  # diagnostic-expected: stale tool reference
                     continue
                 if (
@@ -13446,7 +13740,7 @@ class ChatService:
                         "arguments": call.arguments,
                         "budget_class": call.metadata.get("budget_class", "execution"),
                     }
-                intent = self._replayable_intent(turn.id, intent)
+                intent = await self._replayable_intent(turn.id, intent)
                 existing = next(
                     (item for item in history if item.get("tool_call_id") == call.id),
                     None,
@@ -13471,14 +13765,16 @@ class ChatService:
                 history.append(entry)
                 # The ledger is the provider-visible history: the adopted
                 # receipt replaces the step's running intent there, once.
-                self.turn_ledger.import_legacy(turn)
+                (await self.turn_ledger.import_legacy(turn))
                 ledger_sequence = max(
                     ledger_sequence,
-                    self.turn_ledger.append(
-                        turn.id,
-                        entry,
-                        idempotency_key=f"recorded-result:{call.id}",
-                        event_type="recorded_result",
+                    (
+                        await self.turn_ledger.append(
+                            turn.id,
+                            entry,
+                            idempotency_key=f"recorded-result:{call.id}",
+                            event_type="recorded_result",
+                        )
                     ),
                 )
                 if existing is None:
@@ -13522,7 +13818,7 @@ class ChatService:
                 )
                 changes["tool_history"] = history
             try:
-                return self.store.update(
+                return await self.store.update(
                     ChatTurn,
                     turn.id,
                     changes,
@@ -13534,7 +13830,7 @@ class ChatService:
             "interrupted response changed while recovering recorded effects; reload"
         )
 
-    def _reconcile_recorded_hook_outcomes(self, turn_id: str) -> ChatTurn:
+    async def _reconcile_recorded_hook_outcomes(self, turn_id: str) -> ChatTurn:
         """Adopt a successful hook exit observed after its turn was parked.
 
         A failed or timed-out hook can have partial workspace or external
@@ -13542,7 +13838,7 @@ class ChatService:
         """
 
         for _ in range(3):
-            turn = self.store.get(ChatTurn, turn_id)
+            turn = await self.store.get(ChatTurn, turn_id)
             recovery = turn.request_snapshot.get("recovery")
             if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(
                 recovery, dict
@@ -13557,7 +13853,7 @@ class ChatService:
                 if not isinstance(execution_id, str):
                     continue
                 try:
-                    execution = self.store.get(NativeHookExecution, execution_id)
+                    execution = await self.store.get(NativeHookExecution, execution_id)
                 except NotFoundError:  # diagnostic-expected: stale hook reference
                     continue
                 if execution.chat_turn_id != turn.id:
@@ -13578,24 +13874,26 @@ class ChatService:
             recorded = recovery.get("recorded_hook_outcome_ids")
             prior_recorded = recorded if isinstance(recorded, list) else []
             try:
-                with self.store.transaction() as transaction:
+                async with self.store.transaction() as transaction:
                     for execution in late_executions:
                         outcome = execution.late_outcome
                         assert outcome is not None
-                        transaction.update(
-                            NativeHookExecution,
-                            execution.id,
-                            {
-                                "status": "complete",
-                                "completed_at": outcome.observed_at,
-                                "exit_code": outcome.exit_code,
-                                "stdout": outcome.stdout,
-                                "stderr": outcome.stderr,
-                                "error": None,
-                            },
-                            expected_revision=execution.revision,
+                        (
+                            await transaction.update(
+                                NativeHookExecution,
+                                execution.id,
+                                {
+                                    "status": "complete",
+                                    "completed_at": outcome.observed_at,
+                                    "exit_code": outcome.exit_code,
+                                    "stdout": outcome.stdout,
+                                    "stderr": outcome.stderr,
+                                    "error": None,
+                                },
+                                expected_revision=execution.revision,
+                            )
                         )
-                    repaired = transaction.update(
+                    repaired = await transaction.update(
                         ChatTurn,
                         turn.id,
                         {
@@ -13635,7 +13933,7 @@ class ChatService:
             "interrupted hook state changed while recovering recorded effects; reload"
         )
 
-    def pending_turns(self, engagement_id: str) -> dict[str, ChatTurnHeader]:
+    async def pending_turns(self, engagement_id: str) -> dict[str, ChatTurnHeader]:
         """Return the pending turn of every conversation in a project, by session.
 
         One indexed read of the project's turn versions replaces a
@@ -13645,8 +13943,8 @@ class ChatService:
         """
 
         pending: dict[str, ChatTurnHeader] = {}
-        with self.store.database.session() as database:
-            for turn in engagement_turn_headers(database, engagement_id):
+        async with self.store.database.session() as database:
+            for turn in await engagement_turn_headers(database, engagement_id):
                 if not self._header_is_pending(turn):
                     continue
                 if turn.session_id in pending:
@@ -13654,12 +13952,12 @@ class ChatService:
                 pending[turn.session_id] = turn
         return pending
 
-    def recoverable_final_answer_turn(self, session_id: str) -> ChatTurn | None:
+    async def recoverable_final_answer_turn(self, session_id: str) -> ChatTurn | None:
         """Return the latest turn only when its failed synthesis can be resumed."""
 
-        self.store.get(ChatSession, session_id)
-        with self.store.database.session() as database:
-            headers = session_turn_headers(database, session_id)
+        (await self.store.get(ChatSession, session_id))
+        async with self.store.database.session() as database:
+            headers = await session_turn_headers(database, session_id)
         if not headers:
             return None
         latest = max(headers, key=lambda item: (item.created_at, item.id))
@@ -13671,7 +13969,7 @@ class ChatService:
             or attempts < 2
         ):
             return None
-        turn = self.store.get(ChatTurn, latest.id)
+        turn = await self.store.get(ChatTurn, latest.id)
         # The header named a version; confirm the row still qualifies.
         recovery = turn.request_snapshot.get("final_answer_recovery")
         current = recovery.get("attempts") if isinstance(recovery, dict) else None
@@ -13685,7 +13983,7 @@ class ChatService:
             return None
         return turn
 
-    def reconcile_interrupted_tool(
+    async def reconcile_interrupted_tool(
         self,
         turn_id: str,
         tool_call_id: str,
@@ -13696,7 +13994,7 @@ class ChatService:
     ) -> ChatTurn:
         """Record an operator-confirmed outcome without replaying the tool effect."""
 
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = await self.store.get(ChatTurn, turn_id)
         if turn.revision != expected_revision:
             raise ChatHistoryConflict(
                 "interrupted response changed; reload before reconciling"
@@ -13718,7 +14016,7 @@ class ChatService:
         note = detail.strip()
         if not note:
             raise ChatConfigurationError("reconciliation requires an operator note")
-        call = self.store.get(ToolCall, tool_call_id)
+        call = await self.store.get(ToolCall, tool_call_id)
         if call.chat_turn_id != turn.id or call.status not in {
             ToolCallStatus.RUNNING,
             ToolCallStatus.COMPLETE,
@@ -13747,7 +14045,7 @@ class ChatService:
             "metadata": {
                 **call.metadata,
                 "reconciled_after_restart": True,
-                "reconciled_by": self.operator_id(),
+                "reconciled_by": (await call_async(self.operator_id)),
                 "operator_reconciliation": result,
             },
         }
@@ -13760,11 +14058,13 @@ class ChatService:
                     "error": note if outcome == "failed" else None,
                 }
             )
-        self.store.update(
-            ToolCall,
-            call.id,
-            changes,
-            expected_revision=call.revision,
+        (
+            await self.store.update(
+                ToolCall,
+                call.id,
+                changes,
+                expected_revision=call.revision,
+            )
         )
         entry = {
             "step": step,
@@ -13778,19 +14078,19 @@ class ChatService:
             "trusted_result": False,
             "result_summary": note[:1_000],
         }
-        for item in self._turn_history(turn):
+        for item in await self._turn_history(turn):
             if item.get("tool_call_id") == call.id:
                 # The step stays part of the response that issued it.
                 entry.update({key: item[key] for key in _REPLAY_FIELDS if key in item})
         history = [
             item
-            for item in self._turn_history(turn)
+            for item in (await self._turn_history(turn))
             if item.get("tool_call_id") != call.id
         ]
         history.append(entry)
         history.sort(key=lambda item: int(item.get("step", 0)))
-        self.turn_ledger.import_legacy(turn)
-        ledger_sequence = self.turn_ledger.append(
+        (await self.turn_ledger.import_legacy(turn))
+        ledger_sequence = await self.turn_ledger.append(
             turn.id,
             entry,
             idempotency_key=f"operator-reconcile:{call.id}:{outcome}",
@@ -13821,14 +14121,14 @@ class ChatService:
                 dict.fromkeys([*turn.tool_call_ids, call.id])
             )
             turn_changes["tool_history"] = history
-        return self.store.update(
+        return await self.store.update(
             ChatTurn,
             turn.id,
             turn_changes,
             expected_revision=turn.revision,
         )
 
-    def reconcile_interrupted_hook(
+    async def reconcile_interrupted_hook(
         self,
         turn_id: str,
         hook_execution_id: str,
@@ -13839,7 +14139,7 @@ class ChatService:
     ) -> ChatTurn:
         """Resolve an uncertain native-hook effect without replaying it."""
 
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = await self.store.get(ChatTurn, turn_id)
         if turn.revision != expected_revision:
             raise ChatHistoryConflict(
                 "interrupted response changed; reload before reconciling"
@@ -13864,29 +14164,31 @@ class ChatService:
         note = detail.strip()
         if not note:
             raise ChatConfigurationError("reconciliation requires an operator note")
-        execution = self.store.get(NativeHookExecution, hook_execution_id)
+        execution = await self.store.get(NativeHookExecution, hook_execution_id)
         if execution.chat_turn_id != turn.id or execution.status != "interrupted":
             raise ChatHistoryConflict(
                 "hook execution state no longer matches restart recovery"
             )
-        self.store.update(
-            NativeHookExecution,
-            execution.id,
-            {
-                "status": "reconciled",
-                "reconciliation": {
-                    "schema": "nebula.operator-reconciliation/v1",
-                    "outcome": outcome,
-                    "detail": note,
-                    "verified": False,
-                    "reconciled_by": self.operator_id(),
-                    "reconciled_at": utc_now().isoformat(),
+        (
+            await self.store.update(
+                NativeHookExecution,
+                execution.id,
+                {
+                    "status": "reconciled",
+                    "reconciliation": {
+                        "schema": "nebula.operator-reconciliation/v1",
+                        "outcome": outcome,
+                        "detail": note,
+                        "verified": False,
+                        "reconciled_by": (await call_async(self.operator_id)),
+                        "reconciled_at": utc_now().isoformat(),
+                    },
                 },
-            },
-            expected_revision=execution.revision,
+                expected_revision=execution.revision,
+            )
         )
         remaining = [item for item in unknown if item != execution.id]
-        return self.store.update(
+        return await self.store.update(
             ChatTurn,
             turn.id,
             {
@@ -13913,7 +14215,7 @@ class ChatService:
             expected_revision=turn.revision,
         )
 
-    def _pause_running_session_goal(
+    async def _pause_running_session_goal(
         self, session_id: str, reason: str
     ) -> ChatGoal | None:
         """Pause the conversation goal whenever its active response settles early.
@@ -13928,13 +14230,13 @@ class ChatService:
         last_error: ConflictError | None = None
         for _ in range(3):
             try:
-                goal = goals.get(session_id)
+                goal = await goals.get(session_id)
             except NotFoundError:  # diagnostic-expected: goals are optional
                 return None
             if goal.status != ChatGoalStatus.RUNNING:
                 return goal
             try:
-                return goals.write(
+                return await goals.write(
                     session_id,
                     GoalWrite(
                         expected_revision=goal.revision,
@@ -13956,39 +14258,43 @@ class ChatService:
             )
         return None
 
-    def cancel_turn(
+    async def cancel_turn(
         self, turn_id: str, *, reason: str = "response stopped"
     ) -> ChatTurn:
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = await self.store.get(ChatTurn, turn_id)
         if turn.status == ChatTurnStatus.COMPLETE:
-            self._settle_admission(turn.id)
+            (await self._settle_admission(turn.id))
             return turn
         if turn.status == ChatTurnStatus.CANCELLED:
             # Also closes an admission an earlier stop left parked.
-            self._settle_admission(turn.id)
-            self.record_turn_outcome(turn.id)
-            self._pause_running_session_goal(
-                turn.session_id,
-                "Response stopped by the operator. Resume the goal when ready.",
+            (await self._settle_admission(turn.id))
+            (await self.record_turn_outcome(turn.id))
+            (
+                await self._pause_running_session_goal(
+                    turn.session_id,
+                    "Response stopped by the operator. Resume the goal when ready.",
+                )
             )
             return turn
         if turn.approval_id:
-            approval = self.store.get(Approval, turn.approval_id)
+            approval = await self.store.get(Approval, turn.approval_id)
             if approval.status == ApprovalStatus.PENDING:
-                self.store.update(
-                    Approval,
-                    approval.id,
-                    {
-                        "status": ApprovalStatus.CANCELLED,
-                        "decided_by": self.operator_id(),
-                        "decided_at": utc_now(),
-                        "decision_note": "response stopped",
-                    },
-                    expected_revision=approval.revision,
+                (
+                    await self.store.update(
+                        Approval,
+                        approval.id,
+                        {
+                            "status": ApprovalStatus.CANCELLED,
+                            "decided_by": (await call_async(self.operator_id)),
+                            "decided_at": utc_now(),
+                            "decision_note": "response stopped",
+                        },
+                        expected_revision=approval.revision,
+                    )
                 )
-        for call_id in self._turn_tool_call_ids(turn):
+        for call_id in await self._turn_tool_call_ids(turn):
             try:
-                call = self.store.get(ToolCall, call_id)
+                call = await self.store.get(ToolCall, call_id)
             except NotFoundError as caught_error:
                 record_caught_exception(
                     "chat",
@@ -14004,27 +14310,29 @@ class ChatService:
                 ToolCallStatus.DENIED,
                 ToolCallStatus.CANCELLED,
             }:
-                self.store.update_with_event(
-                    ToolCall,
-                    call.id,
-                    {
-                        "status": ToolCallStatus.CANCELLED,
-                        "completed_at": utc_now(),
-                        "error": reason,
-                    },
-                    expected_revision=call.revision,
-                    run_id=turn.id,
-                    event_type="tool.cancelled",
-                    event_payload={
-                        "tool_call_id": call.id,
-                        "status": ToolCallStatus.CANCELLED.value,
-                    },
-                    actor_id=self.operator_id(),
-                    idempotency_key=f"tool:{call.id}:chat-stop",
+                (
+                    await self.store.update_with_event(
+                        ToolCall,
+                        call.id,
+                        {
+                            "status": ToolCallStatus.CANCELLED,
+                            "completed_at": utc_now(),
+                            "error": reason,
+                        },
+                        expected_revision=call.revision,
+                        run_id=turn.id,
+                        event_type="tool.cancelled",
+                        event_payload={
+                            "tool_call_id": call.id,
+                            "status": ToolCallStatus.CANCELLED.value,
+                        },
+                        actor_id=(await call_async(self.operator_id)),
+                        idempotency_key=f"tool:{call.id}:chat-stop",
+                    )
                 )
-        goal = self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
-        with self.store.transaction() as transaction:
-            cancelled = transaction.update(
+        goal = (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
+        async with self.store.transaction() as transaction:
+            cancelled = await transaction.update(
                 ChatTurn,
                 turn.id,
                 {
@@ -14037,27 +14345,31 @@ class ChatService:
                 expected_revision=turn.revision,
             )
             if goal is not None and goal.execution_claim_id == turn.execution_claim_id:
-                transaction.update(
-                    ChatGoal,
-                    goal.id,
-                    {
-                        "execution_owner_id": None,
-                        "execution_claim_id": None,
-                        "execution_claimed_at": None,
-                    },
-                    expected_revision=goal.revision,
+                (
+                    await transaction.update(
+                        ChatGoal,
+                        goal.id,
+                        {
+                            "execution_owner_id": None,
+                            "execution_claim_id": None,
+                            "execution_claimed_at": None,
+                        },
+                        expected_revision=goal.revision,
+                    )
                 )
         # A turn stopped while queued or parked (waiting for an approval or a
         # callback, or interrupted) ends here, not in admission release.
-        self._settle_admission(cancelled.id)
-        self.record_turn_outcome(cancelled.id)
-        self._pause_running_session_goal(
-            turn.session_id,
-            "Response stopped by the operator. Resume the goal when ready.",
+        (await self._settle_admission(cancelled.id))
+        (await self.record_turn_outcome(cancelled.id))
+        (
+            await self._pause_running_session_goal(
+                turn.session_id,
+                "Response stopped by the operator. Resume the goal when ready.",
+            )
         )
         return cancelled
 
-    def record_turn_outcome(self, turn_id: str) -> ChatMessage | None:
+    async def record_turn_outcome(self, turn_id: str) -> ChatMessage | None:
         """Save how a provider turn ended when it failed or stopped unanswered.
 
         Without it the operator's message stays unanswered in the transcript:
@@ -14068,7 +14380,7 @@ class ChatService:
         """
 
         try:
-            turn = self.store.get(ChatTurn, turn_id)
+            turn = await self.store.get(ChatTurn, turn_id)
             if (
                 turn.backend != ChatBackend.PROVIDER
                 or turn.status not in {ChatTurnStatus.FAILED, ChatTurnStatus.CANCELLED}
@@ -14076,8 +14388,8 @@ class ChatService:
             ):
                 return None
             for _ in range(3):
-                session = self.store.get(ChatSession, turn.session_id)
-                stored = self._session_messages(session, include_replaced=True)
+                session = await self.store.get(ChatSession, turn.session_id)
+                stored = await self._session_messages(session, include_replaced=True)
                 if any(
                     message.metadata.get("chat_turn_id") == turn.id
                     for message in stored
@@ -14092,13 +14404,15 @@ class ChatService:
                     )
                     + 1
                 )
-                elapsed_ms, approval_wait_ms = self._turn_timing(turn)
+                elapsed_ms, approval_wait_ms = await self._turn_timing(turn)
                 note = ChatMessage(
                     engagement_id=turn.engagement_id,
                     session_id=session.id,
                     sequence=sequence,
                     role=ChatRole.ASSISTANT,
-                    content=turn_outcome_text(turn, history=self._turn_history(turn)),
+                    content=turn_outcome_text(
+                        turn, history=(await self._turn_history(turn))
+                    ),
                     provider_profile_id=turn.provider_profile_id,
                     model=turn.model,
                     usage=turn.usage if turn.usage.total_tokens else None,
@@ -14106,24 +14420,26 @@ class ChatService:
                     approval_wait_ms=approval_wait_ms,
                     finish_reason=TURN_OUTCOME_FINISH_REASON,
                     metadata=turn_outcome_metadata(
-                        turn, history=self._turn_history(turn)
+                        turn, history=(await self._turn_history(turn))
                     ),
                 )
                 try:
-                    with self.store.transaction() as transaction:
-                        transaction.update(
-                            ChatSession,
-                            session.id,
-                            {
-                                "metadata": {
-                                    **session.metadata,
-                                    "message_count": sequence,
-                                    "last_sequence": sequence,
-                                }
-                            },
-                            expected_revision=session.revision,
+                    async with self.store.transaction() as transaction:
+                        (
+                            await transaction.update(
+                                ChatSession,
+                                session.id,
+                                {
+                                    "metadata": {
+                                        **session.metadata,
+                                        "message_count": sequence,
+                                        "last_sequence": sequence,
+                                    }
+                                },
+                                expected_revision=session.revision,
+                            )
                         )
-                        transaction.add(note)
+                        (await transaction.add(note))
                 except ConflictError:  # diagnostic-expected: another writer moved the conversation on; the note is retried against its newer revision
                     continue
                 return note
@@ -14140,38 +14456,40 @@ class ChatService:
             )
             return None
 
-    def _withdraw_turn_outcome(self, turn: ChatTurn) -> None:
+    async def _withdraw_turn_outcome(self, turn: ChatTurn) -> None:
         """Remove a turn's outcome note before the turn answers after all."""
 
-        session = self.store.get(ChatSession, turn.session_id)
+        session = await self.store.get(ChatSession, turn.session_id)
         notes = [
             message
-            for message in self._session_messages(session)
+            for message in (await self._session_messages(session))
             if is_turn_outcome(message)
             and message.metadata.get("chat_turn_id") == turn.id
         ]
         if not notes:
             return
-        with self.store.transaction() as transaction:
+        async with self.store.transaction() as transaction:
             for note in notes:
-                transaction.delete(
-                    ChatMessage, note.id, expected_revision=note.revision
+                (
+                    await transaction.delete(
+                        ChatMessage, note.id, expected_revision=note.revision
+                    )
                 )
 
-    def session_messages(
+    async def session_messages(
         self, session_id: str, *, include_replaced: bool = False
     ) -> list[ChatMessage]:
-        session = self.store.get(ChatSession, session_id)
-        return self._session_messages(session, include_replaced=include_replaced)
+        session = await self.store.get(ChatSession, session_id)
+        return await self._session_messages(session, include_replaced=include_replaced)
 
-    def session_messages_page(
+    async def session_messages_page(
         self, session_id: str, *, limit: int, before_message_id: str | None = None
     ) -> list[ChatMessage]:
         """Read one recent window for the UI; Core still retains the full history."""
 
-        self.store.get(ChatSession, session_id)
+        (await self.store.get(ChatSession, session_id))
         before = (
-            self.store.get(ChatMessage, before_message_id)
+            (await self.store.get(ChatMessage, before_message_id))
             if before_message_id
             else None
         )
@@ -14179,17 +14497,17 @@ class ChatService:
             raise ChatHistoryConflict(
                 "history cursor does not belong to this conversation"
             )
-        messages = self.store.list_session_entities(
+        messages = await self.store.list_session_entities(
             ChatMessage, session_id, newest_first=True, limit=limit, before=before
         )
         return sorted(
             messages, key=lambda item: (item.sequence, item.created_at, item.id)
         )
 
-    def attach_native_run_to_chat(self, run_id: str) -> ChatSession:
+    async def attach_native_run_to_chat(self, run_id: str) -> ChatSession:
         """Create or return the durable provider chat that continues a mission result."""
 
-        run = self.store.get(AgentRun, run_id)
+        run = await self.store.get(AgentRun, run_id)
         if run.backend != RunBackend.NATIVE:
             raise ChatConfigurationError(
                 "only native runs can be attached to provider chat"
@@ -14200,8 +14518,10 @@ class ChatService:
             )
         existing: ChatSession | None = None
         offset = 0
-        while page := self.store.list_entities(
-            ChatSession, engagement_id=run.engagement_id, offset=offset, limit=1_000
+        while page := (
+            await self.store.list_entities(
+                ChatSession, engagement_id=run.engagement_id, offset=offset, limit=1_000
+            )
         ):
             existing = next(
                 (
@@ -14237,37 +14557,41 @@ class ChatService:
                 "context_management": "nebula",
             },
         )
-        with self.store.transaction() as transaction:
-            transaction.add(chat)
-            transaction.add(
-                ChatMessage(
-                    id=str(uuid4()),
-                    engagement_id=run.engagement_id,
-                    session_id=chat.id,
-                    sequence=1,
-                    role=ChatRole.USER,
-                    content=run.objective,
-                    provider_profile_id=run.supervisor_provider_id,
-                    model=run.supervisor_model,
-                    metadata={"run_id": run.id, "handoff": "mission_to_chat"},
+        async with self.store.transaction() as transaction:
+            (await transaction.add(chat))
+            (
+                await transaction.add(
+                    ChatMessage(
+                        id=str(uuid4()),
+                        engagement_id=run.engagement_id,
+                        session_id=chat.id,
+                        sequence=1,
+                        role=ChatRole.USER,
+                        content=run.objective,
+                        provider_profile_id=run.supervisor_provider_id,
+                        model=run.supervisor_model,
+                        metadata={"run_id": run.id, "handoff": "mission_to_chat"},
+                    )
                 )
             )
-            transaction.add(
-                ChatMessage(
-                    id=str(uuid4()),
-                    engagement_id=run.engagement_id,
-                    session_id=chat.id,
-                    sequence=2,
-                    role=ChatRole.ASSISTANT,
-                    content=summary,
-                    provider_profile_id=run.supervisor_provider_id,
-                    model=run.supervisor_model,
-                    metadata={"run_id": run.id, "handoff": "mission_to_chat"},
+            (
+                await transaction.add(
+                    ChatMessage(
+                        id=str(uuid4()),
+                        engagement_id=run.engagement_id,
+                        session_id=chat.id,
+                        sequence=2,
+                        role=ChatRole.ASSISTANT,
+                        content=summary,
+                        provider_profile_id=run.supervisor_provider_id,
+                        model=run.supervisor_model,
+                        metadata={"run_id": run.id, "handoff": "mission_to_chat"},
+                    )
                 )
             )
         return chat
 
-    def fork_session(
+    async def fork_session(
         self,
         session_id: str,
         *,
@@ -14281,12 +14605,12 @@ class ChatService:
     ) -> ChatSession:
         """Create an independent transcript branch with explicit provenance."""
 
-        source = self.store.get(ChatSession, session_id)
-        if not side_chat and self.pending_turn(session_id) is not None:
+        source = await self.store.get(ChatSession, session_id)
+        if not side_chat and (await self.pending_turn(session_id)) is not None:
             raise ChatHistoryConflict(
                 "conversation cannot be forked while a response is active"
             )
-        messages = self._session_messages(source)
+        messages = await self._session_messages(source)
         boundary = (
             messages[-1]
             if through_latest and messages
@@ -14376,23 +14700,25 @@ class ChatService:
             )
             for message in copied_messages
         ]
-        with self.store.transaction() as transaction:
-            transaction.add(fork)
-            transaction.add_chat_messages(inherited)
+        async with self.store.transaction() as transaction:
+            (await transaction.add(fork))
+            (await transaction.add_chat_messages(inherited))
         from .chat_decisions import fork_decisions
         from .chat_goals import ChatGoalService
         from .storage import NotFoundError
 
         if not side_chat:
-            fork_decisions(
-                self.store,
-                source,
-                fork,
-                boundary.sequence - (1 if before_message_id else 0),
+            (
+                await fork_decisions(
+                    self.store,
+                    source,
+                    fork,
+                    boundary.sequence - (1 if before_message_id else 0),
+                )
             )
         if source.backend == ChatBackend.PROVIDER and not side_chat:
             try:
-                goal = ChatGoalService(self.store).get(source.id)
+                goal = await ChatGoalService(self.store).get(source.id)
             except (
                 NotFoundError
             ):  # diagnostic-expected: fork without a goal copies no goal
@@ -14401,36 +14727,40 @@ class ChatService:
                 # The copy's skills are stored in the fork, which outlives
                 # the source conversation if that is deleted.
                 skill_entries, skill_parts = split_skill_snapshots(
-                    resolve_skill_snapshots(
-                        self.store, goal.skill_snapshots, session_id=goal.session_id
+                    (
+                        await resolve_skill_snapshots(
+                            self.store, goal.skill_snapshots, session_id=goal.session_id
+                        )
                     ),
                     engagement_id=fork.engagement_id,
                     session_id=fork.id,
                 )
-                with self.store.transaction() as transaction:
-                    stage_snapshot_parts(transaction, skill_parts)
-                    transaction.add(
-                        ChatGoal(
-                            engagement_id=fork.engagement_id,
-                            session_id=fork.id,
-                            objective=goal.objective,
-                            completion_criteria=goal.completion_criteria,
-                            plan=goal.plan,
-                            resume_instruction=goal.resume_instruction,
-                            token_budget=goal.token_budget,
-                            time_budget_seconds=goal.time_budget_seconds,
-                            step_budget=goal.step_budget,
-                            child_budget=goal.child_budget,
-                            skill_snapshots=skill_entries,
-                            metadata={
-                                "forked_from_goal_id": goal.id,
-                                "workspace_is_shared": True,
-                            },
+                async with self.store.transaction() as transaction:
+                    (await stage_snapshot_parts(transaction, skill_parts))
+                    (
+                        await transaction.add(
+                            ChatGoal(
+                                engagement_id=fork.engagement_id,
+                                session_id=fork.id,
+                                objective=goal.objective,
+                                completion_criteria=goal.completion_criteria,
+                                plan=goal.plan,
+                                resume_instruction=goal.resume_instruction,
+                                token_budget=goal.token_budget,
+                                time_budget_seconds=goal.time_budget_seconds,
+                                step_budget=goal.step_budget,
+                                child_budget=goal.child_budget,
+                                skill_snapshots=skill_entries,
+                                metadata={
+                                    "forked_from_goal_id": goal.id,
+                                    "workspace_is_shared": True,
+                                },
+                            )
                         )
                     )
         return fork
 
-    def rewind_session(
+    async def rewind_session(
         self,
         session_id: str,
         *,
@@ -14439,16 +14769,16 @@ class ChatService:
     ) -> tuple[ChatSession, list[ChatMessage], list[ChatMessage]]:
         """Retract an operator message and its replies so it can be resent here."""
 
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         if expected_revision is not None and session.revision != expected_revision:
             raise ChatHistoryConflict(
                 "conversation changed; read its current revision before editing"
             )
-        if self.pending_turn(session_id) is not None:
+        if (await self.pending_turn(session_id)) is not None:
             raise ChatHistoryConflict(
                 "conversation cannot be edited while a response is active"
             )
-        messages = self._session_messages(session)
+        messages = await self._session_messages(session)
         boundary = next(
             (message for message in messages if message.id == before_message_id),
             None,
@@ -14489,29 +14819,35 @@ class ChatService:
         }
         retracted_subagents = [
             record
-            for record in self.subagents.for_session(session.id)
+            for record in (await self.subagents.for_session(session.id))
             if record.parent_turn_id in retracted_turn_ids
         ]
-        with self.store.transaction() as transaction:
+        async with self.store.transaction() as transaction:
             retracted = [
-                transaction.update(
-                    ChatMessage,
-                    message.id,
-                    {
-                        "metadata": {
-                            **message.metadata,
-                            "retracted_at": retracted_at,
-                            "retraction_id": retraction_id,
-                            "retracted_reason": "operator_edit",
-                        }
-                    },
-                    expected_revision=message.revision,
+                (
+                    await transaction.update(
+                        ChatMessage,
+                        message.id,
+                        {
+                            "metadata": {
+                                **message.metadata,
+                                "retracted_at": retracted_at,
+                                "retraction_id": retraction_id,
+                                "retracted_reason": "operator_edit",
+                            }
+                        },
+                        expected_revision=message.revision,
+                    )
                 )
                 for message in replaced
             ]
             for record in retracted_subagents:
-                self.subagents.retract(transaction, record, retraction_id=retraction_id)
-            session = transaction.update(
+                (
+                    await self.subagents.retract(
+                        transaction, record, retraction_id=retraction_id
+                    )
+                )
+            session = await transaction.update(
                 ChatSession,
                 session.id,
                 {
@@ -14523,13 +14859,13 @@ class ChatService:
                 expected_revision=session.revision,
             )
         for record in retracted_subagents:
-            self.subagents.close_retracted_messages(record)
+            (await self.subagents.close_retracted_messages(record))
         retained = [
             message for message in messages if message.sequence < boundary.sequence
         ]
         return session, retained, retracted
 
-    def context_status(
+    async def context_status(
         self,
         session_id: str,
         *,
@@ -14546,11 +14882,11 @@ class ChatService:
         conversation's own, as a runtime switch preflight does.
         """
 
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         provider_id, model = runtime or (session.provider_profile_id, session.model)
         if provider_id is None:
             raise ChatConfigurationError("chat session does not identify a provider")
-        profile = self.store.get(ProviderProfile, provider_id)
+        profile = await self.store.get(ProviderProfile, provider_id)
         if images_supported is None:
             images_supported = profile.capabilities.vision
         calibration = _context_calibration(
@@ -14559,7 +14895,7 @@ class ChatService:
             model,
         )
         reserved = _context_reserve(session.metadata)
-        messages = self._session_messages(session)
+        messages = await self._session_messages(session)
         last_provider_request = next(
             (
                 message.metadata.get("last_provider_request")
@@ -14579,15 +14915,19 @@ class ChatService:
             for message in messages
         }
         limits = resolve_context_limits(profile, model=model)
-        base_instructions = self._estimated_base_instructions(session.engagement_id)
+        base_instructions = await self._estimated_base_instructions(
+            session.engagement_id
+        )
         estimated = calibrated_estimate(
             estimate_messages(estimated_forms.values(), base_instructions) + reserved,
             calibration,
         )
         active_estimated = estimated
         latest = (
-            ContextCompactor(self.store).latest(
-                ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
+            (
+                await ContextCompactor(self.store).latest(
+                    ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
+                )
             )
             if session.backend == ChatBackend.PROVIDER
             else None
@@ -14669,7 +15009,7 @@ class ChatService:
             compaction_cost_usd=latest.cost_usd if latest else 0.0,
             snapshot=latest,
             working_notes=working_notes_status(
-                read_working_notes(self.store, session.id)
+                (await read_working_notes(self.store, session.id))
             ),
             quality=(
                 latest.quality
@@ -14678,21 +15018,23 @@ class ChatService:
             ),
         )
 
-    def runtime_switch_preflight(
+    async def runtime_switch_preflight(
         self,
         session_id: str,
         request: ChatRuntimeSwitchPreflightRequest,
+        *,
+        _confirmation_revision: int | None = None,
     ) -> ChatRuntimeSwitchPreflight:
         """Validate a proposed provider/model switch against durable active context."""
 
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         if session.revision != request.expected_session_revision:
             raise ChatHistoryConflict(
                 "conversation changed; reload it before changing provider or model"
             )
         # Provider turns carry their own runtime. A harness turn can still
         # reattach its vendor session, so a backend change needs an idle chat.
-        profile = self.store.get(ProviderProfile, request.provider_id)
+        profile = await self.store.get(ProviderProfile, request.provider_id)
         current: dict[str, Any] = {
             "session_id": session.id,
             "session_revision": session.revision,
@@ -14701,15 +15043,20 @@ class ChatService:
             "target_provider_id": request.provider_id,
             "target_model": request.model,
         }
-        if session.backend == ChatBackend.HARNESS:
-            reason = self._harness_to_provider_blocker(session)
-            if reason:
-                return ChatRuntimeSwitchPreflight(
-                    **current,
-                    compatible=False,
-                    reason=reason,
-                    reason_code="harness_not_idle",
-                )
+        if (
+            session.metadata.get("side_chat")
+            or session.metadata.get("temporary_assistant")
+            or session.metadata.get("archived_at")
+        ):
+            return ChatRuntimeSwitchPreflight(
+                **current,
+                compatible=False,
+                reason="Switch the runtime from an unarchived saved main conversation.",
+                reason_code="conversation_unavailable",
+            )
+        reason = await self.runtime_switcher.reason(session)
+        current["activation"] = "after_active_work" if reason else "immediate"
+        current["activation_reason"] = reason
         if not profile.enabled:
             return ChatRuntimeSwitchPreflight(
                 **current,
@@ -14737,8 +15084,8 @@ class ChatService:
             )
         try:
             provider = self.provider_factory(profile)
-            engagement = self.store.get(Engagement, session.engagement_id)
-            self._enforce_engagement_privacy(engagement, provider)
+            engagement = await self.store.get(Engagement, session.engagement_id)
+            (await self._enforce_engagement_privacy(engagement, provider))
             limits = resolve_context_limits(
                 profile,
                 model=request.model,
@@ -14758,15 +15105,19 @@ class ChatService:
             )
         # Size stored images the way the target model will receive them: the
         # image reserve for a vision model, a text placeholder otherwise.
-        active_tokens = self.context_status(
-            session.id,
-            images_supported=profile.capabilities.vision,
-            runtime=(profile.id, request.model),
+        active_tokens = (
+            await self.context_status(
+                session.id,
+                images_supported=profile.capabilities.vision,
+                runtime=(profile.id, request.model),
+            )
         ).estimated_input_tokens
         requires_confirmation = active_tokens > limits.target_input_tokens
         confirmation = (
             self._runtime_switch_token(
-                session=session,
+                session=session.model_copy(update={"revision": _confirmation_revision})
+                if _confirmation_revision is not None
+                else session,
                 profile=profile,
                 model=request.model,
                 tools_enabled=request.tools_enabled,
@@ -14794,39 +15145,10 @@ class ChatService:
             metadata_revision=limits.metadata_revision,
         )
 
-    def _harness_to_provider_blocker(self, session: ChatSession) -> str | None:
-        if session.metadata.get("side_chat") or session.metadata.get(
-            "temporary_assistant"
-        ):
-            return "Switch the runtime from a saved main conversation."
-        if isinstance(session.metadata.get("archived_at"), str):
-            return "Unarchive this conversation before switching its runtime."
-        with self.store.database.session() as database:
-            if any(
-                self._header_is_pending(turn)
-                for turn in session_turn_headers(database, session.id)
-            ):
-                return "Wait for the active response or resolve its pending action before switching to a provider."
-        goals = self.store.list_session_entities(ChatGoal, session.id)
-        if any(
-            goal.status in {ChatGoalStatus.RUNNING, ChatGoalStatus.BLOCKED}
-            or goal.execution_claim_id is not None
-            for goal in goals
-        ):
-            return "Pause the running goal or resolve its block before switching to a provider."
-        from .chat_goals import ChatGoalService
+    async def _harness_to_provider_blocker(self, session: ChatSession) -> str | None:
+        return await self.runtime_switcher.reason(session)
 
-        if ChatGoalService(self.store).has_working_subagents(session.id):
-            return "Wait for this conversation's subagents to finish before switching to a provider."
-        for queue in self.store.list_session_entities(ChatQueue, session.id):
-            if any(
-                item.get("status") not in {"complete", "cancelled"}
-                for item in queue.items
-            ):
-                return "Finish, cancel, or remove queued follow-ups before switching to a provider."
-        return None
-
-    def apply_runtime_switch(
+    async def apply_runtime_switch(
         self, session_id: str, request: ChatRuntimeSwitchRequest
     ) -> ChatSession:
         """Make a reviewed provider/model the conversation's runtime.
@@ -14839,7 +15161,7 @@ class ChatService:
         harness conversations must be idle before changing backend.
         """
 
-        switch = self.runtime_switch_preflight(session_id, request)
+        switch = await self.runtime_switch_preflight(session_id, request)
         if not switch.compatible:
             raise ChatConfigurationError(
                 switch.reason or "the selected provider/model is incompatible"
@@ -14850,7 +15172,7 @@ class ChatService:
             raise ChatConfigurationError(
                 "switching to this provider/model requires confirmed context compaction; review the switch again"
             )
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         metadata = dict(session.metadata)
         saved_config = metadata.get("assistant_config")
         if isinstance(saved_config, dict):
@@ -14880,24 +15202,20 @@ class ChatService:
                     "harness_mode": None,
                     "harness_cyber_access_program": None,
                 }
-        with self.store.transaction(immediate=True) as transaction:
-            if session.backend == ChatBackend.HARNESS:
-                reason = self._harness_to_provider_blocker(session)
-                if reason:
-                    raise ChatHistoryConflict(reason)
-            return transaction.update(
-                ChatSession,
-                session_id,
-                {
-                    "backend": ChatBackend.PROVIDER,
-                    "provider_profile_id": request.provider_id,
-                    "harness_profile_id": None,
-                    "harness_session_id": None,
-                    "model": request.model,
-                    "metadata": metadata,
-                },
-                expected_revision=switch.session_revision,
-            )
+        return await self.runtime_switcher.select(
+            session,
+            metadata,
+            {
+                "backend": ChatBackend.PROVIDER,
+                "provider_profile_id": request.provider_id,
+                "harness_profile_id": None,
+                "harness_session_id": None,
+                "model": request.model,
+            },
+            expected_revision=request.expected_session_revision,
+            confirmation_token=request.confirmation_token,
+            max_output_tokens=request.max_output_tokens,
+        )
 
     @staticmethod
     def _runtime_switch_token(
@@ -14929,10 +15247,10 @@ class ChatService:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def _session_messages(
+    async def _session_messages(
         self, session: ChatSession, *, include_replaced: bool = False
     ) -> list[ChatMessage]:
-        messages = self.store.list_session_entities(ChatMessage, session.id)
+        messages = await self.store.list_session_entities(ChatMessage, session.id)
         if not include_replaced:
             messages = [
                 message for message in messages if not message_is_replaced(message)
@@ -14941,10 +15259,10 @@ class ChatService:
             messages, key=lambda item: (item.sequence, item.created_at, item.id)
         )
 
-    def _next_sequence(self, session: ChatSession) -> int:
+    async def _next_sequence(self, session: ChatSession) -> int:
         """Reserve the next transcript slot above every message, replaced or not."""
 
-        stored = self._session_messages(session, include_replaced=True)
+        stored = await self._session_messages(session, include_replaced=True)
         recorded = session.metadata.get("last_sequence")
         return (
             max(
@@ -15190,7 +15508,7 @@ class ChatService:
             well as identity, so an edited or retracted one compacts afresh.
             """
 
-            latest = compactor.latest(
+            latest = await compactor.latest(
                 ContextOwnerType.CHAT_SESSION, owner.id, owner.engagement_id
             )
             if (
@@ -15294,7 +15612,7 @@ class ChatService:
             if result.created:
                 usage = _added_usage(usage, snapshot.usage)
                 cost += snapshot.cost_usd
-            session = self.store.get(ChatSession, session.id)
+            session = await self.store.get(ChatSession, session.id)
             if snapshot.memory is None:
                 raise ContextCompactionError(
                     "latest context snapshot has no memory", usage=usage
@@ -15343,13 +15661,13 @@ class ChatService:
         )
         return request_messages, instructions, usage, snapshot, session
 
-    def _estimated_base_instructions(self, engagement_id: str) -> str:
+    async def _estimated_base_instructions(self, engagement_id: str) -> str:
         """The instructions every turn of the conversation begins with, for
         estimates made outside a turn (the context meter, pre-compaction)."""
 
         try:
             project_text = project_instructions_text(
-                self._project_instructions(engagement_id)
+                (await self._project_instructions(engagement_id))
             )
         except ChatConfigurationError:
             # diagnostic-expected: an unusable AGENTS.md is reported when a turn starts
@@ -15410,7 +15728,7 @@ class ChatService:
             if self._precompactions.get(session.id) is state:
                 del self._precompactions[session.id]
 
-        state.task.add_done_callback(finished)
+        state.task.add_done_callback(async_done_callback(finished))
 
     async def _settle_precompaction(self, session_id: str) -> bool:
         """Let a turn that needs a new snapshot use the background compaction.
@@ -15448,7 +15766,7 @@ class ChatService:
     ) -> None:
         async with self._precompaction_slots:
             try:
-                plan, reason = self._precompaction_plan(
+                plan, reason = await self._precompaction_plan(
                     session_id, profile_id, model, goal_id
                 )
             except (NotFoundError, ChatError) as exc:
@@ -15512,10 +15830,10 @@ class ChatService:
                     stage="context",
                     metadata={"session_id": session_id},
                 )
-                self._charge_precompaction(plan.goal_id, exc.usage)
+                (await self._charge_precompaction(plan.goal_id, exc.usage))
                 return
             if result.created:
-                self._charge_precompaction(plan.goal_id, result.snapshot.usage)
+                (await self._charge_precompaction(plan.goal_id, result.snapshot.usage))
             record_diagnostic(
                 "info",
                 "chat",
@@ -15532,7 +15850,7 @@ class ChatService:
                 },
             )
 
-    def _precompaction_plan(
+    async def _precompaction_plan(
         self, session_id: str, profile_id: str, model: str, goal_id: str | None
     ) -> tuple[_PrecompactionPlan | None, str]:
         """What a background compaction would archive now, or why it would not.
@@ -15543,7 +15861,7 @@ class ChatService:
         with each operator message assumed as long as the last one.
         """
 
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         if (
             session.backend != ChatBackend.PROVIDER
             or session.provider_profile_id != profile_id
@@ -15551,10 +15869,10 @@ class ChatService:
         ):
             # The operator switched runtime for the next turn.
             return None, "runtime_changed"
-        profile = self.store.get(ProviderProfile, profile_id)
+        profile = await self.store.get(ProviderProfile, profile_id)
         if not profile.enabled:
             return None, "provider_disabled"
-        messages = self._session_messages(session)
+        messages = await self._session_messages(session)
         if not messages:
             return None, "no_messages"
         images_supported = profile.capabilities.vision
@@ -15567,7 +15885,7 @@ class ChatService:
             )
             for message in messages
         ]
-        instructions = self._estimated_base_instructions(session.engagement_id)
+        instructions = await self._estimated_base_instructions(session.engagement_id)
         calibration = _context_calibration(session.metadata, profile_id, model)
         reserved = _context_reserve(session.metadata)
         limits = resolve_context_limits(profile, model=model)
@@ -15590,7 +15908,7 @@ class ChatService:
             ),
             0,
         )
-        latest = ContextCompactor(self.store).latest(
+        latest = await ContextCompactor(self.store).latest(
             ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
         )
         if (
@@ -15648,7 +15966,7 @@ class ChatService:
         goal: ChatGoal | None = None
         if goal_id is not None:
             try:
-                goal = self.store.get(ChatGoal, goal_id)
+                goal = await self.store.get(ChatGoal, goal_id)
             except NotFoundError:  # diagnostic-expected: a deleted goal neither guides nor pays for the compaction
                 goal = None
         if goal is not None and goal.status != ChatGoalStatus.RUNNING:
@@ -15661,8 +15979,10 @@ class ChatService:
                 return None, "goal_budget"
             budget = ContextCallBudget(max_tokens=remaining)
         provider = self.provider_factory(profile)
-        self._enforce_engagement_privacy(
-            self.store.get(Engagement, session.engagement_id), provider
+        (
+            await self._enforce_engagement_privacy(
+                (await self.store.get(Engagement, session.engagement_id)), provider
+            )
         )
         return (
             _PrecompactionPlan(
@@ -15677,7 +15997,9 @@ class ChatService:
             "compact",
         )
 
-    def _charge_precompaction(self, goal_id: str | None, usage: ChatTokenUsage) -> None:
+    async def _charge_precompaction(
+        self, goal_id: str | None, usage: ChatTokenUsage
+    ) -> None:
         """Debit a background compaction from the goal it prepared a turn for."""
 
         if goal_id is None or usage.total_tokens <= 0:
@@ -15685,10 +16007,12 @@ class ChatService:
         last_error: Exception | None = None
         for _ in range(3):
             try:
-                self._charge_goal(
-                    goal_id,
-                    usage,
-                    exhausted_reason="Token budget exhausted during context compaction.",
+                (
+                    await self._charge_goal(
+                        goal_id,
+                        usage,
+                        exhausted_reason="Token budget exhausted during context compaction.",
+                    )
                 )
                 return
             except ConflictError as exc:  # diagnostic-expected: a running turn updated the goal; charged again against its revision
@@ -15761,11 +16085,15 @@ class ChatService:
             dense=self._conversation_dense,
         )
 
-    def _enforce_engagement_privacy(
+    async def _enforce_engagement_privacy(
         self, engagement: Engagement, provider: ModelProvider
     ) -> None:
         try:
-            validate_engagement_provider_privacy(self.store, engagement, provider)
+            (
+                await validate_engagement_provider_privacy(
+                    self.store, engagement, provider
+                )
+            )
         except ProviderPrivacyViolation as exc:
             record_caught_exception(
                 "chat",
@@ -15830,10 +16158,10 @@ class ChatService:
             *[item for item in plan.queries if item.casefold() != query.casefold()],
         ][:4]
 
-    def _has_ready_knowledge(self, engagement_id: str) -> bool:
+    async def _has_ready_knowledge(self, engagement_id: str) -> bool:
         offset = 0
         while True:
-            sources = self.store.list_entities(
+            sources = await self.store.list_entities(
                 KnowledgeSource,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -15846,7 +16174,7 @@ class ChatService:
             offset += len(sources)
         offset = 0
         while True:
-            items = self.store.list_entities(
+            items = await self.store.list_entities(
                 LibraryItem,
                 offset=offset,
                 limit=1_000,
@@ -15857,7 +16185,7 @@ class ChatService:
                 return False
             offset += len(items)
 
-    def _retrieve(
+    async def _retrieve(
         self,
         engagement_id: str,
         queries: list[str],
@@ -15884,7 +16212,7 @@ class ChatService:
             and self.knowledge_index.status.state == "ready"
         ):
             try:
-                candidates = self._retrieve_vector_candidates(
+                candidates = await self._retrieve_vector_candidates(
                     engagement_id,
                     queries,
                     query_terms=query_terms,
@@ -15905,7 +16233,7 @@ class ChatService:
         # Inline chunks are retained only for pre-Chroma sources and library
         # embedders without an index. Merge them during a gradual migration so
         # adding a newly indexed source never hides an older source.
-        legacy_candidates = self._retrieve_legacy_candidates(
+        legacy_candidates = await self._retrieve_legacy_candidates(
             engagement_id,
             query_terms=query_terms,
             redact=redact,
@@ -15989,7 +16317,7 @@ class ChatService:
             for index, score in kept
         ]
 
-    def _retrieve_vector_candidates(
+    async def _retrieve_vector_candidates(
         self,
         engagement_id: str,
         queries: list[str],
@@ -16001,7 +16329,7 @@ class ChatService:
         ready_sources: dict[str, KnowledgeSource | LibraryItem] = {}
         offset = 0
         while True:
-            sources = self.store.list_entities(
+            sources = await self.store.list_entities(
                 KnowledgeSource,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -16017,7 +16345,7 @@ class ChatService:
             offset += len(sources)
         offset = 0
         while True:
-            items = self.store.list_entities(
+            items = await self.store.list_entities(
                 LibraryItem,
                 offset=offset,
                 limit=1_000,
@@ -16071,7 +16399,7 @@ class ChatService:
             )
         return candidates
 
-    def _retrieve_legacy_candidates(
+    async def _retrieve_legacy_candidates(
         self,
         engagement_id: str,
         *,
@@ -16083,7 +16411,7 @@ class ChatService:
         engagement_sources: list[KnowledgeSource | LibraryItem] = []
         offset = 0
         while len(engagement_sources) < 5_000:
-            knowledge_page = self.store.list_entities(
+            knowledge_page = await self.store.list_entities(
                 KnowledgeSource,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -16096,7 +16424,7 @@ class ChatService:
         library_sources: list[KnowledgeSource | LibraryItem] = []
         offset = 0
         while len(library_sources) < 5_000:
-            library_page = self.store.list_entities(
+            library_page = await self.store.list_entities(
                 LibraryItem,
                 offset=offset,
                 limit=1_000,
@@ -16165,7 +16493,7 @@ class ChatService:
                     ordinal += 1
         return candidates
 
-    def _project_instructions(
+    async def _project_instructions(
         self, engagement_id: str | None
     ) -> ProjectInstructions | None:
         """Re-read the project-root AGENTS.md for this turn; it is never compacted."""
@@ -16173,7 +16501,7 @@ class ChatService:
         if engagement_id is None:
             return None
         try:
-            workspace = self.workspace_resolver(engagement_id)
+            workspace = await resolve_workspace(self.workspace_resolver, engagement_id)
         except (ChatConfigurationError, OSError, ValueError):
             # diagnostic-expected: without a project workspace there is no AGENTS.md to apply
             return None
@@ -16292,7 +16620,7 @@ class ChatService:
         session_id = self._session_id(prepared)
         if not session_id or not prepared.engagement_id:
             return
-        session = await asyncio.to_thread(self.store.get, ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         from .chat_naming import should_name, substantive_prompt
 
         if not should_name(session):
@@ -16300,9 +16628,7 @@ class ChatService:
         first_prompt = substantive_prompt(
             [
                 message.content
-                for message in await asyncio.to_thread(
-                    self.session_messages, session_id
-                )
+                for message in await self.session_messages(session_id)
                 if message.role == ChatRole.USER
             ]
         )
@@ -16361,12 +16687,11 @@ class ChatService:
                 "metadata": {**session.metadata, "initial_title_state": "failed"}
             }
         for _ in range(3):
-            latest = await asyncio.to_thread(self.store.get, ChatSession, session.id)
+            latest = await self.store.get(ChatSession, session.id)
             if not should_name(latest):
                 return
             try:
-                prepared.session = await asyncio.to_thread(
-                    self.store.update,
+                prepared.session = await self.store.update(
                     ChatSession,
                     session.id,
                     {
@@ -16384,7 +16709,7 @@ class ChatService:
             except ConflictError:  # diagnostic-expected: concurrent writer won; the next candidate is tried
                 continue
 
-    def _turn_citations(
+    async def _turn_citations(
         self, prepared: PreparedChat, answer: str = ""
     ) -> list[ChatCitation]:
         """What the answer cites: attached knowledge, then what it searched.
@@ -16402,7 +16727,7 @@ class ChatService:
         if prepared.turn is None or not prepared.tools_enabled:
             return citations
         known = {(item.source_id, item.chunk_id) for item in citations}
-        for entry in self._turn_history(prepared.turn):
+        for entry in await self._turn_history(prepared.turn):
             if (
                 entry.get("name") != KNOWLEDGE_SEARCH_TOOL_NAME
                 or entry.get("status") != "complete"
@@ -16415,7 +16740,7 @@ class ChatService:
                     citations.append(citation)
         return citations
 
-    def _completion(
+    async def _completion(
         self, prepared: PreparedChat, response: ModelResponse
     ) -> ChatCompletionResponse:
         content = _operator_answer_text(response.text)
@@ -16449,7 +16774,9 @@ class ChatService:
         # A tool turn thinks once per routing step and again while it answers.
         # The turn collected all of it; the final response holds only the last.
         turn_reasoning = (
-            self.turn_reasoning(prepared.turn) if prepared.turn is not None else ""
+            (await self.turn_reasoning(prepared.turn))
+            if prepared.turn is not None
+            else ""
         )
         if turn_reasoning:
             reasoning = turn_reasoning
@@ -16481,11 +16808,11 @@ class ChatService:
             ),
             finish_reason=response.finish_reason,
             provider_request_id=response.provider_request_id,
-            citations=self._turn_citations(prepared, content),
+            citations=(await self._turn_citations(prepared, content)),
             tool_suggestions=(
                 public_suggestions(
                     prepared.turn.request_snapshot.get("tool_suggestions"),
-                    self._turn_history(prepared.turn),
+                    (await self._turn_history(prepared.turn)),
                 )
                 if prepared.turn is not None
                 else None
@@ -16493,7 +16820,7 @@ class ChatService:
             progress_prefix_utf16_length=progress_prefix_utf16_length,
         )
 
-    def _persist_turn_inputs(self, prepared: PreparedChat) -> None:
+    async def _persist_turn_inputs(self, prepared: PreparedChat) -> None:
         """Persist the new turn and its inputs against the session as it is now.
 
         ``prepare_async`` read the session before provider verification,
@@ -16507,16 +16834,18 @@ class ChatService:
         last_error: ConflictError | None = None
         for _ in range(3):
             if prepared.session is not None:
-                prepared.session = self.store.get(ChatSession, prepared.session.id)
+                prepared.session = await self.store.get(
+                    ChatSession, prepared.session.id
+                )
             try:
-                self._write_turn_inputs(prepared)
+                (await self._write_turn_inputs(prepared))
                 return
             except ConflictError as exc:  # diagnostic-expected: another writer moved the session; retry against its newer revision
                 last_error = exc
         if last_error is not None:
             raise last_error
 
-    def _write_turn_inputs(self, prepared: PreparedChat) -> None:
+    async def _write_turn_inputs(self, prepared: PreparedChat) -> None:
         turn = prepared.turn
         if turn is None or not prepared.engagement_id:
             return
@@ -16530,10 +16859,12 @@ class ChatService:
         }
         active = [
             item
-            for item in self.store.list_session_entities(
-                ChatTurn,
-                turn.session_id,
-                statuses=[status.value for status in active_statuses],
+            for item in (
+                await self.store.list_session_entities(
+                    ChatTurn,
+                    turn.session_id,
+                    statuses=[status.value for status in active_statuses],
+                )
             )
             if item.status != ChatTurnStatus.INTERRUPTED
             or bool(item.request_snapshot.get("recovery", {}).get("required"))
@@ -16543,7 +16874,7 @@ class ChatService:
         session = prepared.session or prepared.pending_session
         if session is None:
             raise ChatError("provider chat is missing its durable session")
-        start = self._next_sequence(session)
+        start = await self._next_sequence(session)
         messages = [
             ChatMessage(
                 engagement_id=prepared.engagement_id,
@@ -16580,22 +16911,28 @@ class ChatService:
         turn = turn.model_copy(update={"request_snapshot": compact_snapshot})
         if prepared.pending_session is not None:
             session = prepared.pending_session.model_copy(update={"metadata": metadata})
-            with self.store.transaction(immediate=True) as transaction:
-                transaction.assert_project_workspace(
-                    prepared.engagement_id, prepared.project_workspace_path
+            async with self.store.transaction(immediate=True) as transaction:
+                (
+                    await transaction.assert_project_workspace(
+                        prepared.engagement_id, prepared.project_workspace_path
+                    )
                 )
-                transaction.add_all([session, *messages])
-                stage_snapshot_parts(transaction, snapshot_parts)
-                transaction.add(turn)
+                (await transaction.add_all([session, *messages]))
+                (await stage_snapshot_parts(transaction, snapshot_parts))
+                (await transaction.add(turn))
             prepared.session = session
             prepared.pending_session = None
         else:
-            goal = self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
-            with self.store.transaction(immediate=True) as transaction:
-                transaction.assert_project_workspace(
-                    prepared.engagement_id, prepared.project_workspace_path
+            goal = (
+                (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
+            )
+            async with self.store.transaction(immediate=True) as transaction:
+                (
+                    await transaction.assert_project_workspace(
+                        prepared.engagement_id, prepared.project_workspace_path
+                    )
                 )
-                prepared.session = transaction.update(
+                prepared.session = await transaction.update(
                     ChatSession,
                     session.id,
                     {
@@ -16608,35 +16945,39 @@ class ChatService:
                     },
                     expected_revision=session.revision,
                 )
-                transaction.add_all(messages)
-                stage_snapshot_parts(transaction, snapshot_parts)
-                transaction.add(turn)
+                (await transaction.add_all(messages))
+                (await stage_snapshot_parts(transaction, snapshot_parts))
+                (await transaction.add(turn))
                 if goal is not None:
-                    transaction.update(
-                        ChatGoal,
-                        goal.id,
-                        {
-                            "current_step": goal.current_step + 1,
-                            "linked_turn_ids": [*goal.linked_turn_ids, turn.id],
-                        },
-                        expected_revision=goal.revision,
+                    (
+                        await transaction.update(
+                            ChatGoal,
+                            goal.id,
+                            {
+                                "current_step": goal.current_step + 1,
+                                "linked_turn_ids": [*goal.linked_turn_ids, turn.id],
+                            },
+                            expected_revision=goal.revision,
+                        )
                     )
                 from .chat_queue import link_queue_turn
 
-                link_queue_turn(transaction, prepared.queue_claim, turn.id)
+                (await link_queue_turn(transaction, prepared.queue_claim, turn.id))
         browser_session_id = turn.request_snapshot.get("browser_session_id")
         if isinstance(browser_session_id, str):
-            browser_session = self.store.get(BrowserSession, browser_session_id)
+            browser_session = await self.store.get(BrowserSession, browser_session_id)
             if browser_session.metadata.get("browser_companion_version") == 1:
-                BrowserCompanion(self.store, BrowserEngineRegistry()).bind(
-                    browser_session_id, session.id
+                (
+                    await BrowserCompanion(self.store, BrowserEngineRegistry()).bind(
+                        browser_session_id, session.id
+                    )
                 )
         prepared.turn = turn
         prepared.inputs_persisted = True
         prepared.stored_messages.extend(messages)
         prepared.new_messages = []
 
-    def _turn_timing(
+    async def _turn_timing(
         self, turn: ChatTurn | None, started_at: datetime | None = None
     ) -> tuple[int | None, int | None]:
         """Elapsed since the turn started, and the approval wait inside it."""
@@ -16648,11 +16989,11 @@ class ChatService:
         if turn is None:
             return elapsed, None
         waited = 0
-        for call_id in self._turn_tool_call_ids(turn):
+        for call_id in await self._turn_tool_call_ids(turn):
             try:
-                call = self.store.get(ToolCall, call_id)
+                call = await self.store.get(ToolCall, call_id)
                 approval = (
-                    self.store.get(Approval, call.approval_id)
+                    (await self.store.get(Approval, call.approval_id))
                     if call.approval_id
                     else None
                 )
@@ -16670,13 +17011,13 @@ class ChatService:
         # Parallel approvals can overlap, so the wait never exceeds the turn.
         return elapsed, min(waited, elapsed) if waited else None
 
-    def _saved_turn_answer(self, turn: ChatTurn) -> ChatMessage | None:
+    async def _saved_turn_answer(self, turn: ChatTurn) -> ChatMessage | None:
         """The answer already stored for ``turn``, if one is.
 
         Outcome notes carry the turn id too, under their own ``kind``.
         """
 
-        saved = self.store.find_entities(
+        saved = await self.store.find_entities(
             ChatMessage,
             {
                 "role": ChatRole.ASSISTANT.value,
@@ -16688,7 +17029,7 @@ class ChatService:
         )
         return saved[0] if saved else None
 
-    def _adopt_saved_answer(
+    async def _adopt_saved_answer(
         self,
         prepared: PreparedChat,
         completion: ChatCompletionResponse,
@@ -16707,10 +17048,10 @@ class ChatService:
         completion.message.reasoning = saved.reasoning
         completion.elapsed_ms = saved.elapsed_ms
         completion.approval_wait_ms = saved.approval_wait_ms
-        with self.store.transaction() as transaction:
-            self._complete_turn_in(transaction, prepared, completion)
+        async with self.store.transaction() as transaction:
+            (await self._complete_turn_in(transaction, prepared, completion))
 
-    def _complete_turn_in(
+    async def _complete_turn_in(
         self,
         transaction: StoreTransaction,
         prepared: PreparedChat,
@@ -16724,10 +17065,10 @@ class ChatService:
 
         from .chat_goals import ChatGoalService
 
-        latest = self._assert_execution_owner(prepared)
-        proposal = self._accepted_goal_completion(latest)
+        latest = await self._assert_execution_owner(prepared)
+        proposal = await self._accepted_goal_completion(latest)
         goal = (
-            self.store.get(ChatGoal, latest.goal_id)
+            (await self.store.get(ChatGoal, latest.goal_id))
             if proposal is not None and latest.goal_id is not None
             else None
         )
@@ -16736,7 +17077,11 @@ class ChatService:
                 goal.status != ChatGoalStatus.RUNNING
                 or goal.execution_owner_id != self.worker_id
                 or goal.execution_claim_id != prepared.execution_claim_id
-                or ChatGoalService(self.store).has_working_subagents(latest.session_id)
+                or (
+                    await ChatGoalService(self.store).has_working_subagents(
+                        latest.session_id
+                    )
+                )
             ):
                 raise ChatHistoryConflict(
                     "the goal changed or still has working subagents before completion"
@@ -16748,7 +17093,7 @@ class ChatService:
         if not prepared.tools_enabled:
             # A tool turn recorded each response's usage as it arrived.
             changes.update({"usage": completion.usage, "error": None})
-        prepared.turn = transaction.update(
+        prepared.turn = await transaction.update(
             ChatTurn,
             latest.id,
             changes,
@@ -16756,28 +17101,30 @@ class ChatService:
         )
         if goal is not None and proposal is not None:
             now = utc_now()
-            transaction.update(
-                ChatGoal,
-                goal.id,
-                {
-                    "status": ChatGoalStatus.COMPLETED,
-                    "completed_at": now,
-                    "completion_summary": proposal.completion_summary,
-                    "completion_evidence": [
-                        {
-                            "kind": "agent_reported",
-                            "detail": detail,
-                            "turn_id": latest.id,
-                        }
-                        for detail in proposal.completion_evidence
-                    ],
-                    "active_since": None,
-                    "elapsed_seconds": goal.active_elapsed_seconds(now),
-                    "execution_owner_id": None,
-                    "execution_claim_id": None,
-                    "execution_claimed_at": None,
-                },
-                expected_revision=goal.revision,
+            (
+                await transaction.update(
+                    ChatGoal,
+                    goal.id,
+                    {
+                        "status": ChatGoalStatus.COMPLETED,
+                        "completed_at": now,
+                        "completion_summary": proposal.completion_summary,
+                        "completion_evidence": [
+                            {
+                                "kind": "agent_reported",
+                                "detail": detail,
+                                "turn_id": latest.id,
+                            }
+                            for detail in proposal.completion_evidence
+                        ],
+                        "active_since": None,
+                        "elapsed_seconds": goal.active_elapsed_seconds(now),
+                        "execution_owner_id": None,
+                        "execution_claim_id": None,
+                        "execution_claimed_at": None,
+                    },
+                    expected_revision=goal.revision,
+                )
             )
         if latest.goal_id and not prepared.tools_enabled:
             uncharged = ChatTokenUsage(
@@ -16792,9 +17139,13 @@ class ChatService:
                 ),
             )
             if uncharged.total_tokens:
-                self._charge_goal(latest.goal_id, uncharged, transaction=transaction)
+                (
+                    await self._charge_goal(
+                        latest.goal_id, uncharged, transaction=transaction
+                    )
+                )
 
-    def _persist(
+    async def _persist(
         self, prepared: PreparedChat, completion: ChatCompletionResponse
     ) -> None:
         """Store the exchange and, for a durable turn, complete it atomically."""
@@ -16805,11 +17156,11 @@ class ChatService:
         if session is None:
             raise ChatError("engagement chat is missing its durable session")
         if prepared.turn is not None and not prepared.new_messages:
-            saved = self._saved_turn_answer(prepared.turn)
+            saved = await self._saved_turn_answer(prepared.turn)
             if saved is not None:
-                self._adopt_saved_answer(prepared, completion, saved)
+                (await self._adopt_saved_answer(prepared, completion, saved))
                 return
-        start = self._next_sequence(session)
+        start = await self._next_sequence(session)
         messages: list[ChatMessage] = [
             ChatMessage(
                 engagement_id=prepared.engagement_id,
@@ -16831,7 +17182,7 @@ class ChatService:
         ]
         assistant_message_id = str(uuid4())
         completion.message.id = assistant_message_id
-        elapsed_ms, approval_wait_ms = self._turn_timing(
+        elapsed_ms, approval_wait_ms = await self._turn_timing(
             prepared.turn, prepared.started_at
         )
         completion.elapsed_ms = elapsed_ms
@@ -16864,7 +17215,9 @@ class ChatService:
                                 if completion.progress_prefix_utf16_length is not None
                                 else {}
                             ),
-                            "tool_call_ids": self._turn_tool_call_ids(prepared.turn),
+                            "tool_call_ids": (
+                                await self._turn_tool_call_ids(prepared.turn)
+                            ),
                             "tool_results": [
                                 {
                                     "tool_call_id": item.get("tool_call_id"),
@@ -16881,7 +17234,7 @@ class ChatService:
                                     ),
                                     "artifacts": item.get("artifacts", []),
                                 }
-                                for item in self._turn_history(prepared.turn)
+                                for item in (await self._turn_history(prepared.turn))
                             ],
                             **(
                                 {"tool_suggestions": completion.tool_suggestions}
@@ -16929,12 +17282,16 @@ class ChatService:
             last_error: Exception | None = None
             for _ in range(3):
                 try:
-                    with self.store.transaction() as transaction:
+                    async with self.store.transaction() as transaction:
                         if prepared.turn is not None:
                             # Fenced by the execution claim, and one commit
                             # with the answer it completes the turn on.
-                            self._complete_turn_in(transaction, prepared, completion)
-                        latest_session = self.store.get(
+                            (
+                                await self._complete_turn_in(
+                                    transaction, prepared, completion
+                                )
+                            )
+                        latest_session = await self.store.get(
                             ChatSession, prepared.session.id
                         )
                         # A turn recorded its runtime and assistant settings on
@@ -16968,7 +17325,7 @@ class ChatService:
                         title_state = latest_session.metadata.get("initial_title_state")
                         if title_state in {"generated", "operator", "failed"}:
                             metadata["initial_title_state"] = title_state
-                        prepared.session = transaction.update(
+                        prepared.session = await transaction.update(
                             ChatSession,
                             latest_session.id,
                             {
@@ -16978,7 +17335,7 @@ class ChatService:
                             },
                             expected_revision=latest_session.revision,
                         )
-                        transaction.add_all(messages)
+                        (await transaction.add_all(messages))
                     last_error = None
                     break
                 except ConflictError as exc:  # diagnostic-expected: revision conflict is retried; exhaustion raises ChatHistoryConflict
@@ -16992,7 +17349,7 @@ class ChatService:
             self._schedule_provider_usage_check(prepared.provider_profile.id)
             return
         entities.extend(messages)
-        self.store.create_many(entities)
+        (await self.store.create_many(entities))
         self._schedule_provider_usage_check(prepared.provider_profile.id)
 
     @staticmethod

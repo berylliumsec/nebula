@@ -8,6 +8,8 @@ jobs keep their capacity until the child finishes; their results are discarded.
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
 import asyncio
 from _thread import LockType
 from collections import deque
@@ -88,7 +90,7 @@ class _Job:
     result: asyncio.Future
     input_bytes: int
     context: Context
-    on_start: Callable[[], None] | None = None
+    on_start: MaybeAsync[[], None] | None = None
     started: bool = False
 
 
@@ -272,7 +274,7 @@ class CpuWorkerPool:
         /,
         *arguments: Any,
         input_bytes: int = 0,
-        on_start: Callable[[], None] | None = None,
+        on_start: (MaybeAsync[[], None] | None) = None,
     ) -> _T:
         await self.start()
         if input_bytes < 0 or input_bytes > self.max_input_bytes:
@@ -355,7 +357,11 @@ class CpuWorkerPool:
             lost = False
             try:
                 if job.on_start is not None:
-                    job.context.run(job.on_start)
+                    from .async_utils import call_async
+
+                    await asyncio.create_task(
+                        call_async(job.on_start), context=job.context
+                    )
                 status, value, cpu = await asyncio.to_thread(
                     _exchange, worker.connection, job.function, job.arguments
                 )

@@ -134,8 +134,8 @@ class ButlerWorkspace:
         self.workspace = workspace
         self.project_id = project_id
 
-    def _file_digest(self, path: str) -> dict[str, Any]:
-        download = self.workspace.download(self.project_id, path)
+    async def _file_digest(self, path: str) -> dict[str, Any]:
+        download = await self.workspace.download(self.project_id, path)
         digest = hashlib.sha256()
         size = 0
         for chunk in download.chunks():
@@ -145,8 +145,8 @@ class ButlerWorkspace:
             raise ValueError("file changed while reading; select it again")
         return {"path": path, "size": size, "sha256": digest.hexdigest()}
 
-    def _read(self, path: str, offset: int) -> dict[str, Any]:
-        download = self.workspace.download(self.project_id, path)
+    async def _read(self, path: str, offset: int) -> dict[str, Any]:
+        download = await self.workspace.download(self.project_id, path)
         try:
             if download.size > _MAX_TEXT_BYTES:
                 raise ValueError("file exceeds Butler's 1 MiB text-edit limit")
@@ -191,7 +191,7 @@ class ButlerWorkspace:
             expected_sha256=expected,
             expected_content_sha256=hashlib.sha256(payload).hexdigest(),
         )
-        observed = await asyncio.to_thread(self._file_digest, saved.path)
+        observed = await self._file_digest(saved.path)
         if observed["sha256"] != saved.sha256 or observed["size"] != saved.size:
             raise ValueError(
                 "file was saved but changed before read-back; read it before retrying"
@@ -201,36 +201,32 @@ class ButlerWorkspace:
     async def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         path = arguments.get("path", "")
         if name == "list":
-            listing = await asyncio.to_thread(
-                self.workspace.list,
+            listing = await self.workspace.list(
                 self.project_id,
                 path,
                 offset=arguments.get("offset", 0),
                 limit=50,
             )
-            state = await asyncio.to_thread(
-                self.workspace.inspect_entry, self.project_id, path
-            )
+            state = await self.workspace.inspect_entry(self.project_id, path)
             return {
                 **listing.model_dump(mode="json"),
                 "directory_identity": state.entry_identity,
             }
         if name == "read":
-            return await asyncio.to_thread(self._read, path, arguments.get("offset", 0))
+            return await self._read(path, arguments.get("offset", 0))
         if name in {"create_text", "replace_text"}:
             return await self._write(
                 path, arguments["content"], arguments.get("expected_sha256")
             )
         if name == "preserve_evidence":
-            observed = await asyncio.to_thread(self._file_digest, path)
+            observed = await self._file_digest(path)
             if not hmac.compare_digest(
                 observed["sha256"], arguments["expected_sha256"]
             ):
                 raise ValueError(
                     "file changed; read its current hash before preserving Evidence"
                 )
-            evidence = await asyncio.to_thread(
-                self.workspace.promote,
+            evidence = await self.workspace.promote(
                 self.project_id,
                 WorkspacePromotionRequest(
                     path=path,
@@ -263,8 +259,7 @@ class ButlerWorkspace:
                 },
             }
         if name == "rename_file":
-            result = await asyncio.to_thread(
-                self.workspace.rename,
+            result = await self.workspace.rename(
                 self.project_id,
                 WorkspaceRenameRequest(
                     path=path,
@@ -272,7 +267,7 @@ class ButlerWorkspace:
                     expected_sha256=arguments["expected_sha256"],
                 ),
             )
-            observed = await asyncio.to_thread(self._file_digest, result.path)
+            observed = await self._file_digest(result.path)
             if not hmac.compare_digest(
                 observed["sha256"], arguments["expected_sha256"]
             ):
@@ -280,9 +275,7 @@ class ButlerWorkspace:
             return {**observed, "previous_path": path}
         if name == "upload_from_device":
             directory = arguments["directory"]
-            state = await asyncio.to_thread(
-                self.workspace.inspect_entry, self.project_id, directory
-            )
+            state = await self.workspace.inspect_entry(self.project_id, directory)
             if state.kind != "directory" or not hmac.compare_digest(
                 state.entry_identity or "", arguments["expected_directory_identity"]
             ):
@@ -298,31 +291,26 @@ class ButlerWorkspace:
             }
         if name == "create_directory":
             parent = path.rpartition("/")[0]
-            state = await asyncio.to_thread(
-                self.workspace.inspect_entry, self.project_id, parent
-            )
+            state = await self.workspace.inspect_entry(self.project_id, parent)
             if state.kind != "directory" or not hmac.compare_digest(
                 state.entry_identity or "", arguments["expected_parent_identity"]
             ):
                 raise ValueError("parent directory changed; list it again")
-            created = await asyncio.to_thread(
-                self.workspace.create_directory,
+            created = await self.workspace.create_directory(
                 self.project_id,
                 WorkspaceCreateDirectoryRequest(
                     path=path,
                     expected_parent_identity=arguments["expected_parent_identity"],
                 ),
             )
-            created_state = await asyncio.to_thread(
-                self.workspace.inspect_entry, self.project_id, created.path
+            created_state = await self.workspace.inspect_entry(
+                self.project_id, created.path
             )
             if created_state.kind != "directory":
                 raise ValueError("directory was created but changed before read-back")
             return created_state.model_dump(mode="json")
         if name in {"rename_directory", "delete_directory"}:
-            state = await asyncio.to_thread(
-                self.workspace.inspect_entry, self.project_id, path
-            )
+            state = await self.workspace.inspect_entry(self.project_id, path)
             if state.kind != "directory" or not hmac.compare_digest(
                 state.entry_identity or "", arguments["expected_entry_identity"]
             ):
@@ -337,8 +325,7 @@ class ButlerWorkspace:
                         "expected_entry_identity": state.entry_identity,
                     },
                 }
-            renamed = await asyncio.to_thread(
-                self.workspace.rename,
+            renamed = await self.workspace.rename(
                 self.project_id,
                 WorkspaceRenameRequest(
                     path=path,
@@ -346,13 +333,13 @@ class ButlerWorkspace:
                     expected_entry_identity=arguments["expected_entry_identity"],
                 ),
             )
-            renamed_state = await asyncio.to_thread(
-                self.workspace.inspect_entry, self.project_id, renamed.path
+            renamed_state = await self.workspace.inspect_entry(
+                self.project_id, renamed.path
             )
             if renamed_state.kind != "directory":
                 raise ValueError("directory was renamed but changed before read-back")
             return {**renamed_state.model_dump(mode="json"), "previous_path": path}
-        observed = await asyncio.to_thread(self._file_digest, path)
+        observed = await self._file_digest(path)
         if name == "delete_file":
             if not hmac.compare_digest(
                 observed["sha256"], arguments["expected_sha256"]

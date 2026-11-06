@@ -7,6 +7,8 @@ and application records must remain in their purpose-built stores.
 
 from __future__ import annotations
 
+from .async_utils import async_done_callback
+
 import asyncio
 import contextlib
 import contextvars
@@ -2373,7 +2375,7 @@ def create_diagnostic_task(
                     parent_operation_id=parent,
                 )
 
-    task.add_done_callback(completed, context=task_context)
+    task.add_done_callback(async_done_callback(completed), context=task_context)
     return task
 
 

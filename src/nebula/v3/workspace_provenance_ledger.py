@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import distinct, or_, select, tuple_
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
     WorkspaceProvenanceBlobRow,
@@ -56,8 +56,8 @@ def _blob_id(workspace: str, kind: str, payload: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def save_map(
-    session: Session,
+async def save_map(
+    session: AsyncSession,
     engagement_id: str,
     workspace: str,
     kind: str,
@@ -86,23 +86,25 @@ def save_map(
         payload=manifest,
     )
     existing = set(
-        session.scalars(
-            select(WorkspaceProvenanceBlobRow.id).where(
-                WorkspaceProvenanceBlobRow.id.in_(list(candidates))
+        (
+            await session.scalars(
+                select(WorkspaceProvenanceBlobRow.id).where(
+                    WorkspaceProvenanceBlobRow.id.in_(list(candidates))
+                )
             )
         )
     )
     session.add_all(row for digest, row in candidates.items() if digest not in existing)
-    session.flush()
+    (await session.flush())
     return root_id
 
 
-def load_map(
-    session: Session, workspace: str, kind: str, root_id: str | None
+async def load_map(
+    session: AsyncSession, workspace: str, kind: str, root_id: str | None
 ) -> dict[str, Any]:
     if root_id is None:
         return {}
-    manifest = session.get(WorkspaceProvenanceBlobRow, root_id)
+    manifest = await session.get(WorkspaceProvenanceBlobRow, root_id)
     manifest_kind = f"{kind}:manifest"
     if (
         manifest is None
@@ -112,7 +114,7 @@ def load_map(
         raise CorruptRecordError(f"invalid workspace provenance {kind} manifest")
     if not manifest.payload:
         return {}
-    rows = session.scalars(
+    rows = await session.scalars(
         select(WorkspaceProvenanceBlobRow).where(
             WorkspaceProvenanceBlobRow.id.in_(list(manifest.payload.values()))
         )
@@ -133,8 +135,8 @@ def load_map(
     return values
 
 
-def overlapping_scopes(
-    session: Session,
+async def overlapping_scopes(
+    session: AsyncSession,
     observation: WorkspaceProvenanceObservation,
     completed_at: datetime,
 ) -> list[str]:
@@ -154,11 +156,11 @@ def overlapping_scopes(
         .order_by(WorkspaceProvenanceIndexRow.scope_id)
         .limit(128)
     )
-    return list(session.scalars(statement))
+    return list((await session.scalars(statement)))
 
 
-def matching_owners(
-    session: Session, workspace: str, current: dict[str, dict[str, Any]]
+async def matching_owners(
+    session: AsyncSession, workspace: str, current: dict[str, dict[str, Any]]
 ) -> dict[tuple[str, str], WorkspaceProvenanceOwnerRow]:
     pairs = [(path_key(path), state_key(state)) for path, state in current.items()]
     owners: dict[tuple[str, str], WorkspaceProvenanceOwnerRow] = {}
@@ -171,7 +173,7 @@ def matching_owners(
                 WorkspaceProvenanceOwnerRow.state_key,
             ).in_(batch),
         )
-        for row in session.scalars(statement):
+        for row in await session.scalars(statement):
             owners[(row.path_key, row.state_key)] = row
     return owners
 
@@ -181,7 +183,7 @@ def _utc(value: datetime) -> datetime:
 
 
 def remember_mutations(
-    session: Session,
+    session: AsyncSession,
     workspace: str,
     observation: WorkspaceProvenanceObservation,
     mutations: list[dict[str, Any]],

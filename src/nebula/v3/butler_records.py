@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 import hashlib
 import json
 from functools import partial
@@ -93,15 +95,15 @@ class ButlerRecords:
         self.validator = ApiEntityValidator(store)
         self.relations = ResourceRelationService(store)
 
-    def _row(self, kind: str, record_id: str) -> Asset | Finding:
+    async def _row(self, kind: str, record_id: str) -> Asset | Finding:
         row: Asset | Finding = (
-            self.store.get(Asset, record_id)
+            (await self.store.get(Asset, record_id))
             if kind == "assets"
-            else self.store.get(Finding, record_id)
+            else (await self.store.get(Finding, record_id))
         )
         if row.engagement_id != self.project_id:
             raise ValueError("choose a record from the selected project")
-        projected = self.relations.project_legacy(row)
+        projected = await self.relations.project_legacy(row)
         assert isinstance(projected, (Asset, Finding))
         return projected
 
@@ -123,15 +125,21 @@ class ButlerRecords:
             )
         return result
 
-    def list_records(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def list_records(
+        self, kind: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
         rows: list[Asset] | list[Finding] = (
-            self.store.list_entities(
-                Asset, engagement_id=self.project_id, offset=offset, limit=51
+            (
+                await self.store.list_entities(
+                    Asset, engagement_id=self.project_id, offset=offset, limit=51
+                )
             )
             if kind == "assets"
-            else self.store.list_entities(
-                Finding, engagement_id=self.project_id, offset=offset, limit=51
+            else (
+                await self.store.list_entities(
+                    Finding, engagement_id=self.project_id, offset=offset, limit=51
+                )
             )
         )
         return {
@@ -139,8 +147,8 @@ class ButlerRecords:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def detail(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        row = self._row(kind, arguments["record_id"])
+    async def detail(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        row = await self._row(kind, arguments["record_id"])
         result = self._summary(row)
         if isinstance(row, Asset):
             result.update(
@@ -165,8 +173,10 @@ class ButlerRecords:
                 result[field + "_truncated"] = len(values) > 500
         return result
 
-    def _may_write(self) -> None:
-        if self.store.get(Engagement, self.project_id).status.value == "archived":
+    async def _may_write(self) -> None:
+        if (
+            await self.store.get(Engagement, self.project_id)
+        ).status.value == "archived":
             raise ValueError("restore the selected project before changing its records")
 
     @staticmethod
@@ -180,7 +190,7 @@ class ButlerRecords:
                     raise ValueError("record title cannot be blank")
         return values
 
-    def _receipt(
+    async def _receipt(
         self,
         kind: str,
         saved: Asset | Finding,
@@ -188,7 +198,7 @@ class ButlerRecords:
         *,
         replayed: bool = False,
     ) -> dict[str, Any]:
-        observed = self._row(kind, saved.id)
+        observed = await self._row(kind, saved.id)
         actual = observed.model_dump(mode="json")
         if observed.revision < saved.revision or any(
             actual[field] != value for field, value in fields.items()
@@ -208,8 +218,8 @@ class ButlerRecords:
             },
         }
 
-    def create(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._may_write()
+    async def create(self, kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        (await self._may_write())
         values = self._fields(kind, arguments)
         record_id = str(
             uuid5(
@@ -231,10 +241,10 @@ class ButlerRecords:
         }
         digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
         row.metadata = {"butler_create_digest": digest}
-        self.validator.validate_create(row)
+        (await self.validator.validate_create(row))
         current: Asset | Finding | None = None
         try:
-            current = self._row(kind, record_id)
+            current = await self._row(kind, record_id)
         except NotFoundError:
             # diagnostic-expected: the first call has no record at its derived identity.
             current = None
@@ -243,27 +253,27 @@ class ButlerRecords:
                 raise ValueError(
                     "this request key already names different record content; inspect it before retrying"
                 )
-            return self._receipt(kind, current, fields, replayed=True)
+            return await self._receipt(kind, current, fields, replayed=True)
         try:
             saved = (
-                self.store.create(row)
+                (await self.store.create(row))
                 if isinstance(row, Asset)
-                else self.relations.create_legacy_entity(row)
+                else (await self.relations.create_legacy_entity(row))
             )
         except ConflictError:
             # diagnostic-expected: a concurrent retry may have created the same derived identity.
-            concurrent = self._row(kind, record_id)
+            concurrent = await self._row(kind, record_id)
             if concurrent.metadata.get("butler_create_digest") != digest:
                 raise ValueError(
                     "this request key already names different record content"
                 )
-            return self._receipt(kind, concurrent, fields, replayed=True)
+            return await self._receipt(kind, concurrent, fields, replayed=True)
         assert isinstance(saved, (Asset, Finding))
-        return self._receipt(kind, saved, fields)
+        return await self._receipt(kind, saved, fields)
 
-    def update_finding(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._may_write()
-        current = self._row("findings", arguments["record_id"])
+    async def update_finding(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        (await self._may_write())
+        current = await self._row("findings", arguments["record_id"])
         assert isinstance(current, Finding)
         if current.revision != arguments["expected_revision"]:
             raise ValueError("finding changed; read its current revision")
@@ -283,15 +293,15 @@ class ButlerRecords:
         candidate = Finding.model_validate(
             {**current.model_dump(mode="json"), **fields}
         )
-        self.validator.validate_update(current, candidate)
+        (await self.validator.validate_update(current, candidate))
         normalized = {
             field: candidate.model_dump(mode="json")[field] for field in fields
         }
-        saved = self.relations.replace_legacy_entity(
+        saved = await self.relations.replace_legacy_entity(
             current, candidate, expected_revision=current.revision
         )
         assert isinstance(saved, Finding)
-        return self._receipt("findings", saved, normalized)
+        return await self._receipt("findings", saved, normalized)
 
     def actions(self) -> list[AnalysisTool]:
         result = []
@@ -372,7 +382,7 @@ class ButlerRecords:
                 ) -> dict[str, Any]:
                     if selected_read:
                         return await read_in_worker(selected_handler, arguments)
-                    return selected_handler(arguments)
+                    return await call_async(selected_handler, arguments)
 
                 result.append(
                     AnalysisTool(

@@ -1052,7 +1052,7 @@ class VulnerabilityFeeds:
         )
 
 
-def persist_feed_page(
+async def persist_feed_page(
     page: FeedPage,
     *,
     store: NebulaStore,
@@ -1074,10 +1074,10 @@ def persist_feed_page(
         for advisory in page.advisories
     ]
     try:
-        with store.transaction() as transaction:
-            transaction.add(stored.artifact)
-            transaction.add(snapshot)
-            transaction.add_all(advisories)
+        async with store.transaction() as transaction:
+            (await transaction.add(stored.artifact))
+            (await transaction.add(snapshot))
+            (await transaction.add_all(advisories))
     except Exception as caught_error:
         record_caught_exception(
             "missions",

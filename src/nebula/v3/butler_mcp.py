@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
+from .async_utils import async_take
+
 from itertools import islice
 from typing import Any
 
@@ -62,14 +66,12 @@ class ButlerMcp:
             "environment_names": sorted(profile.environment_secret_refs),
         }
 
-    def servers(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        visible = list(
-            islice(
-                project_mcp_profiles(
-                    self.store, self.project_id, offset=arguments.get("offset", 0)
-                ),
-                51,
-            )
+    async def servers(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        visible = await async_take(
+            project_mcp_profiles(
+                self.store, self.project_id, offset=arguments.get("offset", 0)
+            ),
+            51,
         )
         return {
             "servers": [self._summary(profile) for _, profile in visible[:50]],
@@ -79,17 +81,17 @@ class ButlerMcp:
     def _visible(self, profile: McpServerProfile) -> bool:
         return mcp_metadata_is_visible(profile.metadata, self.project_id)
 
-    def _profile(self, server_id: str) -> McpServerProfile:
-        profile = self.store.get(McpServerProfile, server_id)
+    async def _profile(self, server_id: str) -> McpServerProfile:
+        profile = await self.store.get(McpServerProfile, server_id)
         if not self._visible(profile):
             raise ValueError("MCP server is not in the selected project")
         return profile
 
-    def server(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._summary(self._profile(arguments["server_id"]))
+    async def server(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._summary((await self._profile(arguments["server_id"])))
 
-    def attach(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        profile = self._profile(arguments["server_id"])
+    async def attach(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        profile = await self._profile(arguments["server_id"])
         if profile.revision != arguments["expected_revision"]:
             raise ValueError("MCP server changed; read its current revision")
         if profile.transport == McpTransport.BUILTIN:
@@ -162,7 +164,7 @@ class ButlerMcp:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

@@ -1,0 +1,1390 @@
+{
+  "status": "Performance acceptance failed; pre-final-correctness-fixes source snapshot only. Controlled monitor experiments do not establish production host admission behavior. Overload driver issue_lag exceeded two seconds, limiting rate interpretation.",
+  "reports": [
+    {
+      "label": "baseline-db-mixed-pool15",
+      "pool_size": 15,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 22.38006570899961,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 8383.199,
+          "p95_ms": 10469.518,
+          "max_ms": 10814.849
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 4924.803,
+          "p95_ms": 7690.613,
+          "max_ms": 7940.919
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 6896.096,
+          "p95_ms": 9028.056,
+          "max_ms": 9542.878
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 11166.416,
+          "p95_ms": 16654.871,
+          "max_ms": 17049.383
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 1526.295,
+          "p95_ms": 2570.037,
+          "max_ms": 2774.105
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 5020.104,
+          "p95_ms": 6320.706,
+          "max_ms": 6571.666
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.914,
+          "p95_ms": 1.858,
+          "max_ms": 2.3
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "81353cc452b41b671c0ed5705321765e8cd6734576f7a6009e77c0f83f9004ce",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "79fb983ffdaaad2067597d0f58f6e631aa3e13ff551907c9e7c7e7a8f113ac46",
+      "pool": {
+        "checked_out": 0
+      }
+    },
+    {
+      "label": "baseline-db-mixed-r1-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 21.42292598399945,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 7715.34,
+          "p95_ms": 9156.186,
+          "max_ms": 9521.108
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 4676.634,
+          "p95_ms": 6585.556,
+          "max_ms": 6710.466
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 6419.711,
+          "p95_ms": 7909.132,
+          "max_ms": 8293.099
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 9709.347,
+          "p95_ms": 14928.311,
+          "max_ms": 15456.581
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 1473.643,
+          "p95_ms": 2177.323,
+          "max_ms": 2303.167
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 4521.156,
+          "p95_ms": 5460.541,
+          "max_ms": 5710.981
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.899,
+          "p95_ms": 1.94,
+          "max_ms": 2.193
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "81353cc452b41b671c0ed5705321765e8cd6734576f7a6009e77c0f83f9004ce",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "fb74a1cfb250a26c471ef9a43d803a60f1a27eeb620b37063620c4cebd647331",
+      "pool": {
+        "checked_out": 0
+      }
+    },
+    {
+      "label": "baseline-db-mixed-r2-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 21.296423423000306,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 7218.89,
+          "p95_ms": 9207.612,
+          "max_ms": 9486.989
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 4580.285,
+          "p95_ms": 6455.616,
+          "max_ms": 6704.851
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 6085.879,
+          "p95_ms": 7834.096,
+          "max_ms": 8150.044
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 9569.401,
+          "p95_ms": 14766.598,
+          "max_ms": 15334.024
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 1191.348,
+          "p95_ms": 2250.183,
+          "max_ms": 2594.196
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 4449.391,
+          "p95_ms": 5577.759,
+          "max_ms": 5759.742
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.896,
+          "p95_ms": 1.77,
+          "max_ms": 2.364
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "81353cc452b41b671c0ed5705321765e8cd6734576f7a6009e77c0f83f9004ce",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "eb96562055c3d0628414ae8a0b46df705938cd4ca0ab0c99a1ce48643c5aeb9a",
+      "pool": {
+        "checked_out": 0
+      }
+    },
+    {
+      "label": "baseline-db-overload-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 16.0,
+      "offered_requests_per_kind": 180,
+      "elapsed_seconds": 31.604057067001122,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 180,
+          "p50_ms": 15954.781,
+          "p95_ms": 19677.941,
+          "max_ms": 19886.212
+        },
+        "admission": {
+          "n": 180,
+          "p50_ms": 12760.033,
+          "p95_ms": 17601.155,
+          "max_ms": 17865.611
+        },
+        "first_token": {
+          "n": 180,
+          "p50_ms": 14269.686,
+          "p95_ms": 18628.016,
+          "max_ms": 18829.19
+        },
+        "listing": {
+          "n": 180,
+          "p50_ms": 23315.519,
+          "p95_ms": 27272.832,
+          "max_ms": 27624.58
+        },
+        "auth": {
+          "n": 180,
+          "p50_ms": 3760.587,
+          "p95_ms": 10801.201,
+          "max_ms": 11795.577
+        },
+        "tool": {
+          "n": 180,
+          "p50_ms": 7332.351,
+          "p95_ms": 13511.99,
+          "max_ms": 13849.331
+        },
+        "issue_lag": {
+          "n": 180,
+          "p50_ms": 1.192,
+          "p95_ms": 2426.748,
+          "max_ms": 3099.946
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "81353cc452b41b671c0ed5705321765e8cd6734576f7a6009e77c0f83f9004ce",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 181
+      },
+      "stored_tool_calls": {
+        "complete": 181
+      },
+      "raw_report_sha256": "9e2de380834fb7a3bc98b47c50574bf91030c69b10d9f8f5bb5b5db2c7ce5959",
+      "pool": {
+        "checked_out": 0
+      }
+    },
+    {
+      "label": "baseline-five-minute-soak-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 2.0,
+      "offered_requests_per_kind": 600,
+      "elapsed_seconds": 299.7323864509999,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 600,
+          "p50_ms": 193.574,
+          "p95_ms": 278.852,
+          "max_ms": 842.498
+        },
+        "admission": {
+          "n": 600,
+          "p50_ms": 98.856,
+          "p95_ms": 151.038,
+          "max_ms": 774.002
+        },
+        "first_token": {
+          "n": 600,
+          "p50_ms": 192.936,
+          "p95_ms": 276.869,
+          "max_ms": 841.011
+        },
+        "listing": {
+          "n": 600,
+          "p50_ms": 95.433,
+          "p95_ms": 147.547,
+          "max_ms": 561.773
+        },
+        "auth": {
+          "n": 600,
+          "p50_ms": 26.397,
+          "p95_ms": 81.786,
+          "max_ms": 395.995
+        },
+        "tool": {
+          "n": 600,
+          "p50_ms": 158.307,
+          "p95_ms": 276.532,
+          "max_ms": 839.51
+        },
+        "issue_lag": {
+          "n": 600,
+          "p50_ms": 1.035,
+          "p95_ms": 1.958,
+          "max_ms": 3.11
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "81353cc452b41b671c0ed5705321765e8cd6734576f7a6009e77c0f83f9004ce",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 601
+      },
+      "stored_tool_calls": {
+        "complete": 601
+      },
+      "raw_report_sha256": "a35e40f1278f9f9b9662309153c1b70b5c481ae76f8baebf62c2b2cca67657ab",
+      "pool": {
+        "checked_out": 0
+      }
+    },
+    {
+      "label": "baseline-low-pool15",
+      "pool_size": 15,
+      "offered_groups_per_second": 1.0,
+      "offered_requests_per_kind": 30,
+      "elapsed_seconds": 29.187102040001264,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 30,
+          "p50_ms": 172.642,
+          "p95_ms": 212.33,
+          "max_ms": 229.533
+        },
+        "admission": {
+          "n": 30,
+          "p50_ms": 82.838,
+          "p95_ms": 109.138,
+          "max_ms": 121.531
+        },
+        "first_token": {
+          "n": 30,
+          "p50_ms": 170.428,
+          "p95_ms": 211.477,
+          "max_ms": 227.067
+        },
+        "listing": {
+          "n": 30,
+          "p50_ms": 82.244,
+          "p95_ms": 107.98,
+          "max_ms": 121.593
+        },
+        "auth": {
+          "n": 30,
+          "p50_ms": 21.932,
+          "p95_ms": 68.574,
+          "max_ms": 78.463
+        },
+        "tool": {
+          "n": 30,
+          "p50_ms": 152.041,
+          "p95_ms": 196.503,
+          "max_ms": 210.755
+        },
+        "issue_lag": {
+          "n": 30,
+          "p50_ms": 1.546,
+          "p95_ms": 2.699,
+          "max_ms": 3.016
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 1
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "81353cc452b41b671c0ed5705321765e8cd6734576f7a6009e77c0f83f9004ce",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 31
+      },
+      "stored_tool_calls": {
+        "complete": 31
+      },
+      "raw_report_sha256": "7bd6ede3ba76def18831b4f2492b0763abaaee5508856a9cf26d446343a30ae2",
+      "pool": {
+        "checked_out": 0
+      }
+    },
+    {
+      "label": "baseline-mixed-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 4.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 29.97911572799967,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 174.277,
+          "p95_ms": 325.931,
+          "max_ms": 528.783
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 85.679,
+          "p95_ms": 131.736,
+          "max_ms": 415.437
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 173.036,
+          "p95_ms": 259.636,
+          "max_ms": 465.381
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 81.225,
+          "p95_ms": 125.229,
+          "max_ms": 296.28
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 22.393,
+          "p95_ms": 71.599,
+          "max_ms": 216.172
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 128.679,
+          "p95_ms": 243.354,
+          "max_ms": 433.124
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.906,
+          "p95_ms": 1.703,
+          "max_ms": 2.424
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "81353cc452b41b671c0ed5705321765e8cd6734576f7a6009e77c0f83f9004ce",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "2fd64314ec634fc4495505e4acffa9118b62576059111f5319d91700f128876f",
+      "pool": {
+        "checked_out": 0
+      }
+    },
+    {
+      "label": "candidate-db-mixed-pool15",
+      "pool_size": 15,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 25.50898965700071,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 10668.245,
+          "p95_ms": 11314.836,
+          "max_ms": 11575.842
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 10059.152,
+          "p95_ms": 10693.405,
+          "max_ms": 11167.383
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 10248.991,
+          "p95_ms": 10896.243,
+          "max_ms": 11306.317
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 327.678,
+          "p95_ms": 728.074,
+          "max_ms": 856.29
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 232.292,
+          "p95_ms": 583.471,
+          "max_ms": 780.029
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 419.199,
+          "p95_ms": 920.937,
+          "max_ms": 1041.35
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.844,
+          "p95_ms": 1.384,
+          "max_ms": 2.178
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "57deef4ebd5029920249002346aa81b9ee6dcfef0044fe393d921bef9d2fd0b5",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "256914007b0627256045728b0ec1e9605f04c53531241f5da06c0703712da5f3",
+      "pool": {
+        "budget": {
+          "max_connections": 100,
+          "postgres_reserved": 3,
+          "admin_reserve": 5,
+          "other_connections": 12,
+          "peak_processes": 2,
+          "role_limit": -1,
+          "database_limit": -1,
+          "ceiling": 40,
+          "pool_size": 15
+        },
+        "configured_size": 15,
+        "max_overflow": 0,
+        "checked_out": 0,
+        "peak_checked_out": 15,
+        "waiters": 0,
+        "timeouts": 0,
+        "connection_failures": 0
+      }
+    },
+    {
+      "label": "candidate-db-mixed-r1-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 22.823487018000378,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 9129.378,
+          "p95_ms": 10634.65,
+          "max_ms": 10799.859
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 8505.986,
+          "p95_ms": 10068.122,
+          "max_ms": 10205.008
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 8687.577,
+          "p95_ms": 10261.11,
+          "max_ms": 10435.259
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 285.606,
+          "p95_ms": 590.565,
+          "max_ms": 717.098
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 201.135,
+          "p95_ms": 510.962,
+          "max_ms": 616.044
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 533.048,
+          "p95_ms": 934.618,
+          "max_ms": 1084.909
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.786,
+          "p95_ms": 2.077,
+          "max_ms": 12.119
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "57deef4ebd5029920249002346aa81b9ee6dcfef0044fe393d921bef9d2fd0b5",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "407f0bd63e11ac2e4d8483a49cfd4324b8f503312078dd96206b763eccf50c13",
+      "pool": {
+        "budget": {
+          "max_connections": 100,
+          "postgres_reserved": 3,
+          "admin_reserve": 5,
+          "other_connections": 12,
+          "peak_processes": 2,
+          "role_limit": -1,
+          "database_limit": -1,
+          "ceiling": 40,
+          "pool_size": 40
+        },
+        "configured_size": 40,
+        "max_overflow": 0,
+        "checked_out": 0,
+        "peak_checked_out": 39,
+        "waiters": 0,
+        "timeouts": 0,
+        "connection_failures": 0
+      }
+    },
+    {
+      "label": "candidate-db-mixed-r2-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 8.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 21.83065932699901,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 7378.118,
+          "p95_ms": 8735.435,
+          "max_ms": 8980.513
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 6802.838,
+          "p95_ms": 8116.964,
+          "max_ms": 8332.816
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 6986.057,
+          "p95_ms": 8338.758,
+          "max_ms": 8449.367
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 212.742,
+          "p95_ms": 606.303,
+          "max_ms": 645.992
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 118.148,
+          "p95_ms": 464.712,
+          "max_ms": 549.826
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 462.783,
+          "p95_ms": 934.263,
+          "max_ms": 1043.935
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.832,
+          "p95_ms": 1.579,
+          "max_ms": 2.009
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "57deef4ebd5029920249002346aa81b9ee6dcfef0044fe393d921bef9d2fd0b5",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "9d9fa6f7e2773123d04adb2de1d4703653cfad50e258df889929b35b625a529d",
+      "pool": {
+        "budget": {
+          "max_connections": 100,
+          "postgres_reserved": 3,
+          "admin_reserve": 5,
+          "other_connections": 12,
+          "peak_processes": 2,
+          "role_limit": -1,
+          "database_limit": -1,
+          "ceiling": 40,
+          "pool_size": 40
+        },
+        "configured_size": 40,
+        "max_overflow": 0,
+        "checked_out": 0,
+        "peak_checked_out": 36,
+        "waiters": 0,
+        "timeouts": 0,
+        "connection_failures": 0
+      }
+    },
+    {
+      "label": "candidate-db-overload-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 16.0,
+      "offered_requests_per_kind": 180,
+      "elapsed_seconds": 43.08376601999953,
+      "host_monitor": "controlled",
+      "host_monitor_fixture": {
+        "capacity": 4,
+        "cpu_ratio": 0,
+        "memory_available_ratio": 0.5,
+        "interval_seconds": 0.01,
+        "finite_starts_per_second": 800
+      },
+      "metrics": {
+        "chat": {
+          "n": 180,
+          "p50_ms": 28070.467,
+          "p95_ms": 31317.515,
+          "max_ms": 33132.649
+        },
+        "admission": {
+          "n": 180,
+          "p50_ms": 27571.195,
+          "p95_ms": 30907.228,
+          "max_ms": 32704.122
+        },
+        "first_token": {
+          "n": 180,
+          "p50_ms": 27682.33,
+          "p95_ms": 31034.181,
+          "max_ms": 32825.748
+        },
+        "listing": {
+          "n": 180,
+          "p50_ms": 7945.082,
+          "p95_ms": 11150.82,
+          "max_ms": 11546.799
+        },
+        "auth": {
+          "n": 180,
+          "p50_ms": 7860.329,
+          "p95_ms": 11017.085,
+          "max_ms": 11259.264
+        },
+        "tool": {
+          "n": 180,
+          "p50_ms": 2117.74,
+          "p95_ms": 7600.565,
+          "max_ms": 9038.923
+        },
+        "issue_lag": {
+          "n": 180,
+          "p50_ms": 1.302,
+          "p95_ms": 2677.303,
+          "max_ms": 3259.902
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "57deef4ebd5029920249002346aa81b9ee6dcfef0044fe393d921bef9d2fd0b5",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "controlled"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 181
+      },
+      "stored_tool_calls": {
+        "complete": 181
+      },
+      "raw_report_sha256": "5911c3ebf344cc883be6dc04e9cd054885ad041e0f305dafc8c981b30d759af0",
+      "pool": {
+        "budget": {
+          "max_connections": 100,
+          "postgres_reserved": 3,
+          "admin_reserve": 5,
+          "other_connections": 12,
+          "peak_processes": 2,
+          "role_limit": -1,
+          "database_limit": -1,
+          "ceiling": 40,
+          "pool_size": 40
+        },
+        "configured_size": 40,
+        "max_overflow": 0,
+        "checked_out": 0,
+        "peak_checked_out": 40,
+        "waiters": 0,
+        "timeouts": 0,
+        "connection_failures": 0
+      }
+    },
+    {
+      "label": "candidate-five-minute-soak-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 2.0,
+      "offered_requests_per_kind": 600,
+      "elapsed_seconds": 299.7882153539995,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 600,
+          "p50_ms": 200.877,
+          "p95_ms": 306.771,
+          "max_ms": 808.159
+        },
+        "admission": {
+          "n": 600,
+          "p50_ms": 103.794,
+          "p95_ms": 171.231,
+          "max_ms": 613.303
+        },
+        "first_token": {
+          "n": 600,
+          "p50_ms": 140.957,
+          "p95_ms": 219.76,
+          "max_ms": 702.111
+        },
+        "listing": {
+          "n": 600,
+          "p50_ms": 34.934,
+          "p95_ms": 57.33,
+          "max_ms": 401.009
+        },
+        "auth": {
+          "n": 600,
+          "p50_ms": 19.443,
+          "p95_ms": 29.033,
+          "max_ms": 378.402
+        },
+        "tool": {
+          "n": 600,
+          "p50_ms": 60.289,
+          "p95_ms": 96.287,
+          "max_ms": 423.94
+        },
+        "issue_lag": {
+          "n": 600,
+          "p50_ms": 1.092,
+          "p95_ms": 2.04,
+          "max_ms": 2.837
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "57deef4ebd5029920249002346aa81b9ee6dcfef0044fe393d921bef9d2fd0b5",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 601
+      },
+      "stored_tool_calls": {
+        "complete": 601
+      },
+      "raw_report_sha256": "1cac1281a947b328155b48ed9e5e42ab32d5d36a102190b3aefa96727f299e30",
+      "pool": {
+        "budget": {
+          "max_connections": 100,
+          "postgres_reserved": 3,
+          "admin_reserve": 5,
+          "other_connections": 12,
+          "peak_processes": 2,
+          "role_limit": -1,
+          "database_limit": -1,
+          "ceiling": 40,
+          "pool_size": 40
+        },
+        "configured_size": 40,
+        "max_overflow": 0,
+        "checked_out": 0,
+        "peak_checked_out": 6,
+        "waiters": 0,
+        "timeouts": 0,
+        "connection_failures": 0
+      }
+    },
+    {
+      "label": "candidate-low-pool15",
+      "pool_size": 15,
+      "offered_groups_per_second": 1.0,
+      "offered_requests_per_kind": 30,
+      "elapsed_seconds": 29.243940790000124,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 30,
+          "p50_ms": 209.426,
+          "p95_ms": 278.81,
+          "max_ms": 558.499
+        },
+        "admission": {
+          "n": 30,
+          "p50_ms": 109.191,
+          "p95_ms": 141.908,
+          "max_ms": 465.842
+        },
+        "first_token": {
+          "n": 30,
+          "p50_ms": 148.06,
+          "p95_ms": 182.297,
+          "max_ms": 500.539
+        },
+        "listing": {
+          "n": 30,
+          "p50_ms": 36.437,
+          "p95_ms": 51.112,
+          "max_ms": 54.208
+        },
+        "auth": {
+          "n": 30,
+          "p50_ms": 18.583,
+          "p95_ms": 28.011,
+          "max_ms": 32.286
+        },
+        "tool": {
+          "n": 30,
+          "p50_ms": 63.026,
+          "p95_ms": 87.987,
+          "max_ms": 88.963
+        },
+        "issue_lag": {
+          "n": 30,
+          "p50_ms": 1.482,
+          "p95_ms": 1.944,
+          "max_ms": 2.323
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "57deef4ebd5029920249002346aa81b9ee6dcfef0044fe393d921bef9d2fd0b5",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 31
+      },
+      "stored_tool_calls": {
+        "complete": 31
+      },
+      "raw_report_sha256": "bd24ec6528b5d068864ba01868aa0536c41152618ac30b34b7dba33e0e1c91a1",
+      "pool": {
+        "budget": {
+          "max_connections": 100,
+          "postgres_reserved": 3,
+          "admin_reserve": 5,
+          "other_connections": 12,
+          "peak_processes": 2,
+          "role_limit": -1,
+          "database_limit": -1,
+          "ceiling": 40,
+          "pool_size": 15
+        },
+        "configured_size": 15,
+        "max_overflow": 0,
+        "checked_out": 0,
+        "peak_checked_out": 4,
+        "waiters": 0,
+        "timeouts": 0,
+        "connection_failures": 0
+      }
+    },
+    {
+      "label": "candidate-mixed-pool40",
+      "pool_size": 40,
+      "offered_groups_per_second": 4.0,
+      "offered_requests_per_kind": 120,
+      "elapsed_seconds": 30.06305664700085,
+      "host_monitor": "system",
+      "host_monitor_fixture": null,
+      "metrics": {
+        "chat": {
+          "n": 120,
+          "p50_ms": 181.523,
+          "p95_ms": 401.681,
+          "max_ms": 684.255
+        },
+        "admission": {
+          "n": 120,
+          "p50_ms": 92.918,
+          "p95_ms": 193.131,
+          "max_ms": 461.601
+        },
+        "first_token": {
+          "n": 120,
+          "p50_ms": 128.224,
+          "p95_ms": 274.971,
+          "max_ms": 518.515
+        },
+        "listing": {
+          "n": 120,
+          "p50_ms": 32.367,
+          "p95_ms": 62.779,
+          "max_ms": 320.291
+        },
+        "auth": {
+          "n": 120,
+          "p50_ms": 17.76,
+          "p95_ms": 30.863,
+          "max_ms": 291.973
+        },
+        "tool": {
+          "n": 120,
+          "p50_ms": 54.629,
+          "p95_ms": 93.495,
+          "max_ms": 370.737
+        },
+        "issue_lag": {
+          "n": 120,
+          "p50_ms": 0.928,
+          "p95_ms": 2.186,
+          "max_ms": 4.479
+        }
+      },
+      "error_count": 0,
+      "errors": [],
+      "shutdown": {
+        "checked_out_after_shutdown": 0
+      },
+      "provenance": {
+        "revision": "928727eb3a80a4516ff2ad2c30e02855697b56f4",
+        "runtime_source_sha256": "57deef4ebd5029920249002346aa81b9ee6dcfef0044fe393d921bef9d2fd0b5",
+        "harness_sha256": "4c599009a27406817611a5b7d1351bc37ae2c1e0f70139c85eb7424edf90be65",
+        "python": "3.12.14",
+        "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "cpu_quota": "400000 100000",
+        "host_monitor": "system"
+      },
+      "boundary": "TCP Core; independent fixed-arrival load-generator process",
+      "fixture": "12 sessions and 2400 COMPLETE historical harness turns; inert 20ms provider; persisted local no-op tool",
+      "semantic_validation": "exact final message, no SSE error, exact tool result",
+      "stored_chat_turns": {
+        "complete": 121
+      },
+      "stored_tool_calls": {
+        "complete": 121
+      },
+      "raw_report_sha256": "1ca290983477df8ed90bf213c4bc5aedfc883cedd6ea38d96d9a969601455fbf",
+      "pool": {
+        "budget": {
+          "max_connections": 100,
+          "postgres_reserved": 3,
+          "admin_reserve": 5,
+          "other_connections": 12,
+          "peak_processes": 2,
+          "role_limit": -1,
+          "database_limit": -1,
+          "ceiling": 40,
+          "pool_size": 40
+        },
+        "configured_size": 40,
+        "max_overflow": 0,
+        "checked_out": 0,
+        "peak_checked_out": 7,
+        "waiters": 0,
+        "timeouts": 0,
+        "connection_failures": 0
+      }
+    }
+  ]
+}

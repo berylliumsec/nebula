@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import call_async
+
+from .async_utils import resolve_workspace
+
 import asyncio
 import builtins
 import hashlib
@@ -81,11 +87,11 @@ def _now() -> datetime:
 
 
 class NotebookDocumentStore:
-    def __init__(self, workspace_resolver: Callable[[str], Path]) -> None:
+    def __init__(self, workspace_resolver: (MaybeAsync[[str], Path])) -> None:
         self.workspace_resolver = workspace_resolver
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
-    def path(self, engagement_id: str, relative_path: str) -> Path:
+    async def path(self, engagement_id: str, relative_path: str) -> Path:
         relative = PurePosixPath(relative_path)
         if (
             not relative_path
@@ -96,7 +102,11 @@ class NotebookDocumentStore:
             or "\x00" in relative_path
         ):
             raise NotebookError("choose a project-relative .ipynb path")
-        root = self.workspace_resolver(engagement_id).expanduser().resolve(strict=True)
+        root = (
+            (await resolve_workspace(self.workspace_resolver, engagement_id))
+            .expanduser()
+            .resolve(strict=True)
+        )
         candidate = root.joinpath(*relative.parts)
         if not candidate.resolve(strict=False).is_relative_to(root):
             raise NotebookError("notebook path escapes the project workspace")
@@ -105,8 +115,12 @@ class NotebookDocumentStore:
     def lock(self, engagement_id: str, relative_path: str) -> asyncio.Lock:
         return self._locks.setdefault((engagement_id, relative_path), asyncio.Lock())
 
-    def list(self, engagement_id: str) -> list[dict[str, Any]]:
-        root = self.workspace_resolver(engagement_id).expanduser().resolve(strict=True)
+    async def list(self, engagement_id: str) -> list[dict[str, Any]]:
+        root = (
+            (await resolve_workspace(self.workspace_resolver, engagement_id))
+            .expanduser()
+            .resolve(strict=True)
+        )
         entries: list[dict[str, Any]] = []
         for candidate in root.rglob("*.ipynb"):
             if len(entries) >= 1000:
@@ -127,8 +141,8 @@ class NotebookDocumentStore:
             )
         return sorted(entries, key=lambda entry: entry["path"].lower())
 
-    def read(self, engagement_id: str, relative_path: str) -> dict[str, Any]:
-        path = self.path(engagement_id, relative_path)
+    async def read(self, engagement_id: str, relative_path: str) -> dict[str, Any]:
+        path = await self.path(engagement_id, relative_path)
         try:
             data = path.read_bytes()
         except FileNotFoundError as exc:
@@ -186,9 +200,9 @@ class NotebookDocumentStore:
 
     async def create(self, engagement_id: str, relative_path: str) -> dict[str, Any]:
         async with self.lock(engagement_id, relative_path):
-            path = self.path(engagement_id, relative_path)
+            path = await self.path(engagement_id, relative_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            self.path(engagement_id, relative_path)
+            (await self.path(engagement_id, relative_path))
             if path.exists():
                 raise NotebookConflict("notebook already exists; open it instead")
             document = {
@@ -205,7 +219,7 @@ class NotebookDocumentStore:
                 "nbformat_minor": 5,
             }
             self._atomic_write(path, document)
-            return self.read(engagement_id, relative_path)
+            return await self.read(engagement_id, relative_path)
 
     async def upsert_cell(
         self,
@@ -223,7 +237,7 @@ class NotebookDocumentStore:
         if len(source.encode("utf-8")) > MAX_SOURCE_BYTES:
             raise NotebookError("cell source exceeds 1 MB")
         async with self.lock(engagement_id, relative_path):
-            current = self.read(engagement_id, relative_path)
+            current = await self.read(engagement_id, relative_path)
             document = current["document"]
             cells = document["cells"]
             target = next((cell for cell in cells if cell.get("id") == cell_id), None)
@@ -260,8 +274,10 @@ class NotebookDocumentStore:
                 elif source_changed and cell_type == "code":
                     target["outputs"] = []
                     target["execution_count"] = None
-            self._atomic_write(self.path(engagement_id, relative_path), document)
-            result = self.read(engagement_id, relative_path)
+            self._atomic_write(
+                (await self.path(engagement_id, relative_path)), document
+            )
+            result = await self.read(engagement_id, relative_path)
             result["cell_id"] = cell_id
             return result
 
@@ -269,7 +285,7 @@ class NotebookDocumentStore:
         self, run: NotebookRun, events: builtins.list[dict[str, Any]]
     ) -> None:
         async with self.lock(run.engagement_id, run.notebook_path):
-            current = self.read(run.engagement_id, run.notebook_path)
+            current = await self.read(run.engagement_id, run.notebook_path)
             cell = next(
                 (
                     item
@@ -315,7 +331,8 @@ class NotebookDocumentStore:
                     )
             cell["outputs"] = outputs
             self._atomic_write(
-                self.path(run.engagement_id, run.notebook_path), current["document"]
+                (await self.path(run.engagement_id, run.notebook_path)),
+                current["document"],
             )
 
     @staticmethod
@@ -343,7 +360,7 @@ class NotebookWorkerConnection:
     def __init__(
         self,
         process: asyncio.subprocess.Process,
-        on_event: Callable[[str, dict[str, Any]], None],
+        on_event: (MaybeAsync[[str, dict[str, Any]], None]),
         *,
         mode: str,
         policy_revision: int,
@@ -384,7 +401,13 @@ class NotebookWorkerConnection:
                     if not self.ready.done():
                         self.ready.set_result(str(frame.get("python", "Python")))
                 elif kind == "event":
-                    self.on_event(str(frame.get("run_id")), frame.get("event", {}))
+                    (
+                        await call_async(
+                            self.on_event,
+                            str(frame.get("run_id")),
+                            frame.get("event", {}),
+                        )
+                    )
                 elif kind == "result":
                     run_id = str(frame.get("run_id"))
                     run_future = self.runs.pop(run_id, None)
@@ -489,7 +512,7 @@ class NotebookService:
         self,
         *,
         store: NebulaStore,
-        workspace_resolver: Callable[[str], Path],
+        workspace_resolver: (MaybeAsync[[str], Path]),
         automation_runtime: AutomationRuntimeManager | None,
         data_root: Path,
     ) -> None:
@@ -516,28 +539,32 @@ class NotebookService:
         self._restarting: set[tuple[str, str]] = set()
         self._package_changes: set[str] = set()
 
-    def startup(self) -> None:
-        for run in self.store.find_entities(NotebookRun, {}, limit=None):
+    async def startup(self) -> None:
+        for run in await self.store.find_entities(NotebookRun, {}, limit=None):
             if run.status in {"queued", "running"}:
-                self.store.update(
-                    NotebookRun,
-                    run.id,
-                    {
-                        "status": "interrupted",
-                        "detail": "Core restarted; run the cell again",
-                        "completed_at": _now(),
-                    },
-                    expected_revision=run.revision,
+                (
+                    await self.store.update(
+                        NotebookRun,
+                        run.id,
+                        {
+                            "status": "interrupted",
+                            "detail": "Core restarted; run the cell again",
+                            "completed_at": _now(),
+                        },
+                        expected_revision=run.revision,
+                    )
                 )
-                self.store.append_event(
-                    run.id,
-                    "notebook.completed",
-                    {"status": "interrupted", "detail": "Core restarted"},
+                (
+                    await self.store.append_event(
+                        run.id,
+                        "notebook.completed",
+                        {"status": "interrupted", "detail": "Core restarted"},
+                    )
                 )
 
-    def active_runs(self, engagement_id: str) -> list[NotebookRun]:
-        self.store.get(Engagement, engagement_id)
-        return self.store.find_entities(
+    async def active_runs(self, engagement_id: str) -> list[NotebookRun]:
+        (await self.store.get(Engagement, engagement_id))
+        return await self.store.find_entities(
             NotebookRun,
             {"engagement_id": engagement_id, "status": ["queued", "running"]},
             limit=None,
@@ -564,9 +591,9 @@ class NotebookService:
                 raise NotebookConflict(
                     "Project packages are changing; wait before changing mode"
                 )
-            if self.policy(engagement_id).execution_mode == next_mode:
+            if (await self.policy(engagement_id)).execution_mode == next_mode:
                 return False
-            if self.active_runs(engagement_id):
+            if await self.active_runs(engagement_id):
                 raise NotebookConflict(
                     "A notebook cell is running or queued; interrupt it before changing project mode"
                 )
@@ -595,13 +622,13 @@ class NotebookService:
     def finish_policy_change(self, engagement_id: str) -> None:
         self._mode_changes.discard(engagement_id)
 
-    def policy(self, engagement_id: str) -> AutomationProjectPolicy:
+    async def policy(self, engagement_id: str) -> AutomationProjectPolicy:
         if self.automation_runtime is None:
             raise NotebookRuntimeUnavailable("project command runtime is unavailable")
-        return self.automation_runtime.project_policy(engagement_id)
+        return await self.automation_runtime.project_policy(engagement_id)
 
-    def status(self, engagement_id: str) -> dict[str, Any]:
-        policy = self.policy(engagement_id)
+    async def status(self, engagement_id: str) -> dict[str, Any]:
+        policy = await self.policy(engagement_id)
         return {
             "project_id": engagement_id,
             "execution_mode": policy.execution_mode,
@@ -611,12 +638,12 @@ class NotebookService:
             "runtime_ready": self.automation_runtime is not None,
         }
 
-    def list(self, engagement_id: str) -> list[dict[str, Any]]:
-        self.store.get(Engagement, engagement_id)
-        return self.documents.list(engagement_id)
+    async def list(self, engagement_id: str) -> list[dict[str, Any]]:
+        (await self.store.get(Engagement, engagement_id))
+        return await self.documents.list(engagement_id)
 
-    def file_index_status(self, engagement_id: str) -> dict[str, Any]:
-        engagement = self.store.get(Engagement, engagement_id)
+    async def file_index_status(self, engagement_id: str) -> dict[str, Any]:
+        engagement = await self.store.get(Engagement, engagement_id)
         path = engagement.metadata.get("notebook_file_index")
         return {
             "project_revision": engagement.revision,
@@ -639,7 +666,7 @@ class NotebookService:
         *,
         expected_project_revision: int | None = None,
     ) -> dict[str, Any]:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         if (
             expected_project_revision is not None
             and engagement.revision != expected_project_revision
@@ -649,7 +676,11 @@ class NotebookService:
             listing = await asyncio.to_thread(
                 list_indexed_notebooks,
                 path,
-                self.documents.workspace_resolver(engagement_id),
+                (
+                    await resolve_workspace(
+                        self.documents.workspace_resolver, engagement_id
+                    )
+                ),
             )
         metadata = dict(engagement.metadata)
         if path is None:
@@ -658,11 +689,13 @@ class NotebookService:
             metadata["notebook_file_index"] = str(
                 Path(path).expanduser().resolve(strict=True)
             )
-        self.store.update(
-            Engagement,
-            engagement_id,
-            {"metadata": metadata},
-            expected_revision=engagement.revision,
+        (
+            await self.store.update(
+                Engagement,
+                engagement_id,
+                {"metadata": metadata},
+                expected_revision=engagement.revision,
+            )
         )
         self._list_cache.pop(engagement_id, None)
         self._index_errors.pop(engagement_id, None)
@@ -670,13 +703,13 @@ class NotebookService:
             self._index_warnings[engagement_id] = listing.warning
         else:
             self._index_warnings.pop(engagement_id, None)
-        return self.file_index_status(engagement_id)
+        return await self.file_index_status(engagement_id)
 
     async def list_async(
         self, engagement_id: str, *, refresh: bool = False
     ) -> builtins.list[dict[str, Any]]:
         async with self._list_locks.setdefault(engagement_id, asyncio.Lock()):
-            engagement = self.store.get(Engagement, engagement_id)
+            engagement = await self.store.get(Engagement, engagement_id)
             cached = self._list_cache.get(engagement_id)
             if (
                 not refresh
@@ -691,7 +724,11 @@ class NotebookService:
                     listing = await asyncio.to_thread(
                         list_indexed_notebooks,
                         index_path,
-                        self.documents.workspace_resolver(engagement_id),
+                        (
+                            await resolve_workspace(
+                                self.documents.workspace_resolver, engagement_id
+                            )
+                        ),
                     )
                     self._index_errors.pop(engagement_id, None)
                     if listing.warning:
@@ -705,7 +742,9 @@ class NotebookService:
                         created.difference_update(indexed)
                         for path in sorted(created):
                             try:
-                                candidate = self.documents.path(engagement_id, path)
+                                candidate = await self.documents.path(
+                                    engagement_id, path
+                                )
                                 info = candidate.stat()
                             except (OSError, NotebookError):
                                 # diagnostic-expected: a recently created file may be moved before indexing.
@@ -739,7 +778,7 @@ class NotebookService:
                     self._index_warnings.pop(engagement_id, None)
             # A linked workspace can contain a very large tree. Never walk it
             # on the FastAPI event loop, and share the result between callers.
-            entries = await asyncio.to_thread(self.documents.list, engagement_id)
+            entries = await self.documents.list(engagement_id)
             self._list_cache[engagement_id] = (
                 engagement.revision,
                 time.monotonic() + NOTEBOOK_LIST_CACHE_SECONDS,
@@ -747,12 +786,12 @@ class NotebookService:
             )
             return entries
 
-    def read(self, engagement_id: str, path: str) -> dict[str, Any]:
-        self.store.get(Engagement, engagement_id)
-        return self.documents.read(engagement_id, path)
+    async def read(self, engagement_id: str, path: str) -> dict[str, Any]:
+        (await self.store.get(Engagement, engagement_id))
+        return await self.documents.read(engagement_id, path)
 
     async def create(self, engagement_id: str, path: str) -> dict[str, Any]:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         result = await self.documents.create(engagement_id, path)
         self._created_notebooks.setdefault(engagement_id, set()).add(path)
         self._list_cache.pop(engagement_id, None)
@@ -761,29 +800,29 @@ class NotebookService:
     async def upsert_cell(
         self, engagement_id: str, path: str, **changes: Any
     ) -> dict[str, Any]:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         return await self.documents.upsert_cell(engagement_id, path, **changes)
 
-    def pin(
+    async def pin(
         self, session_id: str, path: str | None, *, expected_revision: int
     ) -> ChatSession:
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         if path is not None:
-            self.read(session.engagement_id, path)
-        return self.store.update(
+            (await self.read(session.engagement_id, path))
+        return await self.store.update(
             ChatSession,
             session_id,
             {"notebook_path": path},
             expected_revision=expected_revision,
         )
 
-    def run(
+    async def run(
         self, run_id: str, *, engagement_id: str, after_sequence: int = 0
     ) -> dict[str, Any]:
-        run = self.store.get(NotebookRun, run_id)
+        run = await self.store.get(NotebookRun, run_id)
         if run.engagement_id != engagement_id:
             raise NotebookError("run is outside the selected project")
-        events = self.store.replay_events(
+        events = await self.store.replay_events(
             run_id, after_sequence=after_sequence, limit=1000
         )
         return {
@@ -792,11 +831,11 @@ class NotebookService:
             "next_sequence": events[-1].sequence if events else after_sequence,
         }
 
-    def recent_runs(
+    async def recent_runs(
         self, engagement_id: str, path: str
     ) -> builtins.list[dict[str, Any]]:
-        self.read(engagement_id, path)
-        runs = self.store.find_entities(
+        (await self.read(engagement_id, path))
+        runs = await self.store.find_entities(
             NotebookRun, {"engagement_id": engagement_id}, newest_first=True, limit=200
         )
         return [
@@ -839,12 +878,12 @@ class NotebookService:
             raise NotebookConflict(
                 "Notebook kernel is restarting; retry the cell afterward"
             )
-        policy = self.policy(engagement_id)
+        policy = await self.policy(engagement_id)
         if policy.execution_mode == "host" and not policy.host_access_acknowledged:
             raise NotebookPermissionRequired(
                 "Acknowledge host filesystem and network access in Project settings"
             )
-        document = self.read(engagement_id, path)["document"]
+        document = (await self.read(engagement_id, path))["document"]
         cell = next(
             (item for item in document["cells"] if item.get("id") == cell_id), None
         )
@@ -856,7 +895,7 @@ class NotebookService:
             raise NotebookConflict(
                 "saved code cell changed; read its current source hash before executing"
             )
-        run = self.store.create(
+        run = await self.store.create(
             NotebookRun(
                 engagement_id=engagement_id,
                 notebook_path=path,
@@ -865,8 +904,10 @@ class NotebookService:
                 execution_mode=policy.execution_mode,
             )
         )
-        self.store.append_event(
-            run.id, "notebook.queued", {"cell_id": cell_id, "path": path}
+        (
+            await self.store.append_event(
+                run.id, "notebook.queued", {"cell_id": cell_id, "path": path}
+            )
         )
         key = (engagement_id, path)
         queue = self._queues.setdefault(key, asyncio.Queue())
@@ -886,31 +927,33 @@ class NotebookService:
         queue = self._queues[key]
         while not queue.empty():
             run_id, source = await queue.get()
-            run = self.store.get(NotebookRun, run_id)
+            run = await self.store.get(NotebookRun, run_id)
             if run.status == "interrupted":
                 self._run_done[run_id].set()
                 queue.task_done()
                 continue
             try:
                 worker = await self._worker(key[0], key[1])
-                run = self.store.get(NotebookRun, run_id)
+                run = await self.store.get(NotebookRun, run_id)
                 if run.status == "interrupted":
                     self._run_done[run_id].set()
                     queue.task_done()
                     continue
-                current_policy = self.policy(key[0])
+                current_policy = await self.policy(key[0])
                 if current_policy.execution_mode != run.execution_mode:
                     raise NotebookConflict(
                         "project execution mode changed; run this cell again"
                     )
-                run = self.store.update(
+                run = await self.store.update(
                     NotebookRun,
                     run_id,
                     {"status": "running", "started_at": _now()},
                     expected_revision=run.revision,
                 )
-                self.store.append_event(
-                    run_id, "notebook.running", {"mode": run.execution_mode}
+                (
+                    await self.store.append_event(
+                        run_id, "notebook.running", {"mode": run.execution_mode}
+                    )
                 )
                 self._output_events[run_id] = []
                 status = await worker.execute(run_id, source)
@@ -931,29 +974,33 @@ class NotebookService:
             finally:
                 self._output_events.pop(run_id, None)
                 self._interrupted_runs.discard(run_id)
-            latest = self.store.get(NotebookRun, run_id)
-            self.store.update(
-                NotebookRun,
-                run_id,
-                {"status": status, "detail": detail, "completed_at": _now()},
-                expected_revision=latest.revision,
+            latest = await self.store.get(NotebookRun, run_id)
+            (
+                await self.store.update(
+                    NotebookRun,
+                    run_id,
+                    {"status": status, "detail": detail, "completed_at": _now()},
+                    expected_revision=latest.revision,
+                )
             )
-            self.store.append_event(
-                run_id, "notebook.completed", {"status": status, "detail": detail}
+            (
+                await self.store.append_event(
+                    run_id, "notebook.completed", {"status": status, "detail": detail}
+                )
             )
             self._run_done[run_id].set()
             queue.task_done()
 
-    def _on_event(self, run_id: str, event: dict[str, Any]) -> None:
+    async def _on_event(self, run_id: str, event: dict[str, Any]) -> None:
         if run_id not in self._output_events:
             return
         self._output_events[run_id].append(event)
-        self.store.append_event(run_id, "notebook.output", event)
+        (await self.store.append_event(run_id, "notebook.output", event))
 
     async def wait_run(
         self, run_id: str, *, engagement_id: str, timeout: float = 30
     ) -> dict[str, Any]:
-        run = self.store.get(NotebookRun, run_id)
+        run = await self.store.get(NotebookRun, run_id)
         if run.engagement_id != engagement_id:
             raise NotebookError("run is outside the selected project")
         event = self._run_done.get(run_id)
@@ -963,21 +1010,23 @@ class NotebookService:
             except asyncio.TimeoutError:
                 # diagnostic-expected: wait is bounded; the run remains available for replay.
                 pass
-        return self.run(run_id, engagement_id=engagement_id)
+        return await self.run(run_id, engagement_id=engagement_id)
 
     async def interrupt(self, run_id: str, *, engagement_id: str) -> NotebookRun:
-        run = self.store.get(NotebookRun, run_id)
+        run = await self.store.get(NotebookRun, run_id)
         if run.engagement_id != engagement_id:
             raise NotebookError("run is outside the selected project")
         if run.status == "queued":
-            updated = self.store.update(
+            updated = await self.store.update(
                 NotebookRun,
                 run_id,
                 {"status": "interrupted", "completed_at": _now()},
                 expected_revision=run.revision,
             )
-            self.store.append_event(
-                run_id, "notebook.completed", {"status": "interrupted"}
+            (
+                await self.store.append_event(
+                    run_id, "notebook.completed", {"status": "interrupted"}
+                )
             )
             return updated
         if run.status == "running":
@@ -985,19 +1034,19 @@ class NotebookService:
             worker = self.workers.get((engagement_id, run.notebook_path))
             if worker is not None:
                 await worker.command("interrupt")
-        return self.store.get(NotebookRun, run_id)
+        return await self.store.get(NotebookRun, run_id)
 
-    def kernel_status(self, engagement_id: str, path: str) -> dict[str, Any]:
-        self.read(engagement_id, path)
+    async def kernel_status(self, engagement_id: str, path: str) -> dict[str, Any]:
+        (await self.read(engagement_id, path))
         key = (engagement_id, path)
         worker = self.workers.get(key)
-        if worker is not None and worker.workspace_path != self._workspace_path(
-            engagement_id
+        if worker is not None and worker.workspace_path != (
+            await self._workspace_path(engagement_id)
         ):
             worker = None
         runs = [
             run.id
-            for run in self.active_runs(engagement_id)
+            for run in (await self.active_runs(engagement_id))
             if run.notebook_path == path
         ]
         if worker is None:
@@ -1029,7 +1078,7 @@ class NotebookService:
         expected_instance_id: str | None = None,
         expected_generation: int | None = None,
     ) -> dict[str, Any]:
-        self.read(engagement_id, path)
+        (await self.read(engagement_id, path))
         key = (engagement_id, path)
         async with self._worker_lock:
             if engagement_id in self._package_changes:
@@ -1040,8 +1089,11 @@ class NotebookService:
             if worker is None:
                 if expected_instance_id is not None or expected_generation is not None:
                     raise NotebookConflict("kernel is absent; read its current status")
-                return {**self.kernel_status(engagement_id, path), "restarted": False}
-            if worker.workspace_path != self._workspace_path(engagement_id):
+                return {
+                    **(await self.kernel_status(engagement_id, path)),
+                    "restarted": False,
+                }
+            if worker.workspace_path != (await self._workspace_path(engagement_id)):
                 raise NotebookConflict(
                     "project workspace changed; read the current kernel status"
                 )
@@ -1057,12 +1109,13 @@ class NotebookService:
                 )
             if worker.process.returncode is not None or worker.restart_uncertain:
                 raise NotebookConflict("kernel is unavailable; read its current status")
-            if worker.policy_revision != self.policy(engagement_id).revision:
+            if worker.policy_revision != (await self.policy(engagement_id)).revision:
                 raise NotebookConflict(
                     "project execution policy changed; read its current status"
                 )
             if worker.active_run or any(
-                run.notebook_path == path for run in self.active_runs(engagement_id)
+                run.notebook_path == path
+                for run in (await self.active_runs(engagement_id))
             ):
                 raise NotebookConflict(
                     "cell is running or queued; interrupt it before restarting"
@@ -1078,7 +1131,7 @@ class NotebookService:
             previous_generation = worker.generation
             worker.generation += 1
             return {
-                **self.kernel_status(engagement_id, path),
+                **(await self.kernel_status(engagement_id, path)),
                 "restarted": True,
                 "previous_generation": previous_generation,
             }
@@ -1086,8 +1139,8 @@ class NotebookService:
     async def _worker(self, engagement_id: str, path: str) -> NotebookWorkerConnection:
         key = (engagement_id, path)
         async with self._worker_lock:
-            policy = self.policy(engagement_id)
-            workspace_path = self._workspace_path(engagement_id)
+            policy = await self.policy(engagement_id)
+            workspace_path = await self._workspace_path(engagement_id)
             existing = self.workers.get(key)
             if (
                 existing is not None
@@ -1118,7 +1171,7 @@ class NotebookService:
                 await evict.close()
                 self.workers.pop(evict_key, None)
             command = await self._worker_command(engagement_id, policy)
-            if workspace_path != self._workspace_path(engagement_id):
+            if workspace_path != (await self._workspace_path(engagement_id)):
                 raise NotebookConflict(
                     "project workspace changed while starting a kernel; retry the cell"
                 )
@@ -1147,9 +1200,9 @@ class NotebookService:
             self.workers[key] = worker
             return worker
 
-    def _workspace_path(self, engagement_id: str) -> Path:
+    async def _workspace_path(self, engagement_id: str) -> Path:
         return (
-            self.documents.workspace_resolver(engagement_id)
+            (await resolve_workspace(self.documents.workspace_resolver, engagement_id))
             .expanduser()
             .resolve(strict=True)
         )
@@ -1186,7 +1239,9 @@ class NotebookService:
             )
         self._sessions[engagement_id] = (session.id, policy.revision)
         prefix = [*backend.runner._runtime_argv(), "exec", backend.container_name]
-        environment = self.automation_runtime.notebook_data_directory(engagement_id)
+        environment = await self.automation_runtime.notebook_data_directory(
+            engagement_id
+        )
         if not (environment / "pyvenv.cfg").exists():
             await self._capture(
                 [
@@ -1323,7 +1378,7 @@ class NotebookService:
     async def install_package(
         self, engagement_id: str, path: str, requirement: str
     ) -> dict[str, Any]:
-        self.read(engagement_id, path)
+        (await self.read(engagement_id, path))
         match = re.fullmatch(PACKAGE_REQUIREMENT_PATTERN, requirement)
         if match is None:
             raise NotebookError(
@@ -1339,11 +1394,11 @@ class NotebookService:
             raise NotebookConflict(
                 "A project kernel is restarting; wait before installing packages"
             )
-        if self.active_runs(engagement_id):
+        if await self.active_runs(engagement_id):
             raise NotebookConflict(
                 "a project cell is running or queued; wait before installing a package"
             )
-        policy = self.policy(engagement_id)
+        policy = await self.policy(engagement_id)
         if policy.execution_mode == "host" and not policy.host_access_acknowledged:
             raise NotebookPermissionRequired(
                 "Acknowledge Host access in Project settings before installing packages"
@@ -1436,10 +1491,10 @@ class NotebookService:
     async def installed_package(
         self, engagement_id: str, path: str, name: str
     ) -> dict[str, Any]:
-        self.read(engagement_id, path)
+        (await self.read(engagement_id, path))
         if not re.fullmatch(PACKAGE_NAME_PATTERN, name) or len(name) > 200:
             raise NotebookError("choose one exact package name")
-        policy = self.policy(engagement_id)
+        policy = await self.policy(engagement_id)
         if policy.execution_mode == "host":
             if not policy.host_access_acknowledged:
                 raise NotebookPermissionRequired(
@@ -1500,10 +1555,10 @@ class NotebookService:
     ) -> dict[str, Any]:
         """Resolve an exact package name through the selected runtime's network boundary."""
 
-        self.read(engagement_id, path)
+        (await self.read(engagement_id, path))
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name):
             raise NotebookError("enter a Python package name to look up")
-        policy = self.policy(engagement_id)
+        policy = await self.policy(engagement_id)
         if policy.execution_mode == "host" and not policy.host_access_acknowledged:
             raise NotebookPermissionRequired(
                 "Acknowledge Host access in Project settings before searching packages"

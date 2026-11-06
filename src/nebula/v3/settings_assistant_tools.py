@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from importlib import resources
 from typing import Any
@@ -353,12 +354,12 @@ def catalog() -> dict[str, Any]:
     }
 
 
-def notebook_settings(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
+async def notebook_settings(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
     from .notebook_mcp import NotebookMcpTools
 
-    store.get(Engagement, engagement_id)
-    profile = NotebookMcpTools.ensure_profile(store, engagement_id)
-    policies = store.find_entities(
+    (await store.get(Engagement, engagement_id))
+    profile = await NotebookMcpTools.ensure_profile(store, engagement_id)
+    policies = await store.find_entities(
         AutomationProjectPolicy, {"engagement_id": engagement_id}, limit=1
     )
     policy = policies[0] if policies else None
@@ -415,14 +416,16 @@ async def set_notebook_settings(
             expected_revision=current.revision,
         )
     if enabled is not None:
-        profile = NotebookMcpTools.ensure_profile(store, engagement_id)
-        store.update(
-            McpServerProfile,
-            profile.id,
-            {"enabled": enabled},
-            expected_revision=profile.revision,
+        profile = await NotebookMcpTools.ensure_profile(store, engagement_id)
+        (
+            await store.update(
+                McpServerProfile,
+                profile.id,
+                {"enabled": enabled},
+                expected_revision=profile.revision,
+            )
         )
-    return {**notebook_settings(store, engagement_id), "saved": True}
+    return {**(await notebook_settings(store, engagement_id)), "saved": True}
 
 
 def open_setting(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -524,11 +527,11 @@ def request_headless_session(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def project_context(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
+async def project_context(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
     """Read the selected project's runtime facts without creating a policy."""
 
-    engagement = store.get(Engagement, engagement_id)
-    policies = store.find_entities(
+    engagement = await store.get(Engagement, engagement_id)
+    policies = await store.find_entities(
         AutomationProjectPolicy,
         {"engagement_id": engagement.id},
         limit=1,
@@ -561,7 +564,7 @@ def project_context(store: NebulaStore, engagement_id: str) -> dict[str, Any]:
     }
 
 
-def set_post_tool_preference(
+async def set_post_tool_preference(
     store: NebulaStore,
     artifact_store: Any,
     engagement_id: str,
@@ -577,15 +580,15 @@ def set_post_tool_preference(
         raise ValueError(
             "choose take_notes or suggest_next_steps and a boolean enabled value"
         )
-    engagement = store.get(Engagement, engagement_id)
+    engagement = await store.get(Engagement, engagement_id)
     service = ExecutionAIService(store=store, artifact_store=artifact_store)
-    current = service.get_config(engagement.id)
-    saved = service.set_config(
+    current = await service.get_config(engagement.id)
+    saved = await service.set_config(
         engagement.id,
         current.model_copy(update={setting: enabled}),
         expected_revision=engagement.revision,
     )
-    observed = service.get_config(engagement.id)
+    observed = await service.get_config(engagement.id)
     if observed != saved:
         raise RuntimeError("Core did not confirm the saved post-tool setting")
     return {
@@ -600,9 +603,9 @@ def set_post_tool_preference(
     }
 
 
-def model_choices(store: NebulaStore) -> dict[str, Any]:
-    providers = store.find_entities(ProviderProfile, {}, limit=None)
-    harnesses = store.find_entities(HarnessProfile, {}, limit=None)
+async def model_choices(store: NebulaStore) -> dict[str, Any]:
+    providers = await store.find_entities(ProviderProfile, {}, limit=None)
+    harnesses = await store.find_entities(HarnessProfile, {}, limit=None)
     return {
         "providers": [
             {
@@ -627,7 +630,9 @@ def model_choices(store: NebulaStore) -> dict[str, Any]:
     }
 
 
-def set_default_model(store: NebulaStore, arguments: dict[str, Any]) -> dict[str, Any]:
+async def set_default_model(
+    store: NebulaStore, arguments: dict[str, Any]
+) -> dict[str, Any]:
     kind = arguments.get("kind")
     profile_id = arguments.get("profile_id")
     model = arguments.get("model")
@@ -638,35 +643,39 @@ def set_default_model(store: NebulaStore, arguments: dict[str, Any]) -> dict[str
     ):
         raise ValueError("kind, profile_id, and model are required")
     if kind == "provider":
-        provider = store.get(ProviderProfile, profile_id)
+        provider = await store.get(ProviderProfile, profile_id)
         choices = provider.model_allowlist
         if not provider.enabled or model not in choices:
             raise ValueError("choose an enabled provider and one of its allowed models")
-        store.update(
-            ProviderProfile,
-            provider.id,
-            {
-                "metadata": {**provider.metadata, "default_model": model},
-            },
-            expected_revision=provider.revision,
+        (
+            await store.update(
+                ProviderProfile,
+                provider.id,
+                {
+                    "metadata": {**provider.metadata, "default_model": model},
+                },
+                expected_revision=provider.revision,
+            )
         )
-        saved_provider = store.get(ProviderProfile, provider.id)
+        saved_provider = await store.get(ProviderProfile, provider.id)
         observed = saved_provider.metadata.get("default_model")
         profile_name = provider.name
     else:
-        harness = store.get(HarnessProfile, profile_id)
+        harness = await store.get(HarnessProfile, profile_id)
         choices = harness.capabilities.models
         if not harness.enabled or model not in choices:
             raise ValueError(
                 "choose an enabled harness and one of its advertised models"
             )
-        store.update(
-            HarnessProfile,
-            harness.id,
-            {"default_model": model},
-            expected_revision=harness.revision,
+        (
+            await store.update(
+                HarnessProfile,
+                harness.id,
+                {"default_model": model},
+                expected_revision=harness.revision,
+            )
         )
-        saved_harness = store.get(HarnessProfile, harness.id)
+        saved_harness = await store.get(HarnessProfile, harness.id)
         observed = saved_harness.default_model
         profile_name = harness.name
     if observed != model:
@@ -714,13 +723,15 @@ def provider_plugins(
         return request_headless_session(arguments)
 
     async def set_post_tool(arguments: dict[str, Any]) -> dict[str, Any]:
-        return set_post_tool_preference(store, artifact_store, engagement_id, arguments)
+        return await set_post_tool_preference(
+            store, artifact_store, engagement_id, arguments
+        )
 
     async def list_models(_arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(model_choices, store)
+        return await model_choices(store)
 
     async def read_project_context(_arguments: dict[str, Any]) -> dict[str, Any]:
-        return project_context(store, engagement_id)
+        return await project_context(store, engagement_id)
 
     async def search_help(arguments: dict[str, Any]) -> dict[str, Any]:
         from .product_knowledge import search_product_knowledge
@@ -729,12 +740,12 @@ def provider_plugins(
         if not isinstance(query, str) or not 3 <= len(query) <= 1000:
             raise ValueError("provide a product-help query of 3 to 1000 characters")
         return {
-            "matches": search_product_knowledge(query),
+            "matches": await asyncio.to_thread(search_product_knowledge, query),
             "source": "bundled Nebula product knowledge",
         }
 
     async def save_default_model(arguments: dict[str, Any]) -> dict[str, Any]:
-        return set_default_model(store, arguments)
+        return await set_default_model(store, arguments)
 
     async def settings_schema(arguments: dict[str, Any]) -> dict[str, Any]:
         if settings_api is None:
@@ -755,7 +766,7 @@ def provider_plugins(
         )
 
     async def read_notebook(_arguments: dict[str, Any]) -> dict[str, Any]:
-        return notebook_settings(store, engagement_id)
+        return await notebook_settings(store, engagement_id)
 
     async def save_notebook(arguments: dict[str, Any]) -> dict[str, Any]:
         return await set_notebook_settings(store, notebooks, engagement_id, arguments)

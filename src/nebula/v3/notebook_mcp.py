@@ -198,20 +198,22 @@ class NotebookMcpTools:
             ],
         )
 
-    def register_profile(self, project_id: str) -> McpServerProfile:
-        return self.ensure_profile(self.store, project_id)
+    async def register_profile(self, project_id: str) -> McpServerProfile:
+        return await self.ensure_profile(self.store, project_id)
 
     @classmethod
-    def ensure_profile(cls, store: NebulaStore, project_id: str) -> McpServerProfile:
+    async def ensure_profile(
+        cls, store: NebulaStore, project_id: str
+    ) -> McpServerProfile:
         from .domain import Engagement
 
-        store.get(Engagement, project_id)
+        (await store.get(Engagement, project_id))
         identity = profile_id(project_id)
         try:
-            current = store.get(McpServerProfile, identity)
+            current = await store.get(McpServerProfile, identity)
         except NotFoundError:
             # diagnostic-expected: first use creates the reserved project profile.
-            return store.create(
+            return await store.create(
                 McpServerProfile(
                     id=identity,
                     name="Notebook",
@@ -230,7 +232,7 @@ class NotebookMcpTools:
             raise NotebookError("Notebook MCP profile identity is inconsistent")
         fresh = cls.capabilities()
         if current.capabilities.tools != fresh.tools:
-            current = store.update(
+            current = await store.update(
                 McpServerProfile,
                 identity,
                 {"capabilities": fresh.model_dump(mode="json")},
@@ -252,7 +254,7 @@ class NotebookMcpTools:
         self, project_id: str, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         try:
-            profile = self.store.get(McpServerProfile, profile_id(project_id))
+            profile = await self.store.get(McpServerProfile, profile_id(project_id))
         except NotFoundError as exc:
             raise GuidedToolError(
                 str(exc),
@@ -296,7 +298,7 @@ class NotebookMcpTools:
                     before_execution=True,
                 )
             try:
-                self.notebooks.documents.path(project_id, path)
+                (await self.notebooks.documents.path(project_id, path))
             except NotebookError as exc:
                 raise GuidedToolError(
                     str(exc),
@@ -347,7 +349,7 @@ class NotebookMcpTools:
     ) -> dict[str, Any]:
         # The gateway checks the live profile grant as well; this service never
         # accepts a project ID supplied by the model in tool arguments.
-        profile = self.store.get(McpServerProfile, profile_id(project_id))
+        profile = await self.store.get(McpServerProfile, profile_id(project_id))
         if not profile.enabled or profile.metadata.get("engagement_id") != project_id:
             raise GuidedToolError(
                 "Notebook MCP grant was revoked during dispatch",
@@ -380,9 +382,9 @@ class NotebookMcpTools:
             raise NotebookError("choose a notebook path")
         value: Any
         if name == "status":
-            value = self.notebooks.status(project_id)
+            value = await self.notebooks.status(project_id)
         elif name == "file_index_status":
-            status = self.notebooks.file_index_status(project_id)
+            status = await self.notebooks.file_index_status(project_id)
             value = {
                 "configured": isinstance(status["path"], str),
                 "state": status["state"],
@@ -391,7 +393,7 @@ class NotebookMcpTools:
         elif name == "list":
             value = await self.notebooks.list_async(project_id)
         elif name == "read":
-            value = self.notebooks.read(project_id, path)
+            value = await self.notebooks.read(project_id, path)
         elif name == "create":
             value = await self.notebooks.create(project_id, path)
         elif name == "edit_cell":
@@ -414,7 +416,7 @@ class NotebookMcpTools:
                 )
             ).model_dump(mode="json")
         elif name == "recent_runs":
-            value = self.notebooks.recent_runs(project_id, path)
+            value = await self.notebooks.recent_runs(project_id, path)
         elif name == "wait":
             value = await self.notebooks.wait_run(
                 arguments["run_id"],
@@ -422,7 +424,7 @@ class NotebookMcpTools:
                 timeout=arguments.get("timeout", 30),
             )
         elif name == "run":
-            value = self.notebooks.run(
+            value = await self.notebooks.run(
                 arguments["run_id"],
                 engagement_id=project_id,
                 after_sequence=arguments.get("after_sequence", 0),
@@ -434,7 +436,7 @@ class NotebookMcpTools:
                 )
             ).model_dump(mode="json")
         elif name == "kernel_status":
-            value = self.notebooks.kernel_status(project_id, path)
+            value = await self.notebooks.kernel_status(project_id, path)
         elif name == "restart":
             value = await self.notebooks.restart(
                 project_id,

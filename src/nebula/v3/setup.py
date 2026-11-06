@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import AsyncIterator
+
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -303,7 +305,7 @@ def default_host_policy(
     )
 
 
-def create_engagement_with_default_scope(
+async def create_engagement_with_default_scope(
     store: NebulaStore,
     engagement: Engagement,
     *,
@@ -323,10 +325,10 @@ def create_engagement_with_default_scope(
     )
     prepared = engagement.model_copy(update={"scope_policy_id": scope.id})
     if request_id is None:
-        with store.transaction() as transaction:
-            transaction.add(scope)
-            transaction.add(prepared)
-            transaction.add(runtime_policy)
+        async with store.transaction() as transaction:
+            (await transaction.add(scope))
+            (await transaction.add(prepared))
+            (await transaction.add(runtime_policy))
         return prepared
     assert actor_id is not None
 
@@ -355,18 +357,22 @@ def create_engagement_with_default_scope(
         # SQLite takes the writer lock before the absent-row read. PostgreSQL's
         # name lock serializes Butler creates with equal normalized names; the
         # primary key also serializes a reused ID with different details.
-        with store.transaction(immediate=True) as transaction:
+        async with store.transaction(immediate=True) as transaction:
             if (
                 transaction.session.bind
                 and transaction.session.bind.dialect.name == "postgresql"
             ):
-                transaction.session.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtext(:name_key))"),
-                    {"name_key": f"nebula:project-name:{name_key}"},
+                (
+                    await transaction.session.execute(
+                        text("SELECT pg_advisory_xact_lock(hashtext(:name_key))"),
+                        {"name_key": f"nebula:project-name:{name_key}"},
+                    )
                 )
-            receipt = transaction.session.get(ProjectCreateRequestRow, receipt_key)
+            receipt = await transaction.session.get(
+                ProjectCreateRequestRow, receipt_key
+            )
             if receipt is None:
-                existing_names = transaction.session.execute(
+                existing_names = await transaction.session.execute(
                     select(EntityRow.id, EntityRow.payload).where(
                         EntityRow.kind == Engagement.entity_kind
                     )
@@ -393,10 +399,10 @@ def create_engagement_with_default_scope(
                         engagement_id=engagement.id,
                     )
                 )
-                transaction.session.flush()
-                transaction.add(scope)
-                transaction.add(prepared)
-                transaction.add(runtime_policy)
+                (await transaction.session.flush())
+                (await transaction.add(scope))
+                (await transaction.add(prepared))
+                (await transaction.add(runtime_policy))
                 created = True
                 project_id = prepared.id
             else:
@@ -408,8 +414,8 @@ def create_engagement_with_default_scope(
     except IntegrityError:
         # A concurrent PostgreSQL writer committed the receipt first. Resolve
         # only that exact receipt; an unrelated integrity failure still raises.
-        with store.database.session() as session:
-            receipt = session.get(ProjectCreateRequestRow, receipt_key)
+        async with store.database.session() as session:
+            receipt = await session.get(ProjectCreateRequestRow, receipt_key)
             if receipt is None:
                 raise
             if receipt.payload_hash != fingerprint:
@@ -420,14 +426,14 @@ def create_engagement_with_default_scope(
     if created:
         return prepared
     try:
-        return store.get(Engagement, project_id)
+        return await store.get(Engagement, project_id)
     except NotFoundError as exc:
         raise ConflictError(
             "request_id belongs to a project that has since been deleted"
         ) from exc
 
 
-def bootstrap_scratch_project(store: NebulaStore) -> str | None:
+async def bootstrap_scratch_project(store: NebulaStore) -> str | None:
     """Consume the durable first-run marker and optionally create Scratch.
 
     The marker and entity write share one transaction. This makes the operation
@@ -436,17 +442,19 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
     truly empty from the user's perspective (notably during a legacy import).
     """
 
-    connection = store.database.engine.connect()
+    connection = await store.database.connect()
     try:
         if store.database.engine.dialect.name == "sqlite":
-            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
         else:
-            connection.begin()
+            (await connection.begin())
         marker = (
-            connection.execute(
-                select(BootstrapStateRow)
-                .where(BootstrapStateRow.key == SCRATCH_PROJECT_BOOTSTRAP_KEY)
-                .with_for_update()
+            (
+                await connection.execute(
+                    select(BootstrapStateRow)
+                    .where(BootstrapStateRow.key == SCRATCH_PROJECT_BOOTSTRAP_KEY)
+                    .with_for_update()
+                )
             )
             .mappings()
             .first()
@@ -455,33 +463,37 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
             # A store constructed without the normal Database bootstrap is not
             # eligible. Fail closed instead of guessing that an existing DB is new.
             now = utc_now()
-            connection.execute(
-                insert(BootstrapStateRow).values(
-                    key=SCRATCH_PROJECT_BOOTSTRAP_KEY,
-                    status="complete",
-                    engagement_id=None,
-                    created_at=now,
-                    completed_at=now,
+            (
+                await connection.execute(
+                    insert(BootstrapStateRow).values(
+                        key=SCRATCH_PROJECT_BOOTSTRAP_KEY,
+                        status="complete",
+                        engagement_id=None,
+                        created_at=now,
+                        completed_at=now,
+                    )
                 )
             )
-            connection.commit()
+            (await connection.commit())
             return None
 
         if marker["status"] != "eligible":
             existing_engagement_id = marker["engagement_id"]
             if existing_engagement_id is None:
-                connection.commit()
+                (await connection.commit())
                 return None
-            exists_now = connection.scalar(
+            exists_now = await connection.scalar(
                 select(func.count(EntityRow.id)).where(
                     EntityRow.id == existing_engagement_id,
                     EntityRow.kind == Engagement.entity_kind,
                 )
             )
-            connection.commit()
+            (await connection.commit())
             return existing_engagement_id if exists_now else None
 
-        entity_count = int(connection.scalar(select(func.count(EntityRow.id))) or 0)
+        entity_count = int(
+            (await connection.scalar(select(func.count(EntityRow.id)))) or 0
+        )
         engagement_id: str | None = None
         if entity_count == 0:
             scope = default_scope_policy(SCRATCH_PROJECT_ID)
@@ -498,56 +510,64 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
                 },
             )
             scope_payload = scope.model_dump(mode="json")
-            connection.execute(
-                insert(EntityRow).values(
-                    id=scope.id,
-                    kind=scope.entity_kind,
-                    engagement_id=scope.engagement_id,
-                    revision=scope.revision,
-                    payload=scope_payload,
-                    created_at=scope.created_at,
-                    updated_at=scope.updated_at,
+            (
+                await connection.execute(
+                    insert(EntityRow).values(
+                        id=scope.id,
+                        kind=scope.entity_kind,
+                        engagement_id=scope.engagement_id,
+                        revision=scope.revision,
+                        payload=scope_payload,
+                        created_at=scope.created_at,
+                        updated_at=scope.updated_at,
+                    )
                 )
             )
             payload = scratch.model_dump(mode="json")
-            connection.execute(
-                insert(EntityRow).values(
-                    id=scratch.id,
-                    kind=scratch.entity_kind,
-                    engagement_id=scratch.id,
-                    revision=scratch.revision,
-                    payload=payload,
-                    created_at=scratch.created_at,
-                    updated_at=scratch.updated_at,
+            (
+                await connection.execute(
+                    insert(EntityRow).values(
+                        id=scratch.id,
+                        kind=scratch.entity_kind,
+                        engagement_id=scratch.id,
+                        revision=scratch.revision,
+                        payload=payload,
+                        created_at=scratch.created_at,
+                        updated_at=scratch.updated_at,
+                    )
                 )
             )
-            connection.execute(
-                insert(EntityRow).values(
-                    id=runtime_policy.id,
-                    kind=runtime_policy.entity_kind,
-                    engagement_id=runtime_policy.engagement_id,
-                    revision=runtime_policy.revision,
-                    payload=runtime_policy.model_dump(mode="json"),
-                    created_at=runtime_policy.created_at,
-                    updated_at=runtime_policy.updated_at,
+            (
+                await connection.execute(
+                    insert(EntityRow).values(
+                        id=runtime_policy.id,
+                        kind=runtime_policy.entity_kind,
+                        engagement_id=runtime_policy.engagement_id,
+                        revision=runtime_policy.revision,
+                        payload=runtime_policy.model_dump(mode="json"),
+                        created_at=runtime_policy.created_at,
+                        updated_at=runtime_policy.updated_at,
+                    )
                 )
             )
             engagement_id = scratch.id
 
         now = utc_now()
-        connection.execute(
-            update(BootstrapStateRow)
-            .where(
-                BootstrapStateRow.key == SCRATCH_PROJECT_BOOTSTRAP_KEY,
-                BootstrapStateRow.status == "eligible",
-            )
-            .values(
-                status="complete",
-                engagement_id=engagement_id,
-                completed_at=now,
+        (
+            await connection.execute(
+                update(BootstrapStateRow)
+                .where(
+                    BootstrapStateRow.key == SCRATCH_PROJECT_BOOTSTRAP_KEY,
+                    BootstrapStateRow.status == "eligible",
+                )
+                .values(
+                    status="complete",
+                    engagement_id=engagement_id,
+                    completed_at=now,
+                )
             )
         )
-        connection.commit()
+        (await connection.commit())
         return engagement_id
     except Exception as caught_error:
         record_caught_exception(
@@ -557,20 +577,20 @@ def bootstrap_scratch_project(store: NebulaStore) -> str | None:
             caught_error,
             stage="setup",
         )
-        connection.rollback()
+        (await connection.rollback())
         raise
     finally:
-        connection.close()
+        (await connection.close())
 
 
-def current_scratch_project_id(store: NebulaStore) -> str | None:
+async def current_scratch_project_id(store: NebulaStore) -> str | None:
     """Return the live bootstrapped project, not a stale deleted marker target."""
 
-    with store.database.session() as session:
-        marker = session.get(BootstrapStateRow, SCRATCH_PROJECT_BOOTSTRAP_KEY)
+    async with store.database.session() as session:
+        marker = await session.get(BootstrapStateRow, SCRATCH_PROJECT_BOOTSTRAP_KEY)
         if marker is None or not marker.engagement_id:
             return None
-        exists_now = session.scalar(
+        exists_now = await session.scalar(
             select(func.count(EntityRow.id)).where(
                 EntityRow.id == marker.engagement_id,
                 EntityRow.kind == Engagement.entity_kind,
@@ -617,9 +637,10 @@ class SetupService:
                 image_preparation=self._image_preparation,
                 detail="Checking supported local container runtimes.",
             )
-        self._emit(SetupEventReason.SNAPSHOT)
 
-    def start(self) -> None:
+    async def start(self) -> None:
+        if not self._events:
+            (await self._emit(SetupEventReason.SNAPSHOT))
         if self.tool_platform is None or not self.tool_platform.execution_enabled:
             return
         if self._image_preparation.operation_id is not None:
@@ -648,22 +669,22 @@ class SetupService:
             )
 
     async def status(self) -> SetupStatus:
-        self.start()
+        (await self.start())
         # The snapshot reads persisted profiles. A busy database must not hold
         # the HTTP event loop while the UI checks health or setup status.
-        return await asyncio.to_thread(self._snapshot)
+        return await self._snapshot()
 
     async def refresh(self) -> SetupStatus:
         if self.tool_platform is None or not self.tool_platform.execution_enabled:
-            return self._snapshot()
+            return await self._snapshot()
         if self._preparation_running():
-            return self._snapshot()
+            return await self._snapshot()
         task = self._refresh_task
         if task is not None and not task.done():
             await task
         else:
             await self._refresh()
-        return self._snapshot()
+        return await self._snapshot()
 
     async def _refresh(self) -> None:
         async with self._refresh_lock:
@@ -673,15 +694,22 @@ class SetupService:
                     detail="Checking supported local container runtimes.",
                 )
             )
-            self._emit(SetupEventReason.RUNTIME_DETECTION_STARTED)
+            (await self._emit(SetupEventReason.RUNTIME_DETECTION_STARTED))
             try:
-                profiles = list(self.store.iter_readable_entities(StoredRunnerProfile))
+                profiles = list(
+                    [
+                        item
+                        async for item in self.store.iter_readable_entities(
+                            StoredRunnerProfile
+                        )
+                    ]
+                )
                 if profiles:
                     candidates = await asyncio.gather(
                         *(self._verify_configured(profile) for profile in profiles)
                     )
                     self._set_terminal(self._resolve_candidates(list(candidates)))
-                    self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED)
+                    (await self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED))
                     return
 
                 candidates = await self._detect_fixed_candidates()
@@ -690,7 +718,7 @@ class SetupService:
                     selected = healthy[0]
                     profile = self._stored_profile(selected)
                     try:
-                        profile = self.store.create(profile)
+                        profile = await self.store.create(profile)
                     except ConflictError as caught_error:
                         record_caught_exception(
                             "setup",
@@ -699,7 +727,7 @@ class SetupService:
                             caught_error,
                             stage="setup",
                         )
-                        existing = self.store.get(StoredRunnerProfile, "local")
+                        existing = await self.store.get(StoredRunnerProfile, "local")
                         if not self._same_runner(existing, profile):
                             self._set_terminal(
                                 TerminalSetupStatus(
@@ -711,7 +739,11 @@ class SetupService:
                                     ),
                                 )
                             )
-                            self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED)
+                            (
+                                await self._emit(
+                                    SetupEventReason.RUNTIME_DETECTION_COMPLETED
+                                )
+                            )
                             return
                         profile = existing
                     selected = selected.model_copy(
@@ -750,7 +782,7 @@ class SetupService:
                             ),
                         )
                     )
-                self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED)
+                (await self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED))
             except asyncio.CancelledError as caught_error:
                 record_caught_exception(
                     "setup",
@@ -774,7 +806,7 @@ class SetupService:
                         detail="Local container runtime detection failed. Retry setup.",
                     )
                 )
-                self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED)
+                (await self._emit(SetupEventReason.RUNTIME_DETECTION_COMPLETED))
 
     async def select_runner(
         self, request: RunnerSelectionRequest
@@ -811,7 +843,7 @@ class SetupService:
                     operation="runner_selection",
                     accepted=True,
                     idempotent=True,
-                    setup=self._snapshot(),
+                    setup=(await self._snapshot()),
                 )
             if candidate.source != RunnerCandidateSource.DETECTED:
                 raise SetupServiceError(
@@ -848,7 +880,7 @@ class SetupService:
             profile = self._stored_profile(verified)
             idempotent = False
             try:
-                profile = self.store.create(profile)
+                profile = await self.store.create(profile)
             except ConflictError as caught_error:
                 record_caught_exception(
                     "setup",
@@ -857,7 +889,7 @@ class SetupService:
                     caught_error,
                     stage="setup",
                 )
-                existing = self.store.get(StoredRunnerProfile, "local")
+                existing = await self.store.get(StoredRunnerProfile, "local")
                 if not self._same_runner(existing, profile):
                     raise SetupServiceError(
                         "local_runner_conflict",
@@ -879,12 +911,12 @@ class SetupService:
                     detail=self._selected_runner_detail(selected.detail),
                 )
             )
-            self._emit(SetupEventReason.RUNNER_SELECTED)
+            (await self._emit(SetupEventReason.RUNNER_SELECTED))
             return SetupControlResponse(
                 operation="runner_selection",
                 accepted=True,
                 idempotent=idempotent,
-                setup=self._snapshot(),
+                setup=(await self._snapshot()),
             )
 
     async def prepare_image(
@@ -918,7 +950,7 @@ class SetupService:
                     accepted=False,
                     idempotent=True,
                     operation_id=current.operation_id,
-                    setup=self._snapshot(),
+                    setup=(await self._snapshot()),
                 )
             task = self._preparation_task
             self._transition_preparation(
@@ -931,7 +963,7 @@ class SetupService:
                 ),
                 terminal_state=TerminalSetupState.PREPARING_IMAGE,
             )
-            self._emit(SetupEventReason.IMAGE_PREPARATION_CANCELLING)
+            (await self._emit(SetupEventReason.IMAGE_PREPARATION_CANCELLING))
             if task is not None and not task.done():
                 task.cancel()
 
@@ -944,13 +976,13 @@ class SetupService:
                 stage="cancellation",
             )
         if self._image_preparation.phase == ImagePreparationPhase.CANCELLING:
-            self._mark_preparation_cancelled(request.operation_id)
+            (await self._mark_preparation_cancelled(request.operation_id))
         return SetupControlResponse(
             operation="image_preparation_cancellation",
             accepted=True,
             idempotent=False,
             operation_id=request.operation_id,
-            setup=self._snapshot(),
+            setup=(await self._snapshot()),
         )
 
     def replay_events(self, after_sequence: int = 0) -> SetupEventReplay:
@@ -1024,9 +1056,11 @@ class SetupService:
         requested_project_id = request.project_id
         if retry and requested_project_id is None:
             requested_project_id = self._image_preparation.project_id
-        project_id = self._preparation_project_id(requested_project_id)
+        project_id = await self._preparation_project_id(requested_project_id)
         try:
-            profile = self.tool_platform.resolve_human_terminal_profile(project_id)
+            profile = await self.tool_platform.resolve_human_terminal_profile(
+                project_id
+            )
         except (NotFoundError, RuntimePlatformError) as exc:
             record_caught_exception(
                 "setup",
@@ -1055,7 +1089,7 @@ class SetupService:
                     accepted=False,
                     idempotent=True,
                     operation_id=current.operation_id,
-                    setup=self._snapshot(),
+                    setup=(await self._snapshot()),
                 )
             if (
                 current.phase == ImagePreparationPhase.READY
@@ -1066,7 +1100,7 @@ class SetupService:
                     accepted=False,
                     idempotent=True,
                     operation_id=current.operation_id,
-                    setup=self._snapshot(),
+                    setup=(await self._snapshot()),
                 )
             if retry and current.phase not in {
                 ImagePreparationPhase.ERROR,
@@ -1095,7 +1129,7 @@ class SetupService:
                 preparation,
                 terminal_state=TerminalSetupState.PREPARING_IMAGE,
             )
-            self._emit(SetupEventReason.IMAGE_PREPARATION_QUEUED)
+            (await self._emit(SetupEventReason.IMAGE_PREPARATION_QUEUED))
             self._preparation_task = create_diagnostic_task(
                 self._run_image_preparation(operation_id, project_id),
                 feature="setup",
@@ -1108,7 +1142,7 @@ class SetupService:
                 accepted=True,
                 idempotent=False,
                 operation_id=operation_id,
-                setup=self._snapshot(),
+                setup=(await self._snapshot()),
             )
 
     async def _run_image_preparation(self, operation_id: str, project_id: str) -> None:
@@ -1124,7 +1158,7 @@ class SetupService:
                 ),
                 terminal_state=TerminalSetupState.PREPARING_IMAGE,
             )
-            self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS)
+            (await self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS))
             await asyncio.sleep(0)
             current = self._image_preparation
             self._transition_preparation(
@@ -1139,7 +1173,7 @@ class SetupService:
                 ),
                 terminal_state=TerminalSetupState.PREPARING_IMAGE,
             )
-            self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS)
+            (await self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS))
 
             async def report_progress(detail: str) -> None:
                 if self._image_preparation.operation_id != operation_id:
@@ -1156,7 +1190,7 @@ class SetupService:
                     progressing,
                     terminal_state=TerminalSetupState.PREPARING_IMAGE,
                 )
-                self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS)
+                (await self._emit(SetupEventReason.IMAGE_PREPARATION_PROGRESS))
 
             resolution = await self.tool_platform.resolve_human_terminal_runtime(
                 project_id,
@@ -1176,7 +1210,7 @@ class SetupService:
                 }
             )
             self._transition_preparation(ready, terminal_state=TerminalSetupState.READY)
-            self._emit(SetupEventReason.IMAGE_PREPARATION_READY)
+            (await self._emit(SetupEventReason.IMAGE_PREPARATION_READY))
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
                 "setup",
@@ -1185,7 +1219,7 @@ class SetupService:
                 caught_error,
                 stage="setup",
             )
-            self._mark_preparation_cancelled(operation_id)
+            (await self._mark_preparation_cancelled(operation_id))
             raise
         except Exception as exc:
             record_caught_exception(
@@ -1211,9 +1245,9 @@ class SetupService:
             self._transition_preparation(
                 failed, terminal_state=TerminalSetupState.ERROR
             )
-            self._emit(SetupEventReason.IMAGE_PREPARATION_ERROR)
+            (await self._emit(SetupEventReason.IMAGE_PREPARATION_ERROR))
 
-    def _mark_preparation_cancelled(self, operation_id: str) -> None:
+    async def _mark_preparation_cancelled(self, operation_id: str) -> None:
         if self._image_preparation.operation_id != operation_id:
             return
         cancelled = self._image_preparation.model_copy(
@@ -1232,12 +1266,12 @@ class SetupService:
             else TerminalSetupState.NEEDS_RUNNER
         )
         self._transition_preparation(cancelled, terminal_state=terminal_state)
-        self._emit(SetupEventReason.IMAGE_PREPARATION_CANCELLED)
+        (await self._emit(SetupEventReason.IMAGE_PREPARATION_CANCELLED))
 
-    def _preparation_project_id(self, requested: str | None) -> str:
+    async def _preparation_project_id(self, requested: str | None) -> str:
         if requested is not None:
             try:
-                return self.store.get(Engagement, requested).id
+                return (await self.store.get(Engagement, requested)).id
             except NotFoundError as exc:
                 record_caught_exception(
                     "setup",
@@ -1251,10 +1285,10 @@ class SetupService:
                     "the requested Project does not exist",
                     status_code=404,
                 ) from exc
-        scratch = current_scratch_project_id(self.store)
+        scratch = await current_scratch_project_id(self.store)
         if scratch is not None:
             return scratch
-        projects = self.store.list_entities(Engagement, limit=2)
+        projects = await self.store.list_entities(Engagement, limit=2)
         if len(projects) == 1:
             return projects[0].id
         raise SetupServiceError(
@@ -1286,12 +1320,12 @@ class SetupService:
             update={"image_preparation": self._image_preparation}
         )
 
-    def _emit(self, reason: SetupEventReason | str) -> SetupEvent:
+    async def _emit(self, reason: SetupEventReason | str) -> SetupEvent:
         event = SetupEvent(
             sequence=self._next_event_sequence,
             occurred_at=utc_now(),
             reason=cast(SetupEventReason, reason),
-            snapshot=self._snapshot(),
+            snapshot=(await self._snapshot()),
         )
         self._next_event_sequence += 1
         self._events.append(event)
@@ -1341,7 +1375,7 @@ class SetupService:
                 )
                 detail = str(exc)[:1_000]
                 try:
-                    refreshed = self.store.update(
+                    refreshed = await self.store.update(
                         StoredRunnerProfile,
                         profile.id,
                         {
@@ -1359,7 +1393,7 @@ class SetupService:
                         caught_error,
                         stage="setup",
                     )
-                    refreshed = self.store.get(StoredRunnerProfile, profile.id)
+                    refreshed = await self.store.get(StoredRunnerProfile, profile.id)
         return RunnerCandidate(
             candidate_id=self._candidate_id_for_executable(refreshed.executable),
             runner_profile_id=refreshed.id,
@@ -1500,12 +1534,12 @@ class SetupService:
             "prepared when the first terminal opens."
         )
 
-    def _snapshot(self) -> SetupStatus:
+    async def _snapshot(self) -> SetupStatus:
         # Built with Core itself: one unreadable profile must not stop Core
         # starting or the setup status from reading the others.
         providers = [
             provider
-            for provider in self.store.iter_readable_entities(ProviderProfile)
+            async for provider in self.store.iter_readable_entities(ProviderProfile)
             if provider.enabled
         ]
         provider = providers[0] if providers else None
@@ -1568,7 +1602,7 @@ class SetupService:
             retryable=bool(recovery_actions),
             recovery_actions=recovery_actions,
             core=CoreSetupStatus(status=CoreSetupState.READY),
-            scratch_project_id=current_scratch_project_id(self.store),
+            scratch_project_id=(await current_scratch_project_id(self.store)),
             terminal=self._terminal,
             assistant=assistant,
         )

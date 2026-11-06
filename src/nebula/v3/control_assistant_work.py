@@ -5,6 +5,8 @@ This is a project-bound control plane over Core's chat and mission services.
 
 from __future__ import annotations
 
+from .async_utils import resolve_workspace
+
 import asyncio
 import os
 from collections.abc import Sequence
@@ -794,11 +796,11 @@ class ControlAssistantWork:
         self.schedules = ChatScheduleService(store)
         self.timeline = ButlerTimeline(store)
 
-    def _project(self, project_id: str) -> Engagement:
-        return self.store.get(Engagement, project_id)
+    async def _project(self, project_id: str) -> Engagement:
+        return await self.store.get(Engagement, project_id)
 
-    def _chat(self, project_id: str, session_id: Any) -> ChatSession:
-        chat = self.store.get(ChatSession, _text(session_id, "session_id", 200))
+    async def _chat(self, project_id: str, session_id: Any) -> ChatSession:
+        chat = await self.store.get(ChatSession, _text(session_id, "session_id", 200))
         if (
             chat.engagement_id != project_id
             or chat.metadata.get("control_assistant") is True
@@ -808,23 +810,23 @@ class ControlAssistantWork:
             raise ValueError("choose an assistant chat from this project's work roster")
         return chat
 
-    def _non_subagent_chat(self, project_id: str, session_id: Any) -> ChatSession:
-        session = self._chat(project_id, session_id)
+    async def _non_subagent_chat(self, project_id: str, session_id: Any) -> ChatSession:
+        session = await self._chat(project_id, session_id)
         if is_subagent_session(session):
             raise ValueError(
                 "this is a delegated subagent; use subagent controls on its parent"
             )
         return session
 
-    def _messageable_chat(self, project_id: str, session_id: Any) -> ChatSession:
-        session = self._non_subagent_chat(project_id, session_id)
+    async def _messageable_chat(self, project_id: str, session_id: Any) -> ChatSession:
+        session = await self._non_subagent_chat(project_id, session_id)
         if _chat_kind(session) == "goal_child":
             raise ValueError(
                 "this is a child goal chat; message its parent main agent instead"
             )
         return session
 
-    def _main_ancestor(
+    async def _main_ancestor(
         self, project_id: str, session: ChatSession
     ) -> ChatSession | None:
         current = session
@@ -834,25 +836,29 @@ class ControlAssistantWork:
                 return None
             seen.add(current.id)
             try:
-                current = self._chat(project_id, current.parent_session_id)
+                current = await self._chat(project_id, current.parent_session_id)
             except (
                 ValueError
             ):  # diagnostic-expected: stale or private lineage has no message target
                 return None
         return current
 
-    def _message_via(self, project_id: str, session: ChatSession) -> dict[str, Any]:
-        main = self._main_ancestor(project_id, session)
+    async def _message_via(
+        self, project_id: str, session: ChatSession
+    ) -> dict[str, Any]:
+        main = await self._main_ancestor(project_id, session)
         return {
             "message_via_session_id": main.id if main else None,
             "message_via_url": _chat_url(project_id, main.id) if main else None,
         }
 
-    def _native_goal(self, session: ChatSession) -> dict[str, Any] | None:
+    async def _native_goal(self, session: ChatSession) -> dict[str, Any] | None:
         if session.backend != ChatBackend.HARNESS or not session.harness_session_id:
             return None
         try:
-            snapshot = self.harness.session_activity(session.harness_session_id).goal
+            snapshot = (
+                await self.harness.session_activity(session.harness_session_id)
+            ).goal
         except (
             NotFoundError
         ):  # diagnostic-expected: old chat may lack its harness session
@@ -867,10 +873,10 @@ class ControlAssistantWork:
             "control_reason": "The harness owns this goal; Butler can guide or stop its chat turn.",
         }
 
-    def _settings_chat(self, project_id: str, session_id: Any) -> ChatSession:
+    async def _settings_chat(self, project_id: str, session_id: Any) -> ChatSession:
         target = _text(session_id, "session_id", 200)
         if target == "self":
-            matches = self.store.find_entities(
+            matches = await self.store.find_entities(
                 ChatSession,
                 {},
                 engagement_id=project_id,
@@ -889,15 +895,15 @@ class ControlAssistantWork:
             if session is None:
                 raise ValueError("Butler has no saved conversation yet")
             return session
-        return self._chat(project_id, target)
+        return await self._chat(project_id, target)
 
-    def chat_settings(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._settings_chat(project_id, session_id)
-        current = chat_assistant_config(self.store, session)
-        available = model_choices(self.store)
+    async def chat_settings(self, project_id: str, session_id: Any) -> dict[str, Any]:
+        session = await self._settings_chat(project_id, session_id)
+        current = await chat_assistant_config(self.store, session)
+        available = await model_choices(self.store)
         harness = None
         if current["backend"] == "harness":
-            harness = self.store.get(HarnessProfile, current["profile_id"])
+            harness = await self.store.get(HarnessProfile, current["profile_id"])
         model_option = (
             next(
                 (
@@ -910,14 +916,14 @@ class ControlAssistantWork:
             if harness
             else None
         )
-        project = self._project(project_id)
+        project = await self._project(project_id)
         scope = (
-            self.store.get(ScopePolicy, project.scope_policy_id)
+            (await self.store.get(ScopePolicy, project.scope_policy_id))
             if project.scope_policy_id
             else None
         )
         mcp = []
-        for item in self.store.find_entities(McpServerProfile, {}, limit=None):
+        for item in await self.store.find_entities(McpServerProfile, {}, limit=None):
             if (
                 not item.enabled
                 or item.capabilities.checked_at is None
@@ -948,7 +954,7 @@ class ControlAssistantWork:
             [
                 {"id": item.id, "name": item.manifest.name}
                 for item in discover_native_hooks(
-                    self.chat.workspace_resolver(project_id)
+                    (await resolve_workspace(self.chat.workspace_resolver, project_id))
                 )
             ]
             if current["backend"] == "provider"
@@ -964,14 +970,18 @@ class ControlAssistantWork:
             "revision": session.revision,
             "task_plans": [
                 item.model_dump(mode="json")
-                for item in self.store.list_session_entities(
-                    ChatTaskPlan, session.id, newest_first=True, limit=10
+                for item in (
+                    await self.store.list_session_entities(
+                        ChatTaskPlan, session.id, newest_first=True, limit=10
+                    )
                 )
             ],
             "plan_directives": [
                 item.model_dump(mode="json")
-                for item in self.store.list_session_entities(
-                    ChatPlanDirective, session.id, newest_first=True, limit=10
+                for item in (
+                    await self.store.list_session_entities(
+                        ChatPlanDirective, session.id, newest_first=True, limit=10
+                    )
                 )
             ],
             "settings": current,
@@ -1005,7 +1015,7 @@ class ControlAssistantWork:
             "applies_to": "next message; queued and running turns keep their submitted settings",
         }
 
-    def chat_settings_many(
+    async def chat_settings_many(
         self, project_id: str, session_ids: list[str]
     ) -> dict[str, Any]:
         """Read saved choices without rebuilding the global runtime catalog per chat."""
@@ -1016,14 +1026,14 @@ class ControlAssistantWork:
             raise ValueError("choose 1 to 100 distinct chat session IDs")
         chats = []
         for session_id in session_ids:
-            session = self._chat(project_id, session_id)
+            session = await self._chat(project_id, session_id)
             chats.append(
                 {
                     "session_id": session.id,
                     "title": session.title,
                     "url": _chat_url(project_id, session.id),
                     "revision": session.revision,
-                    "settings": chat_assistant_config(self.store, session),
+                    "settings": (await chat_assistant_config(self.store, session)),
                     "bound_runtime": {
                         "backend": session.backend.value,
                         "profile_id": session.provider_profile_id
@@ -1035,19 +1045,19 @@ class ControlAssistantWork:
             )
         return {"chats": chats}
 
-    def assistant_defaults(self, project_id: str) -> dict[str, Any]:
-        project = self._project(project_id)
+    async def assistant_defaults(self, project_id: str) -> dict[str, Any]:
+        project = await self._project(project_id)
         return {
             "project_id": project.id,
             "revision": project.revision,
             "settings": project.assistant_defaults.model_dump(mode="json"),
-            "available": model_choices(self.store),
+            "available": (await model_choices(self.store)),
         }
 
-    def set_assistant_defaults(
+    async def set_assistant_defaults(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        project = self._project(project_id)
+        project = await self._project(project_id)
         if project.revision != arguments.get("expected_revision"):
             raise ValueError("project changed; read Assistant defaults again")
         changes = arguments.get("settings")
@@ -1060,23 +1070,23 @@ class ControlAssistantWork:
             {**project.assistant_defaults.model_dump(mode="json"), **changes}
         )
         if selected != project.assistant_defaults:
-            project = self.store.update(
+            project = await self.store.update(
                 Engagement,
                 project.id,
                 {"assistant_defaults": selected.model_dump(mode="json")},
                 expected_revision=project.revision,
             )
-        return self.assistant_defaults(project.id)
+        return await self.assistant_defaults(project.id)
 
-    def set_chat_settings(
+    async def set_chat_settings(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._settings_chat(project_id, arguments.get("session_id"))
+        session = await self._settings_chat(project_id, arguments.get("session_id"))
         expected_revision = arguments.get("expected_revision")
         if type(expected_revision) is not int or expected_revision < 1:
             raise ValueError("read current settings and provide expected_revision")
         patch = ChatAssistantConfigPatch.model_validate(arguments.get("settings"))
-        current = chat_assistant_config(self.store, session)
+        current = await chat_assistant_config(self.store, session)
         selected = {**current, **patch.model_dump(exclude_unset=True, mode="json")}
         if (
             session.backend == ChatBackend.PROVIDER
@@ -1084,7 +1094,7 @@ class ControlAssistantWork:
             and (selected["profile_id"], selected["model"])
             != (session.provider_profile_id, session.model)
         ):
-            preflight = self.chat.runtime_switch_preflight(
+            preflight = await self.chat.runtime_switch_preflight(
                 session.id,
                 ChatRuntimeSwitchPreflightRequest(
                     provider_id=selected["profile_id"],
@@ -1097,7 +1107,7 @@ class ControlAssistantWork:
                 raise ValueError(
                     preflight.reason or "open the chat to confirm this runtime switch"
                 )
-        saved = update_chat_assistant_config(
+        saved = await update_chat_assistant_config(
             self.store,
             session,
             patch,
@@ -1108,16 +1118,17 @@ class ControlAssistantWork:
             "session_id": saved.id,
             "url": _chat_url(project_id, saved.id),
             "revision": saved.revision,
-            "settings": chat_assistant_config(self.store, saved),
+            "settings": (await chat_assistant_config(self.store, saved)),
+            "pending_runtime_switch": saved.metadata.get("pending_runtime_switch"),
             "applies_to": "next message; queued and running turns keep their submitted settings",
         }
 
-    def require_plan(
+    async def require_plan(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """Request planning for one exact target using fresh Core revisions."""
 
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = await self._chat(project_id, arguments.get("session_id"))
         kind = arguments.get("target_kind")
         target_id = _text(arguments.get("target_id"), "target_id", 200)
         expected = arguments.get("expected_revision")
@@ -1130,15 +1141,15 @@ class ControlAssistantWork:
             if target_id != session.id:
                 raise ValueError("agent target must be the exact session_id")
         elif kind == "goal":
-            target = self.store.get(ChatGoal, target_id)
+            target = await self.store.get(ChatGoal, target_id)
             if target.session_id != session.id:
                 raise ValueError("goal does not belong to this chat")
         elif kind == "child":
-            target = self._subagent(project_id, target_id)
+            target = await self._subagent(project_id, target_id)
             if target.child_session_id != session.id:
                 raise ValueError("child target must name its child chat")
         elif kind == "turn":
-            target = self.store.get(ChatTurn, target_id)
+            target = await self.store.get(ChatTurn, target_id)
             if target.session_id != session.id:
                 raise ValueError("turn does not belong to this chat")
         else:
@@ -1147,14 +1158,14 @@ class ControlAssistantWork:
             raise ValueError(
                 "target changed; read its current revision before requesting a plan"
             )
-        active = self.chat.pending_turn(session.id)
+        active = await self.chat.pending_turn(session.id)
         active_harness_in_flight = False
         if (
             active is not None
             and active.backend == ChatBackend.HARNESS
             and active.harness_turn_id
         ):
-            harness_turn = self.store.get(HarnessTurn, active.harness_turn_id)
+            harness_turn = await self.store.get(HarnessTurn, active.harness_turn_id)
             active_harness_in_flight = harness_turn.status in {
                 HarnessTurnStatus.RUNNING,
                 HarnessTurnStatus.WAITING_APPROVAL,
@@ -1171,7 +1182,9 @@ class ControlAssistantWork:
             )
         existing = [
             item
-            for item in self.store.list_session_entities(ChatPlanDirective, session.id)
+            for item in (
+                await self.store.list_session_entities(ChatPlanDirective, session.id)
+            )
             if item.status == "pending"
             and item.target_kind == kind
             and item.target_id == target_id
@@ -1180,7 +1193,7 @@ class ControlAssistantWork:
         if internal_id is not None:
             internal_id = _text(internal_id, "directive id", 200)
             try:
-                saved_internal = self.store.get(ChatPlanDirective, internal_id)
+                saved_internal = await self.store.get(ChatPlanDirective, internal_id)
             except NotFoundError:
                 # diagnostic-expected: no prior directive allows one to be created.
                 saved_internal = None
@@ -1218,7 +1231,7 @@ class ControlAssistantWork:
                     reason=reason,
                     deferred_after_turn_id=deferred_after_turn_id,
                 )
-            directive = self.store.create(pending_directive)
+            directive = await self.store.create(pending_directive)
         timing = (
             "next_turn"
             if active is not None and active_harness_in_flight
@@ -1229,22 +1242,22 @@ class ControlAssistantWork:
             else "next_turn"
         )
         return {
-            "directive": self.store.get(ChatPlanDirective, directive.id).model_dump(
-                mode="json"
-            ),
+            "directive": (
+                await self.store.get(ChatPlanDirective, directive.id)
+            ).model_dump(mode="json"),
             "timing": timing,
             "session_id": session.id,
             "target_revision": target.revision,
         }
 
-    def _run(self, project_id: str, run_id: Any) -> AgentRun:
-        run = self.store.get(AgentRun, _text(run_id, "run_id", 200))
+    async def _run(self, project_id: str, run_id: Any) -> AgentRun:
+        run = await self.store.get(AgentRun, _text(run_id, "run_id", 200))
         if run.engagement_id != project_id:
             raise ValueError("choose a mission from this project's work roster")
         return run
 
-    def catalog(self, project_id: str, operation: Any = None) -> dict[str, Any]:
-        self._project(project_id)
+    async def catalog(self, project_id: str, operation: Any = None) -> dict[str, Any]:
+        (await self._project(project_id))
         if operation is not None:
             target = _text(operation, "operation", 200)
             entry = next((item for item in _ALL_WORK_TOOLS if item[0] == target), None)
@@ -1258,7 +1271,7 @@ class ControlAssistantWork:
             }
         return {
             "project_id": project_id,
-            "runtimes": model_choices(self.store),
+            "runtimes": (await model_choices(self.store)),
             "host_admission": {
                 "policy": "New chats and missions wait for host capacity. Queued means saved, not running. Work starts automatically when load recovers.",
                 "status_route": "/api/v1/host-load",
@@ -1274,29 +1287,34 @@ class ControlAssistantWork:
             "scope": "selected project; Assistant settings can attach available browser MCP tools to a chat; direct browser and notes control are not included",
         }
 
-    def overview(self, project_id: str) -> dict[str, Any]:
-        project = self._project(project_id)
-        pending = self.chat.pending_turns(project_id)
-        attention = self.attention(project_id)["items"]
+    async def overview(self, project_id: str) -> dict[str, Any]:
+        project = await self._project(project_id)
+        pending = await self.chat.pending_turns(project_id)
+        attention = (await self.attention(project_id))["items"]
         chats = [
             item
-            for item in self.store.find_entities(
-                ChatSession,
-                {"metadata.subagent_id": None, "metadata.delegated_from_goal_id": None},
-                engagement_id=project_id,
-                newest_first=True,
-                limit=80,
+            for item in (
+                await self.store.find_entities(
+                    ChatSession,
+                    {
+                        "metadata.subagent_id": None,
+                        "metadata.delegated_from_goal_id": None,
+                    },
+                    engagement_id=project_id,
+                    newest_first=True,
+                    limit=80,
+                )
             )
             if item.metadata.get("control_assistant") is not True
             and item.metadata.get("side_chat") is not True
             and item.metadata.get("temporary_assistant") is not True
             and _chat_kind(item) == "main"
         ]
-        subagents = self.store.find_entities(
+        subagents = await self.store.find_entities(
             ChatSubagent, {}, engagement_id=project_id, newest_first=True, limit=31
         )
-        native_subagents = self._native_subagents_overview(project_id, {})
-        runs = self.store.find_entities(
+        native_subagents = await self._native_subagents_overview(project_id, {})
+        runs = await self.store.find_entities(
             AgentRun,
             {},
             engagement_id=project_id,
@@ -1313,8 +1331,8 @@ class ControlAssistantWork:
                     "model": item.model,
                     "state": "working" if item.id in pending else "idle",
                     "kind": "main",
-                    "goal": self._goal_summary(item.id),
-                    "native_harness_goal": self._native_goal(item),
+                    "goal": (await self._goal_summary(item.id)),
+                    "native_harness_goal": (await self._native_goal(item)),
                     "archived": isinstance(item.metadata.get("archived_at"), str),
                     "pinned": item.metadata.get("pinned") is True,
                     "flag_color": item.metadata.get("flag_color"),
@@ -1323,7 +1341,9 @@ class ControlAssistantWork:
                 }
                 for item in chats[:30]
             ],
-            "subagents": [self._subagent_summary(item) for item in subagents[:30]],
+            "subagents": [
+                (await self._subagent_summary(item)) for item in subagents[:30]
+            ],
             "more_subagents": len(subagents) > 30,
             "native_subagents": native_subagents["native_subagents"],
             "next_native_turn_offset": native_subagents["next_native_turn_offset"],
@@ -1344,13 +1364,13 @@ class ControlAssistantWork:
             "more_attention": len(attention) > 5,
         }
 
-    def chats(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
+    async def chats(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
         """Page project conversations beyond the bounded overview roster."""
 
-        self._project(project_id)
+        (await self._project(project_id))
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             ChatSession,
             {},
             engagement_id=project_id,
@@ -1380,21 +1400,23 @@ class ControlAssistantWork:
             "next_offset": offset + 30 if len(rows) > 30 else None,
         }
 
-    def work_items(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
+    async def work_items(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
         """Page saved Work board items inside the selected project."""
 
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
-        return self.work_service.agent_list_page(
+        return await self.work_service.agent_list_page(
             project_id, offset=offset, envelope={"project_id": project_id}
         )
 
-    def work_item(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def work_item(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         item_id = _text(arguments.get("item_id"), "item_id", 200)
         offset = arguments.get("description_offset", 0)
         if type(offset) is not int or offset < 0:
             raise ValueError("description_offset must be a nonnegative integer")
-        return self.work_service.agent_get_item(
+        return await self.work_service.agent_get_item(
             project_id,
             item_id,
             description_offset=offset,
@@ -1404,8 +1426,8 @@ class ControlAssistantWork:
             },
         )
 
-    def work_setting(self, project_id: str) -> dict[str, Any]:
-        project = self._project(project_id)
+    async def work_setting(self, project_id: str) -> dict[str, Any]:
+        project = await self._project(project_id)
         return {
             "project_id": project_id,
             "enabled": project.work_enabled,
@@ -1417,7 +1439,7 @@ class ControlAssistantWork:
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         _validate_work_item_arguments(arguments, WORK_SETTING_SCHEMA)
-        current = self._project(project_id)
+        current = await self._project(project_id)
         if current.revision != arguments["expected_revision"]:
             raise ValueError(
                 "project Work setting changed; read its current revision before updating"
@@ -1428,19 +1450,19 @@ class ControlAssistantWork:
             f"/api/v1/engagements/{quote(project_id, safe='')}/work/setting",
             request.model_dump(mode="json", exclude_unset=True),
         )
-        observed = self.work_setting(project_id)
+        observed = await self.work_setting(project_id)
         return {
             **observed,
             "saved": observed["enabled"] == request.enabled
             and observed["revision"] == saved["revision"],
         }
 
-    def work_updates(
+    async def work_updates(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         _validate_work_item_arguments(arguments, WORK_UPDATES_SCHEMA)
         item_id = _text(arguments["item_id"], "item_id", 200)
-        return self.work_service.agent_updates_page(
+        return await self.work_service.agent_updates_page(
             project_id,
             item_id,
             offset=arguments.get("offset", 0),
@@ -1451,11 +1473,13 @@ class ControlAssistantWork:
             },
         )
 
-    def work_update(self, project_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def work_update(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         _validate_work_item_arguments(arguments, WORK_UPDATE_SCHEMA)
         item_id = _text(arguments["item_id"], "item_id", 200)
         update_id = _text(arguments["update_id"], "update_id", 200)
-        return self.work_service.agent_get_update(
+        return await self.work_service.agent_get_update(
             project_id,
             item_id,
             update_id,
@@ -1471,7 +1495,7 @@ class ControlAssistantWork:
     async def create_work_item(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        self._project(project_id)
+        (await self._project(project_id))
         _validate_work_item_arguments(arguments, WORK_ITEM_CREATE_SCHEMA)
         request = WorkCreate.model_validate(
             {**arguments, "status": arguments.get("status", "ready")}
@@ -1481,14 +1505,14 @@ class ControlAssistantWork:
             f"/api/v1/engagements/{quote(project_id, safe='')}/work",
             request.model_dump(mode="json"),
         )
-        return self.work_item(project_id, {"item_id": created["id"]})
+        return await self.work_item(project_id, {"item_id": created["id"]})
 
     async def update_work_item(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         _validate_work_item_arguments(arguments, WORK_ITEM_UPDATE_SCHEMA)
         item_id = _text(arguments.get("item_id"), "item_id", 200)
-        current = self.work_service.get(project_id, item_id)
+        current = await self.work_service.get(project_id, item_id)
         expected = arguments.get("expected_revision")
         if type(expected) is not int or current.revision != expected:
             raise ValueError(
@@ -1503,14 +1527,14 @@ class ControlAssistantWork:
             f"/api/v1/engagements/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}",
             request.model_dump(mode="json", exclude_unset=True),
         )
-        return self.work_item(project_id, {"item_id": item_id})
+        return await self.work_item(project_id, {"item_id": item_id})
 
     async def check_in_work_item(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         _validate_work_item_arguments(arguments, WORK_ITEM_CHECK_IN_SCHEMA)
         item_id = _text(arguments.get("item_id"), "item_id", 200)
-        self.work_service.get(project_id, item_id)
+        (await self.work_service.get(project_id, item_id))
         request = WorkCheckIn.model_validate(
             {key: value for key, value in arguments.items() if key != "item_id"}
         )
@@ -1519,7 +1543,7 @@ class ControlAssistantWork:
             f"/api/v1/engagements/{quote(project_id, safe='')}/work/{quote(item_id, safe='')}/updates",
             request.model_dump(mode="json", exclude_unset=True),
         )
-        current = self.work_service.get(project_id, item_id)
+        current = await self.work_service.get(project_id, item_id)
         return {
             "project_id": project_id,
             "item_id": item_id,
@@ -1535,13 +1559,13 @@ class ControlAssistantWork:
     ) -> dict[str, Any]:
         """Fetch current Core host calibration on every invocation."""
 
-        self._project(project_id)
+        (await self._project(project_id))
         return await self._request("GET", "/api/v1/host-load", {})
 
     async def host_cpu_budget(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        self._project(project_id)
+        (await self._project(project_id))
         return await self._request("GET", "/api/v1/host-cpu-budget", {})
 
     async def harness_quota(
@@ -1549,8 +1573,8 @@ class ControlAssistantWork:
     ) -> dict[str, Any]:
         """Read a configured harness's measured account window for agents."""
 
-        self._project(project_id)
-        profile = self.store.get(
+        (await self._project(project_id))
+        profile = await self.store.get(
             HarnessProfile, _text(arguments.get("profile_id"), "profile_id", 200)
         )
         if not profile.enabled:
@@ -1574,12 +1598,12 @@ class ControlAssistantWork:
             **read.model_dump(mode="json"),
         }
 
-    def chat_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._chat(project_id, session_id)
-        messages = self.store.recent_chat_messages(session.id)
-        pending = self.chat.pending_turn(session.id)
-        queue = self.queue.get(session.id)
-        harness_turns = self.store.find_entities(
+    async def chat_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
+        session = await self._chat(project_id, session_id)
+        messages = await self.store.recent_chat_messages(session.id)
+        pending = await self.chat.pending_turn(session.id)
+        queue = await self.queue.get(session.id)
+        harness_turns = await self.store.find_entities(
             HarnessTurn,
             {"chat_session_id": session.id},
             engagement_id=project_id,
@@ -1599,25 +1623,29 @@ class ControlAssistantWork:
                 if session.parent_session_id
                 else None
             ),
-            **self._message_via(project_id, session),
+            **(await self._message_via(project_id, session)),
             "subagent_id": session.metadata.get("subagent_id"),
             "delegated_from_goal_id": session.metadata.get("delegated_from_goal_id"),
-            "goal": self._goal_summary(session.id),
-            "native_harness_goal": self._native_goal(session),
+            "goal": (await self._goal_summary(session.id)),
+            "native_harness_goal": (await self._native_goal(session)),
             "revision": session.revision,
             "archived": isinstance(session.metadata.get("archived_at"), str),
             "pinned": session.metadata.get("pinned") is True,
             "flag_color": session.metadata.get("flag_color"),
             "task_plans": [
                 item.model_dump(mode="json")
-                for item in self.store.list_session_entities(
-                    ChatTaskPlan, session.id, newest_first=True, limit=10
+                for item in (
+                    await self.store.list_session_entities(
+                        ChatTaskPlan, session.id, newest_first=True, limit=10
+                    )
                 )
             ],
             "plan_directives": [
                 item.model_dump(mode="json")
-                for item in self.store.list_session_entities(
-                    ChatPlanDirective, session.id, newest_first=True, limit=10
+                for item in (
+                    await self.store.list_session_entities(
+                        ChatPlanDirective, session.id, newest_first=True, limit=10
+                    )
                 )
             ],
             "pending_turn": {
@@ -1652,16 +1680,16 @@ class ControlAssistantWork:
             ],
         }
 
-    def chat_messages(
+    async def chat_messages(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """Page active transcript previews to choose an exact saved user message."""
 
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
         cursor = arguments.get("before_message_id")
         if cursor is not None:
             cursor = _text(cursor, "before_message_id", 200)
-        page = self.chat.session_messages_page(
+        page = await self.chat.session_messages_page(
             session.id, limit=30, before_message_id=cursor
         )
         active = [
@@ -1687,9 +1715,9 @@ class ControlAssistantWork:
             "next_before_message_id": page[0].id if len(page) == 30 else None,
         }
 
-    def _goal_summary(self, session_id: str) -> dict[str, Any] | None:
+    async def _goal_summary(self, session_id: str) -> dict[str, Any] | None:
         try:
-            goal = self.goals.read(session_id)
+            goal = await self.goals.read(session_id)
         except NotFoundError:  # diagnostic-expected: most chats have no goal
             return None
         return {
@@ -1702,11 +1730,11 @@ class ControlAssistantWork:
             "revision": goal.revision,
         }
 
-    def goals_overview(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
-        self._project(project_id)
+    async def goals_overview(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
+        (await self._project(project_id))
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
-        goals = self.store.find_entities(
+        goals = await self.store.find_entities(
             ChatGoal,
             {},
             engagement_id=project_id,
@@ -1717,7 +1745,7 @@ class ControlAssistantWork:
         items = []
         for goal in goals[:30]:
             try:
-                session = self._chat(project_id, goal.session_id)
+                session = await self._chat(project_id, goal.session_id)
             except (
                 ValueError
             ):  # diagnostic-expected: private assistant sessions are not work targets
@@ -1733,12 +1761,12 @@ class ControlAssistantWork:
                         if session.parent_session_id
                         else None
                     ),
-                    **self._message_via(project_id, session),
+                    **(await self._message_via(project_id, session)),
                     "url": _chat_url(project_id, session.id),
-                    **(self._goal_summary(session.id) or {}),
+                    **((await self._goal_summary(session.id)) or {}),
                 }
             )
-        harness_chats = self.store.find_entities(
+        harness_chats = await self.store.find_entities(
             ChatSession,
             {"backend": ChatBackend.HARNESS},
             engagement_id=project_id,
@@ -1749,19 +1777,19 @@ class ControlAssistantWork:
         native_goals = []
         for session in harness_chats[:30]:
             try:
-                self._chat(project_id, session.id)
+                (await self._chat(project_id, session.id))
             except (
                 ValueError
             ):  # diagnostic-expected: private chats are not work targets
                 continue
-            snapshot = self._native_goal(session)
+            snapshot = await self._native_goal(session)
             if snapshot is not None:
                 native_goals.append(
                     {
                         "title": session.title,
                         "kind": _chat_kind(session),
                         "parent_session_id": session.parent_session_id,
-                        **self._message_via(project_id, session),
+                        **(await self._message_via(project_id, session)),
                         "url": _chat_url(project_id, session.id),
                         **snapshot,
                     }
@@ -1774,12 +1802,12 @@ class ControlAssistantWork:
             "next_native_offset": offset + 30 if len(harness_chats) > 30 else None,
         }
 
-    def goal_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._chat(project_id, session_id)
+    async def goal_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
+        session = await self._chat(project_id, session_id)
         try:
-            goal = self.goals.read(session.id)
+            goal = await self.goals.read(session.id)
         except NotFoundError:
-            snapshot = self._native_goal(session)
+            snapshot = await self._native_goal(session)
             if snapshot is None:
                 raise
             return {
@@ -1792,13 +1820,13 @@ class ControlAssistantWork:
                     if session.parent_session_id
                     else None
                 ),
-                **self._message_via(project_id, session),
+                **(await self._message_via(project_id, session)),
                 "url": _chat_url(project_id, session.id),
                 "goal": None,
                 "native_harness_goal": snapshot,
                 "children": [],
             }
-        children = self.goals.list_children(session.id)
+        children = await self.goals.list_children(session.id)
         return {
             "session_id": session.id,
             "title": session.title,
@@ -1809,10 +1837,10 @@ class ControlAssistantWork:
                 if session.parent_session_id
                 else None
             ),
-            **self._message_via(project_id, session),
+            **(await self._message_via(project_id, session)),
             "url": _chat_url(project_id, session.id),
             "goal": goal.model_dump(mode="json"),
-            "native_harness_goal": self._native_goal(session),
+            "native_harness_goal": (await self._native_goal(session)),
             "children": [
                 {
                     "session_id": item.session_id,
@@ -1829,7 +1857,7 @@ class ControlAssistantWork:
     async def create_goal(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = await self._chat(project_id, arguments.get("session_id"))
         body = GoalCreate.model_validate(
             {key: value for key, value in arguments.items() if key != "session_id"}
         )
@@ -1838,13 +1866,13 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal",
             body.model_dump(mode="json"),
         )
-        return self.goal_detail(project_id, session.id)
+        return await self.goal_detail(project_id, session.id)
 
     async def create_goal_conversation(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        self._project(project_id)
-        backend, profile_id, model = self._runtime(arguments)
+        (await self._project(project_id))
+        backend, profile_id, model = await self._runtime(arguments)
         fields = {
             key: value
             for key, value in arguments.items()
@@ -1886,13 +1914,13 @@ class ControlAssistantWork:
         result = await self._request(
             "POST", "/api/v1/chat/goal-conversations", body.model_dump(mode="json")
         )
-        return self.goal_detail(project_id, result["session"]["id"])
+        return await self.goal_detail(project_id, result["session"]["id"])
 
     async def update_goal(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
-        current = self.goals.get(session.id)
+        session = await self._chat(project_id, arguments.get("session_id"))
+        current = await self.goals.get(session.id)
         expected = arguments.get("expected_revision")
         if type(expected) is not int or expected != current.revision:
             raise ValueError("goal changed; read its current revision before editing")
@@ -1911,13 +1939,13 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal",
             body.model_dump(mode="json"),
         )
-        return self.goal_detail(project_id, session.id)
+        return await self.goal_detail(project_id, session.id)
 
     async def goal_action(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
-        current = self.goals.get(session.id)
+        session = await self._chat(project_id, arguments.get("session_id"))
+        current = await self.goals.get(session.id)
         expected = arguments.get("expected_revision")
         if type(expected) is not int or expected != current.revision:
             raise ValueError("goal changed; read its current revision before acting")
@@ -1929,12 +1957,12 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/actions",
             body.model_dump(mode="json"),
         )
-        return self.goal_detail(project_id, session.id)
+        return await self.goal_detail(project_id, session.id)
 
     async def handoff_goal(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        source = self._chat(project_id, arguments.get("session_id"))
+        source = await self._chat(project_id, arguments.get("session_id"))
         body = GoalHandoffRequest.model_validate(
             {
                 **{
@@ -1950,7 +1978,7 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(source.id, safe='')}/goal/handoff",
             body.model_dump(mode="json"),
         )
-        target = self.goal_detail(project_id, result["session"]["id"])
+        target = await self.goal_detail(project_id, result["session"]["id"])
         return {
             **target,
             "source_goal_id": result["source_goal"]["id"],
@@ -1961,8 +1989,8 @@ class ControlAssistantWork:
     async def create_goal_child(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
-        parent = self.goals.get(session.id)
+        session = await self._chat(project_id, arguments.get("session_id"))
+        parent = await self.goals.get(session.id)
         if parent.status.value != "running":
             raise ValueError("start the parent goal before creating child work")
         body = GoalCreate.model_validate(
@@ -1973,12 +2001,12 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/children",
             body.model_dump(mode="json"),
         )
-        return self.goal_detail(project_id, created["session_id"])
+        return await self.goal_detail(project_id, created["session_id"])
 
-    def schedule_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._chat(project_id, session_id)
+    async def schedule_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
+        session = await self._chat(project_id, session_id)
         try:
-            schedule = self.schedules.get(session.id)
+            schedule = await self.schedules.get(session.id)
         except NotFoundError:  # diagnostic-expected: recurring work is optional
             schedule = None
         return {
@@ -1992,7 +2020,7 @@ class ControlAssistantWork:
     async def create_schedule(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
         body = ScheduleCreate.model_validate(
             {"interval_seconds": arguments.get("interval_seconds")}
         )
@@ -2001,13 +2029,13 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/schedule",
             body.model_dump(mode="json"),
         )
-        return self.schedule_detail(project_id, session.id)
+        return await self.schedule_detail(project_id, session.id)
 
     async def set_schedule(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
-        current = self.schedules.get(session.id)
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
+        current = await self.schedules.get(session.id)
         expected = arguments.get("expected_revision")
         if type(expected) is not int or expected != current.revision:
             raise ValueError(
@@ -2024,18 +2052,20 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/schedule/actions",
             body.model_dump(mode="json"),
         )
-        return self.schedule_detail(project_id, session.id)
+        return await self.schedule_detail(project_id, session.id)
 
-    def _subagent(self, project_id: str, subagent_id: Any) -> ChatSubagent:
-        record = self.store.get(ChatSubagent, _text(subagent_id, "subagent_id", 200))
+    async def _subagent(self, project_id: str, subagent_id: Any) -> ChatSubagent:
+        record = await self.store.get(
+            ChatSubagent, _text(subagent_id, "subagent_id", 200)
+        )
         if record.engagement_id != project_id:
             raise ValueError("choose a subagent from this project's work roster")
-        self._chat(project_id, record.parent_session_id)
+        (await self._chat(project_id, record.parent_session_id))
         return record
 
-    def _subagent_summary(self, record: ChatSubagent) -> dict[str, Any]:
-        view = self.chat.subagents.view(record)
-        parent = self.store.get(ChatSession, record.parent_session_id)
+    async def _subagent_summary(self, record: ChatSubagent) -> dict[str, Any]:
+        view = await self.chat.subagents.view(record)
+        parent = await self.store.get(ChatSession, record.parent_session_id)
         return {
             "id": record.id,
             "source": "delegated_chat",
@@ -2045,25 +2075,25 @@ class ControlAssistantWork:
             "parent_session_id": record.parent_session_id,
             "parent_title": parent.title,
             "parent_kind": _chat_kind(parent),
-            **self._message_via(record.engagement_id, parent),
+            **(await self._message_via(record.engagement_id, parent)),
             "child_session_id": record.child_session_id,
             "url": _chat_url(record.engagement_id, record.child_session_id),
             "revision": record.revision,
         }
 
-    def _native_turn(self, project_id: str, turn_id: Any) -> HarnessTurn:
-        turn = self.store.get(HarnessTurn, _text(turn_id, "turn_id", 200))
+    async def _native_turn(self, project_id: str, turn_id: Any) -> HarnessTurn:
+        turn = await self.store.get(HarnessTurn, _text(turn_id, "turn_id", 200))
         if turn.engagement_id != project_id:
             raise ValueError("choose a native subagent from this project's work roster")
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_session_id:
-            self._chat(project_id, turn.chat_session_id)
+            (await self._chat(project_id, turn.chat_session_id))
         elif turn.origin == HarnessTurnOrigin.MISSION and turn.run_id:
-            self._run(project_id, turn.run_id)
+            (await self._run(project_id, turn.run_id))
         else:
             raise ValueError("choose a chat or mission native subagent")
         return turn
 
-    def _native_subagent_items(self, turn: HarnessTurn) -> list[dict[str, Any]]:
+    async def _native_subagent_items(self, turn: HarnessTurn) -> list[dict[str, Any]]:
         """Fold only durable native task events; provider subagents have their own rows."""
 
         latest: dict[str, dict[str, Any]] = {}
@@ -2071,7 +2101,7 @@ class ControlAssistantWork:
         while True:
             rows: Sequence[OperationEvent | RunEvent]
             if turn.origin == HarnessTurnOrigin.CHAT:
-                rows = self.store.replay_operation_events(
+                rows = await self.store.replay_operation_events(
                     turn.id,
                     after_sequence=cursor,
                     limit=1000,
@@ -2083,7 +2113,7 @@ class ControlAssistantWork:
                     payload_values={"item_kind": ("subagent",)},
                 )
             else:
-                rows = self.store.replay_events(
+                rows = await self.store.replay_events(
                     turn.run_id or "",
                     after_sequence=cursor,
                     limit=1000,
@@ -2105,16 +2135,16 @@ class ControlAssistantWork:
             if len(rows) < 1000:
                 break
         return [
-            self._native_subagent_summary(turn, task_id, payload)
+            (await self._native_subagent_summary(turn, task_id, payload))
             for task_id, payload in latest.items()
         ]
 
-    def _native_subagent_summary(
+    async def _native_subagent_summary(
         self, turn: HarnessTurn, task_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self.store.get(HarnessSession, turn.harness_session_id)
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
-        activity = self.harness.session_activity(session.id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
+        activity = await self.harness.session_activity(session.id)
         status = str(payload.get("item_status") or "unknown")
         can_stop = bool(
             profile.kind == HarnessKind.CLAUDE_AGENT_SDK
@@ -2125,7 +2155,7 @@ class ControlAssistantWork:
             in {"queued", "running", "streaming", "waiting_approval", "waiting_input"}
         )
         parent = (
-            self.store.get(ChatSession, turn.chat_session_id)
+            (await self.store.get(ChatSession, turn.chat_session_id))
             if turn.chat_session_id
             else None
         )
@@ -2142,7 +2172,7 @@ class ControlAssistantWork:
             "parent_title": parent.title if parent else None,
             "parent_kind": _chat_kind(parent) if parent else "mission",
             **(
-                self._message_via(turn.engagement_id, parent)
+                (await self._message_via(turn.engagement_id, parent))
                 if parent
                 else {"message_via_session_id": None, "message_via_url": None}
             ),
@@ -2156,7 +2186,7 @@ class ControlAssistantWork:
             "can_message": False,
         }
 
-    def _native_subagents_overview(
+    async def _native_subagents_overview(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         native_offset = arguments.get("native_turn_offset", 0)
@@ -2165,9 +2195,9 @@ class ControlAssistantWork:
         parent_id = arguments.get("parent_session_id")
         filters: dict[str, Any] = {}
         if parent_id is not None:
-            parent = self._chat(project_id, parent_id)
+            parent = await self._chat(project_id, parent_id)
             filters["chat_session_id"] = parent.id
-        turns = self.store.find_entities(
+        turns = await self.store.find_entities(
             HarnessTurn,
             filters,
             engagement_id=project_id,
@@ -2178,28 +2208,28 @@ class ControlAssistantWork:
         items: list[dict[str, Any]] = []
         for turn in turns[:30]:
             try:
-                self._native_turn(project_id, turn.id)
+                (await self._native_turn(project_id, turn.id))
             except ValueError:  # diagnostic-expected: private or unrelated turn
                 continue
-            items.extend(self._native_subagent_items(turn))
+            items.extend((await self._native_subagent_items(turn)))
         return {
             "native_subagents": items,
             "next_native_turn_offset": native_offset + 30 if len(turns) > 30 else None,
         }
 
-    def subagents_overview(
+    async def subagents_overview(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        self._project(project_id)
+        (await self._project(project_id))
         offset = arguments.get("offset", 0)
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
         parent_id = arguments.get("parent_session_id")
         filters = {}
         if parent_id is not None:
-            parent = self._chat(project_id, parent_id)
+            parent = await self._chat(project_id, parent_id)
             filters["parent_session_id"] = parent.id
-        records = self.store.find_entities(
+        records = await self.store.find_entities(
             ChatSubagent,
             filters,
             engagement_id=project_id,
@@ -2207,32 +2237,36 @@ class ControlAssistantWork:
             offset=offset,
             limit=31,
         )
-        native = self._native_subagents_overview(project_id, arguments)
+        native = await self._native_subagents_overview(project_id, arguments)
         return {
             "project_id": project_id,
             "parent_session_id": parent_id,
-            "subagents": [self._subagent_summary(item) for item in records[:30]],
+            "subagents": [
+                (await self._subagent_summary(item)) for item in records[:30]
+            ],
             "next_offset": offset + 30 if len(records) > 30 else None,
             **native,
         }
 
-    def subagent_detail(self, project_id: str, subagent_id: Any) -> dict[str, Any]:
-        record = self._subagent(project_id, subagent_id)
+    async def subagent_detail(
+        self, project_id: str, subagent_id: Any
+    ) -> dict[str, Any]:
+        record = await self._subagent(project_id, subagent_id)
         return {
-            **self._subagent_summary(record),
-            "view": self.chat.subagents.view(record),
+            **(await self._subagent_summary(record)),
+            "view": (await self.chat.subagents.view(record)),
             "parent_url": _chat_url(project_id, record.parent_session_id),
         }
 
-    def native_subagent_detail(
+    async def native_subagent_detail(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        turn = self._native_turn(project_id, arguments.get("turn_id"))
+        turn = await self._native_turn(project_id, arguments.get("turn_id"))
         task_id = _text(arguments.get("task_id"), "task_id", 500)
         item = next(
             (
                 row
-                for row in self._native_subagent_items(turn)
+                for row in (await self._native_subagent_items(turn))
                 if row["task_id"] == task_id
             ),
             None,
@@ -2244,7 +2278,7 @@ class ControlAssistantWork:
     async def stop_native_subagent(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        item = self.native_subagent_detail(project_id, arguments)
+        item = await self.native_subagent_detail(project_id, arguments)
         if not item["can_stop"]:
             raise ValueError("this native harness subagent cannot be stopped now")
         await self._request(
@@ -2252,35 +2286,37 @@ class ControlAssistantWork:
             f"/api/v1/harness-turns/{quote(item['turn_id'], safe='')}/tasks/{quote(item['task_id'], safe='')}/stop",
             {},
         )
-        return self.native_subagent_detail(project_id, arguments)
+        return await self.native_subagent_detail(project_id, arguments)
 
     async def stop_subagent(self, project_id: str, subagent_id: Any) -> dict[str, Any]:
-        record = self._subagent(project_id, subagent_id)
+        record = await self._subagent(project_id, subagent_id)
         await self._request(
             "POST",
             f"/api/v1/chat/sessions/{quote(record.parent_session_id, safe='')}/subagents/{quote(record.id, safe='')}/stop",
             {},
         )
-        return self.subagent_detail(project_id, record.id)
+        return await self.subagent_detail(project_id, record.id)
 
     async def stop_subagents(
         self, project_id: str, parent_session_id: Any
     ) -> dict[str, Any]:
-        parent = self._chat(project_id, parent_session_id)
+        parent = await self._chat(project_id, parent_session_id)
         await self._request(
             "POST",
             f"/api/v1/chat/sessions/{quote(parent.id, safe='')}/subagents/stop",
             {},
         )
-        return self.subagents_overview(project_id, {"parent_session_id": parent.id})
+        return await self.subagents_overview(
+            project_id, {"parent_session_id": parent.id}
+        )
 
-    def queue_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._messageable_chat(project_id, session_id)
-        queue = self.queue.get(session.id)
+    async def queue_detail(self, project_id: str, session_id: Any) -> dict[str, Any]:
+        session = await self._messageable_chat(project_id, session_id)
+        queue = await self.queue.get(session.id)
         return {
             "session_id": session.id,
             "url": _chat_url(project_id, session.id),
-            "revision": queue.revision if self.queue.exists(session.id) else 0,
+            "revision": queue.revision if (await self.queue.exists(session.id)) else 0,
             "paused": queue.paused,
             "items": [
                 {
@@ -2305,12 +2341,12 @@ class ControlAssistantWork:
             ][:20],
         }
 
-    def queue_action(
+    async def queue_action(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
-        current = self.queue.get(session.id)
-        revision = current.revision if self.queue.exists(session.id) else 0
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
+        current = await self.queue.get(session.id)
+        revision = current.revision if (await self.queue.exists(session.id)) else 0
         expected = arguments.get("expected_revision")
         if type(expected) is not int or expected != revision:
             raise ValueError("queue changed; read its current revision before acting")
@@ -2350,21 +2386,23 @@ class ControlAssistantWork:
         order = arguments.get("order", [])
         if not isinstance(order, list):
             raise ValueError("order must contain queued item IDs")
-        self.queue.write(
-            session.id,
-            QueueWrite(
-                expected_revision=revision,
-                action=action,
-                item_id=item_id,
-                order=order,
-                request=request,
-            ),
+        (
+            await self.queue.write(
+                session.id,
+                QueueWrite(
+                    expected_revision=revision,
+                    action=action,
+                    item_id=item_id,
+                    order=order,
+                    request=request,
+                ),
+            )
         )
-        return self.queue_detail(project_id, session.id)
+        return await self.queue_detail(project_id, session.id)
 
-    def mission_detail(self, project_id: str, run_id: Any) -> dict[str, Any]:
-        run = self._run(project_id, run_id)
-        tasks = self.store.find_entities(
+    async def mission_detail(self, project_id: str, run_id: Any) -> dict[str, Any]:
+        run = await self._run(project_id, run_id)
+        tasks = await self.store.find_entities(
             Task, {"run_id": run.id}, engagement_id=project_id, limit=30
         )
         return {
@@ -2388,13 +2426,15 @@ class ControlAssistantWork:
             ],
         }
 
-    def browser_sessions(self, project_id: str, offset: int = 0) -> dict[str, Any]:
+    async def browser_sessions(
+        self, project_id: str, offset: int = 0
+    ) -> dict[str, Any]:
         """Page project-owned active sessions without disclosing browser contents."""
-        self._project(project_id)
+        (await self._project(project_id))
         filters = {"status": BrowserSessionStatus.ACTIVE.value}
         if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
             filters["runtime_kind"] = "agent_security"
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             BrowserSession,
             filters,
             engagement_id=project_id,
@@ -2404,7 +2444,7 @@ class ControlAssistantWork:
         sessions = []
         for session in rows[:50]:
             try:
-                identity = self.store.get(BrowserIdentity, session.identity_id)
+                identity = await self.store.get(BrowserIdentity, session.identity_id)
                 available = identity.engagement_id == project_id
             except NotFoundError:
                 # diagnostic-expected: a deleted identity leaves the session ineligible.
@@ -2425,17 +2465,19 @@ class ControlAssistantWork:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def _approval(self, project_id: str, action_id: Any) -> tuple[Approval, str, str]:
-        approval = self.store.get(Approval, _text(action_id, "action_id", 200))
+    async def _approval(
+        self, project_id: str, action_id: Any
+    ) -> tuple[Approval, str, str]:
+        approval = await self.store.get(Approval, _text(action_id, "action_id", 200))
         if approval.engagement_id != project_id:
             raise ValueError(
                 "choose a pending approval from this project's attention list"
             )
         if approval.origin == ToolCallOrigin.CHAT and approval.chat_session_id:
-            chat = self._chat(project_id, approval.chat_session_id)
+            chat = await self._chat(project_id, approval.chat_session_id)
             return approval, chat.title, _chat_url(project_id, chat.id)
         if approval.origin == ToolCallOrigin.MISSION:
-            run = self._run(project_id, approval.run_id)
+            run = await self._run(project_id, approval.run_id)
             return (
                 approval,
                 str(run.metadata.get("name") or run.objective)[:300],
@@ -2443,10 +2485,10 @@ class ControlAssistantWork:
             )
         raise ValueError("approval has no supported chat or mission owner")
 
-    def _question(
+    async def _question(
         self, project_id: str, action_id: Any
     ) -> tuple[HarnessInteraction, str, str]:
-        question = self.store.get(
+        question = await self.store.get(
             HarnessInteraction, _text(action_id, "action_id", 200)
         )
         if question.engagement_id != project_id:
@@ -2454,10 +2496,10 @@ class ControlAssistantWork:
                 "choose a pending question from this project's attention list"
             )
         if question.origin == HarnessTurnOrigin.CHAT and question.chat_session_id:
-            chat = self._chat(project_id, question.chat_session_id)
+            chat = await self._chat(project_id, question.chat_session_id)
             return question, chat.title, _chat_url(project_id, chat.id)
         if question.origin == HarnessTurnOrigin.MISSION and question.run_id:
-            run = self._run(project_id, question.run_id)
+            run = await self._run(project_id, question.run_id)
             return (
                 question,
                 str(run.metadata.get("name") or run.objective)[:300],
@@ -2465,10 +2507,10 @@ class ControlAssistantWork:
             )
         raise ValueError("question has no supported chat or mission owner")
 
-    def attention(self, project_id: str) -> dict[str, Any]:
-        self._project(project_id)
+    async def attention(self, project_id: str) -> dict[str, Any]:
+        (await self._project(project_id))
         items: list[dict[str, Any]] = []
-        for approval in self.store.find_entities(
+        for approval in await self.store.find_entities(
             Approval,
             {"status": ApprovalStatus.PENDING.value},
             engagement_id=project_id,
@@ -2476,7 +2518,7 @@ class ControlAssistantWork:
             limit=100,
         ):
             try:
-                _, title, url = self._approval(project_id, approval.id)
+                _, title, url = await self._approval(project_id, approval.id)
             except (NotFoundError, ValueError):
                 # diagnostic-expected: a pending item can become stale or leave this project between list and lookup.
                 continue
@@ -2497,7 +2539,7 @@ class ControlAssistantWork:
                     "requested_at": approval.requested_at.isoformat(),
                 }
             )
-        for question in self.store.find_entities(
+        for question in await self.store.find_entities(
             HarnessInteraction,
             {"status": HarnessInteractionStatus.PENDING.value},
             engagement_id=project_id,
@@ -2505,7 +2547,7 @@ class ControlAssistantWork:
             limit=100,
         ):
             try:
-                _, title, url = self._question(project_id, question.id)
+                _, title, url = await self._question(project_id, question.id)
             except (NotFoundError, ValueError):
                 # diagnostic-expected: a pending item can become stale or leave this project between list and lookup.
                 continue
@@ -2529,8 +2571,8 @@ class ControlAssistantWork:
         )
         return {"project_id": project_id, "items": items, "count": len(items)}
 
-    def approval_detail(self, project_id: str, action_id: Any) -> dict[str, Any]:
-        approval, title, url = self._approval(project_id, action_id)
+    async def approval_detail(self, project_id: str, action_id: Any) -> dict[str, Any]:
+        approval, title, url = await self._approval(project_id, action_id)
         exact = approval.exact_request
         return {
             "action_id": approval.id,
@@ -2558,7 +2600,7 @@ class ControlAssistantWork:
     async def decide_approval(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        approval, _, url = self._approval(project_id, arguments.get("action_id"))
+        approval, _, url = await self._approval(project_id, arguments.get("action_id"))
         if approval.status != ApprovalStatus.PENDING:
             raise ValueError("approval is no longer pending; read it again")
         if approval.revision != arguments.get("expected_revision"):
@@ -2576,7 +2618,7 @@ class ControlAssistantWork:
             f"/api/v1/approvals/{quote(approval.id, safe='')}/decision",
             {"decision": decision, "reason": reason},
         )
-        saved = self.store.get(Approval, approval.id)
+        saved = await self.store.get(Approval, approval.id)
         return {
             "action_id": saved.id,
             "status": saved.status.value,
@@ -2586,8 +2628,8 @@ class ControlAssistantWork:
             "result": "decision saved in Core; the chat or mission may still be running",
         }
 
-    def question_detail(self, project_id: str, action_id: Any) -> dict[str, Any]:
-        question, title, url = self._question(project_id, action_id)
+    async def question_detail(self, project_id: str, action_id: Any) -> dict[str, Any]:
+        question, title, url = await self._question(project_id, action_id)
         return {
             "action_id": question.id,
             "revision": question.revision,
@@ -2603,7 +2645,7 @@ class ControlAssistantWork:
     async def answer_question(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        question, _, url = self._question(project_id, arguments.get("action_id"))
+        question, _, url = await self._question(project_id, arguments.get("action_id"))
         if question.status != HarnessInteractionStatus.PENDING:
             raise ValueError("question is no longer pending; read it again")
         if question.revision != arguments.get("expected_revision"):
@@ -2625,7 +2667,7 @@ class ControlAssistantWork:
             f"/api/v1/harness-interactions/{quote(question.id, safe='')}/decision",
             {"action": action, "response": response},
         )
-        saved = self.store.get(HarnessInteraction, question.id)
+        saved = await self.store.get(HarnessInteraction, question.id)
         return {
             "action_id": saved.id,
             "status": saved.status.value,
@@ -2637,7 +2679,7 @@ class ControlAssistantWork:
     async def update_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = await self._chat(project_id, arguments.get("session_id"))
         if session.revision != arguments.get("expected_revision"):
             raise ValueError("chat changed; read its current revision before updating")
         body: dict[str, Any] = {"expected_revision": session.revision}
@@ -2668,7 +2710,7 @@ class ControlAssistantWork:
         await self._request(
             "PATCH", f"/api/v1/chat-sessions/{quote(session.id, safe='')}", body
         )
-        saved = self._chat(project_id, session.id)
+        saved = await self._chat(project_id, session.id)
         return {
             "session_id": saved.id,
             "title": saved.title,
@@ -2682,7 +2724,7 @@ class ControlAssistantWork:
     async def rewind_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
         revision = arguments.get("expected_revision")
         if type(revision) is not int or revision < 1:
             raise ValueError("read the chat and pass its current revision")
@@ -2690,7 +2732,7 @@ class ControlAssistantWork:
             raise ValueError("chat changed; read its current revision before rewinding")
         message_id = _text(arguments.get("before_message_id"), "before_message_id", 200)
         try:
-            target = self.store.get(ChatMessage, message_id)
+            target = await self.store.get(ChatMessage, message_id)
         except NotFoundError as exc:
             raise ValueError("choose an active user message from this chat") from exc
         if (
@@ -2704,8 +2746,8 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/rewind",
             {"before_message_id": message_id, "expected_revision": revision},
         )
-        saved = self._messageable_chat(project_id, session.id)
-        retracted = self.store.get(ChatMessage, message_id)
+        saved = await self._messageable_chat(project_id, session.id)
+        retracted = await self.store.get(ChatMessage, message_id)
         if not message_is_replaced(retracted):
             raise RuntimeError("Core did not save the requested message retraction")
         return {
@@ -2721,14 +2763,15 @@ class ControlAssistantWork:
     async def fork_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        source = self._chat(project_id, arguments.get("session_id"))
+        source = await self._chat(project_id, arguments.get("session_id"))
         if source.revision != arguments.get("expected_revision"):
             raise ValueError("chat changed; read its current revision before forking")
         message_id = _text(
             arguments.get("through_message_id"), "through_message_id", 200
         )
         if not any(
-            item.id == message_id for item in self.chat.session_messages(source.id)
+            item.id == message_id
+            for item in (await self.chat.session_messages(source.id))
         ):
             raise ValueError("choose a message ID from this chat's saved transcript")
         title = arguments.get("title")
@@ -2741,7 +2784,7 @@ class ControlAssistantWork:
                 **({"title": _text(title, "title", 300)} if title is not None else {}),
             },
         )
-        fork = self._chat(project_id, created["id"])
+        fork = await self._chat(project_id, created["id"])
         return {
             "session_id": fork.id,
             "parent_session_id": source.id,
@@ -2754,7 +2797,7 @@ class ControlAssistantWork:
     async def delete_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._chat(project_id, arguments.get("session_id"))
+        session = await self._chat(project_id, arguments.get("session_id"))
         if session.revision != arguments.get("expected_revision"):
             raise ValueError("chat changed; read its current revision before deleting")
         if session.title != arguments.get("confirm_title"):
@@ -2775,8 +2818,8 @@ class ControlAssistantWork:
     async def retry_chat_turn(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
-        turn = self.store.get(
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
+        turn = await self.store.get(
             HarnessTurn, _text(arguments.get("turn_id"), "turn_id", 200)
         )
         if (
@@ -2795,7 +2838,7 @@ class ControlAssistantWork:
             raise ValueError(
                 "only failed, cancelled, or interrupted chat turns can be retried"
             )
-        existing = self.store.find_entities(
+        existing = await self.store.find_entities(
             HarnessTurn,
             {"metadata.retry_of_turn_id": turn.id},
             engagement_id=project_id,
@@ -2811,7 +2854,7 @@ class ControlAssistantWork:
                 f"/api/v1/harness-turns/{quote(turn.id, safe='')}/retry",
                 {},
             )
-            replacement = self.store.get(HarnessTurn, created["id"])
+            replacement = await self.store.get(HarnessTurn, created["id"])
             result = "linked retry started in Core; work may still be running"
         return {
             "session_id": session.id,
@@ -2825,7 +2868,7 @@ class ControlAssistantWork:
     async def retry_mission(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        run = self._run(project_id, arguments.get("run_id"))
+        run = await self._run(project_id, arguments.get("run_id"))
         if run.revision != arguments.get("expected_revision"):
             raise ValueError(
                 "mission changed; read its current revision before retrying"
@@ -2845,8 +2888,14 @@ class ControlAssistantWork:
         existing = next(
             (
                 item
-                for item in self.store.find_entities(
-                    AgentRun, {}, engagement_id=project_id, newest_first=True, limit=100
+                for item in (
+                    await self.store.find_entities(
+                        AgentRun,
+                        {},
+                        engagement_id=project_id,
+                        newest_first=True,
+                        limit=100,
+                    )
                 )
                 if item.metadata.get("retry_of_run_id") == run.id
             ),
@@ -2865,7 +2914,7 @@ class ControlAssistantWork:
             f"/api/v1/runs/{quote(run.id, safe='')}/retry",
             {"allow_cloud_tool_results": allow_cloud},
         )
-        saved = self._run(project_id, created["id"])
+        saved = await self._run(project_id, created["id"])
         return {
             "run_id": saved.id,
             "retry_of_run_id": run.id,
@@ -2874,7 +2923,7 @@ class ControlAssistantWork:
             "result": "retry started in Core; work may still be running",
         }
 
-    def _runtime(self, arguments: dict[str, Any]) -> tuple[str, str, str]:
+    async def _runtime(self, arguments: dict[str, Any]) -> tuple[str, str, str]:
         requested_backend = arguments.get("backend")
         requested_profile = arguments.get("profile_id")
         requested_model = arguments.get("model")
@@ -2889,7 +2938,7 @@ class ControlAssistantWork:
                 raise ValueError("provide backend with profile_id")
             backend = requested_backend
         else:
-            available = model_choices(self.store)
+            available = await model_choices(self.store)
             backend = requested_backend or (
                 "provider" if available["providers"] else "harness"
             )
@@ -2900,12 +2949,12 @@ class ControlAssistantWork:
                 )
             profile_id = options[0]["id"]
         if backend == "provider":
-            provider_profile = self.store.get(ProviderProfile, profile_id)
+            provider_profile = await self.store.get(ProviderProfile, profile_id)
             choices = provider_profile.model_allowlist
             default = provider_profile.metadata.get("default_model")
             enabled = provider_profile.enabled
         else:
-            harness_profile = self.store.get(HarnessProfile, profile_id)
+            harness_profile = await self.store.get(HarnessProfile, profile_id)
             choices = harness_profile.capabilities.models
             default = harness_profile.default_model
             enabled = harness_profile.enabled
@@ -2923,9 +2972,9 @@ class ControlAssistantWork:
     async def start_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        self._project(project_id)
+        (await self._project(project_id))
         prompt = _text(arguments.get("prompt"), "prompt", 20000)
-        backend, profile_id, model = self._runtime(arguments)
+        backend, profile_id, model = await self._runtime(arguments)
         setting_values = arguments.get("settings") or {}
         if not isinstance(setting_values, dict):
             raise ValueError("settings must contain Assistant settings choices")
@@ -2975,13 +3024,13 @@ class ControlAssistantWork:
             prepared = await self.chat.prepare_async(request)
             if prepared.turn is None:
                 raise RuntimeError("Core did not prepare a durable chat turn")
-            self.chat.start_provider_turn(prepared)
+            (await self.chat.start_provider_turn(prepared))
             session = prepared.session or prepared.pending_session
             if session is None:
                 raise RuntimeError("Core did not save the assistant chat")
             turn_id = prepared.turn.id
         else:
-            session, turn, harness_turn = self.harness.prepare_chat(
+            session, turn, harness_turn = await self.harness.prepare_chat(
                 engagement_id=project_id,
                 butler_initiated=True,
                 profile_id=profile_id,
@@ -3024,9 +3073,9 @@ class ControlAssistantWork:
                 if chosen.get("allow_subagents")
                 else None,
             )
-            self.harness.start_chat_turn(harness_turn.id)
+            (await self.harness.start_chat_turn(harness_turn.id))
             turn_id = turn.id
-        saved = self._chat(project_id, session.id)
+        saved = await self._chat(project_id, session.id)
         return {
             "session_id": saved.id,
             "title": saved.title,
@@ -3044,21 +3093,21 @@ class ControlAssistantWork:
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
         text = _text(arguments.get("text"), "text", 20000)
         delivery = arguments.get("delivery", "next")
         if delivery in {"steer", "immediate"}:
-            pending = self.chat.pending_turn(session.id)
+            pending = await self.chat.pending_turn(session.id)
             if (
                 pending is not None
                 and session.backend == ChatBackend.HARNESS
                 and pending.harness_turn_id
             ):
-                active_turn = self.store.get(HarnessTurn, pending.harness_turn_id)
-                active_session = self.store.get(
+                active_turn = await self.store.get(HarnessTurn, pending.harness_turn_id)
+                active_session = await self.store.get(
                     HarnessSession, active_turn.harness_session_id
                 )
-                active_profile = self.store.get(
+                active_profile = await self.store.get(
                     HarnessProfile, active_session.harness_profile_id
                 )
                 if active_profile.kind == HarnessKind.GROK_ACP:
@@ -3099,16 +3148,16 @@ class ControlAssistantWork:
                 }
         if delivery not in {"next", "immediate"}:
             raise ValueError("choose next, steer, or immediate delivery")
-        next_settings = chat_assistant_config(self.store, session)
+        next_settings = await chat_assistant_config(self.store, session)
         next_backend = ChatBackend(next_settings["backend"])
         next_profile = next_settings["profile_id"]
         sharing_allowed = (
-            self.store.get(
-                ProviderProfile, next_profile
+            (
+                await self.store.get(ProviderProfile, next_profile)
             ).privacy.auto_share_tool_results
             if next_backend == ChatBackend.PROVIDER
-            else self.store.get(
-                HarnessProfile, next_profile
+            else (
+                await self.store.get(HarnessProfile, next_profile)
             ).privacy.auto_share_tool_results
         )
         request = ChatCompletionRequest(
@@ -3167,13 +3216,13 @@ class ControlAssistantWork:
                 prepared = await self.chat.prepare_async(request)
                 if prepared.turn is None:
                     raise RuntimeError("Core did not prepare a durable chat turn")
-                self.chat.start_provider_turn(prepared)
+                (await self.chat.start_provider_turn(prepared))
                 return {
                     "session_id": session.id,
                     "delivery": "started",
                     "turn_id": prepared.turn.id,
                 }
-            _, turn, harness_turn = self.harness.prepare_chat(
+            _, turn, harness_turn = await self.harness.prepare_chat(
                 engagement_id=project_id,
                 profile_id=next_profile,
                 model=next_settings["model"],
@@ -3193,9 +3242,9 @@ class ControlAssistantWork:
                 provider_subagent=request.harness_provider_subagent(),
                 pending_provider_subagent=request.harness_pending_provider_subagent(),
             )
-            self.harness.start_chat_turn(harness_turn.id)
+            (await self.harness.start_chat_turn(harness_turn.id))
             return {"session_id": session.id, "delivery": "started", "turn_id": turn.id}
-        queue = self.queue.get(session.id)
+        queue = await self.queue.get(session.id)
         # Proactive Butler actions reuse a stable private key on recovery. The
         # ordinary operator-facing capability still gets a fresh key per call.
         key = (
@@ -3203,11 +3252,11 @@ class ControlAssistantWork:
             if idempotency_key is not None
             else f"control:{uuid4()}"
         )
-        saved = self.queue.write(
+        saved = await self.queue.write(
             session.id,
             QueueWrite(
                 expected_revision=queue.revision
-                if self.queue.exists(session.id)
+                if (await self.queue.exists(session.id))
                 else 0,
                 action="enqueue",
                 idempotency_key=key,
@@ -3223,7 +3272,7 @@ class ControlAssistantWork:
             "status": item["status"],
         }
 
-    def _saved_chat_reply(
+    async def _saved_chat_reply(
         self,
         project_id: str,
         session_id: str,
@@ -3236,7 +3285,7 @@ class ControlAssistantWork:
         ):
             if not isinstance(value, str):
                 continue
-            messages = self.store.find_entities(
+            messages = await self.store.find_entities(
                 ChatMessage,
                 {"role": ChatRole.ASSISTANT.value, field: value, "metadata.kind": None},
                 engagement_id=project_id,
@@ -3253,7 +3302,7 @@ class ControlAssistantWork:
     ) -> dict[str, Any]:
         """Wait briefly for one queued or immediately delivered chat reply."""
 
-        session = self._messageable_chat(project_id, arguments.get("session_id"))
+        session = await self._messageable_chat(project_id, arguments.get("session_id"))
         item_id = arguments.get("item_id")
         turn_id = arguments.get("turn_id")
         if (item_id is None) == (turn_id is None):
@@ -3269,7 +3318,7 @@ class ControlAssistantWork:
         deadline = loop.time() + timeout
         while True:
             if turn_id is not None:
-                turn = self.store.get(ChatTurn, turn_id)
+                turn = await self.store.get(ChatTurn, turn_id)
                 if turn.engagement_id != project_id or turn.session_id != session.id:
                     raise ValueError("turn does not belong to this project chat")
                 status = turn.status.value
@@ -3287,7 +3336,7 @@ class ControlAssistantWork:
                     "interrupted",
                     "waiting_approval",
                 }:
-                    saved_reply = self._saved_chat_reply(
+                    saved_reply = await self._saved_chat_reply(
                         project_id, session.id, turn.id, turn.harness_turn_id
                     )
                     if saved_reply is not None:
@@ -3306,7 +3355,7 @@ class ControlAssistantWork:
                     return {**result, "result": "still in progress"}
                 await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
                 continue
-            queue = self.queue.get(session.id)
+            queue = await self.queue.get(session.id)
             item = next((row for row in queue.items if row.get("id") == item_id), None)
             if item is None:
                 raise ValueError(
@@ -3332,7 +3381,7 @@ class ControlAssistantWork:
                 turn_id = item.get("turn_id")
                 harness_turn_id = item.get("harness_turn_id")
                 if isinstance(turn_id, str) or isinstance(harness_turn_id, str):
-                    saved_reply = self._saved_chat_reply(
+                    saved_reply = await self._saved_chat_reply(
                         project_id, session.id, turn_id, harness_turn_id
                     )
                     if saved_reply is not None:
@@ -3353,8 +3402,8 @@ class ControlAssistantWork:
             await asyncio.sleep(min(0.5, max(0.0, deadline - loop.time())))
 
     async def stop_chat(self, project_id: str, session_id: Any) -> dict[str, Any]:
-        session = self._non_subagent_chat(project_id, session_id)
-        pending = self.chat.pending_turn(session.id)
+        session = await self._non_subagent_chat(project_id, session_id)
+        pending = await self.chat.pending_turn(session.id)
         if pending is None:
             return {"session_id": session.id, "status": "idle", "stopped": False}
         if pending.harness_turn_id:
@@ -3363,7 +3412,7 @@ class ControlAssistantWork:
             )
         else:
             await self.chat.stop_provider_turn(pending.id)
-        observed = self.chat.pending_turn(session.id)
+        observed = await self.chat.pending_turn(session.id)
         return {
             "session_id": session.id,
             "turn_id": pending.id,
@@ -3404,10 +3453,10 @@ class ControlAssistantWork:
     async def start_mission(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        self._project(project_id)
+        (await self._project(project_id))
         name = _text(arguments.get("name"), "name", 300)
         objective = _text(arguments.get("objective"), "objective", 10000)
-        backend, profile_id, model = self._runtime(arguments)
+        backend, profile_id, model = await self._runtime(arguments)
         max_tool_calls = arguments.get("max_tool_calls")
         if max_tool_calls is not None and (
             type(max_tool_calls) is not int or not 0 <= max_tool_calls <= 100
@@ -3444,7 +3493,7 @@ class ControlAssistantWork:
                     "browser credential grants belong in the operator-controlled Browser"
                 )
             autonomy = BrowserAutonomyRequestModel.model_validate(raw_autonomy)
-            session = self.store.get(BrowserSession, autonomy.session_id)
+            session = await self.store.get(BrowserSession, autonomy.session_id)
             if session.engagement_id != project_id:
                 raise ValueError("browser session is outside the selected project")
         body: dict[str, Any] = {
@@ -3464,7 +3513,7 @@ class ControlAssistantWork:
         if autonomy is not None:
             body["browser_autonomy"] = autonomy.model_dump(mode="json")
         result = await self._request("POST", "/api/v1/missions", body)
-        run = self._run(project_id, result["id"])
+        run = await self._run(project_id, result["id"])
         saved_autonomy = run.metadata.get("browser_autonomy")
         if autonomy is not None and saved_autonomy != autonomy.model_dump(mode="json"):
             raise ValueError(
@@ -3482,24 +3531,24 @@ class ControlAssistantWork:
     async def steer_mission(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        run = self._run(project_id, arguments.get("run_id"))
+        run = await self._run(project_id, arguments.get("run_id"))
         text = _text(arguments.get("text"), "text", 20000)
         if run.backend != RunBackend.HARNESS:
             raise ValueError(
                 "live mission steering is available for active harness missions only; inspect this mission to discuss or stop it"
             )
         await self._request("POST", f"/api/v1/runs/{run.id}/steer", {"text": text})
-        observed = self._run(project_id, run.id)
+        observed = await self._run(project_id, run.id)
         return {"run_id": run.id, "status": observed.status.value, "steered": True}
 
     async def stop_mission(self, project_id: str, run_id: Any) -> dict[str, Any]:
-        run = self._run(project_id, run_id)
+        run = await self._run(project_id, run_id)
         await self._request(
             "POST",
             f"/api/v1/runs/{run.id}/stop",
             {"reason": "Stopped through Butler"},
         )
-        observed = self._run(project_id, run.id)
+        observed = await self._run(project_id, run.id)
         return {
             "run_id": run.id,
             "status": observed.status.value,
@@ -3911,9 +3960,7 @@ async def dispatch_work_tool(
     work: ControlAssistantWork, project_id: str, name: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
     if name == "nebula.work.catalog":
-        return await read_in_worker(
-            work.catalog, project_id, arguments.get("operation")
-        )
+        return await work.catalog(project_id, arguments.get("operation"))
     if name == "nebula.work.manage":
         operation = _text(arguments.get("operation"), "operation", 200)
         if operation not in _MANAGED_WORK_NAMES:
@@ -3923,33 +3970,29 @@ async def dispatch_work_tool(
             raise ValueError("provide arguments for the managed operation")
         return await dispatch_work_tool(work, project_id, operation, payload)
     if name == "nebula.work.overview":
-        return await read_in_worker(work.overview, project_id)
+        return await work.overview(project_id)
     if name == "nebula.work.host_load":
         return await work.host_load(project_id, arguments)
     if name == "nebula.work.host_cpu_budget":
         return await work.host_cpu_budget(project_id, arguments)
     if name == "nebula.work.browser_sessions":
-        return await read_in_worker(
-            work.browser_sessions, project_id, arguments.get("offset", 0)
-        )
+        return await work.browser_sessions(project_id, arguments.get("offset", 0))
     if name == "nebula.work.chats":
-        return await read_in_worker(work.chats, project_id, arguments.get("offset", 0))
+        return await work.chats(project_id, arguments.get("offset", 0))
     if name == "nebula.work.chat_messages":
-        return await read_in_worker(work.chat_messages, project_id, arguments)
+        return await work.chat_messages(project_id, arguments)
     if name == "nebula.work.work_items":
-        return await read_in_worker(
-            work.work_items, project_id, arguments.get("offset", 0)
-        )
+        return await work.work_items(project_id, arguments.get("offset", 0))
     if name == "nebula.work.work_item":
-        return await read_in_worker(work.work_item, project_id, arguments)
+        return await work.work_item(project_id, arguments)
     if name == "nebula.work.work_setting":
-        return await read_in_worker(work.work_setting, project_id)
+        return await work.work_setting(project_id)
     if name == "nebula.work.set_work_setting":
         return await work.set_work_setting(project_id, arguments)
     if name == "nebula.work.work_updates":
-        return await read_in_worker(work.work_updates, project_id, arguments)
+        return await work.work_updates(project_id, arguments)
     if name == "nebula.work.work_update":
-        return await read_in_worker(work.work_update, project_id, arguments)
+        return await work.work_update(project_id, arguments)
     if name == "nebula.work.create_work_item":
         return await work.create_work_item(project_id, arguments)
     if name == "nebula.work.update_work_item":
@@ -3959,19 +4002,13 @@ async def dispatch_work_tool(
     if name == "nebula.work.harness_quota":
         return await work.harness_quota(project_id, arguments)
     if name == "nebula.work.chat":
-        return await read_in_worker(
-            work.chat_detail, project_id, arguments.get("session_id")
-        )
+        return await work.chat_detail(project_id, arguments.get("session_id"))
     if name == "nebula.work.timeline":
-        return await read_in_worker(work.timeline.read, project_id, arguments)
+        return await work.timeline.read(project_id, arguments)
     if name == "nebula.work.goals":
-        return await read_in_worker(
-            work.goals_overview, project_id, arguments.get("offset", 0)
-        )
+        return await work.goals_overview(project_id, arguments.get("offset", 0))
     if name == "nebula.work.goal":
-        return await read_in_worker(
-            work.goal_detail, project_id, arguments.get("session_id")
-        )
+        return await work.goal_detail(project_id, arguments.get("session_id"))
     if name == "nebula.work.create_goal":
         return await work.create_goal(project_id, arguments)
     if name == "nebula.work.create_goal_conversation":
@@ -3985,49 +4022,39 @@ async def dispatch_work_tool(
     if name == "nebula.work.create_goal_child":
         return await work.create_goal_child(project_id, arguments)
     if name == "nebula.work.subagents":
-        return await read_in_worker(work.subagents_overview, project_id, arguments)
+        return await work.subagents_overview(project_id, arguments)
     if name == "nebula.work.subagent":
-        return await read_in_worker(
-            work.subagent_detail, project_id, arguments.get("subagent_id")
-        )
+        return await work.subagent_detail(project_id, arguments.get("subagent_id"))
     if name == "nebula.work.stop_subagent":
         return await work.stop_subagent(project_id, arguments.get("subagent_id"))
     if name == "nebula.work.stop_subagents":
         return await work.stop_subagents(project_id, arguments.get("session_id"))
     if name == "nebula.work.native_subagent":
-        return await read_in_worker(work.native_subagent_detail, project_id, arguments)
+        return await work.native_subagent_detail(project_id, arguments)
     if name == "nebula.work.stop_native_subagent":
         return await work.stop_native_subagent(project_id, arguments)
     if name == "nebula.work.queue":
-        return await read_in_worker(
-            work.queue_detail, project_id, arguments.get("session_id")
-        )
+        return await work.queue_detail(project_id, arguments.get("session_id"))
     if name == "nebula.work.queue_action":
-        return work.queue_action(project_id, arguments)
+        return await work.queue_action(project_id, arguments)
     if name == "nebula.work.schedule":
-        return await read_in_worker(
-            work.schedule_detail, project_id, arguments.get("session_id")
-        )
+        return await work.schedule_detail(project_id, arguments.get("session_id"))
     if name == "nebula.work.create_schedule":
         return await work.create_schedule(project_id, arguments)
     if name == "nebula.work.set_schedule":
         return await work.set_schedule(project_id, arguments)
     if name == "nebula.work.chat_settings":
-        return await read_in_worker(
-            work.chat_settings, project_id, arguments.get("session_id")
-        )
+        return await work.chat_settings(project_id, arguments.get("session_id"))
     if name == "nebula.work.assistant_defaults":
-        return await read_in_worker(work.assistant_defaults, project_id)
+        return await work.assistant_defaults(project_id)
     if name == "nebula.work.set_assistant_defaults":
-        return work.set_assistant_defaults(project_id, arguments)
+        return await work.set_assistant_defaults(project_id, arguments)
     if name == "nebula.work.set_chat_settings":
-        return work.set_chat_settings(project_id, arguments)
+        return await work.set_chat_settings(project_id, arguments)
     if name == "nebula.work.require_plan":
-        return work.require_plan(project_id, arguments)
+        return await work.require_plan(project_id, arguments)
     if name == "nebula.work.mission":
-        return await read_in_worker(
-            work.mission_detail, project_id, arguments.get("run_id")
-        )
+        return await work.mission_detail(project_id, arguments.get("run_id"))
     if name == "nebula.work.start_chat":
         return await work.start_chat(project_id, arguments)
     if name == "nebula.work.message_chat":
@@ -4043,17 +4070,13 @@ async def dispatch_work_tool(
     if name == "nebula.work.stop_mission":
         return await work.stop_mission(project_id, arguments.get("run_id"))
     if name == "nebula.work.attention":
-        return await read_in_worker(work.attention, project_id)
+        return await work.attention(project_id)
     if name == "nebula.work.approval":
-        return await read_in_worker(
-            work.approval_detail, project_id, arguments.get("action_id")
-        )
+        return await work.approval_detail(project_id, arguments.get("action_id"))
     if name == "nebula.work.decide_approval":
         return await work.decide_approval(project_id, arguments)
     if name == "nebula.work.question":
-        return await read_in_worker(
-            work.question_detail, project_id, arguments.get("action_id")
-        )
+        return await work.question_detail(project_id, arguments.get("action_id"))
     if name == "nebula.work.answer_question":
         return await work.answer_question(project_id, arguments)
     if name == "nebula.work.update_chat":

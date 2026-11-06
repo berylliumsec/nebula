@@ -572,7 +572,7 @@ class BrowserAutomationBroker(ToolBroker):
         evidence_ids: list[str] = []
         output: dict[str, Any]
         try:
-            lease = self.automation.active_lease_for_run(invocation.run_id)
+            lease = await self.automation.active_lease_for_run(invocation.run_id)
             lease_id = lease.id
             if invocation.tool_name.startswith(
                 ("target.", "repeater.", "intruder.", "analysis.", "finding.")
@@ -580,10 +580,10 @@ class BrowserAutomationBroker(ToolBroker):
                 research = BrowserResearchService(
                     self.store, BrowserSecurityService(self.store)
                 )
-                session = self.store.get(BrowserSession, lease.session_id)
+                session = await self.store.get(BrowserSession, lease.session_id)
                 arguments = dict(invocation.arguments)
                 if invocation.tool_name == "target.observe":
-                    workspace = research.workspace(lease.engagement_id)
+                    workspace = await research.workspace(lease.engagement_id)
                     output = {
                         "status": "complete",
                         "site_nodes": [
@@ -598,7 +598,7 @@ class BrowserAutomationBroker(ToolBroker):
                         ][:100],
                     }
                 elif invocation.tool_name == "target.crawl":
-                    crawl = research.create_crawl(
+                    crawl = await research.create_crawl(
                         CrawlCreateRequest(
                             session_id=session.id,
                             identity_id=session.identity_id,
@@ -609,7 +609,7 @@ class BrowserAutomationBroker(ToolBroker):
                     output = {"status": "draft", "crawl": crawl.model_dump(mode="json")}
                 elif invocation.tool_name == "repeater.create":
                     arguments["method"] = str(arguments["method"]).upper()
-                    tab = research.create_repeater_tab(
+                    tab = await research.create_repeater_tab(
                         RepeaterTabCreateRequest(
                             session_id=session.id,
                             identity_id=session.identity_id,
@@ -621,7 +621,7 @@ class BrowserAutomationBroker(ToolBroker):
                 elif invocation.tool_name == "intruder.create":
                     values = arguments.pop("payload_values")
                     arguments["method"] = str(arguments["method"]).upper()
-                    attack = research.create_attack(
+                    attack = await research.create_attack(
                         AttackCreateRequest(
                             session_id=session.id,
                             identity_id=session.identity_id,
@@ -636,12 +636,12 @@ class BrowserAutomationBroker(ToolBroker):
                     }
                 elif invocation.tool_name == "intruder.control":
                     attack_id = str(arguments.pop("attack_id"))
-                    current_attack = self.store.get(BrowserAttack, attack_id)
+                    current_attack = await self.store.get(BrowserAttack, attack_id)
                     if current_attack.session_id != session.id:
                         raise InvalidToolArguments(
                             "attack belongs to another browser lease session"
                         )
-                    attack = research.transition_attack(
+                    attack = await research.transition_attack(
                         attack_id,
                         AttackStateRequest(
                             actor_id=invocation.requested_by, **arguments
@@ -656,7 +656,7 @@ class BrowserAutomationBroker(ToolBroker):
                 elif invocation.tool_name == "analysis.compare":
                     output = research.compare(CompareRequest.model_validate(arguments))
                 elif invocation.tool_name == "analysis.tokens":
-                    analysis = research.analyze_tokens(
+                    analysis = await research.analyze_tokens(
                         TokenAnalysisRequest(session_id=session.id, **arguments),
                         invocation.requested_by,
                     )
@@ -665,7 +665,7 @@ class BrowserAutomationBroker(ToolBroker):
                         "analysis": analysis.model_dump(mode="json"),
                     }
                 else:
-                    finding = research.promote_finding(
+                    finding = await research.promote_finding(
                         lease.engagement_id,
                         FindingPromotionRequest(run_id=lease.run_id, **arguments),
                         invocation.requested_by,
@@ -675,8 +675,8 @@ class BrowserAutomationBroker(ToolBroker):
                         "finding": finding.model_dump(mode="json"),
                     }
             elif invocation.tool_name == "proxy.observe":
-                session = self.store.get(BrowserSession, lease.session_id)
-                status = self.automation.status(
+                session = await self.store.get(BrowserSession, lease.session_id)
+                status = await self.automation.status(
                     lease.engagement_id, run_id=lease.run_id
                 )
                 output = {
@@ -689,13 +689,15 @@ class BrowserAutomationBroker(ToolBroker):
                         "upstream_proxy_enabled": session.upstream_proxy_enabled,
                         "upstream_proxy_configured": bool(session.upstream_proxy_url),
                     },
-                    "traffic_count": self.store.count(
-                        BrowserTrafficExchange, engagement_id=session.engagement_id
+                    "traffic_count": (
+                        await self.store.count(
+                            BrowserTrafficExchange, engagement_id=session.engagement_id
+                        )
                     ),
                     "rules": [rule.model_dump(mode="json") for rule in status.rules],
                 }
             elif invocation.tool_name == "proxy.configure":
-                session = self.store.get(BrowserSession, lease.session_id)
+                session = await self.store.get(BrowserSession, lease.session_id)
                 changes: dict[str, Any] = {}
                 if "capture_mode" in invocation.arguments:
                     try:
@@ -742,7 +744,7 @@ class BrowserAutomationBroker(ToolBroker):
                     raise InvalidToolArguments(
                         "proxy.configure requires a capture_mode or interception_enabled change"
                     )
-                updated, _ = self.store.update_with_operation_event(
+                updated, _ = await self.store.update_with_operation_event(
                     BrowserSession,
                     session.id,
                     changes,
@@ -765,7 +767,7 @@ class BrowserAutomationBroker(ToolBroker):
                     "native_worker": "pending_or_active",
                 }
             elif invocation.tool_name == "proxy.add_rule":
-                rule = self.automation.add_rule(
+                rule = await self.automation.add_rule(
                     lease_id,
                     BrowserProxyRuleRequest.model_validate(invocation.arguments),
                     invocation.requested_by,
@@ -776,7 +778,7 @@ class BrowserAutomationBroker(ToolBroker):
                     "rule_id": rule.id,
                 }
             elif invocation.tool_name == "proxy.remove_rule":
-                rule = self.automation.remove_rule(
+                rule = await self.automation.remove_rule(
                     str(invocation.arguments["rule_id"]), invocation.requested_by
                 )
                 output = {
@@ -785,7 +787,7 @@ class BrowserAutomationBroker(ToolBroker):
                     "enabled": rule.enabled,
                 }
             elif invocation.tool_name == "proxy.emergency_stop":
-                count = self.automation.revoke_run(
+                count = await self.automation.revoke_run(
                     invocation.run_id,
                     str(
                         invocation.arguments.get("reason")
@@ -802,7 +804,7 @@ class BrowserAutomationBroker(ToolBroker):
                 command_arguments.pop("lease_id", None)
                 tab_id = command_arguments.pop("tab_id", None)
                 expected_page_url = command_arguments.pop("page_url", None)
-                command = self.automation.enqueue_command(
+                command = await self.automation.enqueue_command(
                     lease_id,
                     BrowserCommandCreateRequest(
                         tab_id=str(tab_id or ""),
@@ -852,11 +854,11 @@ class BrowserAutomationToolPlatform:
         self.store = store
         self.automation = automation
 
-    def runtime_components(self, engagement_id: str) -> RuntimeToolComponents:
+    async def runtime_components(self, engagement_id: str) -> RuntimeToolComponents:
         """Return the backend-neutral tool surface used by harness gateways."""
 
-        engagement = self.store.get(Engagement, engagement_id)
-        scope = self.store.get(ScopePolicy, engagement.scope_policy_id or "")
+        engagement = await self.store.get(Engagement, engagement_id)
+        scope = await self.store.get(ScopePolicy, engagement.scope_policy_id or "")
         specs = autonomous_browser_specs()
         return RuntimeToolComponents(
             broker=BrowserAutomationBroker(self.store, self.automation),
@@ -866,7 +868,7 @@ class BrowserAutomationToolPlatform:
             runtime_digest="browser-investigation-v2",
         )
 
-    def mission_components(
+    async def mission_components(
         self, run: Any, provider: ModelProvider
     ) -> MissionComponents:
         selected = run.metadata.get("tool_names")
@@ -880,8 +882,8 @@ class BrowserAutomationToolPlatform:
             raise MissionConfigurationError(
                 f"frozen browser capabilities are unavailable: {unknown}"
             )
-        engagement = self.store.get(Engagement, run.engagement_id)
-        scope = self.store.get(ScopePolicy, engagement.scope_policy_id or "")
+        engagement = await self.store.get(Engagement, run.engagement_id)
+        scope = await self.store.get(ScopePolicy, engagement.scope_policy_id or "")
         broker = BrowserAutomationBroker(self.store, self.automation)
         workspace = Path(engagement.workspace_path or ".").resolve()
         specialist = BrokeredToolSpecialist(
@@ -892,11 +894,13 @@ class BrowserAutomationToolPlatform:
             workspace=workspace,
             specs={name: specs[name] for name in selected},
             model=run.supervisor_model,
-            max_output_tokens=default_output_tokens(
-                self.store,
-                run.supervisor_provider_id,
-                run.supervisor_model or provider.config.default_model,
-                token_budget=run.budget.max_tokens,
+            max_output_tokens=(
+                await default_output_tokens(
+                    self.store,
+                    run.supervisor_provider_id,
+                    run.supervisor_model or provider.config.default_model,
+                    token_budget=run.budget.max_tokens,
+                )
             ),
         )
         return MissionComponents(
@@ -1033,7 +1037,7 @@ class BrowserActionProposalBroker:
             )
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
         try:
-            action = self.service.propose_action(
+            action = await self.service.propose_action(
                 self.session.id,
                 BrowserActionProposalRequest(
                     **invocation.arguments,
@@ -1059,18 +1063,18 @@ class BrowserToolPlatform:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def chat_components(
+    async def chat_components(
         self,
         *,
         engagement_id: str,
         browser_session_id: str,
     ) -> RuntimeToolComponents:
-        engagement = self.store.get(Engagement, engagement_id)
-        session = self.store.get(BrowserSession, browser_session_id)
+        engagement = await self.store.get(Engagement, engagement_id)
+        session = await self.store.get(BrowserSession, browser_session_id)
         if session.engagement_id != engagement_id:
             raise ValueError("selected browser context belongs to another Project")
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id is not None
             else None
         )

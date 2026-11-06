@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import async_take
+
 import json
 import re
 from itertools import islice
@@ -447,11 +449,13 @@ async def _check_runtime_mutation(
         raise ValueError("provide the listed runtime settings object")
     try:
         if family == "runner-profiles":
-            current: RunnerProfile | SshEnvironment | None = app.state.store.get(
+            current: RunnerProfile | SshEnvironment | None = await app.state.store.get(
                 RunnerProfile, identity
             )
         else:
-            current = app.state.store.get(SshEnvironment, environment_id(identity))
+            current = await app.state.store.get(
+                SshEnvironment, environment_id(identity)
+            )
     except NotFoundError:
         # diagnostic-expected: first-time settings have no saved entity.
         current = None
@@ -616,11 +620,12 @@ async def _settings_request(
         profiles = project_mcp_profiles(app.state.store, project_id)
         if path.endswith("/export"):
             result: Any = export_mcp_config(
-                [profile for _, profile in profiles]
+                [profile async for _, profile in profiles]
             ).model_dump(mode="json")
         else:
             result = [
-                profile.model_dump(mode="json") for _, profile in islice(profiles, 100)
+                profile.model_dump(mode="json")
+                for _, profile in await async_take(profiles, 100)
             ]
         return httpx.Response(200, json=result)
     exact = re.fullmatch(r"(/api/v1/mcp-servers/([^/]+))(/probe)?", path)

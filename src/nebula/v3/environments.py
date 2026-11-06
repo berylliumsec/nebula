@@ -97,21 +97,21 @@ class SshEnvironmentService:
         self.config_path = config_path
         self._probe = probe or (lambda alias: ssh.probe_host(alias, self.config_path))
 
-    def get(self, alias: str) -> SshEnvironment | None:
+    async def get(self, alias: str) -> SshEnvironment | None:
         try:
-            return self.store.get(SshEnvironment, environment_id(alias))
+            return await self.store.get(SshEnvironment, environment_id(alias))
         except NotFoundError:  # diagnostic-expected: a host without saved settings
             return None
 
-    def saved(self) -> list[SshEnvironment]:
-        return self.store.list_entities(SshEnvironment, limit=1_000)
+    async def saved(self) -> list[SshEnvironment]:
+        return await self.store.list_entities(SshEnvironment, limit=1_000)
 
-    def discover(self, *, resolve: bool = True) -> SshEnvironmentDiscovery:
+    async def discover(self, *, resolve: bool = True) -> SshEnvironmentDiscovery:
         """List config hosts with saved settings; ``resolve`` adds ``ssh -G`` facts."""
 
         scan = ssh.discover_hosts(self.config_path)
         available = ssh.ssh_binary() is not None
-        saved = {item.alias: item for item in self.saved()}
+        saved = {item.alias: item for item in (await self.saved())}
         hosts: list[SshEnvironmentHost] = []
         for entry in scan.hosts:
             resolved: SshEnvironmentResolved | None = None
@@ -165,7 +165,9 @@ class SshEnvironmentService:
         }:
             raise NotFoundError(f"Host {alias!r} is not defined in the SSH config")
 
-    def save(self, alias: str, settings: SshEnvironmentSettings) -> SshEnvironment:
+    async def save(
+        self, alias: str, settings: SshEnvironmentSettings
+    ) -> SshEnvironment:
         changes = settings.model_dump(
             exclude_unset=True, exclude={"expected_revision", "expected_absent"}
         )
@@ -173,33 +175,35 @@ class SshEnvironmentService:
             changes["working_directory"] = (
                 changes["working_directory"] or ""
             ).strip() or None
-        existing = self.get(alias)
+        existing = await self.get(alias)
         if (settings.expected_absent and existing is not None) or (
             settings.expected_revision is not None and existing is None
         ):
             raise ConflictError("SSH settings changed; read the host again")
         if existing is None:
             self._require_configured(alias)
-            return self.store.create(
+            return await self.store.create(
                 SshEnvironment(id=environment_id(alias), alias=alias, **changes)
             )
-        return self.store.update(
+        return await self.store.update(
             SshEnvironment,
             existing.id,
             changes,
             expected_revision=settings.expected_revision,
         )
 
-    def forget(self, alias: str, *, expected_revision: int | None = None) -> None:
-        existing = self.get(alias)
+    async def forget(self, alias: str, *, expected_revision: int | None = None) -> None:
+        existing = await self.get(alias)
         if existing is None:
             raise NotFoundError(f"No saved settings for SSH host {alias!r}")
-        self.store.delete(
-            SshEnvironment, existing.id, expected_revision=expected_revision
+        (
+            await self.store.delete(
+                SshEnvironment, existing.id, expected_revision=expected_revision
+            )
         )
 
     async def probe(self, alias: str) -> SshEnvironment:
-        existing = self.get(alias)
+        existing = await self.get(alias)
         if existing is None:
             self._require_configured(alias)
         result = await asyncio.to_thread(self._probe, alias)
@@ -215,19 +219,19 @@ class SshEnvironmentService:
             detail=result.detail[:1_000],
         )
         if existing is None:
-            return self.store.create(
+            return await self.store.create(
                 SshEnvironment(
                     id=environment_id(alias), alias=alias, last_probe=snapshot
                 )
             )
-        return self.store.update(
+        return await self.store.update(
             SshEnvironment,
             existing.id,
             {"last_probe": snapshot},
         )
 
 
-def resolve_ssh_environments(
+async def resolve_ssh_environments(
     store: NebulaStore,
     ids: list[str] | None,
     *,
@@ -240,7 +244,7 @@ def resolve_ssh_environments(
             sorted(
                 (
                     item
-                    for item in store.list_entities(SshEnvironment, limit=1_000)
+                    for item in (await store.list_entities(SshEnvironment, limit=1_000))
                     if item.enabled
                 ),
                 key=lambda item: item.alias,
@@ -249,7 +253,7 @@ def resolve_ssh_environments(
     else:
         explicit: list[SshEnvironment] = []
         for item_id in dict.fromkeys(ids):
-            environment = store.get(SshEnvironment, item_id)
+            environment = await store.get(SshEnvironment, item_id)
             if not environment.enabled:
                 raise ValueError(
                     f"SSH environment {environment.label!r} is not enabled"
@@ -279,7 +283,7 @@ def resolve_ssh_environments(
     return tuple(enriched)
 
 
-def enabled_snapshot_ssh_ids(store: NebulaStore, hosts: Any) -> list[str]:
+async def enabled_snapshot_ssh_ids(store: NebulaStore, hosts: Any) -> list[str]:
     """Ids of a turn's recorded SSH hosts that are still saved and enabled.
 
     A turn Core starts on its own repeats the hosts an earlier turn was given.
@@ -293,7 +297,7 @@ def enabled_snapshot_ssh_ids(store: NebulaStore, hosts: Any) -> list[str]:
         if not isinstance(host_id, str):
             continue
         try:
-            environment = store.get(SshEnvironment, host_id)
+            environment = await store.get(SshEnvironment, host_id)
         except NotFoundError:  # diagnostic-expected: the host was removed since that turn; the new turn runs without it
             continue
         if environment.enabled:

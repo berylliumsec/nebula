@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import AsyncIterator
+
 from .diagnostics import record_caught_exception
 
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from typing import Any, Iterator
 
 from sqlalchemy import and_, delete, exists, insert, or_, select, update
-from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.exc import IntegrityError
 
 from .database import EntityRow, RunEventRow
@@ -34,11 +36,11 @@ class OperatorProfileService:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def list_profiles(self) -> list[OperatorProfile]:
+    async def list_profiles(self) -> list[OperatorProfile]:
         profiles: list[OperatorProfile] = []
         offset = 0
         while True:
-            batch = self.store.list_entities(
+            batch = await self.store.list_entities(
                 OperatorProfile,
                 offset=offset,
                 limit=1_000,
@@ -58,20 +60,20 @@ class OperatorProfileService:
             ),
         )
 
-    def active_profile(self) -> OperatorProfile:
-        profiles = self.list_profiles()
+    async def active_profile(self) -> OperatorProfile:
+        profiles = await self.list_profiles()
         if not profiles:
             raise NotFoundError("no operator profile has been configured")
         return profiles[0]
 
-    def active_profile_or_none(self) -> OperatorProfile | None:
-        profiles = self.list_profiles()
+    async def active_profile_or_none(self) -> OperatorProfile | None:
+        profiles = await self.list_profiles()
         return profiles[0] if profiles else None
 
-    def get_profile(self, profile_id: str) -> OperatorProfile:
-        return self.store.get(OperatorProfile, profile_id)
+    async def get_profile(self, profile_id: str) -> OperatorProfile:
+        return await self.store.get(OperatorProfile, profile_id)
 
-    def create_profile(
+    async def create_profile(
         self,
         *,
         display_name: str,
@@ -86,22 +88,24 @@ class OperatorProfileService:
             metadata=metadata or {},
         )
         try:
-            with self._write_transaction() as connection:
-                profiles = self._locked_profiles(connection)
+            async with self._write_transaction() as connection:
+                profiles = await self._locked_profiles(connection)
                 self._assert_coherent(profiles)
                 if not profiles:
                     candidate = candidate.model_copy(
                         update={"active": True, "activated_at": utc_now()}
                     )
-                connection.execute(
-                    insert(EntityRow).values(
-                        id=candidate.id,
-                        kind=candidate.entity_kind,
-                        engagement_id=None,
-                        revision=candidate.revision,
-                        payload=_dump(candidate),
-                        created_at=candidate.created_at,
-                        updated_at=candidate.updated_at,
+                (
+                    await connection.execute(
+                        insert(EntityRow).values(
+                            id=candidate.id,
+                            kind=candidate.entity_kind,
+                            engagement_id=None,
+                            revision=candidate.revision,
+                            payload=_dump(candidate),
+                            created_at=candidate.created_at,
+                            updated_at=candidate.updated_at,
+                        )
                     )
                 )
         except IntegrityError as exc:
@@ -115,7 +119,7 @@ class OperatorProfileService:
             raise ConflictError(f"entity already exists: {candidate.id}") from exc
         return candidate
 
-    def update_profile(
+    async def update_profile(
         self,
         profile_id: str,
         changes: dict[str, Any],
@@ -128,8 +132,8 @@ class OperatorProfileService:
             raise ValueError(
                 f"operator profile fields are not writable: {sorted(unsupported)}"
             )
-        with self._write_transaction() as connection:
-            profiles = self._locked_profiles(connection)
+        async with self._write_transaction() as connection:
+            profiles = await self._locked_profiles(connection)
             self._assert_coherent(profiles)
             current = self._find(profiles, profile_id)
             if expected_revision is not None and current.revision != expected_revision:
@@ -139,16 +143,16 @@ class OperatorProfileService:
                 )
             if not changes:
                 return current
-            return self._update_row(connection, current, changes)
+            return await self._update_row(connection, current, changes)
 
-    def activate_profile(
+    async def activate_profile(
         self,
         profile_id: str,
         *,
         expected_revision: int | None = None,
     ) -> OperatorProfile:
-        with self._write_transaction() as connection:
-            profiles = self._locked_profiles(connection)
+        async with self._write_transaction() as connection:
+            profiles = await self._locked_profiles(connection)
             target = self._find(profiles, profile_id)
             if expected_revision is not None and target.revision != expected_revision:
                 raise ConflictError(
@@ -168,23 +172,23 @@ class OperatorProfileService:
                 changes: dict[str, Any] = {"active": should_be_active}
                 if should_be_active:
                     changes["activated_at"] = activated_at
-                updated = self._update_row(connection, profile, changes)
+                updated = await self._update_row(connection, profile, changes)
                 if updated.id == target.id:
                     result = updated
             # A corrupt all-active set can leave the target unchanged while
             # deactivating others; re-read the returned target in that case.
             if result.id == target.id and result.active:
                 return result
-            return self._find(self._locked_profiles(connection), target.id)
+            return self._find((await self._locked_profiles(connection)), target.id)
 
-    def delete_profile(
+    async def delete_profile(
         self,
         profile_id: str,
         *,
         expected_revision: int | None = None,
     ) -> None:
-        with self._write_transaction() as connection:
-            profiles = self._locked_profiles(connection)
+        async with self._write_transaction() as connection:
+            profiles = await self._locked_profiles(connection)
             self._assert_coherent(profiles)
             target = self._find(profiles, profile_id)
             if expected_revision is not None and target.revision != expected_revision:
@@ -200,12 +204,12 @@ class OperatorProfileService:
                 raise OperatorProfileInvariantError(
                     "activate another operator before deleting the active profile"
                 )
-            if self._has_attribution_references(connection, target.id):
+            if await self._has_attribution_references(connection, target.id):
                 raise OperatorProfileInvariantError(
                     "operator profile cannot be deleted while durable attribution "
                     "references it"
                 )
-            result = connection.execute(
+            result = await connection.execute(
                 delete(EntityRow).where(
                     EntityRow.id == target.id,
                     EntityRow.kind == OperatorProfile.entity_kind,
@@ -217,22 +221,24 @@ class OperatorProfileService:
                     f"operator profile {target.id} changed during deletion"
                 )
 
-    @contextmanager
-    def _write_transaction(self) -> Iterator[Connection]:
-        connection = self.store.database.engine.connect()
+    @asynccontextmanager
+    async def _write_transaction(self) -> AsyncIterator[AsyncConnection]:
+        connection = await self.store.database.connect()
         try:
             if self.store.database.engine.dialect.name == "sqlite":
-                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
             else:
-                connection.begin()
+                (await connection.begin())
                 # PostgreSQL row locks cannot serialize two inserts when the
                 # profile set is empty. This short, rare configuration write
                 # therefore takes a table lock before checking the invariant.
-                connection.exec_driver_sql(
-                    "LOCK TABLE entities IN SHARE ROW EXCLUSIVE MODE"
+                (
+                    await connection.exec_driver_sql(
+                        "LOCK TABLE entities IN SHARE ROW EXCLUSIVE MODE"
+                    )
                 )
             yield connection
-            connection.commit()
+            (await connection.commit())
         except Exception as caught_error:
             record_caught_exception(
                 "projects",
@@ -241,19 +247,21 @@ class OperatorProfileService:
                 caught_error,
                 stage="operators",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
     @staticmethod
-    def _locked_profiles(connection: Connection) -> list[OperatorProfile]:
+    async def _locked_profiles(connection: AsyncConnection) -> list[OperatorProfile]:
         rows = (
-            connection.execute(
-                select(EntityRow)
-                .where(EntityRow.kind == OperatorProfile.entity_kind)
-                .order_by(EntityRow.created_at, EntityRow.id)
-                .with_for_update()
+            (
+                await connection.execute(
+                    select(EntityRow)
+                    .where(EntityRow.kind == OperatorProfile.entity_kind)
+                    .order_by(EntityRow.created_at, EntityRow.id)
+                    .with_for_update()
+                )
             )
             .mappings()
             .all()
@@ -275,7 +283,9 @@ class OperatorProfileService:
             )
 
     @staticmethod
-    def _has_attribution_references(connection: Connection, profile_id: str) -> bool:
+    async def _has_attribution_references(
+        connection: AsyncConnection, profile_id: str
+    ) -> bool:
         entity_reference = or_(
             and_(
                 EntityRow.kind == "evidence",
@@ -305,15 +315,17 @@ class OperatorProfileService:
                 ),
             ),
         )
-        entity_exists = connection.scalar(select(exists().where(entity_reference)))
-        event_exists = connection.scalar(
+        entity_exists = await connection.scalar(
+            select(exists().where(entity_reference))
+        )
+        event_exists = await connection.scalar(
             select(exists().where(RunEventRow.actor_id == profile_id))
         )
         return bool(entity_exists or event_exists)
 
     @staticmethod
-    def _update_row(
-        connection: Connection,
+    async def _update_row(
+        connection: AsyncConnection,
         current: OperatorProfile,
         changes: dict[str, Any],
     ) -> OperatorProfile:
@@ -324,7 +336,7 @@ class OperatorProfileService:
         payload["updated_at"] = utc_now()
         payload["revision"] = current.revision + 1
         updated_profile = OperatorProfile.model_validate(payload)
-        result = connection.execute(
+        result = await connection.execute(
             update(EntityRow)
             .where(
                 EntityRow.id == current.id,

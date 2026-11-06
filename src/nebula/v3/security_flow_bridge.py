@@ -65,8 +65,8 @@ class SecurityFlowBridge:
             await self._server.wait_closed()
             self._server = None
 
-    def _session(self) -> BrowserSession:
-        session = self.store.get(BrowserSession, self.session_id)
+    async def _session(self) -> BrowserSession:
+        session = await self.store.get(BrowserSession, self.session_id)
         if (
             session.runtime_kind != "agent_security"
             or session.status != BrowserSessionStatus.ACTIVE
@@ -90,7 +90,7 @@ class SecurityFlowBridge:
                 supplied, self.token
             ):
                 raise ValueError("proxy bridge authentication failed")
-            result = self._dispatch(message)
+            result = await self._dispatch(message)
             payload = {"ok": True, "result": result}
         except Exception as exc:
             # The sidecar fails closed. Core records the exception type without
@@ -110,8 +110,8 @@ class SecurityFlowBridge:
             writer.close()
             await writer.wait_closed()
 
-    def _dispatch(self, message: dict[str, Any]) -> dict[str, Any]:
-        session = self._session()
+    async def _dispatch(self, message: dict[str, Any]) -> dict[str, Any]:
+        session = await self._session()
         kind = message.get("kind")
         value = message.get("value")
         if not isinstance(value, dict):
@@ -121,7 +121,7 @@ class SecurityFlowBridge:
             if not isinstance(url, str):
                 raise ValueError("proxy flow has no URL")
             self.security._require_in_scope(
-                self.security._scope(session.engagement_id),
+                (await self.security._scope(session.engagement_id)),
                 url,
                 "agent_security.proxy.request",
                 RiskClass.ACTIVE_SCAN,
@@ -133,7 +133,7 @@ class SecurityFlowBridge:
                 and self.security.artifact_store is not None,
             }
         if kind == "body_artifact":
-            artifact = self.security.upload_body_artifact(
+            artifact = await self.security.upload_body_artifact(
                 session.id,
                 BrowserBodyArtifactUploadRequest.model_validate(value),
                 "agent-security-proxy",
@@ -146,13 +146,13 @@ class SecurityFlowBridge:
                     "tab_id": session.active_tab_id,
                 }
             )
-            exchange = self.security.record_traffic(
+            exchange = await self.security.record_traffic(
                 session.id, traffic_request, "agent-security-proxy"
             )
             return {"exchange_id": exchange.id}
         if kind == "websocket_frame":
             frame_request = BrowserWebSocketFrameRecordRequest.model_validate(value)
-            frame = self.security.record_websocket_frame(
+            frame = await self.security.record_websocket_frame(
                 session.id, frame_request, "agent-security-proxy"
             )
             return {"frame_id": frame.id}
@@ -163,19 +163,19 @@ class SecurityFlowBridge:
                     "tab_id": session.active_tab_id,
                 }
             )
-            item = self.research.pause_intercept(
+            item = await self.research.pause_intercept(
                 session.id, intercept_request, "agent-security-proxy"
             )
             return {"intercept_id": item.id, "expires_at": item.expires_at.isoformat()}
         if kind == "intercept_poll":
-            item = self.store.get(
+            item = await self.store.get(
                 BrowserInterceptItem, str(value.get("intercept_id", ""))
             )
             if item.session_id != session.id:
                 raise ValueError("intercept belongs to another session")
             if item.state == "paused" and utc_now() >= item.expires_at:
-                self.research.interrupt_stale_intercepts(session.engagement_id)
-                item = self.store.get(BrowserInterceptItem, item.id)
+                (await self.research.interrupt_stale_intercepts(session.engagement_id))
+                item = await self.store.get(BrowserInterceptItem, item.id)
             return {
                 "state": item.state,
                 "method": item.edited_method,

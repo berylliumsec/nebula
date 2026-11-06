@@ -151,12 +151,12 @@ def companion_spec(
     )
 
 
-def attached_session(
+async def attached_session(
     store: NebulaStore, project_id: str, conversation_id: str | None
 ) -> str | None:
     if not conversation_id:
         return None
-    sessions = store.find_entities(
+    sessions = await store.find_entities(
         BrowserSession,
         {"metadata.conversation_id": conversation_id},
         engagement_id=project_id,
@@ -177,7 +177,13 @@ def attached_session(
 
 
 class CompanionBroker:
-    def __init__(
+    @classmethod
+    async def create(cls, *args, **kwargs) -> "CompanionBroker":
+        instance = cls.__new__(cls)
+        await instance._initialize(*args, **kwargs)
+        return instance
+
+    async def _initialize(
         self,
         store: NebulaStore,
         session_id: str,
@@ -192,31 +198,33 @@ class CompanionBroker:
         )
         self.artifact_store = artifact_store
         self.image_supported = image_supported and artifact_store is not None
-        session = self._available_session()
+        session = await self._available_session()
         self.spec = companion_spec(
             image_supported=self.image_supported,
-            approval_policy=self.service.approval_policy(session.engagement_id).value,
+            approval_policy=(
+                await self.service.approval_policy(session.engagement_id)
+            ).value,
         )
         self.ledger = StoreToolLedger(store)
 
-    def _available_session(self) -> BrowserSession:
+    async def _available_session(self) -> BrowserSession:
         """The session, or a refusal: closed, removed, native or revoked."""
 
         try:
-            return self.service.session(self.session_id)
+            return await self.service.session(self.session_id)
         except (NotFoundError, ValueError) as exc:
             # diagnostic-expected: re-raised as the unavailable resource it is,
             # keeping the service's wording for the operator's view.
             raise _unavailable(str(exc)) from exc
 
-    def approval_policy(self) -> AutomationApprovalPolicy:
-        session = self.service.session(self.session_id)
-        return self.service.approval_policy(session.engagement_id)
+    async def approval_policy(self) -> AutomationApprovalPolicy:
+        session = await self.service.session(self.session_id)
+        return await self.service.approval_policy(session.engagement_id)
 
     async def execute(
         self, invocation: Any, scope: ScopePolicy, *, approval: Any = None
     ) -> ToolExecutionResult:
-        session = self._available_session()
+        session = await self._available_session()
         if (
             invocation.tool_name != self.spec.name
             or invocation.engagement_id != session.engagement_id
@@ -279,7 +287,7 @@ class CompanionBroker:
             raise
         call = await self.ledger.reserve(invocation, self.spec)
         if call.status == ToolCallStatus.COMPLETE and isinstance(call.result, dict):
-            return self.execution_result(call.result, invocation)
+            return await self.execution_result(call.result, invocation)
         if call.status != ToolCallStatus.PROPOSED:
             raise AmbiguousToolState(
                 "A previous browser operation will not be replayed automatically."
@@ -322,10 +330,10 @@ class CompanionBroker:
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
         try:
             if proposal:
-                result = self.service.propose(
+                result = await self.service.propose(
                     self.session_id, request, chat_turn_id=invocation.chat_turn_id
                 )
-                if self.approval_policy() == AutomationApprovalPolicy.NEVER:
+                if (await self.approval_policy()) == AutomationApprovalPolicy.NEVER:
                     result = await self.service.decide(
                         self.session_id, result.id, "approve"
                     )
@@ -333,22 +341,24 @@ class CompanionBroker:
                     while result.status in {"pending", "running"}:
                         if result.status == "pending" and (
                             result.expires_at <= datetime.now(timezone.utc)
-                            or not self.service.turn_active(result.chat_turn_id)
+                            or not (await self.service.turn_active(result.chat_turn_id))
                         ):
                             result = await self.service.decide(
                                 self.session_id, result.id, "reject"
                             )
                             break
                         await asyncio.sleep(0.25)
-                        result = self.store.get(CompanionAction, result.id)
+                        result = await self.store.get(CompanionAction, result.id)
                 except asyncio.CancelledError:
-                    latest = self.store.get(CompanionAction, result.id)
+                    latest = await self.store.get(CompanionAction, result.id)
                     if latest.status == "pending":
-                        self.store.update(
-                            CompanionAction,
-                            latest.id,
-                            {"status": "revoked"},
-                            expected_revision=latest.revision,
+                        (
+                            await self.store.update(
+                                CompanionAction,
+                                latest.id,
+                                {"status": "revoked"},
+                                expected_revision=latest.revision,
+                            )
                         )
                     raise
                 output = {
@@ -395,7 +405,7 @@ class CompanionBroker:
                         "tool_call_id": call.id,
                     },
                 )
-                self.store.create(artifact)
+                (await self.store.create(artifact))
                 output["screenshot_artifact_id"] = artifact.id
                 output["artifacts"] = [
                     {"artifact_id": artifact.id, "media_type": "image/png"}
@@ -435,7 +445,7 @@ class CompanionBroker:
             )
             raise
         await self.ledger.transition(running, ToolCallStatus.COMPLETE, result=output)
-        return self.execution_result(output, invocation)
+        return await self.execution_result(output, invocation)
 
     async def _check_proposal(self, request: CompanionRequest, invocation: Any) -> None:
         """Refuse a change the current page or the operator's control rules out."""
@@ -460,7 +470,7 @@ class CompanionBroker:
             and not request.text
             and any(
                 item["reference"] == request.credential_ref and item["available"]
-                for item in self.service.credential_catalog(self.session_id)
+                for item in (await self.service.credential_catalog(self.session_id))
             )
         )
         if element is None or (element["sensitive"] and not protected_fill):
@@ -474,9 +484,9 @@ class CompanionBroker:
         if request.operation == "upload" and element["type"] != "file":
             raise InvalidToolArguments("Choose a file input from fresh page context.")
         # The operator may have paused control while the page was read.
-        self.service.require_assistant_control(self.session_id)
+        (await self.service.require_assistant_control(self.session_id))
 
-    def execution_result(
+    async def execution_result(
         self, output: dict[str, Any], invocation: Any
     ) -> ToolExecutionResult:
         blocks = []
@@ -489,7 +499,7 @@ class CompanionBroker:
             # A replayed result names its screenshot; one this conversation
             # cannot read is unavailable, and replaying runs nothing.
             try:
-                artifact = self.store.get(Artifact, artifact_id)
+                artifact = await self.store.get(Artifact, artifact_id)
             except NotFoundError as exc:
                 raise _unavailable(
                     "The screenshot is no longer available to this conversation."
@@ -514,7 +524,7 @@ class CompanionBroker:
         return ToolExecutionResult(output=output, mcp_content_blocks=blocks)
 
 
-def companion_components(
+async def companion_components(
     store: NebulaStore,
     project_id: str,
     session_id: str,
@@ -522,19 +532,19 @@ def companion_components(
     artifact_store: ArtifactStore | None = None,
     image_supported: bool = False,
 ) -> RuntimeToolComponents:
-    engagement = store.get(Engagement, project_id)
-    broker = CompanionBroker(
+    engagement = await store.get(Engagement, project_id)
+    broker = await CompanionBroker.create(
         store,
         session_id,
         artifact_store=artifact_store,
         image_supported=image_supported,
     )
-    session = broker.service.session(session_id)
+    session = await broker.service.session(session_id)
     if session.engagement_id != project_id:
         # As the broker refuses another project's call: unavailable to this
         # project, described as a missing resource is, and nothing has run.
         raise _unavailable("Browser session belongs to another project.")
-    scope = broker.service.security._scope(project_id)
+    scope = await broker.service.security._scope(project_id)
     result = RuntimeToolComponents(
         broker=broker,
         scope=scope,

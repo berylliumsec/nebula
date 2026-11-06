@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import resolve_workspace
+
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -424,7 +428,7 @@ class McpProbeService:
         store: NebulaStore,
         *,
         credential_store: CredentialStore,
-        workspace_resolver: Callable[[str], Path],
+        workspace_resolver: (MaybeAsync[[str], Path]),
     ) -> None:
         self.store = store
         self.credential_store = credential_store
@@ -443,7 +447,7 @@ class McpProbeService:
     async def probe(
         self, profile_id: str, *, engagement_id: str | None = None
     ) -> McpProbeReport:
-        profile = self.store.get(McpServerProfile, profile_id)
+        profile = await self.store.get(McpServerProfile, profile_id)
         self._require_probe_scope(profile, engagement_id)
         if profile.metadata.get("built_in") == "notebook_v1":
             if self.notebook_tools is None or engagement_id != profile.metadata.get(
@@ -459,13 +463,15 @@ class McpProbeService:
             if self.security_tools is None:
                 raise McpProbeError("Security Tools are unavailable in this Core")
             snapshot = self.security_tools.capabilities()
-            latest = self.store.get(McpServerProfile, profile.id)
+            latest = await self.store.get(McpServerProfile, profile.id)
             self._require_probe_scope(latest, engagement_id)
-            self.store.update(
-                McpServerProfile,
-                latest.id,
-                {"capabilities": snapshot},
-                expected_revision=latest.revision,
+            (
+                await self.store.update(
+                    McpServerProfile,
+                    latest.id,
+                    {"capabilities": snapshot},
+                    expected_revision=latest.revision,
+                )
             )
             return McpProbeReport(
                 profile_id=profile.id, compatible=True, capabilities=snapshot
@@ -540,13 +546,15 @@ class McpProbeService:
             )
             detail = _safe(exc)
             failed = McpCapabilitySnapshot(checked_at=utc_now(), detail=detail)
-            latest = self.store.get(McpServerProfile, profile.id)
+            latest = await self.store.get(McpServerProfile, profile.id)
             self._require_probe_scope(latest, engagement_id)
-            self.store.update(
-                McpServerProfile,
-                latest.id,
-                {"capabilities": failed},
-                expected_revision=latest.revision,
+            (
+                await self.store.update(
+                    McpServerProfile,
+                    latest.id,
+                    {"capabilities": failed},
+                    expected_revision=latest.revision,
+                )
             )
             return McpProbeReport(
                 profile_id=profile.id,
@@ -561,13 +569,15 @@ class McpProbeService:
         # Persist the discovered snapshot onto the latest revision; a conflict
         # from a concurrent write in this window is a real conflict and is
         # raised as one rather than recorded as an incompatible server.
-        latest = self.store.get(McpServerProfile, profile.id)
+        latest = await self.store.get(McpServerProfile, profile.id)
         self._require_probe_scope(latest, engagement_id)
-        self.store.update(
-            McpServerProfile,
-            latest.id,
-            {"capabilities": snapshot},
-            expected_revision=latest.revision,
+        (
+            await self.store.update(
+                McpServerProfile,
+                latest.id,
+                {"capabilities": snapshot},
+                expected_revision=latest.revision,
+            )
         )
         return McpProbeReport(
             profile_id=profile.id,
@@ -607,7 +617,7 @@ class McpProbeService:
                     raise McpProbeError(
                         "workspace-scoped MCP probing requires engagement_id"
                     )
-                cwd = self.workspace_resolver(engagement_id)
+                cwd = await resolve_workspace(self.workspace_resolver, engagement_id)
             else:
                 cwd = Path(profile.cwd or "")
             environment = dict(profile.environment)
@@ -687,7 +697,7 @@ class McpProbeService:
                         "Notebook profile belongs to another project",
                         usage_reason="project_mismatch",
                     )
-                current = self.store.get(McpServerProfile, profile.id)
+                current = await self.store.get(McpServerProfile, profile.id)
                 if (
                     not current.enabled
                     or current.metadata.get("engagement_id") != engagement_id
@@ -708,7 +718,7 @@ class McpProbeService:
                     "Security Tools are unavailable in this Core",
                     usage_reason="builtin_unavailable",
                 )
-            current = self.store.get(McpServerProfile, profile.id)
+            current = await self.store.get(McpServerProfile, profile.id)
             if not current.enabled or current.transport != McpTransport.BUILTIN:
                 raise McpProbeError(
                     "Security Tools were disabled after this turn began",
@@ -927,7 +937,7 @@ def _mcp_requires_approval(profile: McpServerProfile, tool: McpToolSnapshot) -> 
     )
 
 
-def build_mcp_tool_plugins(
+async def build_mcp_tool_plugins(
     service: McpProbeService,
     profiles: tuple[McpServerProfile, ...],
     *,
@@ -943,8 +953,10 @@ def build_mcp_tool_plugins(
         engagement_id
         and any(
             item.browser_security_allow_all
-            for item in service.store.list_entities(
-                AutomationProjectPolicy, engagement_id=engagement_id, limit=1
+            for item in (
+                await service.store.list_entities(
+                    AutomationProjectPolicy, engagement_id=engagement_id, limit=1
+                )
             )
         )
     )
@@ -1066,7 +1078,7 @@ def build_mcp_tool_plugins(
     return plugins
 
 
-def resolve_mcp_profiles(
+async def resolve_mcp_profiles(
     store: NebulaStore,
     server_ids: list[str] | tuple[str, ...],
     *,
@@ -1076,7 +1088,7 @@ def resolve_mcp_profiles(
     """Resolve a validated, ordered MCP selection for a durable runtime snapshot."""
 
     ids = tuple(dict.fromkeys(server_ids))
-    profiles = tuple(store.get(McpServerProfile, item) for item in ids)
+    profiles = tuple([(await store.get(McpServerProfile, item)) for item in ids])
     for profile in profiles:
         if (
             profile.metadata.get("built_in") == "notebook_v1"
@@ -1113,7 +1125,7 @@ def usable_mcp_tools(
     ]
 
 
-def catalog_mcp_profiles(
+async def catalog_mcp_profiles(
     store: NebulaStore,
     *,
     exclude: Collection[str] = (),
@@ -1132,8 +1144,10 @@ def catalog_mcp_profiles(
         sorted(
             (
                 profile
-                for profile in store.mcp_catalog_candidates(
-                    exclude=exclude, engagement_id=engagement_id
+                for profile in (
+                    await store.mcp_catalog_candidates(
+                        exclude=exclude, engagement_id=engagement_id
+                    )
                 )
                 if usable_mcp_tools(profile, bypass_permissions=bypass_permissions)
             ),

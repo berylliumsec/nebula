@@ -29,7 +29,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
     router = APIRouter(tags=["chat"])
 
     @router.get("/chat/projects/{project_id}/search")
-    def search(
+    async def search(
         project_id: str,
         q: str = Query(default="", max_length=512),
         session_id: str | None = None,
@@ -37,7 +37,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=100),
     ):
-        store.get(Engagement, project_id)
+        (await store.get(Engagement, project_id))
         statement = select(EntityRow).where(
             EntityRow.kind == "chat_messages", EntityRow.engagement_id == project_id
         )
@@ -69,7 +69,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             )
         )
         if session_id:
-            session = store.get(ChatSession, session_id)
+            session = await store.get(ChatSession, session_id)
             if session.engagement_id != project_id:
                 raise NotFoundError("Conversation is not in this project")
             statement = statement.where(EntityRow.chat_session_id == session_id)
@@ -96,10 +96,10 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             .offset(offset)
             .limit(limit + 1)
         )
-        with store.database.session() as database:
+        async with store.database.session() as database:
             page = [
                 ChatMessage.model_validate(row.payload)
-                for row in database.scalars(statement)
+                for row in (await database.scalars(statement))
             ]
         # Offsets count stored rows, retracted ones included, so decide whether
         # another page exists before edited-away messages are filtered out.
@@ -113,7 +113,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
                 if q.strip()
                 else 0
             )
-            session = store.get(ChatSession, message.session_id)
+            session = await store.get(ChatSession, message.session_id)
             items.append(
                 {
                     "message_id": message.id,
@@ -131,10 +131,10 @@ def workspace_router(store: NebulaStore) -> APIRouter:
         }
 
     @router.get("/chat/sessions/{session_id}/bookmarks")
-    def bookmarks(session_id: str):
-        session = store.get(ChatSession, session_id)
-        with store.database.session() as database:
-            rows = database.scalars(
+    async def bookmarks(session_id: str):
+        session = await store.get(ChatSession, session_id)
+        async with store.database.session() as database:
+            rows = await database.scalars(
                 select(EntityRow).where(
                     EntityRow.kind == "chat_bookmarks",
                     EntityRow.engagement_id == session.engagement_id,
@@ -144,9 +144,9 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             return [ChatBookmark.model_validate(row.payload) for row in rows]
 
     @router.put("/chat/sessions/{session_id}/bookmarks/{message_id}")
-    def set_bookmark(session_id: str, message_id: str, request: BookmarkWrite):
-        session = store.get(ChatSession, session_id)
-        message = store.get(ChatMessage, message_id)
+    async def set_bookmark(session_id: str, message_id: str, request: BookmarkWrite):
+        session = await store.get(ChatSession, session_id)
+        message = await store.get(ChatMessage, message_id)
         if (
             message.session_id != session.id
             or message.engagement_id != session.engagement_id
@@ -154,7 +154,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             raise NotFoundError("Message is not in this conversation")
         identity = bookmark_id(session_id, message_id)
         if request.expected_revision == 0:
-            return store.create(
+            return await store.create(
                 ChatBookmark(
                     id=identity,
                     engagement_id=session.engagement_id,
@@ -163,7 +163,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
                     active=request.active,
                 )
             )
-        return store.update(
+        return await store.update(
             ChatBookmark,
             identity,
             {"active": request.active},

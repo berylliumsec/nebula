@@ -7,6 +7,11 @@ is re-read from SQLite under the selected project's visibility rules.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
+
+import aiosqlite
+
 import hashlib
 import json
 import os
@@ -178,7 +183,9 @@ class ButlerMemoryService:
             Path(index_path or self.path.with_suffix(".chroma")).expanduser().resolve()
         )
         self.embedding_index = embedding_index
-        self._lock = RLock()
+        self._lock = asyncio.Lock()
+        self._vector_lock = RLock()
+        self._connections = asyncio.Semaphore(4)
         self._ready = False
         self._collection: Any | None = None
         self._vector_error = False
@@ -187,17 +194,26 @@ class ButlerMemoryService:
     def _utc() -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=15, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=15000")
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+    @asynccontextmanager
+    async def _connect(self):
+        # Each caller owns its connection. Optional local-memory reads share a
+        # finite admission limit, independently of Core's PostgreSQL pool.
+        async with self._connections:
+            async with aiosqlite.connect(
+                self.path, timeout=15, isolation_level=None
+            ) as connection:
+                connection.row_factory = sqlite3.Row
+                await connection.execute("PRAGMA busy_timeout=15000")
+                await connection.execute("PRAGMA foreign_keys=ON")
+                try:
+                    yield connection
+                finally:
+                    await connection.rollback()
 
-    def _ensure_ready(self) -> None:
+    async def _ensure_ready(self) -> None:
         if self._ready:
             return
-        with self._lock:
+        async with self._lock:
             if self._ready:
                 return
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -205,10 +221,11 @@ class ButlerMemoryService:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(fd)
             os.chmod(self.path, 0o600)
-            with self._connect() as connection:
-                connection.execute("PRAGMA journal_mode=WAL")
-                connection.execute(
-                    """CREATE TABLE IF NOT EXISTS butler_memories (
+            async with self._connect() as connection:
+                (await connection.execute("PRAGMA journal_mode=WAL"))
+                (
+                    await connection.execute(
+                        """CREATE TABLE IF NOT EXISTS butler_memories (
                         id TEXT PRIMARY KEY,
                         scope TEXT NOT NULL CHECK (scope IN (
                             'global_preference', 'global_lesson', 'project_lesson')),
@@ -224,17 +241,22 @@ class ButlerMemoryService:
                         revision INTEGER NOT NULL CHECK (revision >= 1),
                         UNIQUE (scope, scope_key, content_hash)
                     )"""
+                    )
                 )
-                connection.execute(
-                    "CREATE INDEX IF NOT EXISTS butler_memory_scope ON "
-                    "butler_memories(scope, scope_key, updated_at DESC)"
+                (
+                    await connection.execute(
+                        "CREATE INDEX IF NOT EXISTS butler_memory_scope ON "
+                        "butler_memories(scope, scope_key, updated_at DESC)"
+                    )
                 )
-                connection.execute(
-                    """CREATE TABLE IF NOT EXISTS butler_memory_event_cursors (
+                (
+                    await connection.execute(
+                        """CREATE TABLE IF NOT EXISTS butler_memory_event_cursors (
                         project_id TEXT PRIMARY KEY,
                         last_event_sequence INTEGER NOT NULL DEFAULT 0
                             CHECK (last_event_sequence >= 0)
                     )"""
+                    )
                 )
             self._ready = True
 
@@ -243,7 +265,7 @@ class ButlerMemoryService:
             return None
         if self._collection is not None:
             return self._collection
-        with self._lock:
+        with self._vector_lock:
             if self._collection is not None:
                 return self._collection
             import chromadb
@@ -360,7 +382,7 @@ class ButlerMemoryService:
             raise UnsafeMemoryError("A global lesson must not name its source project")
         return value
 
-    def _save(
+    async def _save(
         self,
         *,
         source_project_id: str,
@@ -371,50 +393,56 @@ class ButlerMemoryService:
         source_ref: str | None,
         project_name: str = "",
     ) -> ButlerMemoryItem:
-        self._ensure_ready()
+        (await self._ensure_ready())
         value = self._clean(
             content, global_lesson=scope == "global_lesson", project_name=project_name
         )
         scope_key = source_project_id if scope == "project_lesson" else "global"
         digest = hashlib.sha256(value.casefold().encode()).hexdigest()
         now = self._utc()
-        with self._lock, self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                "SELECT * FROM butler_memories WHERE scope=? AND scope_key=? AND content_hash=?",
-                (scope, scope_key, digest),
+        async with self._lock, self._connect() as connection:
+            (await connection.execute("BEGIN IMMEDIATE"))
+            existing = await (
+                await connection.execute(
+                    "SELECT * FROM butler_memories WHERE scope=? AND scope_key=? AND content_hash=?",
+                    (scope, scope_key, digest),
+                )
             ).fetchone()
             if existing is None:
                 item_id = str(uuid4())
-                connection.execute(
-                    """INSERT INTO butler_memories (
+                (
+                    await connection.execute(
+                        """INSERT INTO butler_memories (
                         id, scope, scope_key, source_project_id, content,
                         content_hash, source_kind, source_label, source_ref,
                         created_at, updated_at, revision
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
-                    (
-                        item_id,
-                        scope,
-                        scope_key,
-                        source_project_id,
-                        value,
-                        digest,
-                        source_kind,
-                        source_label,
-                        source_ref,
-                        now,
-                        now,
-                    ),
+                        (
+                            item_id,
+                            scope,
+                            scope_key,
+                            source_project_id,
+                            value,
+                            digest,
+                            source_kind,
+                            source_label,
+                            source_ref,
+                            now,
+                            now,
+                        ),
+                    )
                 )
-                existing = connection.execute(
-                    "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+                existing = await (
+                    await connection.execute(
+                        "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+                    )
                 ).fetchone()
-            connection.commit()
+            (await connection.commit())
         assert existing is not None
-        self._index_one(existing)
+        await asyncio.to_thread(self._index_one, existing)
         return self._public(existing, source_project_id)
 
-    def remember_operator_item(
+    async def remember_operator_item(
         self,
         engagement_id: str,
         *,
@@ -451,7 +479,7 @@ class ButlerMemoryService:
             and (source_project_name.casefold() in content.casefold())
         ):
             raise UnsafeMemoryError("A project-specific preference must stay local")
-        return self._save(
+        return await self._save(
             source_project_id=engagement_id,
             scope=scope,
             content=content,
@@ -461,7 +489,7 @@ class ButlerMemoryService:
             project_name=source_project_name,
         )
 
-    def capture_operator_preference(
+    async def capture_operator_preference(
         self,
         engagement_id: str,
         text: str,
@@ -495,7 +523,7 @@ class ButlerMemoryService:
         ):
             return None
         try:
-            return self._save(
+            return await self._save(
                 source_project_id=engagement_id,
                 scope="global_preference",
                 content=candidate,
@@ -507,7 +535,7 @@ class ButlerMemoryService:
             # diagnostic-expected: Unsafe operator text is intentionally not memorized.
             return None
 
-    def capture_operator_lesson(
+    async def capture_operator_lesson(
         self,
         engagement_id: str,
         text: str,
@@ -540,7 +568,7 @@ class ButlerMemoryService:
             else "global_lesson"
         )
         try:
-            return self._save(
+            return await self._save(
                 source_project_id=engagement_id,
                 scope=scope,
                 content=candidate,
@@ -553,7 +581,7 @@ class ButlerMemoryService:
             # diagnostic-expected: Reject unsafe process guidance before persistence.
             return None
 
-    def capture_operator_decision(
+    async def capture_operator_decision(
         self,
         engagement_id: str,
         text: str,
@@ -587,7 +615,7 @@ class ButlerMemoryService:
             )
         )
         try:
-            return self._save(
+            return await self._save(
                 source_project_id=engagement_id,
                 scope="project_lesson" if local else "global_lesson",
                 content=candidate,
@@ -600,7 +628,7 @@ class ButlerMemoryService:
             # diagnostic-expected: Reject unsafe standing decisions before persistence.
             return None
 
-    def capture_verified_lesson(
+    async def capture_verified_lesson(
         self,
         engagement_id: str,
         content: str,
@@ -623,7 +651,7 @@ class ButlerMemoryService:
             or source_ref.casefold() in content.casefold()
         ):
             raise UnsafeMemoryError("A global lesson must omit source identifiers")
-        return self._save(
+        return await self._save(
             source_project_id=engagement_id,
             scope="global_lesson" if transferable else "project_lesson",
             content=content,
@@ -633,7 +661,7 @@ class ButlerMemoryService:
             project_name=source_project_name,
         )
 
-    def capture_signed_report(
+    async def capture_signed_report(
         self, store: NebulaStore, signed_report: Report
     ) -> tuple[ButlerMemoryItem, ButlerMemoryItem]:
         """Remember a committed, operator-signed report without copying report text.
@@ -642,7 +670,7 @@ class ButlerMemoryService:
         generated summaries and unsigned report drafts cannot reach this path.
         """
 
-        report = store.get(Report, signed_report.id)
+        report = await store.get(Report, signed_report.id)
         signoff = report.metadata.get("signoff")
         if (
             report.status != ReportStatus.FINAL
@@ -655,7 +683,7 @@ class ButlerMemoryService:
             raise UnsafeMemoryError("Only a committed, signed report can be remembered")
         signed_events = [
             event
-            for event in store.replay_operation_events(report.id)
+            for event in (await store.replay_operation_events(report.id))
             if event.event_type == "report.signed_off"
             and event.payload.get("report_revision") == report.revision
             and event.actor_id == report.signed_off_by
@@ -663,7 +691,7 @@ class ButlerMemoryService:
         if not signed_events:
             raise UnsafeMemoryError("The report has no matching Core sign-off event")
         source_ref = f"report:{report.id}:revision:{report.revision}"
-        local = self._save(
+        local = await self._save(
             source_project_id=report.engagement_id,
             scope="project_lesson",
             content=(
@@ -674,7 +702,7 @@ class ButlerMemoryService:
             source_label="Signed report",
             source_ref=source_ref,
         )
-        transferable = self._save(
+        transferable = await self._save(
             source_project_id=report.engagement_id,
             scope="global_lesson",
             content=(
@@ -689,40 +717,44 @@ class ButlerMemoryService:
         # particular report a useful, project-local recollection. Do not copy
         # finding prose or target details into cross-project memory.
         for finding_id in report.finding_ids[:25]:
-            finding = store.get(Finding, finding_id)
+            finding = await store.get(Finding, finding_id)
             if finding.engagement_id != report.engagement_id:
                 continue
             finding_ref = f"{source_ref}:finding:{finding.id}"
             categories = ", ".join(finding.cwe_ids[:3])
             suffix = f" ({categories})" if categories else ""
             try:
-                self._save(
-                    source_project_id=report.engagement_id,
-                    scope="project_lesson",
-                    content=(
-                        f"Signed report reviewed {finding.status.value} finding "
-                        f"{finding.title[:250]}{suffix}."
-                    ),
-                    source_kind="report_signoff",
-                    source_label="Signed report finding",
-                    source_ref=finding_ref,
+                (
+                    await self._save(
+                        source_project_id=report.engagement_id,
+                        scope="project_lesson",
+                        content=(
+                            f"Signed report reviewed {finding.status.value} finding "
+                            f"{finding.title[:250]}{suffix}."
+                        ),
+                        source_kind="report_signoff",
+                        source_label="Signed report finding",
+                        source_ref=finding_ref,
+                    )
                 )
             except UnsafeMemoryError:
                 # diagnostic-expected: One unsafe finding title must not block the signed report.
                 continue
             if finding.status == FindingStatus.CONFIRMED:
                 for cwe in finding.cwe_ids[:3]:
-                    self._save(
-                        source_project_id=report.engagement_id,
-                        scope="global_lesson",
-                        content=(
-                            f"A signed report previously confirmed {cwe}. "
-                            "Use that weakness as a lead only, and verify new "
-                            "evidence independently."
-                        ),
-                        source_kind="report_signoff",
-                        source_label="Verified weakness pattern",
-                        source_ref=finding_ref,
+                    (
+                        await self._save(
+                            source_project_id=report.engagement_id,
+                            scope="global_lesson",
+                            content=(
+                                f"A signed report previously confirmed {cwe}. "
+                                "Use that weakness as a lead only, and verify new "
+                                "evidence independently."
+                            ),
+                            source_kind="report_signoff",
+                            source_label="Verified weakness pattern",
+                            source_ref=finding_ref,
+                        )
                     )
         return local, transferable
 
@@ -734,20 +766,22 @@ class ButlerMemoryService:
             if token.casefold() not in _NOVELTY_STOPWORDS
         }
 
-    def _novel_review_lesson(self, project_id: str, candidate: str) -> bool:
+    async def _novel_review_lesson(self, project_id: str, candidate: str) -> bool:
         """Keep one useful precedent, not repeated rewordings of a checkpoint."""
 
         tokens = self._lesson_tokens(candidate)
         if len(tokens) < 6:
             return False
-        self._ensure_ready()
-        with self._connect() as connection:
-            previous = connection.execute(
-                """SELECT content FROM butler_memories
+        (await self._ensure_ready())
+        async with self._connect() as connection:
+            previous = await (
+                await connection.execute(
+                    """SELECT content FROM butler_memories
                    WHERE scope='project_lesson' AND scope_key=?
                      AND source_kind='butler_review_candidate'
                    ORDER BY updated_at DESC LIMIT 100""",
-                (project_id,),
+                    (project_id,),
+                )
             ).fetchall()
         for row in previous:
             prior_tokens = self._lesson_tokens(row["content"])
@@ -757,7 +791,7 @@ class ButlerMemoryService:
                 return False
         return True
 
-    def _review_lesson_candidate(
+    async def _review_lesson_candidate(
         self, *, project_id: str, project_name: str, decision: ButlerDecision
     ) -> str | None:
         """Accept only short causal process guidance, as an unverified suggestion."""
@@ -789,9 +823,13 @@ class ButlerMemoryService:
         except UnsafeMemoryError:
             # diagnostic-expected: Untrusted review suggestions fail the memory safety gate.
             return None
-        return candidate if self._novel_review_lesson(project_id, candidate) else None
+        return (
+            candidate
+            if (await self._novel_review_lesson(project_id, candidate))
+            else None
+        )
 
-    def _capture_review_candidate(
+    async def _capture_review_candidate(
         self, store: NebulaStore, project_id: str, decision: ButlerDecision
     ) -> ButlerMemoryItem | None:
         """Recheck a decision and its Core source before saving model guidance."""
@@ -810,7 +848,7 @@ class ButlerMemoryService:
             not in {"goal.progress_overdue", "goal.blocked", "goal.plan_changed"}
         ):
             return None
-        source = store.replay_operation_events(
+        source = await store.replay_operation_events(
             project_stream_id(project_id),
             after_sequence=decision.source_sequence - 1,
             through_sequence=decision.source_sequence,
@@ -841,15 +879,15 @@ class ButlerMemoryService:
             for ref in decision.evidence_refs
         ):
             return None
-        project_name = store.get(Engagement, project_id).name
-        candidate = self._review_lesson_candidate(
+        project_name = (await store.get(Engagement, project_id)).name
+        candidate = await self._review_lesson_candidate(
             project_id=project_id,
             project_name=project_name,
             decision=decision,
         )
         if candidate is None:
             return None
-        return self._save(
+        return await self._save(
             source_project_id=project_id,
             scope="project_lesson",
             content=(
@@ -862,7 +900,7 @@ class ButlerMemoryService:
             source_ref=decision.id,
         )
 
-    def _capture_pivotal_event(
+    async def _capture_pivotal_event(
         self, store: NebulaStore, project_id: str, event: Any
     ) -> ButlerMemoryItem | None:
         """Classify committed Core events without retaining model or agent prose."""
@@ -881,7 +919,7 @@ class ButlerMemoryService:
             refs = [ref for ref in payload.evidence_refs if ref.kind == "decision"]
             if len(refs) != 1 or refs[0].project_id != project_id:
                 raise UnsafeMemoryError("The Butler decision reference is invalid")
-            decision = store.get(ButlerDecision, refs[0].id)
+            decision = await store.get(ButlerDecision, refs[0].id)
             if (
                 decision.engagement_id != project_id
                 or decision.status != "reviewed"
@@ -893,12 +931,12 @@ class ButlerMemoryService:
                 or payload.verification_state != "core_observed"
             ):
                 return None
-            return self._capture_review_candidate(store, project_id, decision)
+            return await self._capture_review_candidate(store, project_id, decision)
         if event.event_type == "butler.action_dispatched":
             refs = [ref for ref in payload.evidence_refs if ref.kind == "action"]
             if len(refs) != 1 or refs[0].project_id != project_id:
                 raise UnsafeMemoryError("The Butler action reference is invalid")
-            action = store.get(ButlerAction, refs[0].id)
+            action = await store.get(ButlerAction, refs[0].id)
             if (
                 action.engagement_id != project_id
                 or action.status != "dispatched"
@@ -914,7 +952,7 @@ class ButlerMemoryService:
                 or action.finished_at is None
             ):
                 return None
-            decision = store.get(ButlerDecision, action.decision_id)
+            decision = await store.get(ButlerDecision, action.decision_id)
             if (
                 decision.choice != "steer"
                 or decision.source_event_id != action.source_event_id
@@ -922,12 +960,12 @@ class ButlerMemoryService:
                 or decision.session_id != action.source_session_id
             ):
                 return None
-            return self._capture_review_candidate(store, project_id, decision)
+            return await self._capture_review_candidate(store, project_id, decision)
         if event.event_type == "butler.action_applied":
             refs = [ref for ref in payload.evidence_refs if ref.kind == "action"]
             if len(refs) != 1 or refs[0].project_id != project_id:
                 raise UnsafeMemoryError("The Butler action reference is invalid")
-            action = store.get(ButlerAction, refs[0].id)
+            action = await store.get(ButlerAction, refs[0].id)
             if (
                 action.engagement_id != project_id
                 or action.action_type != "pause_urgent_machine_blocker"
@@ -941,7 +979,7 @@ class ButlerMemoryService:
                 or action.finished_at is None
             ):
                 return None
-            return self._save(
+            return await self._save(
                 source_project_id=project_id,
                 scope="global_lesson",
                 content=(
@@ -955,7 +993,7 @@ class ButlerMemoryService:
             )
         return None
 
-    def capture_pivotal_project_events(
+    async def capture_pivotal_project_events(
         self, store: NebulaStore, project_id: str, *, limit: int = 100
     ) -> int:
         """Consume only salient committed review/action events after Core commits.
@@ -968,15 +1006,17 @@ class ButlerMemoryService:
 
         if not 1 <= limit <= 500:
             raise ValueError("Pivotal event page must be 1 through 500")
-        store.get(Engagement, project_id)
-        self._ensure_ready()
-        with self._connect() as connection:
-            row = connection.execute(
-                "SELECT last_event_sequence FROM butler_memory_event_cursors WHERE project_id=?",
-                (project_id,),
+        (await store.get(Engagement, project_id))
+        (await self._ensure_ready())
+        async with self._connect() as connection:
+            row = await (
+                await connection.execute(
+                    "SELECT last_event_sequence FROM butler_memory_event_cursors WHERE project_id=?",
+                    (project_id,),
+                )
             ).fetchone()
         cursor = int(row["last_event_sequence"]) if row else 0
-        events = store.replay_operation_events(
+        events = await store.replay_operation_events(
             project_stream_id(project_id),
             after_sequence=cursor,
             event_types=[
@@ -987,35 +1027,39 @@ class ButlerMemoryService:
             limit=limit,
         )
         for event in events:
-            self._capture_pivotal_event(store, project_id, event)
-            with self._lock, self._connect() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    """INSERT INTO butler_memory_event_cursors
+            (await self._capture_pivotal_event(store, project_id, event))
+            async with self._lock, self._connect() as connection:
+                (await connection.execute("BEGIN IMMEDIATE"))
+                (
+                    await connection.execute(
+                        """INSERT INTO butler_memory_event_cursors
                        (project_id, last_event_sequence) VALUES (?, ?)
                        ON CONFLICT(project_id) DO UPDATE SET
                          last_event_sequence=MAX(
                            last_event_sequence, excluded.last_event_sequence)""",
-                    (project_id, event.sequence),
+                        (project_id, event.sequence),
+                    )
                 )
-                connection.commit()
+                (await connection.commit())
         return len(events)
 
-    def _authorized_rows(self, engagement_id: str) -> list[sqlite3.Row]:
-        self._ensure_ready()
-        with self._connect() as connection:
-            return connection.execute(
-                """SELECT * FROM butler_memories
+    async def _authorized_rows(self, engagement_id: str) -> list[sqlite3.Row]:
+        (await self._ensure_ready())
+        async with self._connect() as connection:
+            return await (
+                await connection.execute(
+                    """SELECT * FROM butler_memories
                    WHERE scope IN ('global_preference', 'global_lesson')
                       OR (scope='project_lesson' AND scope_key=?)
                    ORDER BY updated_at DESC LIMIT 5000""",
-                (engagement_id,),
+                    (engagement_id,),
+                )
             ).fetchall()
 
-    def list(self, engagement_id: str, *, limit: int = 100) -> ButlerMemoryList:
+    async def list(self, engagement_id: str, *, limit: int = 100) -> ButlerMemoryList:
         if not 1 <= limit <= 200:
             raise ValueError("Memory list limit must be 1 through 200")
-        rows = self._authorized_rows(engagement_id)[:limit]
+        rows = (await self._authorized_rows(engagement_id))[:limit]
         return ButlerMemoryList(
             items=[self._public(row, engagement_id) for row in rows],
             index_status=self._index_status(),
@@ -1084,12 +1128,18 @@ class ButlerMemoryService:
                 stage="memory_vector_sync",
             )
 
-    def search(
+    async def search(
         self, engagement_id: str, query: str, *, limit: int = 20
     ) -> ButlerMemoryList:
         if not 1 <= limit <= 50 or not 1 <= len(query.strip()) <= 500:
             raise ValueError("Provide a short memory search and limit of 1 through 50")
-        rows = self._authorized_rows(engagement_id)
+        rows = await self._authorized_rows(engagement_id)
+        return await asyncio.to_thread(
+            self._search_rows, engagement_id, query, limit, rows
+        )
+
+    def _search_rows(self, engagement_id, query, limit, rows):
+        """Run optional embedding/Chroma work outside the serving event loop."""
         self._sync_index(rows)
         query_terms = set(_TOKEN.findall(query.casefold()))
         lexical: dict[str, float] = {}
@@ -1145,7 +1195,7 @@ class ButlerMemoryService:
             index_status=self._index_status(),
         )
 
-    def turn_context(self, engagement_id: str, query: str) -> str:
+    async def turn_context(self, engagement_id: str, query: str) -> str:
         """Bounded, project-authorized recollections for one Butler turn.
 
         Memory is data to consider, never authority for tool actions. Source
@@ -1154,10 +1204,12 @@ class ButlerMemoryService:
 
         preferences = [
             item
-            for item in self.list(engagement_id, limit=40).items
+            for item in (await self.list(engagement_id, limit=40)).items
             if item.scope == "global_preference"
         ][:3]
-        relevant = self.search(engagement_id, query[:500] or "project", limit=6).items
+        relevant = (
+            await self.search(engagement_id, query[:500] or "project", limit=6)
+        ).items
         selected = list(preferences)
         selected.extend(
             item for item in relevant if item.id not in {entry.id for entry in selected}
@@ -1180,14 +1232,16 @@ class ButlerMemoryService:
             + json.dumps(entries, ensure_ascii=False)
         )
 
-    def update(
+    async def update(
         self, engagement_id: str, item_id: str, content: str, *, expected_revision: int
     ) -> ButlerMemoryItem:
-        self._ensure_ready()
-        with self._lock, self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+        (await self._ensure_ready())
+        async with self._lock, self._connect() as connection:
+            (await connection.execute("BEGIN IMMEDIATE"))
+            row = await (
+                await connection.execute(
+                    "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+                )
             ).fetchone()
             if row is None or not self._visible(row, engagement_id):
                 raise MemoryNotFoundError("Memory is not available in this project")
@@ -1206,36 +1260,49 @@ class ButlerMemoryService:
                 raise UnsafeMemoryError("A global lesson must omit source identifiers")
             digest = hashlib.sha256(value.casefold().encode()).hexdigest()
             try:
-                connection.execute(
-                    """UPDATE butler_memories SET content=?, content_hash=?,
+                (
+                    await connection.execute(
+                        """UPDATE butler_memories SET content=?, content_hash=?,
                        updated_at=?, revision=revision+1 WHERE id=? AND revision=?""",
-                    (value, digest, self._utc(), item_id, expected_revision),
+                        (value, digest, self._utc(), item_id, expected_revision),
+                    )
                 )
             except sqlite3.IntegrityError as exc:
                 raise MemoryConflictError("An identical memory already exists") from exc
-            updated = connection.execute(
-                "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+            updated = await (
+                await connection.execute(
+                    "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+                )
             ).fetchone()
-            connection.commit()
+            (await connection.commit())
         assert updated is not None
-        self._index_one(updated)
+        await asyncio.to_thread(self._index_one, updated)
         return self._public(updated, engagement_id)
 
-    def delete(
+    async def delete(
         self, engagement_id: str, item_id: str, *, expected_revision: int
     ) -> None:
-        self._ensure_ready()
-        with self._lock, self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+        (await self._ensure_ready())
+        async with self._lock, self._connect() as connection:
+            (await connection.execute("BEGIN IMMEDIATE"))
+            row = await (
+                await connection.execute(
+                    "SELECT * FROM butler_memories WHERE id=?", (item_id,)
+                )
             ).fetchone()
             if row is None or not self._visible(row, engagement_id):
                 raise MemoryNotFoundError("Memory is not available in this project")
             if row["revision"] != expected_revision:
                 raise MemoryConflictError("Memory changed; refresh before deleting")
-            connection.execute("DELETE FROM butler_memories WHERE id=?", (item_id,))
-            connection.commit()
+            (
+                await connection.execute(
+                    "DELETE FROM butler_memories WHERE id=?", (item_id,)
+                )
+            )
+            (await connection.commit())
+        await asyncio.to_thread(self._delete_from_index, item_id)
+
+    def _delete_from_index(self, item_id):
         collection = self._vector_collection() if self._collection is not None else None
         if collection is not None:
             try:

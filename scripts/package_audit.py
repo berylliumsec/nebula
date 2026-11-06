@@ -93,6 +93,10 @@ REQUIRED_MEMBERS = (
     ("psycopg",),
     ("psycopg_binary",),
     ("sqlalchemy.dialects.postgresql.psycopg",),
+    ("sqlalchemy.ext.asyncio",),
+    ("sqlalchemy.dialects.sqlite.aiosqlite",),
+    ("aiosqlite",),
+    ("greenlet",),
     ("nebula/v3/BUILD_INFO.json", "nebula.v3.BUILD_INFO.json"),
     ("nebula/v3/migrations/script.py.mako",),
     # The Kali workstation image build copies these files out of the bundle.
@@ -233,7 +237,10 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
     forbidden = sorted(
         value
         for path, value in zip(files, relative)
-        if (path.name in FORBIDDEN_INSTALLER_BINARIES and "/notebook-runtime/" not in value)
+        if (
+            path.name in FORBIDDEN_INSTALLER_BINARIES
+            and "/notebook-runtime/" not in value
+        )
         or value.endswith((".pyc", ".pyo", ".js.map", ".css.map"))
         or any(marker in value for marker in FORBIDDEN_INSTALLER_PATH_MARKERS)
     )
@@ -351,11 +358,19 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
     try:
         notebook = json.loads(notebook_manifests[0].read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ArtifactAuditError("bundled notebook runtime manifest is invalid") from exc
-    if notebook.get("schema") != 1 or notebook.get("target") != "x86_64-unknown-linux-gnu":
+        raise ArtifactAuditError(
+            "bundled notebook runtime manifest is invalid"
+        ) from exc
+    if (
+        notebook.get("schema") != 1
+        or notebook.get("target") != "x86_64-unknown-linux-gnu"
+    ):
         raise ArtifactAuditError("bundled notebook runtime manifest is invalid")
     notebook_executables = notebook.get("executables")
-    if not isinstance(notebook_executables, dict) or set(notebook_executables) != {"python/bin/python3", "uv"}:
+    if not isinstance(notebook_executables, dict) or set(notebook_executables) != {
+        "python/bin/python3",
+        "uv",
+    }:
         raise ArtifactAuditError("bundled notebook runtime executables are invalid")
     for relative_path, expected in notebook_executables.items():
         executable = (notebook_root / relative_path).resolve()
@@ -364,11 +379,17 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
             or not executable.is_file()
             or not os.access(executable, os.X_OK)
             or not isinstance(expected, str)
-            or not hmac.compare_digest(hashlib.sha256(executable.read_bytes()).hexdigest(), expected)
+            or not hmac.compare_digest(
+                hashlib.sha256(executable.read_bytes()).hexdigest(), expected
+            )
         ):
-            raise ArtifactAuditError("bundled notebook runtime executable failed verification")
+            raise ArtifactAuditError(
+                "bundled notebook runtime executable failed verification"
+            )
     worker = notebook_root / "worker.py"
-    if not worker.is_file() or hashlib.sha256(worker.read_bytes()).hexdigest() != notebook.get("worker_sha256"):
+    if not worker.is_file() or hashlib.sha256(
+        worker.read_bytes()
+    ).hexdigest() != notebook.get("worker_sha256"):
         raise ArtifactAuditError("bundled notebook worker failed verification")
     return {
         "status": "ok",
