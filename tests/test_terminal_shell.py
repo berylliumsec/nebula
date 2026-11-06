@@ -22,6 +22,7 @@ from nebula.terminal.transport import (
     Settings,
     terminal_text,
 )
+from nebula.terminal.ui import CancelledInput
 
 CORE = "https://core.example:8765"
 PROJECT = {"id": "project-a", "name": "Project A"}
@@ -233,6 +234,54 @@ def test_provider_body_uses_saved_settings_and_excludes_harness_fields(tmp_path)
         assert body["control_assistant"] is False
         assert body["skill"]["path"].startswith("/core/")
         assert body["messages"] == [{"role": "user", "content": "hello"}]
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_butler_standing_tool_consent_avoids_repeated_confirmation(tmp_path):
+    config = {
+        **CONFIG,
+        "backend": "harness",
+        "profile_id": "harness-a",
+        "tools_enabled": True,
+        "allow_subagents": True,
+        "allow_agent_messaging": True,
+        "include_knowledge": True,
+        "allow_cloud_knowledge": True,
+    }
+
+    def handler(request):
+        assert request.url.path.endswith("assistant-config")
+        return response({"revision": 3, "settings": config})
+
+    async def run():
+        ui = UI()
+        shell = make_shell(tmp_path, handler, ui=ui)
+        shell.current().session["metadata"] = {"control_assistant": True}
+        shell.profiles = {
+            "harness-a": {
+                "privacy": {
+                    "local_only": False,
+                    "permits_sensitive_data": True,
+                    "auto_share_tool_results": True,
+                }
+            }
+        }
+        for message in ("First Butler message", "Second Butler message"):
+            body = await shell.body(message)
+            assert body["control_assistant"] is True
+            assert body["allow_cloud_tool_results"] is True
+            assert body["allow_cloud_knowledge"] is True
+        assert ui.prompts == []
+
+        shell.profiles["harness-a"]["privacy"]["auto_share_tool_results"] = False
+        shell.ui = UI(confirms=[True, False])
+        assert (await shell.body("Explicitly approved"))["allow_cloud_tool_results"]
+        with pytest.raises(CancelledInput):
+            await shell.body("Declined")
+        assert len(shell.ui.prompts) == 2
+        assert all("tool/context results" in prompt for prompt, _ in shell.ui.prompts)
         await shell.api.close()
 
     asyncio.run(run())

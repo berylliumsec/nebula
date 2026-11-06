@@ -766,10 +766,16 @@ class Shell:
                 )
             )
             if not local and tools:
-                if not await self.ui.confirm(
-                    f"Allow selected tool/context results to be sent to {config['model']} for this turn?"
-                ):
-                    raise CancelledInput()
+                privacy = profile.get("privacy") or {}
+                standing_consent = (
+                    privacy.get("auto_share_tool_results") is True
+                    and privacy.get("permits_sensitive_data") is True
+                )
+                if not standing_consent:
+                    if not await self.ui.confirm(
+                        f"Allow selected tool/context results to be sent to {config['model']} for this turn?"
+                    ):
+                        raise CancelledInput()
                 result["allow_cloud_tool_results"] = True
             if (
                 not local

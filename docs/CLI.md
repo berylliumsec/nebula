@@ -113,6 +113,9 @@ Use `/status`, `/history` and `/follow` to recover, or `/chats` to locate a newl
 saved conversation whose acceptance response was lost. Core retains its existing
 permissions, scope and data-sharing consent. Browser-owned actions, Voice,
 editors, notebooks and embedded terminals still use their existing interfaces.
+For cloud tools, a provider or harness profile's standing tool-result consent
+avoids a confirmation on every message; otherwise the client asks for that
+turn. Project knowledge consent follows the saved chat setting separately.
 
 `NO_COLOR`, terminal resizing and plain numbered menus are supported. Set
 `NEBULA_CHAT_PLAIN=1` for a scrolling prompt. Ctrl-G or Ctrl-C closes a full-screen

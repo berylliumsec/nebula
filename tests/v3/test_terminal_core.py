@@ -1116,6 +1116,89 @@ def test_paired_tui_polls_selected_chat_and_reads_others_on_demand(lan_core):
     )
 
 
+def test_paired_tui_butler_respects_standing_tool_consent(lan_core):
+    data = lan_core
+    admin = data["admin"]
+    asyncio.run(
+        data["store"].update(
+            HarnessProfile,
+            "harness-a",
+            {
+                "privacy": {
+                    "local_only": False,
+                    "permits_sensitive_data": True,
+                    "auto_share_tool_results": True,
+                }
+            },
+        )
+    )
+    created = admin.post(
+        "chat/control-assistant/session",
+        json={
+            "engagement_id": "terminal-project",
+            "backend": "harness",
+            "harness_profile_id": "harness-a",
+            "model": "model-a",
+        },
+    )
+    assert created.is_success, created.text
+    session_id = created.json()["id"]
+    settings_path = f"chat-sessions/{session_id}/assistant-config"
+    saved = admin.get(settings_path).json()
+    changed = admin.patch(
+        settings_path,
+        json={
+            "expected_revision": saved["revision"],
+            "settings": {
+                "tools_enabled": True,
+                "include_knowledge": True,
+                "allow_cloud_knowledge": True,
+            },
+        },
+    )
+    assert changed.is_success, changed.text
+    assert admin.get(settings_path).json()["settings"]["tools_enabled"] is True
+
+    for message in ("First Butler request", "Second Butler request"):
+        terminal = data["start"](
+            "shell",
+            "--project",
+            "Terminal Project",
+            tty=True,
+            columns=100,
+            rows=28,
+        )
+        terminal.expect("New conversation")
+        terminal.send("Butler", expect="/help for commands")
+        terminal.expect_screen("Butler", "/help for commands")
+        terminal.send(message, expect="Response complete.")
+        assert b"Allow selected tool/context results" not in terminal.output
+        terminal.close(send_quit=False, send_eof=True)
+
+    messages = admin.get(f"chat/sessions/{session_id}/messages").json()
+    assert [
+        message["content"] for message in messages if message["role"] == "user"
+    ] == [
+        "First Butler request",
+        "Second Butler request",
+    ]
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and authenticated TLS LAN Core",
+                "fixture": "paired TUI, remote-consent harness profile and inert adapter",
+                "checks": [
+                    "Butler opened through the TUI",
+                    "two turns after reconnect without repeated consent prompt",
+                    "both user messages persisted in Core",
+                ],
+                "result": "passed",
+            }
+        )
+    )
+
+
 def test_paired_full_screen_slash_menu_tracks_chat_context(lan_core):
     data = lan_core
     terminal = data["start"]("shell", "--project", "Terminal Project", tty=True)

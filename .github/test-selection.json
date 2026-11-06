@@ -1,33 +1,32 @@
 {
-  "change_digest": "c49b8119b2ba19dc44845dd5e2f8f6fedd6f1844881aecc8da95db875dfc4e4e",
-  "reviewed_by": "Codex; fresh-context subagent independently validated the synthetic hydration fault before implementation",
-  "reason": "27 collected Python cases cover projection selection on SQLite/PostgreSQL, required recovery and automatic retry, legacy nulls, stale selection, deletion/corruption, late receipts and untrusted results, callback, goal, schedule and subagent safeguards, plus an authenticated disposable LAN Core startup/recovery/reload journey. Local LAN run also pairs a desktop Chromium browser with the production UI. Three-minute runtime boundary. Five pre-existing baseline failures were independently diagnosed; repairs await the subagent receipt callback in its existing transaction and correct only the selected async fixture setup. Separate same-workload full-pass measurements on SQLite/PostgreSQL. The LAN regression also checks queue GET absence/ETag and POST persistence after independent diagnosis found its existing async route calls were not awaited.",
-  "exclusions": "No full suites. Python 3.12 only. No frontend/native/interface viewport matrix: no interface, layout, controls, browser transport or settings changed. Production UI build and real Core LAN HTTPS API recovery/reload are exercised. The local browser uses the same Core at loopback HTTPS with only its temporary certificate pinned; the environment proxy rejects browser requests to the container LAN IP. Physical devices not used. Live-host access unavailable; user authorized a throwaway instance instead. Live SQL caller attribution remains unknown.",
+  "change_digest": "c2a369b0d1956152472765d692537bef1e69c01e20d0fb9ea8d6844dcc04cc7c",
+  "reviewed_by": "Codex; independent subagent validated the installed client and Core standing-consent path",
+  "reason": "Fix the paired terminal Butler send path so a remote provider or harness profile with standing tool-result consent does not ask on every message, while profiles without that consent still require per-turn approval. The selected tests cover both consent branches, a paired authenticated TLS LAN TUI Butler conversation across reconnect, and product-help guidance and source digest.",
+  "exclusions": "No Core or web UI code changes, so frontend, native, and Playwright suites are not selected. No production Core mutation or full suite. Python 3.12 only. The LAN fixture uses synthetic data and an inert harness; the merged standalone client will be installed only on this Mac.",
   "expected_tests": {
-    "python": 27,
+    "python": 4,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 0,
+    "manual": 1,
+    "benchmarks": 0
   },
   "python": [
-    "tests/v3/test_recovery_candidate_scan.py",
-    "tests/v3/test_async_postgresql.py::test_postgresql_recovery_candidate_scan",
-    "tests/v3/test_chat.py::test_core_restart_recovery_retries_without_operator_action",
-    "tests/v3/test_chat.py::test_core_restart_recovery_retries_a_resume_that_could_not_be_admitted",
-    "tests/v3/test_chat.py::test_restart_adopts_late_receipt_into_the_ledger_the_provider_replays",
-    "tests/v3/test_chat.py::test_restart_keeps_untrusted_terminal_result_for_operator_review",
-    "tests/v3/test_restart_recovery_lifecycle.py::test_recovered_goal_turn_continues_the_goal",
-    "tests/v3/test_restart_recovery_lifecycle.py::test_interrupted_callback_producer_releases_the_wait_as_unknown",
-    "tests/v3/test_restart_recovery_lifecycle.py::test_recovery_tick_reads_only_turns_that_can_need_recovery",
-    "tests/v3/test_restart_recovery_lifecycle.py::test_due_schedule_is_dispatched_without_holding_the_recovery_tick",
-    "tests/v3/test_chat_subagents.py::test_restart_repairs_a_late_terminal_child_write_from_the_old_core",
-    "tests/v3/test_chat_subagents.py::test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent",
-    "tests/v3/test_chat_turn_status_lookup.py::test_status_lookup_is_covering_and_tracks_every_turn_update"
+    "tests/test_terminal_shell.py::test_butler_standing_tool_consent_avoids_repeated_confirmation",
+    "tests/v3/test_terminal_core.py::test_paired_tui_butler_respects_standing_tool_consent",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
+  "manual": [
+    "Build merged client wheel and verify installed file hash"
+  ],
+  "benchmarks": [],
   "python_versions": [
     "3.12"
-  ]
+  ],
+  "python_browser": false,
+  "python_node": false
 }
