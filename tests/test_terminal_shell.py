@@ -145,16 +145,27 @@ def test_slash_commands_follow_selected_conversation_state(tmp_path):
     shell.view.session["metadata"] = {"control_assistant": True}
     assert "chat" not in shell.available_commands()
 
-    shell._pending_kinds.clear()
-    shell.note_attention(
-        [
-            {"session_id": "another-chat", "kind": "approval"},
-            {"session_id": "chat-a", "kind": "question"},
-        ]
+    asyncio.run(
+        shell.status(
+            state={
+                "session_id": "chat-a",
+                "busy": True,
+                "pending": [
+                    {"id": "question-a", "kind": "input", "text": "Answer question"}
+                ],
+                "detail": "Review the pending action.",
+            },
+            quiet=True,
+        )
     )
     assert "input" in shell.available_commands()
     assert "approvals" not in shell.available_commands()
-    shell.note_attention([])
+    asyncio.run(
+        shell.status(
+            state={"session_id": "chat-a", "busy": False, "pending": []},
+            quiet=True,
+        )
+    )
     assert "input" not in shell.available_commands()
 
 

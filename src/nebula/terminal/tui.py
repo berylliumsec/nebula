@@ -378,7 +378,9 @@ class TuiUI(TerminalUI):
             layout=Layout(root, focused_element=self.composer),
             key_bindings=keys,
             full_screen=True,
-            mouse_support=True,
+            # Let the terminal select and copy chat text with a normal drag.
+            # Pickers retain mouse reporting for their own controls.
+            mouse_support=Condition(lambda: self._mode != "main"),
             style=Style.from_dict(
                 {}
                 if "NO_COLOR" in os.environ
@@ -707,12 +709,6 @@ class TuiUI(TerminalUI):
     ) -> list[str]:
         active = next((row for row in rows if row.get("id") == selected), None)
         remaining = [row for row in rows if row is not active]
-        states = self._chat_activity
-        if key == "title" and states is not None:
-            priority = {"waiting": 0, "working": 1, "idle": 2}
-            remaining.sort(
-                key=lambda row: priority.get(states.get(str(row.get("id"))) or "", 3)
-            )
         ordered = ([active] if active is not None else []) + remaining
         visible = ordered[: slots - 1] if len(ordered) > slots else ordered[:slots]
         lines = []
@@ -724,7 +720,7 @@ class TuiUI(TerminalUI):
                 SIDEBAR_WIDTH - 4,
             )
             lines.append((" › " if row.get("id") == selected else "   ") + title)
-            if key == "title":
+            if key == "title" and row.get("id") == selected:
                 state = (self._chat_activity or {}).get(str(row.get("id")))
                 state_text = {
                     "working": "● Running",
@@ -864,7 +860,7 @@ class TuiUI(TerminalUI):
         self._invalidate()
 
     def set_conversation_activity(self, states: dict[str, str] | None) -> None:
-        """Show Core's project-scoped turn states; None means status is unknown."""
+        """Show the selected chat's Core state; None means it is unknown."""
         self._chat_activity = states
         if (
             self._turn_phase == "waiting"
