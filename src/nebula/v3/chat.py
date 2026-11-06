@@ -3215,10 +3215,10 @@ class ChatService:
 
         return [
             turn
-            async for turn in self.store.iter_readable_entities(
-                ChatTurn, {"status": ChatTurnStatus.INTERRUPTED.value}
-            )
-            if turn.backend == ChatBackend.PROVIDER and self._turn_is_pending(turn)
+            async for turn in self.store.iter_chat_turn_recovery_candidates()
+            if turn.status == ChatTurnStatus.INTERRUPTED
+            and turn.backend == ChatBackend.PROVIDER
+            and self._turn_is_pending(turn)
         ]
 
     async def resume_turns_stopped_by_core(
@@ -4523,12 +4523,11 @@ class ChatService:
                 )
 
     async def recovery_tick(self) -> None:
-        """One periodic recovery pass, with every scan off the event loop.
+        """One periodic recovery pass, selecting potential work before hydration.
 
-        Each scan reads only rows that can still need recovery, filtered in
-        SQL, so an idle pass costs the same however much settled history Core
-        holds. Work that starts turns runs on the loop, and only for rows a
-        scan found. Each step fails alone; the next pass retries it.
+        Projected state excludes settled turn payloads in SQL. Work that starts
+        turns runs only for rows a scan found. Each step fails alone; the next
+        pass retries it.
         """
 
         if self.shutting_down:

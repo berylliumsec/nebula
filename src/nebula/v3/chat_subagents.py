@@ -41,7 +41,7 @@ received is handed to it at the start of its next turn.
 
 from __future__ import annotations
 
-from .async_utils import MaybeAsync
+from .async_utils import MaybeAsync, call_async
 
 from .async_utils import async_done_callback
 
@@ -4773,7 +4773,7 @@ class SubagentService:
         metadata: dict[str, Any],
         *,
         usage: ChatTokenUsage | None = None,
-        updates: Callable[[Any], object],
+        updates: MaybeAsync[[Any], object],
     ) -> None:
         session = await self.store.get(ChatSession, record.parent_session_id)
         messages = await self.chat.session_messages(session.id)
@@ -4817,7 +4817,7 @@ class SubagentService:
                 )
             )
             (await transaction.add(message))
-            updates(transaction)
+            await call_async(updates, transaction)
 
     async def _post_result(self, record: ChatSubagent) -> None:
         marker = self._restart_recovery_marker(record)

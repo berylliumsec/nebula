@@ -1787,8 +1787,12 @@ async def test_restart_repairs_a_late_terminal_child_write_from_the_old_core(
         assert marker["generation"] == 1
         assert marker["superseded_result_message_ids"] == [false_result_id]
 
+        worker = restarted._active_provider_turns[child.id].task
         provider.child_gate.set()
         await _drain(restarted, child.id)
+        # The follower's terminal frame precedes async receipt settlement.
+        assert worker is not None
+        await asyncio.wait_for(worker, 5)
         completed = await store.get(ChatSubagent, record.id)
         assert completed.status == ChatSubagentStatus.COMPLETED
         assert completed.result == "Recovered report."
@@ -1964,11 +1968,9 @@ async def test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent(
         ).status == ChatTurnStatus.WAITING_CALLBACK
         (record,) = await store.list_entities(ChatSubagent)
         await _until(lambda: bool(provider.child_requests))
-        # Simulate a crash: drop the in-memory worker without settling the child.
-        for runtime in chat._active_provider_turns.values():
-            if runtime.task is not None:
-                runtime.task.cancel()
-        chat._active_provider_turns.clear()
+        # Join the old workers before restoring the synthetic crash state.
+        # An unjoined cancel races these writes as an operator stop.
+        await chat.shutdown()
         (
             await store.update(
                 ChatSubagent,

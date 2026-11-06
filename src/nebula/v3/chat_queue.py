@@ -852,10 +852,10 @@ def queue_router(service):
     router = APIRouter(tags=["chat"])
 
     @router.get("/chat/sessions/{session_id}/queue")
-    def get_queue(session_id: str, request: Request, response: Response):
-        queue = service.get(session_id)
+    async def get_queue(session_id: str, request: Request, response: Response):
+        queue = await service.get(session_id)
         value = queue.model_dump(mode="json")
-        present = service.exists(session_id)
+        present = await service.exists(session_id)
         if not present:
             value["revision"] = 0
         # Open conversations poll this; an unchanged queue answers 304. A queue
@@ -871,7 +871,7 @@ def queue_router(service):
 
     @router.post("/chat/sessions/{session_id}/queue")
     async def write_queue(session_id: str, body: QueueWrite, request: Request):
-        queue = service.write(
+        queue = await service.write(
             session_id, body, getattr(request.state, "auth_device_id", None)
         )
         if body.action == "enqueue":

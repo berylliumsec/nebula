@@ -6,7 +6,6 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
-import threading
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -462,8 +461,8 @@ async def _callback_wait(tmp_path, manager, store, engagement):
     """A provider turn waiting for a running background command's callback."""
 
     manager.callback_origin = "http://10.0.0.8:8765"
-    policy = manager.project_policy(engagement.id)
-    manager.update_project_policy(
+    policy = await manager.project_policy(engagement.id)
+    await manager.update_project_policy(
         engagement.id,
         approval_policy=AutomationApprovalPolicy.NEVER,
         network_enabled=True,
@@ -628,8 +627,15 @@ async def test_interrupted_callback_producer_releases_the_wait_as_unknown(
                     expected_revision=execution.revision,
                 )
             )
-        chat.prepare_resume = lambda turn_id: turn_id  # type: ignore[method-assign]
-        chat.start_provider_turn = lambda prepared, **_: prepared  # type: ignore[method-assign]
+
+        async def prepared(turn_id):
+            return turn_id
+
+        async def started_turn(prepared, **_):
+            return prepared
+
+        chat.prepare_resume = prepared  # type: ignore[method-assign]
+        chat.start_provider_turn = started_turn  # type: ignore[method-assign]
 
         passes = [(await chat.reconcile_waiting_callbacks()) for _ in range(3)]
 
@@ -880,7 +886,7 @@ async def test_recovery_tick_reads_only_turns_that_can_need_recovery(
         )
     )
     histories: list[str] = []
-    scan_threads: set[str] = set()
+    scans: list[dict] = []
     read_history = service.turn_ledger.history
     find_entities = store.find_entities
     iter_readable_entities = store.iter_readable_entities
@@ -891,13 +897,13 @@ async def test_recovery_tick_reads_only_turns_that_can_need_recovery(
 
     async def find(model, filters, **kwargs):
         if model is ChatTurn:
-            scan_threads.add(threading.current_thread().name)
+            scans.append(filters)
         return await find_entities(model, filters, **kwargs)
 
-    async def find_readable(model, filters=None, **kwargs):
+    def find_readable(model, filters=None, **kwargs):
         # Recovery scans skip unreadable rows; they filter in SQL the same way.
         if model is ChatTurn:
-            scan_threads.add(threading.current_thread().name)
+            scans.append(filters)
         return iter_readable_entities(model, filters, **kwargs)
 
     async def full_scan(model, *args, **kwargs):
@@ -918,7 +924,7 @@ async def test_recovery_tick_reads_only_turns_that_can_need_recovery(
 
     assert sorted(set(histories)) == sorted({waiting.id, leftover.id})
     assert histories.count(leftover.id) == 1
-    assert scan_threads and threading.main_thread().name not in scan_threads
+    assert scans and all(filters for filters in scans)
 
 
 async def test_due_schedule_is_dispatched_without_holding_the_recovery_tick(tmp_path):
