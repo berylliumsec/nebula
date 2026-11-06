@@ -1,7 +1,11 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import ValidationError
 
 from nebula.v3.api import create_app
@@ -39,14 +43,16 @@ from tests.v3.row_horizon_fixture import seed_older_copies
 AUTH = {"Authorization": "Bearer test-token"}
 
 
-def project(client: TestClient, store: NebulaStore) -> tuple[Engagement, ScopePolicy]:
-    response = client.post(
+async def project(
+    client: TestClient, store: NebulaStore
+) -> tuple[Engagement, ScopePolicy]:
+    response = await client.post(
         "/api/v1/engagements", headers=AUTH, json={"name": "Browser lab"}
     )
     assert response.status_code == 201, response.text
-    engagement = store.get(Engagement, response.json()["id"])
-    scope = store.get(ScopePolicy, engagement.scope_policy_id)
-    scope = store.update(
+    engagement = await store.get(Engagement, response.json()["id"])
+    scope = await store.get(ScopePolicy, engagement.scope_policy_id)
+    scope = await store.update(
         ScopePolicy,
         scope.id,
         {
@@ -86,15 +92,17 @@ class ReadyManagedChromium(BrowserEngineAdapter):
         assert assessment_id
 
 
-def test_assessment_snapshot_is_durable_and_replayable(tmp_path):
+async def test_assessment_snapshot_is_durable_and_replayable(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(create_app(store, auth_token="test-token"))
-    engagement, scope = project(client, store)
-    browser = client.get(
-        f"/api/v1/engagements/{engagement.id}/browser-workspace", headers=AUTH
+    engagement, scope = await project(client, store)
+    browser = (
+        await client.get(
+            f"/api/v1/engagements/{engagement.id}/browser-workspace", headers=AUTH
+        )
     ).json()
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/engagements/{engagement.id}/browser-assessments",
         headers=AUTH,
         json={
@@ -117,7 +125,7 @@ def test_assessment_snapshot_is_durable_and_replayable(tmp_path):
     )
     assert all(item["state"] != "ready" for item in assessment["engines"])
 
-    snapshot = client.get(
+    snapshot = await client.get(
         f"/api/v1/engagements/{engagement.id}/browser-assessments", headers=AUTH
     )
     assert snapshot.status_code == 200, snapshot.text
@@ -132,7 +140,7 @@ def test_assessment_snapshot_is_durable_and_replayable(tmp_path):
         "validation",
     ]
 
-    events = client.get(
+    events = await client.get(
         f"/api/v1/browser-assessments/{assessment['id']}/events?after=0",
         headers=AUTH,
     )
@@ -146,11 +154,11 @@ def test_assessment_snapshot_is_durable_and_replayable(tmp_path):
     ]
 
 
-def test_ready_assessment_lifecycle_is_idempotent_and_scope_frozen(tmp_path):
+async def test_ready_assessment_lifecycle_is_idempotent_and_scope_frozen(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(create_app(store, auth_token="test-token"))
-    engagement, scope = project(client, store)
-    browser = BrowserSecurityService(store).workspace(engagement.id)
+    engagement, scope = await project(client, store)
+    browser = await BrowserSecurityService(store).workspace(engagement.id)
     service = BrowserAssessmentService(
         store, BrowserEngineRegistry([ReadyManagedChromium()])
     )
@@ -163,7 +171,7 @@ def test_ready_assessment_lifecycle_is_idempotent_and_scope_frozen(tmp_path):
         primary_identity_id=browser.identities[0].id,
         target_urls=["https://app.example.test/"],
     )
-    assessment = asyncio.run(service.create(engagement.id, request, "operator"))
+    assessment = await service.create(engagement.id, request, "operator")
     assert assessment.status == BrowserAssessmentStatus.READY
 
     start = BrowserAssessmentTransitionRequest(
@@ -171,32 +179,36 @@ def test_ready_assessment_lifecycle_is_idempotent_and_scope_frozen(tmp_path):
         action="start",
         idempotency_key="start-once",
     )
-    running = asyncio.run(service.transition(assessment.id, start, "operator"))
+    running = await service.transition(assessment.id, start, "operator")
     assert running.status == BrowserAssessmentStatus.RUNNING
-    duplicate = asyncio.run(service.transition(assessment.id, start, "operator"))
+    duplicate = await service.transition(assessment.id, start, "operator")
     assert duplicate.id == running.id
     assert duplicate.revision == running.revision
     assert (
         len(
             [
                 event
-                for event in store.replay_operation_events(assessment.id, limit=100)
+                for event in (
+                    await store.replay_operation_events(assessment.id, limit=100)
+                )
                 if event.event_type == "browser_assessment.start"
             ]
         )
         == 1
     )
 
-    second = asyncio.run(service.create(engagement.id, request, "operator"))
-    store.update(
-        ScopePolicy,
-        scope.id,
-        {"allowed_domains": []},
-        expected_revision=scope.revision,
+    second = await service.create(engagement.id, request, "operator")
+    (
+        await store.update(
+            ScopePolicy,
+            scope.id,
+            {"allowed_domains": []},
+            expected_revision=scope.revision,
+        )
     )
     with pytest.raises(BrowserWorkflowError, match="scope changed"):
-        asyncio.run(
-            service.transition(
+        (
+            await service.transition(
                 second.id,
                 BrowserAssessmentTransitionRequest(
                     expected_revision=second.revision,
@@ -207,8 +219,8 @@ def test_ready_assessment_lifecycle_is_idempotent_and_scope_frozen(tmp_path):
             )
         )
     assert (
-        store.get(BrowserAssessment, second.id).status == BrowserAssessmentStatus.READY
-    )
+        await store.get(BrowserAssessment, second.id)
+    ).status == BrowserAssessmentStatus.READY
 
 
 def test_recipe_contract_rejects_arbitrary_script_nodes():
@@ -228,44 +240,44 @@ def test_recipe_contract_rejects_arbitrary_script_nodes():
         )
 
 
-def test_validation_authority_is_frozen_idempotent_and_revocable(tmp_path):
+async def test_validation_authority_is_frozen_idempotent_and_revocable(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(create_app(store, auth_token="test-token"))
-    engagement, _ = project(client, store)
-    browser = BrowserSecurityService(store).workspace(engagement.id)
+    engagement, _ = await project(client, store)
+    browser = await BrowserSecurityService(store).workspace(engagement.id)
     service = BrowserAssessmentService(
         store, BrowserEngineRegistry([ReadyManagedChromium()])
     )
-    assessment = asyncio.run(
-        service.create(
-            engagement.id,
-            BrowserAssessmentCreateRequest(
-                name="Portal validation source",
-                objective="Collect candidates inside the frozen portal corridor.",
-                profile=BrowserAssessmentProfile.EXPLORE,
-                session_id=browser.sessions[0].id,
-                identity_ids=[browser.identities[0].id],
-                primary_identity_id=browser.identities[0].id,
-                target_urls=["https://app.example.test/portal"],
-            ),
-            "operator",
-        )
+    assessment = await service.create(
+        engagement.id,
+        BrowserAssessmentCreateRequest(
+            name="Portal validation source",
+            objective="Collect candidates inside the frozen portal corridor.",
+            profile=BrowserAssessmentProfile.EXPLORE,
+            session_id=browser.sessions[0].id,
+            identity_ids=[browser.identities[0].id],
+            primary_identity_id=browser.identities[0].id,
+            target_urls=["https://app.example.test/portal"],
+        ),
+        "operator",
     )
 
     with pytest.raises(BrowserWorkflowError, match="frozen target corridor"):
-        service.create_candidate(
-            BrowserIssueCandidateCreateRequest(
-                assessment_id=assessment.id,
-                rule_id="outside-corridor",
-                check_family="routing",
-                title="Outside corridor",
-                target_url="https://app.example.test/admin",
-                severity="low",
-            ),
-            "engine",
+        (
+            await service.create_candidate(
+                BrowserIssueCandidateCreateRequest(
+                    assessment_id=assessment.id,
+                    rule_id="outside-corridor",
+                    check_family="routing",
+                    title="Outside corridor",
+                    target_url="https://app.example.test/admin",
+                    severity="low",
+                ),
+                "engine",
+            )
         )
 
-    candidate = service.create_candidate(
+    candidate = await service.create_candidate(
         BrowserIssueCandidateCreateRequest(
             assessment_id=assessment.id,
             rule_id="reflected-input",
@@ -286,33 +298,37 @@ def test_validation_authority_is_frozen_idempotent_and_revocable(tmp_path):
         duration_seconds=300,
         idempotency_key="grant-candidate-once",
     )
-    grant = service.grant_validation(candidate.id, request, "operator")
-    duplicate = service.grant_validation(candidate.id, request, "operator")
+    grant = await service.grant_validation(candidate.id, request, "operator")
+    duplicate = await service.grant_validation(candidate.id, request, "operator")
     assert duplicate.id == grant.id
     assert (
         len(
             [
                 event
-                for event in store.replay_operation_events(assessment.id, limit=100)
+                for event in (
+                    await store.replay_operation_events(assessment.id, limit=100)
+                )
                 if event.event_type == "browser_assessment.validation.granted"
             ]
         )
         == 1
     )
 
-    queued = store.get(BrowserIssueCandidate, candidate.id)
+    queued = await store.get(BrowserIssueCandidate, candidate.id)
     assert queued.validation_status == BrowserIssueValidationStatus.QUEUED
     with pytest.raises(BrowserWorkflowError, match="already has an active"):
-        service.grant_validation(
-            candidate.id,
-            BrowserValidationGrantRequest(
-                expected_candidate_revision=queued.revision,
-                technique="A second technique must not overlap.",
-                max_requests=2,
-                duration_seconds=60,
-                idempotency_key="overlapping-grant",
-            ),
-            "operator",
+        (
+            await service.grant_validation(
+                candidate.id,
+                BrowserValidationGrantRequest(
+                    expected_candidate_revision=queued.revision,
+                    technique="A second technique must not overlap.",
+                    max_requests=2,
+                    duration_seconds=60,
+                    idempotency_key="overlapping-grant",
+                ),
+                "operator",
+            )
         )
 
     revoke = BrowserValidationRevokeRequest(
@@ -320,14 +336,15 @@ def test_validation_authority_is_frozen_idempotent_and_revocable(tmp_path):
         reason="Operator emergency revocation.",
         idempotency_key="revoke-grant-once",
     )
-    revoked = service.revoke_validation(candidate.id, revoke, "operator")
+    revoked = await service.revoke_validation(candidate.id, revoke, "operator")
     assert revoked.status == "revoked"
     assert revoked.revoked_at is not None
     assert (
-        store.get(BrowserIssueCandidate, candidate.id).validation_status
-        == BrowserIssueValidationStatus.INCONCLUSIVE
-    )
-    assert service.revoke_validation(candidate.id, revoke, "operator").id == grant.id
+        await store.get(BrowserIssueCandidate, candidate.id)
+    ).validation_status == BrowserIssueValidationStatus.INCONCLUSIVE
+    assert (
+        await service.revoke_validation(candidate.id, revoke, "operator")
+    ).id == grant.id
 
 
 class SwitchableManagedChromium(ReadyManagedChromium):
@@ -351,11 +368,11 @@ class SwitchableManagedChromium(ReadyManagedChromium):
         self.stopped.append(assessment_id)
 
 
-def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
+async def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(create_app(store, auth_token="test-token"))
-    engagement, _ = project(client, store)
-    browser = BrowserSecurityService(store).workspace(engagement.id)
+    engagement, _ = await project(client, store)
+    browser = await BrowserSecurityService(store).workspace(engagement.id)
     engine = SwitchableManagedChromium()
     service = BrowserAssessmentService(store, BrowserEngineRegistry([engine]))
     request = BrowserAssessmentCreateRequest(
@@ -384,7 +401,7 @@ def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
 
     # A draft created while Chromium was missing can be revoked without it.
     engine.available = False
-    draft = asyncio.run(service.create(engagement.id, request, "operator"))
+    draft = await service.create(engagement.id, request, "operator")
     assert draft.status == BrowserAssessmentStatus.DRAFT
     revoked = transition(draft, "revoke", reason="Wrong target")
     assert revoked.status == BrowserAssessmentStatus.REVOKED
@@ -393,7 +410,7 @@ def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
     # A running assessment whose browserd died can still be stopped.
     engine.available = True
     running = transition(
-        asyncio.run(service.create(engagement.id, request, "operator")), "start"
+        (await service.create(engagement.id, request, "operator")), "start"
     )
     assert running.status == BrowserAssessmentStatus.RUNNING
     engine.available = False
@@ -402,13 +419,13 @@ def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
     # Never-started assessments do not ask the engine to stop anything, while
     # starting still requires a ready engine and running ones are stopped through it.
     engine.available = True
-    ready = asyncio.run(service.create(engagement.id, request, "operator"))
+    ready = await service.create(engagement.id, request, "operator")
     assert ready.status == BrowserAssessmentStatus.READY
     assert transition(ready, "revoke", reason="Not needed").status == (
         BrowserAssessmentStatus.REVOKED
     )
     assert engine.stopped == []
-    second = asyncio.run(service.create(engagement.id, request, "operator"))
+    second = await service.create(engagement.id, request, "operator")
     engine.available = False
     with pytest.raises(BrowserWorkflowError, match="unavailable"):
         transition(second, "start")
@@ -420,28 +437,26 @@ def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
     assert engine.stopped == [second.id]
 
 
-def test_candidates_and_grants_stay_unique_after_a_page_of_history(tmp_path):
+async def test_candidates_and_grants_stay_unique_after_a_page_of_history(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(create_app(store, auth_token="test-token"))
-    engagement, _ = project(client, store)
-    browser = BrowserSecurityService(store).workspace(engagement.id)
+    engagement, _ = await project(client, store)
+    browser = await BrowserSecurityService(store).workspace(engagement.id)
     service = BrowserAssessmentService(
         store, BrowserEngineRegistry([ReadyManagedChromium()])
     )
-    assessment = asyncio.run(
-        service.create(
-            engagement.id,
-            BrowserAssessmentCreateRequest(
-                name="Portal validation source",
-                objective="Collect candidates inside the frozen portal corridor.",
-                profile=BrowserAssessmentProfile.EXPLORE,
-                session_id=browser.sessions[0].id,
-                identity_ids=[browser.identities[0].id],
-                primary_identity_id=browser.identities[0].id,
-                target_urls=["https://app.example.test/portal"],
-            ),
-            "operator",
-        )
+    assessment = await service.create(
+        engagement.id,
+        BrowserAssessmentCreateRequest(
+            name="Portal validation source",
+            objective="Collect candidates inside the frozen portal corridor.",
+            profile=BrowserAssessmentProfile.EXPLORE,
+            session_id=browser.sessions[0].id,
+            identity_ids=[browser.identities[0].id],
+            primary_identity_id=browser.identities[0].id,
+            target_urls=["https://app.example.test/portal"],
+        ),
+        "operator",
     )
     request = BrowserIssueCandidateCreateRequest(
         assessment_id=assessment.id,
@@ -452,18 +467,20 @@ def test_candidates_and_grants_stay_unique_after_a_page_of_history(tmp_path):
         insertion_point="query:q",
         severity="medium",
     )
-    candidate = service.create_candidate(request, "engine")
-    seed_older_copies(
-        store,
-        candidate,
-        vary=lambda index: {"deduplication_fingerprint": f"{index:064x}"},
+    candidate = await service.create_candidate(request, "engine")
+    (
+        await seed_older_copies(
+            store,
+            candidate,
+            vary=lambda index: {"deduplication_fingerprint": f"{index:064x}"},
+        )
     )
 
-    assert service.create_candidate(request, "engine").id == candidate.id
-    workspace = asyncio.run(service.workspace(engagement.id))
+    assert (await service.create_candidate(request, "engine")).id == candidate.id
+    workspace = await service.workspace(engagement.id)
     assert workspace.candidates[-1].id == candidate.id
 
-    grant = service.grant_validation(
+    grant = await service.grant_validation(
         candidate.id,
         BrowserValidationGrantRequest(
             expected_candidate_revision=candidate.revision,
@@ -474,19 +491,26 @@ def test_candidates_and_grants_stay_unique_after_a_page_of_history(tmp_path):
         ),
         "operator",
     )
-    seed_older_copies(
-        store, grant, vary=lambda index: {"candidate_id": f"earlier-{index}"}
-    )
-    queued = store.get(BrowserIssueCandidate, candidate.id)
-    with pytest.raises(BrowserWorkflowError, match="already has an active"):
-        service.grant_validation(
-            candidate.id,
-            BrowserValidationGrantRequest(
-                expected_candidate_revision=queued.revision,
-                technique="A second technique must not overlap.",
-                max_requests=2,
-                duration_seconds=60,
-                idempotency_key="overlapping-grant",
-            ),
-            "operator",
+    (
+        await seed_older_copies(
+            store, grant, vary=lambda index: {"candidate_id": f"earlier-{index}"}
         )
+    )
+    queued = await store.get(BrowserIssueCandidate, candidate.id)
+    with pytest.raises(BrowserWorkflowError, match="already has an active"):
+        (
+            await service.grant_validation(
+                candidate.id,
+                BrowserValidationGrantRequest(
+                    expected_candidate_revision=queued.revision,
+                    technique="A second technique must not overlap.",
+                    max_requests=2,
+                    duration_seconds=60,
+                    idempotency_key="overlapping-grant",
+                ),
+                "operator",
+            )
+        )
+
+
+pytestmark = pytest.mark.anyio

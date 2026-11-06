@@ -465,7 +465,7 @@ class BrokeredToolSpecialist:
         """
 
         journal = context.routing_journal
-        recorded = journal.recorded() if journal is not None else None
+        recorded = await journal.recorded() if journal is not None else None
         if recorded is not None:
             response = self._recorded_response(recorded)
             record_diagnostic(
@@ -486,7 +486,7 @@ class BrokeredToolSpecialist:
             return response
         response = await self.provider.complete(self._routing_request(context, allowed))
         if journal is not None:
-            journal.record(self._routing_record(response))
+            await journal.record(self._routing_record(response))
         return response
 
     @staticmethod
@@ -546,10 +546,10 @@ class BrokeredToolSpecialist:
         )
 
         try:
-            result = await (
-                self.broker.execute(invocation, self.scope, approval=approval)
+            result = (
+                (await self.broker.execute(invocation, self.scope, approval=approval))
                 if approval is not None
-                else self.broker.execute(invocation, self.scope)
+                else (await self.broker.execute(invocation, self.scope))
             )
         except ApprovalRequired as exc:
             record_caught_exception(
@@ -1609,10 +1609,10 @@ class BrokeredToolSpecialist:
         )
         if store is None:
             raise MissionError("approval resume requires a durable store")
-        approval = await asyncio.to_thread(store.get, Approval, approval_id)
+        approval = await store.get(Approval, approval_id)
         if not approval.tool_call_id:
             raise MissionError("approval is not linked to a durable tool call")
-        call = await asyncio.to_thread(store.get, LedgerToolCall, approval.tool_call_id)
+        call = await store.get(LedgerToolCall, approval.tool_call_id)
         if (
             approval.run_id != context.run_id
             or call.run_id != context.run_id

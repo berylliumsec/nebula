@@ -24,8 +24,8 @@ from nebula.v3.storage import NebulaStore
 async def main():
     with tempfile.TemporaryDirectory(prefix="nebula-navigation-") as directory:
         store = NebulaStore(Path(directory) / "core.db")
-        project = store.create(Engagement(name="Isolated public navigation"))
-        scope = store.create(
+        project = await store.create(Engagement(name="Isolated public navigation"))
+        scope = await store.create(
             ScopePolicy(
                 engagement_id=project.id,
                 allowed_domains=[
@@ -36,7 +36,7 @@ async def main():
                 ],
             )
         )
-        store.update(Engagement, project.id, {"scope_policy_id": scope.id})
+        (await store.update(Engagement, project.id, {"scope_policy_id": scope.id}))
         token = secrets.token_urlsafe(32)
         app = create_app(store, auth_token=token)
         listener = socket.socket()

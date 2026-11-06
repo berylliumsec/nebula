@@ -18,7 +18,12 @@ current message, and it is made only when it frees a step's worth, or keeps
 the newest result whole. The receipts take at most 15% of a small window.
 """
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 from pathlib import Path
 
@@ -119,7 +124,7 @@ class ThinkingProvider(midturn.TurnProvider):
         return await super().complete(request)
 
 
-def _small_window_turn(tmp_path: Path, monkeypatch, window: int):
+async def _small_window_turn(tmp_path: Path, monkeypatch, window: int):
     """Six briefing exchanges, then 24 file reads, calibrated as DeepSeek."""
 
     monkeypatch.setattr(
@@ -139,14 +144,14 @@ def _small_window_turn(tmp_path: Path, monkeypatch, window: int):
     monkeypatch.setattr(chat_module, "record_diagnostic", record)
     broker = FileBroker()
     provider = ThinkingProvider(calls=STEPS)
-    store, service, prepared = midturn._turn(
+    store, service, prepared = await midturn._turn(
         tmp_path, provider, broker, history=12, window=window, specs=SPECS
     )
     prepared.estimate_calibration = 0.67
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
     assert completion.message.content == midturn.ANSWER
     assert broker.calls == [str(step) for step in range(1, STEPS + 1)]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     routing = [
         request
         for request in midturn._turn_requests(provider)
@@ -179,11 +184,13 @@ def _blind(routing: list[ModelRequest]) -> int:
     )
 
 
-def test_an_8k_turn_compacts_its_conversation_to_the_memory_once(tmp_path, monkeypatch):
+async def test_an_8k_turn_compacts_its_conversation_to_the_memory_once(
+    tmp_path, monkeypatch
+):
     """11 of 24 steps changed the request ahead of its tool history; the
     compaction kept two earlier exchanges and excerpts of the rest."""
 
-    prepared, provider, routing, recorded = _small_window_turn(
+    prepared, provider, routing, recorded = await _small_window_turn(
         tmp_path, monkeypatch, window=15_000
     )
 
@@ -203,13 +210,13 @@ def test_an_8k_turn_compacts_its_conversation_to_the_memory_once(tmp_path, monke
         assert _RETRIEVED_EXCERPTS_HEADING not in str(message.content)
 
 
-def test_a_12k_turn_whose_replay_only_needs_folding_keeps_its_conversation(
+async def test_a_12k_turn_whose_replay_only_needs_folding_keeps_its_conversation(
     tmp_path, monkeypatch
 ):
     """With a checkpoint fold the replay leaves room below a 12K window's
     capacity for more steps: the conversation is not compacted."""
 
-    prepared, provider, routing, recorded = _small_window_turn(
+    prepared, provider, routing, recorded = await _small_window_turn(
         tmp_path, monkeypatch, window=18_700
     )
 
@@ -244,7 +251,7 @@ def test_a_small_window_bounds_its_receipts_to_a_share_of_its_capacity(tmp_path)
     assert summary["covered_steps"] == [[0, 39]]
 
 
-def test_a_long_turn_keeps_its_receipts_small_beside_a_small_window(
+async def test_a_long_turn_keeps_its_receipts_small_beside_a_small_window(
     tmp_path, monkeypatch
 ):
     """110 scans on a 16K window: the receipts grew to 16 KiB, 65% of the
@@ -252,10 +259,10 @@ def test_a_long_turn_keeps_its_receipts_small_beside_a_small_window(
 
     broker = ScanBroker()
     provider = midturn.TurnProvider(calls=110)
-    store, service, prepared = midturn._turn(
+    store, service, prepared = await midturn._turn(
         tmp_path, provider, broker, history=0, window=16_384
     )
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == midturn.ANSWER
     assert len(broker.calls) == 110
@@ -276,7 +283,7 @@ def test_a_long_turn_keeps_its_receipts_small_beside_a_small_window(
     assert largest <= 0.15 * limits.working_input_capacity * 3 + 512
 
 
-def test_a_checkpoint_does_not_repeat_the_notes_its_message_carries(tmp_path):
+async def test_a_checkpoint_does_not_repeat_the_notes_its_message_carries(tmp_path):
     """A turn that starts with notes carries them on its current message; the
     checkpoint that rides on the same message carried them again, up to
     8 KiB twice, until a notes.write in the turn changes them."""
@@ -291,8 +298,8 @@ def test_a_checkpoint_does_not_repeat_the_notes_its_message_carries(tmp_path):
 
     broker = ScanBroker()
     provider = LongTurnProvider(calls=30)
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
-    notes = write_working_notes(
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
+    notes = await write_working_notes(
         store,
         engagement_id=prepared.engagement_id,
         session_id="session",
@@ -306,7 +313,7 @@ def test_a_checkpoint_does_not_repeat_the_notes_its_message_carries(tmp_path):
         }
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     checkpointed = [
@@ -322,3 +329,6 @@ def test_a_checkpoint_does_not_repeat_the_notes_its_message_carries(tmp_path):
             content.split("EARLIER TOOL HISTORY CHECKPOINT", 1)[1].split("\n", 1)[1]
         )
         assert "working_notes" not in receipts
+
+
+pytestmark = pytest.mark.anyio

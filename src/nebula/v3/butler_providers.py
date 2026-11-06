@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 
 from .domain import ProviderProfile, RiskClass
@@ -57,19 +59,21 @@ class ButlerProviders:
             "has_management_credential": bool(profile.openrouter_management_secret_ref),
         }
 
-    def profiles(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def profiles(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.list_entities(ProviderProfile, offset=offset, limit=51)
+        rows = await self.store.list_entities(ProviderProfile, offset=offset, limit=51)
         return {
             "providers": [self._summary(profile) for profile in rows[:50]],
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def profile(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._summary(self.store.get(ProviderProfile, arguments["provider_id"]))
+    async def profile(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._summary(
+            (await self.store.get(ProviderProfile, arguments["provider_id"]))
+        )
 
-    def attach(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        profile = self.store.get(ProviderProfile, arguments["provider_id"])
+    async def attach(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        profile = await self.store.get(ProviderProfile, arguments["provider_id"])
         if profile.revision != arguments["expected_revision"]:
             raise ValueError("provider changed; read its current revision")
         slot = arguments["slot"]
@@ -123,7 +127,7 @@ class ButlerProviders:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

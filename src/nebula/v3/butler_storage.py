@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 
 from .domain import RiskClass, StorageSource
@@ -70,9 +72,9 @@ class ButlerStorage:
             ),
         }
 
-    def sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.list_entities(
+        rows = await self.store.list_entities(
             StorageSource, engagement_id=self.project_id, offset=offset, limit=51
         )
         return {
@@ -80,14 +82,14 @@ class ButlerStorage:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def _source(self, source_id: str) -> StorageSource:
-        source = self.store.get(StorageSource, source_id)
+    async def _source(self, source_id: str) -> StorageSource:
+        source = await self.store.get(StorageSource, source_id)
         if source.engagement_id != self.project_id:
             raise ValueError("choose a storage source in the selected project")
         return source
 
-    def source(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._summary(self._source(arguments["source_id"]))
+    async def source(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._summary((await self._source(arguments["source_id"])))
 
     def enroll(self, _arguments: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -95,8 +97,8 @@ class ButlerStorage:
             "client_action": {"kind": "storage_enroll", "project_id": self.project_id},
         }
 
-    def _pending(self, arguments: dict[str, Any], kind: str) -> dict[str, Any]:
-        source = self._source(arguments["source_id"])
+    async def _pending(self, arguments: dict[str, Any], kind: str) -> dict[str, Any]:
+        source = await self._source(arguments["source_id"])
         if source.revision != arguments["expected_revision"]:
             raise ValueError("storage source changed; read its current revision")
         return {
@@ -110,8 +112,8 @@ class ButlerStorage:
             },
         }
 
-    def configure_reporting(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        receipt = self._pending(arguments, "storage_configure_reporting")
+    async def configure_reporting(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        receipt = await self._pending(arguments, "storage_configure_reporting")
         receipt["client_action"]["changes"] = {
             key: arguments[key]
             for key in ("enabled", "reporting_interval_seconds")
@@ -182,7 +184,7 @@ class ButlerStorage:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

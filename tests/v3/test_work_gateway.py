@@ -1,6 +1,11 @@
 """Focused built-in Work gateway boundary."""
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from types import SimpleNamespace
 
 from nebula.v3.credentials import CredentialStore
@@ -18,10 +23,10 @@ from nebula.v3.tool_results import MAX_EXCERPT_BYTES
 from nebula.v3.work import WorkCreate
 
 
-def _runtime(tmp_path):
+async def _runtime(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    engagement = store.create(Engagement(name="Release planning"))
-    profile = store.create(
+    engagement = await store.create(Engagement(name="Release planning"))
+    profile = await store.create(
         HarnessProfile(
             name="Test harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -39,10 +44,10 @@ def _runtime(tmp_path):
     return store, engagement, profile, runtime
 
 
-def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path):
+async def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path):
     async def scenario() -> None:
-        store, engagement, profile, runtime = _runtime(tmp_path)
-        _chat, _chat_turn, turn = runtime.prepare_chat(
+        store, engagement, profile, runtime = await _runtime(tmp_path)
+        _chat, _chat_turn, turn = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -51,9 +56,9 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         assert {
-            tool["name"] for tool in runtime._gateway_catalog(session)["tools"]
+            tool["name"] for tool in (await runtime._gateway_catalog(session))["tools"]
         } >= {
             "work.agents",
             "work.list",
@@ -65,7 +70,7 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
             session,
             HarnessNativeCapabilities(),
             vendor="Codex",
-            gateway_tools=tuple(runtime._gateway_catalog(session)["tools"]),
+            gateway_tools=tuple((await runtime._gateway_catalog(session))["tools"]),
         )
         assert "Project Work is available" in instructions
         assert "work.agents" in instructions
@@ -98,15 +103,14 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
         )
         assert updated["isError"] is False, updated
         assert (
-            store.find_entities(
+            await store.find_entities(
                 WorkUpdate, {"item_id": item_id}, engagement_id=engagement.id
-            )[0].source_session_id
-            == turn.chat_session_id
-        )
-        runtime.work.set_enabled(engagement.id, False)
+            )
+        )[0].source_session_id == turn.chat_session_id
+        (await runtime.work.set_enabled(engagement.id, False))
         assert {
             tool["name"]
-            for tool in runtime._gateway_catalog(session)["tools"]
+            for tool in (await runtime._gateway_catalog(session))["tools"]
             if tool["name"].startswith("work.")
         } == {"work.agents"}
         roster = await runtime._gateway_call(session, "work.agents", {})
@@ -139,33 +143,35 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
         assert denied["isError"] is True
         assert (
             len(
-                store.find_entities(
-                    WorkUpdate, {"item_id": item_id}, engagement_id=engagement.id
+                (
+                    await store.find_entities(
+                        WorkUpdate, {"item_id": item_id}, engagement_id=engagement.id
+                    )
                 )
             )
             == 1
         )
         runtime._active.pop(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
+async def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
     async def scenario() -> None:
-        store, parent, profile, runtime = _runtime(tmp_path)
-        child = store.create(
+        store, parent, profile, runtime = await _runtime(tmp_path)
+        child = await store.create(
             Engagement(name="linked_child", parent_engagement_id=parent.id)
         )
-        unrelated = store.create(Engagement(name="Other project"))
-        child_item = runtime.work.create(
+        unrelated = await store.create(Engagement(name="Other project"))
+        child_item = await runtime.work.create(
             child.id,
             WorkCreate(title="Research status", status="in_progress"),
             actor_id="import",
         )
-        other_item = runtime.work.create(
+        other_item = await runtime.work.create(
             unrelated.id, WorkCreate(title="Other status"), actor_id="import"
         )
-        _chat, _chat_turn, turn = runtime.prepare_chat(
+        _chat, _chat_turn, turn = await runtime.prepare_chat(
             engagement_id=parent.id,
             profile_id=profile.id,
             model=None,
@@ -174,7 +180,7 @@ def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
             turn_id=turn.id, connection=None, task=None
         )
@@ -200,7 +206,7 @@ def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
             },
         )
         assert updated["isError"] is False
-        check_in = runtime.work.updates(child.id, child_item.id)[0]
+        check_in = (await runtime.work.updates(child.id, child_item.id))[0]
         assert check_in.source_session_id == turn.chat_session_id
         assert check_in.source_engagement_id == parent.id
         assert (
@@ -208,34 +214,36 @@ def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
                 session, "work.check_in", {"item_id": other_item.id, "summary": "No"}
             )
         )["isError"] is True
-        runtime.work.set_enabled(child.id, False)
+        (await runtime.work.set_enabled(child.id, False))
         assert (
             await runtime._gateway_call(
                 session, "work.check_in", {"item_id": child_item.id, "summary": "No"}
             )
         )["isError"] is True
-        assert len(runtime.work.updates(child.id, child_item.id)) == 1
+        assert len((await runtime.work.updates(child.id, child_item.id))) == 1
         runtime._active.pop(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_gateway_work_pages_and_reads_long_item(tmp_path):
+async def test_gateway_work_pages_and_reads_long_item(tmp_path):
     async def scenario() -> None:
-        store, project, profile, runtime = _runtime(tmp_path)
+        store, project, profile, runtime = await _runtime(tmp_path)
         long_description = "é" * 20_000
-        original = runtime.work.create(
+        original = await runtime.work.create(
             project.id,
             WorkCreate(title="Full details", description=long_description),
             actor_id="operator",
         )
         for index in range(35):
-            runtime.work.create(
-                project.id,
-                WorkCreate(title=f"Task {index}", description="note " * 150),
-                actor_id="operator",
+            (
+                await runtime.work.create(
+                    project.id,
+                    WorkCreate(title=f"Task {index}", description="note " * 150),
+                    actor_id="operator",
+                )
             )
-        _chat, _chat_turn, turn = runtime.prepare_chat(
+        _chat, _chat_turn, turn = await runtime.prepare_chat(
             engagement_id=project.id,
             profile_id=profile.id,
             model=None,
@@ -244,9 +252,10 @@ def test_gateway_work_pages_and_reads_long_item(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         catalog = {
-            tool["name"]: tool for tool in runtime._gateway_catalog(session)["tools"]
+            tool["name"]: tool
+            for tool in (await runtime._gateway_catalog(session))["tools"]
         }
         assert "offset" in catalog["work.list"]["inputSchema"]["properties"]
         assert "description_offset" in catalog["work.get"]["inputSchema"]["properties"]
@@ -291,4 +300,7 @@ def test_gateway_work_pages_and_reads_long_item(tmp_path):
         finally:
             runtime._active.pop(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

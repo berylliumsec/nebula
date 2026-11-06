@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -90,18 +92,20 @@ class ChatPlanService:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
 
-    def for_turn(self, turn_id: str) -> ChatTaskPlan | None:
+    async def for_turn(self, turn_id: str) -> ChatTaskPlan | None:
         try:
-            return self.store.get(ChatTaskPlan, plan_id(turn_id))
+            return await self.store.get(ChatTaskPlan, plan_id(turn_id))
         except NotFoundError:
             # diagnostic-expected: no saved plan means this turn still needs discovery.
             return None
 
-    def pending_directive(
+    async def pending_directive(
         self, turn: ChatTurn, session: ChatSession
     ) -> ChatPlanDirective | None:
         child_id = session.metadata.get("subagent_id")
-        for item in self.store.list_session_entities(ChatPlanDirective, session.id):
+        for item in await self.store.list_session_entities(
+            ChatPlanDirective, session.id
+        ):
             if item.status != "pending":
                 continue
             if item.deferred_after_turn_id == turn.id:
@@ -115,7 +119,7 @@ class ChatPlanService:
                 return item
         return None
 
-    def required(self, turn: ChatTurn, session: ChatSession) -> bool:
+    async def required(self, turn: ChatTurn, session: ChatSession) -> bool:
         # Existing in-flight enforced turns retain their saved contract. New
         # turns explicitly select advisory planning and never enter this gate.
         if turn.request_snapshot.get("plan_behavior") == "advisory":
@@ -127,18 +131,18 @@ class ChatPlanService:
             return False
         return bool(
             turn.request_snapshot.get("planning_enabled")
-            or self.for_turn(turn.id)
-            or self.pending_directive(turn, session)
+            or (await self.for_turn(turn.id))
+            or (await self.pending_directive(turn, session))
         )
 
-    def requested(self, turn: ChatTurn, session: ChatSession) -> bool:
+    async def requested(self, turn: ChatTurn, session: ChatSession) -> bool:
         return bool(
             turn.request_snapshot.get("planning_enabled")
-            or self.for_turn(turn.id)
-            or self.pending_directive(turn, session)
+            or (await self.for_turn(turn.id))
+            or (await self.pending_directive(turn, session))
         )
 
-    def ensure(
+    async def ensure(
         self, turn: ChatTurn, session: ChatSession, *, voluntary: bool = False
     ) -> ChatTaskPlan | None:
         if (
@@ -146,14 +150,14 @@ class ChatPlanService:
             and turn.request_snapshot.get("plan_behavior") != "advisory"
         ):
             return None
-        if not voluntary and not self.requested(turn, session):
+        if not voluntary and not (await self.requested(turn, session)):
             return None
-        existing = self.for_turn(turn.id)
-        directive = self.pending_directive(turn, session)
+        existing = await self.for_turn(turn.id)
+        directive = await self.pending_directive(turn, session)
         if existing is not None:
             if directive is not None:
-                with self.store.transaction() as transaction:
-                    existing = transaction.update(
+                async with self.store.transaction() as transaction:
+                    existing = await transaction.update(
                         ChatTaskPlan,
                         existing.id,
                         {
@@ -174,11 +178,13 @@ class ChatPlanService:
                         },
                         expected_revision=existing.revision,
                     )
-                    transaction.update(
-                        ChatPlanDirective,
-                        directive.id,
-                        {"status": "applied", "turn_id": turn.id},
-                        expected_revision=directive.revision,
+                    (
+                        await transaction.update(
+                            ChatPlanDirective,
+                            directive.id,
+                            {"status": "applied", "turn_id": turn.id},
+                            expected_revision=directive.revision,
+                        )
                     )
             return existing
         record = ChatTaskPlan(
@@ -191,23 +197,25 @@ class ChatPlanService:
             subagent_id=session.metadata.get("subagent_id"),
             directive_id=directive.id if directive else None,
         )
-        with self.store.transaction() as transaction:
-            transaction.add(record)
+        async with self.store.transaction() as transaction:
+            (await transaction.add(record))
             if directive is not None:
-                transaction.update(
-                    ChatPlanDirective,
-                    directive.id,
-                    {"status": "applied", "turn_id": turn.id},
-                    expected_revision=directive.revision,
+                (
+                    await transaction.update(
+                        ChatPlanDirective,
+                        directive.id,
+                        {"status": "applied", "turn_id": turn.id},
+                        expected_revision=directive.revision,
+                    )
                 )
         return record
 
-    def record_discovery(
+    async def record_discovery(
         self, plan: ChatTaskPlan, name: str, result: dict[str, Any]
     ) -> ChatTaskPlan:
         if name not in DISCOVERY_TOOL_NAMES:
             raise PlanningBlocked("this tool is unavailable during discovery")
-        current = self.for_turn(plan.turn_id)
+        current = await self.for_turn(plan.turn_id)
         if current is None or current.phase not in {"discovery", "replanning"}:
             raise PlanningBlocked("the task is not discovering files")
         if current.discovery_calls >= MAX_DISCOVERY_CALLS:
@@ -220,7 +228,7 @@ class ChatPlanService:
         value = result.get("path")
         if isinstance(value, str) and value != ".":
             paths.add(value)
-        return self.store.update(
+        return await self.store.update(
             ChatTaskPlan,
             current.id,
             {
@@ -230,7 +238,7 @@ class ChatPlanService:
             expected_revision=current.revision,
         )
 
-    def submit(
+    async def submit(
         self,
         plan: ChatTaskPlan,
         submission: PlanSubmission,
@@ -240,7 +248,7 @@ class ChatPlanService:
         workspace: Path,
         strict: bool = True,
     ) -> ChatTaskPlan:
-        current = self.for_turn(plan.turn_id)
+        current = await self.for_turn(plan.turn_id)
         if current is None or current.phase not in {
             "discovery",
             "replanning",
@@ -258,7 +266,7 @@ class ChatPlanService:
                 "unavailable native categories: " + ", ".join(sorted(unknown_native))
             )
         files = [_verified_path(workspace, value) for value in submission.files]
-        return self.store.update(
+        return await self.store.update(
             ChatTaskPlan,
             current.id,
             {
@@ -276,64 +284,68 @@ class ChatPlanService:
             expected_revision=current.revision,
         )
 
-    def guard(self, turn_id: str, tool_name: str) -> None:
-        plan = self.for_turn(turn_id)
+    async def guard(self, turn_id: str, tool_name: str) -> None:
+        plan = await self.for_turn(turn_id)
         if plan is None:
             raise PlanningBlocked("a saved task plan is required before tool execution")
         if plan.phase != "execution":
             raise PlanningBlocked("task is pending a validated plan")
         if tool_name not in plan.tool_names:
-            self.store.update(
-                ChatTaskPlan,
-                plan.id,
-                {
-                    "phase": "replanning",
-                    "plan_version": plan.plan_version + 1,
-                    "reason": f"Tool {tool_name} was not declared in plan version {plan.plan_version}.",
-                },
-                expected_revision=plan.revision,
+            (
+                await self.store.update(
+                    ChatTaskPlan,
+                    plan.id,
+                    {
+                        "phase": "replanning",
+                        "plan_version": plan.plan_version + 1,
+                        "reason": f"Tool {tool_name} was not declared in plan version {plan.plan_version}.",
+                    },
+                    expected_revision=plan.revision,
+                )
             )
             raise PlanningBlocked(
                 f"{tool_name} was not declared; the task must replan before using it"
             )
 
-    def guard_native(self, turn_id: str, category: str) -> None:
-        plan = self.for_turn(turn_id)
+    async def guard_native(self, turn_id: str, category: str) -> None:
+        plan = await self.for_turn(turn_id)
         if plan is None or plan.phase != "execution":
             raise PlanningBlocked(
                 "a saved task plan is required before native tool use"
             )
         if category not in plan.native_categories:
-            self.store.update(
-                ChatTaskPlan,
-                plan.id,
-                {
-                    "phase": "replanning",
-                    "plan_version": plan.plan_version + 1,
-                    "reason": f"Native capability {category} was not declared.",
-                },
-                expected_revision=plan.revision,
+            (
+                await self.store.update(
+                    ChatTaskPlan,
+                    plan.id,
+                    {
+                        "phase": "replanning",
+                        "plan_version": plan.plan_version + 1,
+                        "reason": f"Native capability {category} was not declared.",
+                    },
+                    expected_revision=plan.revision,
+                )
             )
             raise PlanningBlocked(
                 f"native capability {category} was not declared; replan first"
             )
 
-    def block(self, turn_id: str, reason: str) -> ChatTaskPlan:
-        plan = self.for_turn(turn_id)
+    async def block(self, turn_id: str, reason: str) -> ChatTaskPlan:
+        plan = await self.for_turn(turn_id)
         if plan is None:
             raise PlanningBlocked("a task plan is required")
-        return self.store.update(
+        return await self.store.update(
             ChatTaskPlan,
             plan.id,
             {"phase": "blocked", "reason": reason[:2000]},
             expected_revision=plan.revision,
         )
 
-    def answer_without_tools(self, turn_id: str) -> ChatTaskPlan:
-        plan = self.for_turn(turn_id)
+    async def answer_without_tools(self, turn_id: str) -> ChatTaskPlan:
+        plan = await self.for_turn(turn_id)
         if plan is None or plan.phase not in {"discovery", "replanning"}:
             raise PlanningBlocked("task is not in discovery")
-        return self.store.update(
+        return await self.store.update(
             ChatTaskPlan,
             plan.id,
             {
@@ -350,6 +362,7 @@ class PlanningBroker:
     def __init__(self, broker: Any, plans: ChatPlanService) -> None:
         self.broker = broker
         self.plans = plans
+        self._dispatch_lock = asyncio.Lock()
 
     async def execute(
         self,
@@ -358,14 +371,23 @@ class PlanningBroker:
         *,
         approval: Approval | None = None,
     ) -> ToolExecutionResult:
-        turn_id = invocation.chat_turn_id
-        if turn_id is not None:
-            turn = self.plans.store.get(ChatTurn, turn_id)
-            session = self.plans.store.get(ChatSession, turn.session_id)
-            if self.plans.required(turn, session):
-                self.plans.ensure(turn, session)
-                self.plans.guard(turn_id, invocation.tool_name)
-        return await self.broker.execute(invocation, scope, approval=approval)
+        async with self._dispatch_lock:
+            turn_id = invocation.chat_turn_id
+            if turn_id is not None:
+                turn = await self.plans.store.get(ChatTurn, turn_id)
+                session = await self.plans.store.get(ChatSession, turn.session_id)
+                if await self.plans.required(turn, session):
+                    await self.plans.ensure(turn, session)
+                    await self.plans.guard(turn_id, invocation.tool_name)
+            # Schedule in provider order after the asynchronous guard. Release
+            # the dispatch lock before waiting for the tool so independent
+            # reads still overlap. Awaiting this owned task propagates Stop.
+            # diagnostic-expected: this child is immediately awaited, including cancellation.
+            task = asyncio.create_task(
+                self.broker.execute(invocation, scope, approval=approval),
+                name="nebula-planned-tool",
+            )
+        return await task
 
 
 PLAN_SUBMIT_SPEC = ToolSpec(
@@ -394,11 +416,11 @@ class AdvisoryPlanBroker:
         del scope, approval
         if invocation.chat_turn_id is None:
             raise ValueError("a chat turn is required to share a plan")
-        turn = self.plans.store.get(ChatTurn, invocation.chat_turn_id)
-        session = self.plans.store.get(ChatSession, turn.session_id)
-        plan = self.plans.ensure(turn, session, voluntary=True)
+        turn = await self.plans.store.get(ChatTurn, invocation.chat_turn_id)
+        session = await self.plans.store.get(ChatSession, turn.session_id)
+        plan = await self.plans.ensure(turn, session, voluntary=True)
         assert plan is not None
-        saved = self.plans.submit(
+        saved = await self.plans.submit(
             plan,
             PlanSubmission.model_validate(invocation.arguments),
             available_tools=set(),

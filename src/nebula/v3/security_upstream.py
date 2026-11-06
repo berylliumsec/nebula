@@ -160,8 +160,8 @@ class SecurityUpstreamConnector:
         self.session_id = session_id
         self.credentials = credentials
 
-    def settings(self) -> UpstreamSettings | None:
-        session = self.store.get(BrowserSession, self.session_id)
+    async def settings(self) -> UpstreamSettings | None:
+        session = await self.store.get(BrowserSession, self.session_id)
         if not session.upstream_proxy_enabled:
             return None
         if not session.upstream_proxy_url:
@@ -178,7 +178,7 @@ class SecurityUpstreamConnector:
     async def connect(
         self, host: str, port: int
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        settings = self.settings()
+        settings = await self.settings()
         if settings is None:
             return await asyncio.wait_for(asyncio.open_connection(host, port), 10)
         reader, writer = await asyncio.wait_for(

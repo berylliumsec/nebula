@@ -1,6 +1,11 @@
 """Live turn status projections keep rosters fast and recovery semantics intact."""
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -25,10 +30,10 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.work import WorkService
 
 
-def test_status_lookup_is_covering_and_tracks_every_turn_update(tmp_path):
+async def test_status_lookup_is_covering_and_tracks_every_turn_update(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Active"))
-    session = store.create(
+    project = await store.create(Engagement(name="Active"))
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main",
@@ -36,7 +41,7 @@ def test_status_lookup_is_covering_and_tracks_every_turn_update(tmp_path):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -48,34 +53,40 @@ def test_status_lookup_is_covering_and_tracks_every_turn_update(tmp_path):
     )
     assert [
         (row.id, row.status)
-        for row in store.chat_turn_status_rows(
-            [ChatTurnStatus.ROUTING], engagement_id=project.id
+        for row in (
+            await store.chat_turn_status_rows(
+                [ChatTurnStatus.ROUTING], engagement_id=project.id
+            )
         )
     ] == [(turn.id, ChatTurnStatus.ROUTING)]
     assert [
-        row.id for row in store.find_entities(ChatTurn, {"status": ["routing"]})
+        row.id for row in (await store.find_entities(ChatTurn, {"status": ["routing"]}))
     ] == [turn.id]
-    with store.database.engine.connect() as connection:
-        project_plan = connection.execute(
-            text(
-                "EXPLAIN QUERY PLAN SELECT id, engagement_id, created_at, "
-                "chat_session_id, "
-                "chat_turn_status, chat_turn_recovery_visible, "
-                "chat_turn_core_resume_pending FROM entities "
-                "WHERE kind = 'chat_turns' AND chat_turn_status IN "
-                "('routing', 'interrupted') AND engagement_id = :project"
-            ),
-            {"project": project.id},
+    async with store.database.engine.connect() as connection:
+        project_plan = (
+            await connection.execute(
+                text(
+                    "EXPLAIN QUERY PLAN SELECT id, engagement_id, created_at, "
+                    "chat_session_id, "
+                    "chat_turn_status, chat_turn_recovery_visible, "
+                    "chat_turn_core_resume_pending FROM entities "
+                    "WHERE kind = 'chat_turns' AND chat_turn_status IN "
+                    "('routing', 'interrupted') AND engagement_id = :project"
+                ),
+                {"project": project.id},
+            )
         ).all()
-        global_plan = connection.execute(
-            text(
-                "EXPLAIN QUERY PLAN SELECT id, engagement_id, created_at, "
-                "chat_session_id, "
-                "chat_turn_status, chat_turn_recovery_visible, "
-                "chat_turn_core_resume_pending FROM entities "
-                "WHERE kind = 'chat_turns' AND chat_turn_status IN "
-                "('routing', 'interrupted')"
-            ),
+        global_plan = (
+            await connection.execute(
+                text(
+                    "EXPLAIN QUERY PLAN SELECT id, engagement_id, created_at, "
+                    "chat_session_id, "
+                    "chat_turn_status, chat_turn_recovery_visible, "
+                    "chat_turn_core_resume_pending FROM entities "
+                    "WHERE kind = 'chat_turns' AND chat_turn_status IN "
+                    "('routing', 'interrupted')"
+                ),
+            )
         ).all()
     assert any(
         "COVERING INDEX ix_entities_project_chat_turn_status" in row[3]
@@ -88,7 +99,7 @@ def test_status_lookup_is_covering_and_tracks_every_turn_update(tmp_path):
     # Historical imports can use ISO `T` while ORM rows use a space. Preserve
     # SQLite's original created_at ordering without comparing aware and naive
     # Python datetimes.
-    other = store.create(
+    other = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -97,66 +108,78 @@ def test_status_lookup_is_covering_and_tracks_every_turn_update(tmp_path):
             status=ChatTurnStatus.ROUTING,
         )
     )
-    with store.database.engine.begin() as connection:
-        connection.execute(
-            text("UPDATE entities SET created_at=:created WHERE id=:id"),
-            {"created": "2026-11-04T00:00:00+00:00", "id": turn.id},
+    async with store.database.engine.begin() as connection:
+        (
+            await connection.execute(
+                text("UPDATE entities SET created_at=:created WHERE id=:id"),
+                {"created": "2026-11-04T00:00:00+00:00", "id": turn.id},
+            )
         )
-        connection.execute(
-            text("UPDATE entities SET created_at=:created WHERE id=:id"),
-            {"created": "2026-11-04 12:00:00.000000", "id": other.id},
+        (
+            await connection.execute(
+                text("UPDATE entities SET created_at=:created WHERE id=:id"),
+                {"created": "2026-11-04 12:00:00.000000", "id": other.id},
+            )
         )
     assert [
-        row.id for row in store.chat_turn_status_rows([ChatTurnStatus.ROUTING])
+        row.id for row in (await store.chat_turn_status_rows([ChatTurnStatus.ROUTING]))
     ] == [
         other.id,
         turn.id,
     ]
-    store.update(ChatTurn, other.id, {"status": ChatTurnStatus.COMPLETE})
+    (await store.update(ChatTurn, other.id, {"status": ChatTurnStatus.COMPLETE}))
 
-    store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.INTERRUPTED})
-    assert store.chat_turn_status_rows([ChatTurnStatus.ROUTING]) == []
-    interrupted = store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED])[0]
+    (await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.INTERRUPTED}))
+    assert (await store.chat_turn_status_rows([ChatTurnStatus.ROUTING])) == []
+    interrupted = (await store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED]))[0]
     assert (interrupted.recovery_visible, interrupted.core_resume_pending) == (
         False,
         False,
     )
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"request_snapshot": {"recovery": {"required": True, "cause": "core_restart"}}},
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {
+                "request_snapshot": {
+                    "recovery": {"required": True, "cause": "core_restart"}
+                }
+            },
+        )
     )
-    interrupted = store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED])[0]
+    interrupted = (await store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED]))[0]
     assert (interrupted.recovery_visible, interrupted.core_resume_pending) == (
         True,
         True,
     )
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"request_snapshot": {"recovery": {"required": True, "cause": "user"}}},
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"request_snapshot": {"recovery": {"required": True, "cause": "user"}}},
+        )
     )
-    interrupted = store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED])[0]
+    interrupted = (await store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED]))[0]
     assert (interrupted.recovery_visible, interrupted.core_resume_pending) == (
         True,
         False,
     )
-    store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE})
-    assert store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED]) == []
+    (await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.COMPLETE}))
+    assert (await store.chat_turn_status_rows([ChatTurnStatus.INTERRUPTED])) == []
 
 
-def test_work_roster_preserves_recovery_scope_and_turn_order(tmp_path):
+async def test_work_roster_preserves_recovery_scope_and_turn_order(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Active"))
-    archived = store.create(
+    project = await store.create(Engagement(name="Active"))
+    archived = await store.create(
         Engagement(name="Archived", status=EngagementStatus.ARCHIVED)
     )
     start = datetime(2026, 11, 4, tzinfo=timezone.utc)
 
-    def add(
+    async def add(
         title, status, recovery=None, *, engagement=project, metadata=None, minute=0
     ):
-        session = store.create(
+        session = await store.create(
             ChatSession(
                 engagement_id=engagement.id,
                 title=title,
@@ -165,7 +188,7 @@ def test_work_roster_preserves_recovery_scope_and_turn_order(tmp_path):
                 metadata=metadata or {},
             )
         )
-        turn = store.create(
+        turn = await store.create(
             ChatTurn(
                 engagement_id=engagement.id,
                 session_id=session.id,
@@ -178,35 +201,41 @@ def test_work_roster_preserves_recovery_scope_and_turn_order(tmp_path):
         )
         return turn
 
-    routing = add("Routing", ChatTurnStatus.ROUTING, minute=0)
-    resumed = add(
+    routing = await add("Routing", ChatTurnStatus.ROUTING, minute=0)
+    resumed = await add(
         "Core recovery",
         ChatTurnStatus.INTERRUPTED,
         {"required": True, "cause": "core_restart"},
         minute=1,
     )
-    manual = add(
+    manual = await add(
         "Manual recovery",
         ChatTurnStatus.INTERRUPTED,
         {"required": True, "cause": "user"},
         minute=2,
     )
-    retry = add(
+    retry = await add(
         "Automatic retry",
         ChatTurnStatus.INTERRUPTED,
         {"automatic_retry_pending": True},
         minute=3,
     )
-    add("Settled interruption", ChatTurnStatus.INTERRUPTED, minute=4)
-    add("Side", ChatTurnStatus.ROUTING, metadata={"side_chat": True}, minute=5)
-    add(
-        "Temporary",
-        ChatTurnStatus.ROUTING,
-        metadata={"temporary_assistant": True},
-        minute=6,
+    (await add("Settled interruption", ChatTurnStatus.INTERRUPTED, minute=4))
+    (await add("Side", ChatTurnStatus.ROUTING, metadata={"side_chat": True}, minute=5))
+    (
+        await add(
+            "Temporary",
+            ChatTurnStatus.ROUTING,
+            metadata={"temporary_assistant": True},
+            minute=6,
+        )
     )
-    add("Archived project", ChatTurnStatus.ROUTING, engagement=archived, minute=7)
-    result = WorkService(store).active_agents()
+    (
+        await add(
+            "Archived project", ChatTurnStatus.ROUTING, engagement=archived, minute=7
+        )
+    )
+    result = await WorkService(store).active_agents()
     assert [row.turn_id for row in result] == [
         routing.id,
         resumed.id,
@@ -219,21 +248,23 @@ def test_work_roster_preserves_recovery_scope_and_turn_order(tmp_path):
         "waiting",
         "waiting",
     ]
-    assert [row.turn_id for row in WorkService(store).active_agents(project.id)] == [
+    assert [
+        row.turn_id for row in (await WorkService(store).active_agents(project.id))
+    ] == [
         routing.id,
         resumed.id,
         manual.id,
         retry.id,
     ]
-    assert WorkService(store).active_agents(archived.id) == []
+    assert (await WorkService(store).active_agents(archived.id)) == []
 
 
-def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
+async def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Active"))
+    project = await store.create(Engagement(name="Active"))
 
-    def session(title, **metadata):
-        return store.create(
+    async def session(title, **metadata):
+        return await store.create(
             ChatSession(
                 engagement_id=project.id,
                 title=title,
@@ -243,14 +274,14 @@ def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
             )
         )
 
-    sender = session("Sender")
-    peer = session("Peer")
-    session("Archived", archived_at="2026-11-04T00:00:00Z")
-    session("Temporary", temporary_assistant=True)
-    session("Side", side_chat=True)
+    sender = await session("Sender")
+    peer = await session("Peer")
+    (await session("Archived", archived_at="2026-11-04T00:00:00Z"))
+    (await session("Temporary", temporary_assistant=True))
+    (await session("Side", side_chat=True))
 
-    def turn(status):
-        return store.create(
+    async def turn(status):
+        return await store.create(
             ChatTurn(
                 engagement_id=project.id,
                 session_id=peer.id,
@@ -260,10 +291,10 @@ def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
             )
         )
 
-    first = turn(ChatTurnStatus.ROUTING)
-    later = turn(ChatTurnStatus.WAITING_CALLBACK)
+    first = await turn(ChatTurnStatus.ROUTING)
+    later = await turn(ChatTurnStatus.WAITING_CALLBACK)
     service = AgentMessageService(store)
-    assert service.peers(sender) == [
+    assert (await service.peers(sender)) == [
         {
             "session_id": peer.id,
             "title": "Peer",
@@ -272,10 +303,10 @@ def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
             "state": "waiting_callback",
         }
     ]
-    store.update(ChatTurn, later.id, {"status": ChatTurnStatus.COMPLETE})
-    assert service.peers(sender)[0]["state"] == first.status.value
+    (await store.update(ChatTurn, later.id, {"status": ChatTurnStatus.COMPLETE}))
+    assert (await service.peers(sender))[0]["state"] == first.status.value
 
-    profile = store.create(
+    profile = await store.create(
         HarnessProfile(
             name="Inert fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -291,7 +322,7 @@ def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
         adapter_factory=lambda _: None,
     )
     runtime.bind_agent_messages(service)
-    _, _, gateway_turn = runtime.prepare_chat(
+    _, _, gateway_turn = await runtime.prepare_chat(
         engagement_id=project.id,
         profile_id=profile.id,
         model=None,
@@ -300,7 +331,7 @@ def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    gateway_session = store.get(HarnessSession, gateway_turn.harness_session_id)
+    gateway_session = await store.get(HarnessSession, gateway_turn.harness_session_id)
     runtime._active[gateway_session.id] = SimpleNamespace(
         turn_id=gateway_turn.id, connection=None, task=None
     )
@@ -324,9 +355,12 @@ def test_peer_status_uses_latest_unfinished_turn_and_filters_sessions(tmp_path):
             await client.close()
             await gateway.close()
 
-    result = asyncio.run(list_through_gateway())
+    result = await list_through_gateway()
     assert result["isError"] is False
     assert {
         item["session_id"]: item["state"]
         for item in result["structuredContent"]["agents"]
     }[peer.id] == first.status.value
+
+
+pytestmark = pytest.mark.anyio

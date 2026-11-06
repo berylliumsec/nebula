@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import async_done_callback
+
 import asyncio
 import hashlib
 from collections import defaultdict
@@ -72,13 +74,17 @@ def _rate_limit_incident_key(profile_id: str) -> str:
     return f"harness-rate-limited:{_hash(profile_id)}"
 
 
-def _candidate_watches(store: NebulaStore, profile_id: str) -> dict[str, list[str]]:
+async def _candidate_watches(
+    store: NebulaStore, profile_id: str
+) -> dict[str, list[str]]:
     projects: dict[str, list[str]] = defaultdict(list)
-    for watch in store.iter_readable_entities(ButlerGoalWatch, {"closed_at": None}):
+    async for watch in store.iter_readable_entities(
+        ButlerGoalWatch, {"closed_at": None}
+    ):
         if watch.status not in _ACTIVE_GOALS:
             continue
         try:
-            session = store.get(ChatSession, watch.session_id)
+            session = await store.get(ChatSession, watch.session_id)
         except NotFoundError:
             # diagnostic-expected: a watch can outlive a deleted session;
             # the transaction rechecks every surviving project binding.
@@ -91,7 +97,7 @@ def _candidate_watches(store: NebulaStore, profile_id: str) -> dict[str, list[st
     return projects
 
 
-def _current_binding(
+async def _current_binding(
     transaction: StoreTransaction,
     *,
     engagement_id: str,
@@ -99,13 +105,13 @@ def _current_binding(
     profile_id: str,
     harness_kind: HarnessKind,
 ) -> tuple[list[str], list[str]]:
-    profile = _entity_in_transaction(transaction, HarnessProfile, profile_id)
+    profile = await _entity_in_transaction(transaction, HarnessProfile, profile_id)
     if profile is None or not profile.enabled or profile.kind != harness_kind:
         return [], []
     goal_ids: list[str] = []
     session_ids: list[str] = []
     for watch_id in watch_ids:
-        watch = _entity_in_transaction(transaction, ButlerGoalWatch, watch_id)
+        watch = await _entity_in_transaction(transaction, ButlerGoalWatch, watch_id)
         if (
             watch is None
             or watch.engagement_id != engagement_id
@@ -113,8 +119,10 @@ def _current_binding(
             or watch.status not in _ACTIVE_GOALS
         ):
             continue
-        goal = _entity_in_transaction(transaction, ChatGoal, watch.goal_id)
-        session = _entity_in_transaction(transaction, ChatSession, watch.session_id)
+        goal = await _entity_in_transaction(transaction, ChatGoal, watch.goal_id)
+        session = await _entity_in_transaction(
+            transaction, ChatSession, watch.session_id
+        )
         if (
             goal is None
             or goal.engagement_id != engagement_id
@@ -129,7 +137,7 @@ def _current_binding(
     return list(dict.fromkeys(goal_ids))[-100:], list(dict.fromkeys(session_ids))[-100:]
 
 
-def _transition_incident(
+async def _transition_incident(
     transaction: StoreTransaction,
     *,
     engagement_id: str,
@@ -142,7 +150,7 @@ def _transition_incident(
     window_reset: bool = False,
 ) -> None:
     record_id = incident_id(engagement_id, key)
-    previous = _entity_in_transaction(transaction, ButlerIncident, record_id)
+    previous = await _entity_in_transaction(transaction, ButlerIncident, record_id)
     if low:
         impact = (
             f"{snapshot.window_label}: {snapshot.remaining_percent:.1f}% remaining"
@@ -167,11 +175,11 @@ def _transition_incident(
                 session_ids=session_ids,
                 observed_at=snapshot.observed_at,
             )
-            transaction.add(incident)
+            (await transaction.add(incident))
             event_type = "incident.opened"
         else:
             reopened = previous.status == "resolved"
-            incident = transaction.update(
+            incident = await transaction.update(
                 ButlerIncident,
                 record_id,
                 {
@@ -194,7 +202,7 @@ def _transition_incident(
             )
             event_type = "incident.reopened" if reopened else "incident.updated"
     elif previous is not None and previous.status != "resolved":
-        incident = transaction.update(
+        incident = await transaction.update(
             ButlerIncident,
             record_id,
             {"status": "resolved", "resolved_at": snapshot.observed_at},
@@ -203,40 +211,42 @@ def _transition_incident(
         event_type = "incident.resolved"
     else:
         return
-    _append_project_event(
-        transaction,
-        engagement_id=engagement_id,
-        event_type=event_type,
-        payload=ButlerEventPayload(
-            project_id=engagement_id,
-            source="harness",
-            actor_role="core",
-            summary=(
-                "Previous harness quota window ended."
-                if window_reset
-                else incident.summary
-                if low
-                else "Harness quota rose above 20%."
-            ),
-            metrics={
-                "harness_kind": snapshot.harness_kind.value,
-                "remaining_percent": snapshot.remaining_percent,
-            },
-            verification_state="vendor_reported",
-            evidence_refs=[
-                ButlerEvidenceRef(
-                    kind="incident", id=incident.id, project_id=engagement_id
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=engagement_id,
+            event_type=event_type,
+            payload=ButlerEventPayload(
+                project_id=engagement_id,
+                source="harness",
+                actor_role="core",
+                summary=(
+                    "Previous harness quota window ended."
+                    if window_reset
+                    else incident.summary
+                    if low
+                    else "Harness quota rose above 20%."
                 ),
-                state_ref,
-            ],
-            incident_key=key,
-        ),
-        idempotency_key=f"harness-quota-incident:{incident.id}:{snapshot.observed_at.isoformat()}:{event_type}",
-        now=utc_now(),
+                metrics={
+                    "harness_kind": snapshot.harness_kind.value,
+                    "remaining_percent": snapshot.remaining_percent,
+                },
+                verification_state="vendor_reported",
+                evidence_refs=[
+                    ButlerEvidenceRef(
+                        kind="incident", id=incident.id, project_id=engagement_id
+                    ),
+                    state_ref,
+                ],
+                incident_key=key,
+            ),
+            idempotency_key=f"harness-quota-incident:{incident.id}:{snapshot.observed_at.isoformat()}:{event_type}",
+            now=utc_now(),
+        )
     )
 
 
-def record_harness_quota(
+async def record_harness_quota(
     store: NebulaStore, *, profile_id: str, snapshot: HarnessQuotaSnapshot
 ) -> int:
     """Persist only authoritative numeric windows for affected watched projects."""
@@ -254,10 +264,12 @@ def record_harness_quota(
     instance = _window_instance(snapshot)
     low = snapshot.remaining_percent <= LOW_QUOTA_PERCENT
     saved = 0
-    for engagement_id, watch_ids in _candidate_watches(store, profile_id).items():
-        with store.transaction(immediate=True) as transaction:
-            transaction.lock_operation_stream(project_stream_id(engagement_id))
-            goal_ids, session_ids = _current_binding(
+    for engagement_id, watch_ids in (
+        await _candidate_watches(store, profile_id)
+    ).items():
+        async with store.transaction(immediate=True) as transaction:
+            (await transaction.lock_operation_stream(project_stream_id(engagement_id)))
+            goal_ids, session_ids = await _current_binding(
                 transaction,
                 engagement_id=engagement_id,
                 watch_ids=watch_ids,
@@ -267,7 +279,9 @@ def record_harness_quota(
             if not session_ids:
                 continue
             state_id = quota_state_id(engagement_id, profile_id, snapshot.window_id)
-            previous = _entity_in_transaction(transaction, ButlerHarnessQuota, state_id)
+            previous = await _entity_in_transaction(
+                transaction, ButlerHarnessQuota, state_id
+            )
             if previous is not None and previous.observed_at > snapshot.observed_at:
                 # Vendor notices can arrive after a newer window was saved.
                 continue
@@ -285,85 +299,95 @@ def record_harness_quota(
                 "threshold_state": "at_or_below" if low else "above",
             }
             if previous is None:
-                transaction.add(
-                    ButlerHarnessQuota(
-                        id=state_id,
-                        engagement_id=engagement_id,
-                        harness_profile_id=profile_id,
-                        window_id=snapshot.window_id,
-                        window_label=snapshot.window_label,
-                        window_instance=instance,
-                        observation_key=observation_key,
-                        source=snapshot.source,
-                        used_percent=snapshot.used_percent,
-                        remaining_percent=snapshot.remaining_percent,
-                        observed_at=snapshot.observed_at,
-                        resets_at=snapshot.resets_at,
-                        threshold_state="at_or_below" if low else "above",
+                (
+                    await transaction.add(
+                        ButlerHarnessQuota(
+                            id=state_id,
+                            engagement_id=engagement_id,
+                            harness_profile_id=profile_id,
+                            window_id=snapshot.window_id,
+                            window_label=snapshot.window_label,
+                            window_instance=instance,
+                            observation_key=observation_key,
+                            source=snapshot.source,
+                            used_percent=snapshot.used_percent,
+                            remaining_percent=snapshot.remaining_percent,
+                            observed_at=snapshot.observed_at,
+                            resets_at=snapshot.resets_at,
+                            threshold_state="at_or_below" if low else "above",
+                        )
                     )
                 )
             else:
-                transaction.update(
-                    ButlerHarnessQuota,
-                    state_id,
-                    values,
-                    expected_revision=previous.revision,
+                (
+                    await transaction.update(
+                        ButlerHarnessQuota,
+                        state_id,
+                        values,
+                        expected_revision=previous.revision,
+                    )
                 )
             state_ref = ButlerEvidenceRef(
                 kind="resource", id=state_id, project_id=engagement_id
             )
-            _append_project_event(
-                transaction,
-                engagement_id=engagement_id,
-                event_type="resource.harness_quota_observed",
-                payload=ButlerEventPayload(
-                    project_id=engagement_id,
-                    source="harness",
-                    actor_role="core",
-                    summary="Harness quota window observed.",
-                    metrics={
-                        "harness_profile_id": profile_id,
-                        "quota_source": snapshot.source,
-                        "window_id": snapshot.window_id,
-                        "used_percent": snapshot.used_percent,
-                        "remaining_percent": snapshot.remaining_percent,
-                        "observed_at": snapshot.observed_at.isoformat(),
-                    },
-                    verification_state="vendor_reported",
-                    evidence_refs=[state_ref],
-                ),
-                idempotency_key=f"harness-quota:{observation_key}",
-                now=utc_now(),
-            )
-            if previous is not None and previous.window_instance != instance:
-                _transition_incident(
+            (
+                await _append_project_event(
                     transaction,
                     engagement_id=engagement_id,
-                    key=_incident_key(
-                        profile_id, snapshot.window_id, previous.window_instance
+                    event_type="resource.harness_quota_observed",
+                    payload=ButlerEventPayload(
+                        project_id=engagement_id,
+                        source="harness",
+                        actor_role="core",
+                        summary="Harness quota window observed.",
+                        metrics={
+                            "harness_profile_id": profile_id,
+                            "quota_source": snapshot.source,
+                            "window_id": snapshot.window_id,
+                            "used_percent": snapshot.used_percent,
+                            "remaining_percent": snapshot.remaining_percent,
+                            "observed_at": snapshot.observed_at.isoformat(),
+                        },
+                        verification_state="vendor_reported",
+                        evidence_refs=[state_ref],
                     ),
+                    idempotency_key=f"harness-quota:{observation_key}",
+                    now=utc_now(),
+                )
+            )
+            if previous is not None and previous.window_instance != instance:
+                (
+                    await _transition_incident(
+                        transaction,
+                        engagement_id=engagement_id,
+                        key=_incident_key(
+                            profile_id, snapshot.window_id, previous.window_instance
+                        ),
+                        snapshot=snapshot,
+                        state_ref=state_ref,
+                        goal_ids=goal_ids,
+                        session_ids=session_ids,
+                        low=False,
+                        window_reset=True,
+                    )
+                )
+            (
+                await _transition_incident(
+                    transaction,
+                    engagement_id=engagement_id,
+                    key=_incident_key(profile_id, snapshot.window_id, instance),
                     snapshot=snapshot,
                     state_ref=state_ref,
                     goal_ids=goal_ids,
                     session_ids=session_ids,
-                    low=False,
-                    window_reset=True,
+                    low=low,
                 )
-            _transition_incident(
-                transaction,
-                engagement_id=engagement_id,
-                key=_incident_key(profile_id, snapshot.window_id, instance),
-                snapshot=snapshot,
-                state_ref=state_ref,
-                goal_ids=goal_ids,
-                session_ids=session_ids,
-                low=low,
             )
         saved += 1
     return saved
 
 
-def record_harness_rate_limit(
+async def record_harness_rate_limit(
     store: NebulaStore,
     *,
     profile_id: str,
@@ -380,9 +404,9 @@ def record_harness_rate_limit(
     """
 
     try:
-        turn = store.get(HarnessTurn, turn_id)
-        session = store.get(HarnessSession, turn.harness_session_id)
-        profile = store.get(HarnessProfile, profile_id)
+        turn = await store.get(HarnessTurn, turn_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
+        profile = await store.get(HarnessProfile, profile_id)
     except NotFoundError:
         # diagnostic-expected: a stale activity callback has no surviving
         # turn/session/profile to cite, so no incident can be attributed.
@@ -394,12 +418,12 @@ def record_harness_rate_limit(
     ):
         return False
     engagement_id = turn.engagement_id
-    watch_ids = _candidate_watches(store, profile_id).get(engagement_id, [])
+    watch_ids = (await _candidate_watches(store, profile_id)).get(engagement_id, [])
     if not watch_ids:
         return False
-    with store.transaction(immediate=True) as transaction:
-        transaction.lock_operation_stream(project_stream_id(engagement_id))
-        goal_ids, session_ids = _current_binding(
+    async with store.transaction(immediate=True) as transaction:
+        (await transaction.lock_operation_stream(project_stream_id(engagement_id)))
+        goal_ids, session_ids = await _current_binding(
             transaction,
             engagement_id=engagement_id,
             watch_ids=watch_ids,
@@ -410,7 +434,7 @@ def record_harness_rate_limit(
             return False
         key = _rate_limit_incident_key(profile_id)
         record_id = incident_id(engagement_id, key)
-        prior = _entity_in_transaction(transaction, ButlerIncident, record_id)
+        prior = await _entity_in_transaction(transaction, ButlerIncident, record_id)
         if recovered:
             if (
                 prior is None
@@ -418,7 +442,7 @@ def record_harness_rate_limit(
                 or observed_at < prior.observed_at
             ):
                 return False
-            incident = transaction.update(
+            incident = await transaction.update(
                 ButlerIncident,
                 prior.id,
                 {"status": "resolved", "resolved_at": observed_at},
@@ -452,10 +476,10 @@ def record_harness_rate_limit(
                     session_ids=session_ids,
                     observed_at=observed_at,
                 )
-                transaction.add(incident)
+                (await transaction.add(incident))
                 event_type = "incident.opened"
             else:
-                incident = transaction.update(
+                incident = await transaction.update(
                     ButlerIncident,
                     prior.id,
                     {
@@ -477,33 +501,35 @@ def record_harness_rate_limit(
                 )
                 event_type = "incident.reopened"
             summary = "Harness rate-limit rejection was reported by the vendor."
-        _append_project_event(
-            transaction,
-            engagement_id=engagement_id,
-            event_type=event_type,
-            payload=ButlerEventPayload(
-                project_id=engagement_id,
-                source="harness",
-                actor_role="core",
-                summary=summary,
-                metrics={
-                    "harness_profile_id": profile_id,
-                    "reason_code": "rate_limited",
-                },
-                verification_state="vendor_reported",
-                causal_event_id=activity_event_id,
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="incident", id=incident.id, project_id=engagement_id
-                    ),
-                    ButlerEvidenceRef(
-                        kind="harness_turn", id=turn_id, project_id=engagement_id
-                    ),
-                ],
-                incident_key=key,
-            ),
-            idempotency_key=f"harness-rate-limit:{record_id}:{activity_event_id}",
-            now=observed_at,
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=engagement_id,
+                event_type=event_type,
+                payload=ButlerEventPayload(
+                    project_id=engagement_id,
+                    source="harness",
+                    actor_role="core",
+                    summary=summary,
+                    metrics={
+                        "harness_profile_id": profile_id,
+                        "reason_code": "rate_limited",
+                    },
+                    verification_state="vendor_reported",
+                    causal_event_id=activity_event_id,
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="incident", id=incident.id, project_id=engagement_id
+                        ),
+                        ButlerEvidenceRef(
+                            kind="harness_turn", id=turn_id, project_id=engagement_id
+                        ),
+                    ],
+                    incident_key=key,
+                ),
+                idempotency_key=f"harness-rate-limit:{record_id}:{activity_event_id}",
+                now=observed_at,
+            )
         )
     return True
 
@@ -535,9 +561,9 @@ class HarnessQuotaObserver:
         self._inflight.clear()
         self._rate_limit_locks.clear()
 
-    def schedule_read(self, profile_id: str) -> None:
+    async def schedule_read(self, profile_id: str) -> None:
         try:
-            profile = self.store.get(HarnessProfile, profile_id)
+            profile = await self.store.get(HarnessProfile, profile_id)
         except NotFoundError:
             # diagnostic-expected: the profile may be removed after scheduling;
             # there is no configured harness left to check.
@@ -560,7 +586,7 @@ class HarnessQuotaObserver:
             name=f"nebula-harness-quota-{profile_id[:24]}",
         )
         self._scheduled.add(task)
-        task.add_done_callback(self._scheduled.discard)
+        task.add_done_callback(async_done_callback(self._scheduled.discard))
 
     def submit_snapshot(self, profile_id: str, snapshot: HarnessQuotaSnapshot) -> None:
         loop = self._loop
@@ -604,7 +630,7 @@ class HarnessQuotaObserver:
             name=f"nebula-harness-rate-limit-{profile_id[:24]}",
         )
         self._scheduled.add(task)
-        task.add_done_callback(self._scheduled.discard)
+        task.add_done_callback(async_done_callback(self._scheduled.discard))
 
     async def _record_rate_limit_serially(
         self,
@@ -616,8 +642,7 @@ class HarnessQuotaObserver:
     ) -> None:
         lock = self._rate_limit_locks.setdefault(profile_id, asyncio.Lock())
         async with lock:
-            await asyncio.to_thread(
-                record_harness_rate_limit,
+            await record_harness_rate_limit(
                 self.store,
                 profile_id=profile_id,
                 turn_id=turn_id,
@@ -628,8 +653,7 @@ class HarnessQuotaObserver:
 
     def _submit_on_loop(self, profile_id: str, snapshot: HarnessQuotaSnapshot) -> None:
         task = create_diagnostic_task(
-            asyncio.to_thread(
-                record_harness_quota,
+            record_harness_quota(
                 self.store,
                 profile_id=profile_id,
                 snapshot=snapshot,
@@ -640,12 +664,12 @@ class HarnessQuotaObserver:
             name=f"nebula-harness-quota-record-{profile_id[:24]}",
         )
         self._scheduled.add(task)
-        task.add_done_callback(self._scheduled.discard)
+        task.add_done_callback(async_done_callback(self._scheduled.discard))
 
     async def refresh(
         self, profile_id: str, *, force: bool = False
     ) -> HarnessQuotaRead:
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         if profile.kind not in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}:
             return await self.runtime_usage.read_harness_quota(
                 profile_id, refresh=force
@@ -658,8 +682,7 @@ class HarnessQuotaObserver:
             and utc_now() - recent.checked_at < AUTO_CHECK_INTERVAL
         ):
             for snapshot in recent.snapshots:
-                await asyncio.to_thread(
-                    record_harness_quota,
+                await record_harness_quota(
                     self.store,
                     profile_id=profile_id,
                     snapshot=snapshot,
@@ -676,10 +699,12 @@ class HarnessQuotaObserver:
             )
             self._inflight[profile_id] = task
             task.add_done_callback(
-                lambda completed: (
-                    self._inflight.pop(profile_id, None)
-                    if self._inflight.get(profile_id) is completed
-                    else None
+                async_done_callback(
+                    lambda completed: (
+                        self._inflight.pop(profile_id, None)
+                        if self._inflight.get(profile_id) is completed
+                        else None
+                    )
                 )
             )
         return await asyncio.shield(task)
@@ -687,8 +712,7 @@ class HarnessQuotaObserver:
     async def _read_and_record(self, profile_id: str) -> HarnessQuotaRead:
         result = await self.runtime_usage.read_harness_quota(profile_id, refresh=True)
         for snapshot in result.snapshots:
-            await asyncio.to_thread(
-                record_harness_quota,
+            await record_harness_quota(
                 self.store,
                 profile_id=profile_id,
                 snapshot=snapshot,

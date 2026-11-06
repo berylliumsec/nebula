@@ -1,4 +1,8 @@
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 from types import SimpleNamespace
 
 from jsonschema import Draft202012Validator
@@ -61,25 +65,25 @@ class StubSessions:
         return 1
 
 
-def _project(tmp_path):
+async def _project(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    project = store.create(Engagement(name="Security tools"))
-    scope = store.create(
+    project = await store.create(Engagement(name="Security tools"))
+    scope = await store.create(
         ScopePolicy(
             engagement_id=project.id,
             allowed_domains=["example.test"],
             allowed_ports=[443],
         )
     )
-    store.update(Engagement, project.id, {"scope_policy_id": scope.id})
-    identity = store.create(
+    (await store.update(Engagement, project.id, {"scope_policy_id": scope.id}))
+    identity = await store.create(
         BrowserIdentity(
             engagement_id=project.id,
             name="Headless",
             metadata={"runtime_kind": "agent_security"},
         )
     )
-    session = store.create(
+    session = await store.create(
         BrowserSession(
             engagement_id=project.id,
             identity_id=identity.id,
@@ -92,30 +96,34 @@ def _project(tmp_path):
     return store, project, session
 
 
-def test_security_tools_profile_is_optional_and_schemas_are_valid(tmp_path):
-    store, _, session = _project(tmp_path)
+async def test_security_tools_profile_is_optional_and_schemas_are_valid(tmp_path):
+    store, _, session = await _project(tmp_path)
     runtime = SecurityToolsRuntime(store, StubSessions(session))
-    profile = runtime.register_profile()
+    profile = await runtime.register_profile()
     assert profile.id == PROFILE_ID
     assert profile.name == PROFILE_NAME
     assert profile.transport == McpTransport.BUILTIN
     assert profile.enabled is True
     assert profile.required is False
-    assert store.get(McpServerProfile, PROFILE_ID).capabilities.checked_at is not None
+    assert (
+        await store.get(McpServerProfile, PROFILE_ID)
+    ).capabilities.checked_at is not None
     for tool in profile.capabilities.tools:
         Draft202012Validator.check_schema(tool.input_schema)
         assert tool.open_world is False
-    assert runtime.register_profile().id == PROFILE_ID
-    store.update(
-        McpServerProfile,
-        PROFILE_ID,
-        {
-            "name": "security-tools",
-            "capabilities": {"protocol_version": "2025-06-18", "tools": []},
-        },
-        expected_revision=profile.revision,
+    assert (await runtime.register_profile()).id == PROFILE_ID
+    (
+        await store.update(
+            McpServerProfile,
+            PROFILE_ID,
+            {
+                "name": "security-tools",
+                "capabilities": {"protocol_version": "2025-06-18", "tools": []},
+            },
+            expected_revision=profile.revision,
+        )
     )
-    refreshed = runtime.register_profile()
+    refreshed = await runtime.register_profile()
     assert refreshed.name == PROFILE_NAME
     assert {item.name for item in refreshed.capabilities.tools} >= {
         "traffic",
@@ -126,9 +134,9 @@ def test_security_tools_profile_is_optional_and_schemas_are_valid(tmp_path):
     }
 
 
-def test_headless_status_explains_a_failed_start(tmp_path):
-    store, project, session = _project(tmp_path)
-    paused = store.update(
+async def test_headless_status_explains_a_failed_start(tmp_path):
+    store, project, session = await _project(tmp_path)
+    paused = await store.update(
         BrowserSession,
         session.id,
         {
@@ -138,10 +146,8 @@ def test_headless_status_explains_a_failed_start(tmp_path):
         expected_revision=session.revision,
     )
     assert paused.status == BrowserSessionStatus.PAUSED
-    result = asyncio.run(
-        SecurityToolsRuntime(store, StubSessions(paused)).call_tool(
-            project.id, "status", {}
-        )
+    result = await SecurityToolsRuntime(store, StubSessions(paused)).call_tool(
+        project.id, "status", {}
     )
     assert result["structuredContent"]["state"] == "paused"
     assert (
@@ -149,11 +155,11 @@ def test_headless_status_explains_a_failed_start(tmp_path):
     )
 
 
-def test_repeater_uses_headless_identity_and_saves_durable_result(
+async def test_repeater_uses_headless_identity_and_saves_durable_result(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("NEBULA_ONE_BROWSER_CUTOVER", "1")
-    store, project, session = _project(tmp_path)
+    store, project, session = await _project(tmp_path)
     sessions = StubSessions(session)
     artifacts = ArtifactStore(tmp_path / "artifacts")
     sessions.host = SimpleNamespace(artifact_store=artifacts)
@@ -162,7 +168,7 @@ def test_repeater_uses_headless_identity_and_saves_durable_result(
     async def run():
         capture = await runtime.call_tool(project.id, "capture", {"mode": "bodies"})
         assert capture["structuredContent"]["capture_mode"] == "bodies"
-        sessions.session = store.get(BrowserSession, session.id)
+        sessions.session = await store.get(BrowserSession, session.id)
         result = await runtime.call_tool(
             project.id,
             "repeater",
@@ -174,15 +180,15 @@ def test_repeater_uses_headless_identity_and_saves_durable_result(
         assert result["structuredContent"]["status_code"] == 200
         assert len(sessions.requests) == 1
         assert sessions.requests[0].url == "https://example.test/path"
-        saved = store.get(
+        saved = await store.get(
             BrowserRepeaterResult, result["structuredContent"]["result_id"]
         )
         assert saved.engagement_id == project.id
         assert saved.status_code == 200
         assert saved.response_body_artifact_id
-        artifact = store.get(Artifact, saved.response_body_artifact_id)
+        artifact = await store.get(Artifact, saved.response_body_artifact_id)
         assert artifacts.read(artifact) == b"ok"
-        exchange = BrowserSecurityService(store).record_traffic(
+        exchange = await BrowserSecurityService(store).record_traffic(
             session.id,
             BrowserTrafficRecordRequest(
                 tab_id="headless-tab",
@@ -220,10 +226,9 @@ def test_repeater_uses_headless_identity_and_saves_durable_result(
             },
         )
         evidence_id = evidence["structuredContent"]["evidence_id"]
-        assert (
-            store.get(Evidence, evidence_id).metadata["browser_exchange_id"]
-            == exchange.id
-        )
+        assert (await store.get(Evidence, evidence_id)).metadata[
+            "browser_exchange_id"
+        ] == exchange.id
         finding = await runtime.call_tool(
             project.id,
             "finding_candidate",
@@ -234,26 +239,27 @@ def test_repeater_uses_headless_identity_and_saves_durable_result(
             },
         )
         assert (
-            store.get(Finding, finding["structuredContent"]["finding_id"]).status.value
-            == "candidate"
-        )
+            await store.get(Finding, finding["structuredContent"]["finding_id"])
+        ).status.value == "candidate"
         await runtime.close()
 
-    asyncio.run(run())
+    (await run())
 
 
-def test_interception_control_and_project_stop_are_separate_from_visible_browser(
+async def test_interception_control_and_project_stop_are_separate_from_visible_browser(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("NEBULA_ONE_BROWSER_CUTOVER", "1")
-    store, project, session = _project(tmp_path)
+    store, project, session = await _project(tmp_path)
     sessions = StubSessions(session)
     runtime = SecurityToolsRuntime(store, sessions)
 
     async def run():
         enabled = await runtime.call_tool(project.id, "intercept", {"enabled": True})
         assert enabled["structuredContent"]["enabled"] is True
-        assert store.get(BrowserSession, session.id).interception_enabled is True
+        assert (
+            await store.get(BrowserSession, session.id)
+        ).interception_enabled is True
         status = await runtime.call_tool(project.id, "status", {})
         assert status["structuredContent"]["interception_enabled"] is True
         stopped = await runtime.call_tool(project.id, "stop", {})
@@ -261,7 +267,7 @@ def test_interception_control_and_project_stop_are_separate_from_visible_browser
         assert sessions.stopped[0][0] == project.id
         await runtime.close()
 
-    asyncio.run(run())
+    (await run())
 
 
 def test_intruder_payload_strategies_match_durable_sequence():
@@ -289,3 +295,6 @@ def test_intruder_payload_strategies_match_durable_sequence():
     assert _attack_payloads(battering, 1) == {"a": "y", "b": "y"}
     assert _attack_payloads(pitchfork, 1) == {"a": "2", "b": "b"}
     assert _attack_payloads(cluster, 2) == {"a": "2", "b": "a"}
+
+
+pytestmark = pytest.mark.anyio

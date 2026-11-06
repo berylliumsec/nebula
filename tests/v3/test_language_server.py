@@ -1,9 +1,13 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
@@ -43,17 +47,13 @@ def test_language_document_rejects_nul_and_oversized_utf8() -> None:
         LanguageDocument(path="a.py", source="😀" * 300_000)
 
 
-def test_batch_diagnostics_find_python_errors() -> None:
-    response = asyncio.run(
-        analyze_documents(
-            LanguageDiagnosticsRequest(
-                engagement_id="engagement-1",
-                documents=[
-                    LanguageDocument(
-                        path="probe.py", source="print(missing)\n", version=7
-                    )
-                ],
-            )
+async def test_batch_diagnostics_find_python_errors() -> None:
+    response = await analyze_documents(
+        LanguageDiagnosticsRequest(
+            engagement_id="engagement-1",
+            documents=[
+                LanguageDocument(path="probe.py", source="print(missing)\n", version=7)
+            ],
         )
     )
     document = response.documents[0]
@@ -61,7 +61,7 @@ def test_batch_diagnostics_find_python_errors() -> None:
     assert any(item["code"] == "F821" for item in document.diagnostics)
 
 
-def test_lsp_session_supports_intelligence_and_versioned_diagnostics() -> None:
+async def test_lsp_session_supports_intelligence_and_versioned_diagnostics() -> None:
     async def exercise() -> None:
         session = LanguageServerSession("engagement-1")
         initialized = await session.handle(
@@ -177,10 +177,10 @@ def test_lsp_session_supports_intelligence_and_versioned_diagnostics() -> None:
         )
         assert invalid_version[0]["error"]["code"] == -32602
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_lsp_formats_python_without_project_configuration() -> None:
+async def test_lsp_formats_python_without_project_configuration() -> None:
     async def exercise() -> None:
         session = LanguageServerSession("engagement-1")
         await session.handle(
@@ -218,10 +218,10 @@ def test_lsp_formats_python_without_project_configuration() -> None:
         )
         assert formatted[0]["result"][0]["newText"] == "items = [1, 2]\n"
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_lsp_utf16_positions_and_external_root_fail_closed() -> None:
+async def test_lsp_utf16_positions_and_external_root_fail_closed() -> None:
     async def exercise() -> None:
         session = LanguageServerSession("engagement-1")
         rejected = await session.handle(
@@ -269,14 +269,14 @@ def test_lsp_utf16_positions_and_external_root_fail_closed() -> None:
         )
         assert any(item["label"] == "upper" for item in completion[0]["result"])
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_authenticated_language_websocket_and_batch_endpoint(tmp_path) -> None:
+async def test_authenticated_language_websocket_and_batch_endpoint(tmp_path) -> None:
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Language service"))
+    engagement = await store.create(Engagement(name="Language service"))
     client = TestClient(create_app(store, auth_token="test-token"))
-    response = client.post(
+    response = await client.post(
         "/api/v1/code/diagnostics",
         headers={"Authorization": "Bearer test-token"},
         json={
@@ -286,24 +286,26 @@ def test_authenticated_language_websocket_and_batch_endpoint(tmp_path) -> None:
     )
     assert response.status_code == 200
     assert response.json()["documents"][0]["diagnostics"][0]["code"] == "F821"
-    with client.websocket_connect(
+    async with client.websocket_connect(
         f"/api/v1/engagements/{engagement.id}/language-server/ws",
         subprotocols=["nebula.language-server.v1", "nebula.auth.dGVzdC10b2tlbg"],
     ) as websocket:
         assert websocket.accepted_subprotocol == "nebula.language-server.v1"
-        websocket.send_json(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"rootUri": "file:///workspace"},
-            }
+        (
+            await websocket.send_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"rootUri": "file:///workspace"},
+                }
+            )
         )
-        assert (
-            websocket.receive_json()["result"]["capabilities"]["hoverProvider"] is True
-        )
+        assert (await websocket.receive_json())["result"]["capabilities"][
+            "hoverProvider"
+        ] is True
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(
+        async with client.websocket_connect(
             f"/api/v1/engagements/{engagement.id}/language-server/ws",
             subprotocols=["nebula.language-server.v1"],
         ):
@@ -311,7 +313,7 @@ def test_authenticated_language_websocket_and_batch_endpoint(tmp_path) -> None:
     assert exc_info.value.code == 4401
 
 
-def test_language_analysis_uses_a_bounded_pool_and_skips_stale_versions(
+async def test_language_analysis_uses_a_bounded_pool_and_skips_stale_versions(
     monkeypatch,
 ) -> None:
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-language")
@@ -382,8 +384,11 @@ def test_language_analysis_uses_a_bounded_pool_and_skips_stale_versions(
         assert change_response[0]["params"]["version"] == 2
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
         gate.set()
         executor.shutdown(wait=True)
     assert 1 <= language_server.MAX_ANALYSIS_WORKERS <= 8
+
+
+pytestmark = pytest.mark.anyio

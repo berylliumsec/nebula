@@ -1,4 +1,7 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import hashlib
 import json
 import sqlite3
@@ -7,7 +10,7 @@ from typing import Any
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.automation_runtime import (
@@ -56,18 +59,20 @@ from tests.v3.test_chat import FakeProvider
 from tests.v3.test_chat_tool_loop import ScriptedProvider, _response
 
 
-def test_background_command_issues_lan_results_url_and_api_key(tmp_path):
+async def test_background_command_issues_lan_results_url_and_api_key(tmp_path):
     async def scenario():
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
         manager.callback_origin = "http://192.168.1.20:8000"
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         started = await manager.run_command(
             engagement_id=engagement.id,
@@ -93,18 +98,18 @@ def test_background_command_issues_lan_results_url_and_api_key(tmp_path):
             automation_runtime=manager,
         )
         client = TestClient(app)
-        denied = client.post(
+        denied = await client.post(
             f"/api/v1/automation-processes/{started.process_id}/results",
             json={"status": "complete", "summary": "done"},
         )
         assert denied.status_code == 401
-        wrong = client.post(
+        wrong = await client.post(
             f"/api/v1/automation-processes/{started.process_id}/results",
             headers={"Authorization": "Bearer not-the-key"},
             json={"status": "complete", "summary": "done"},
         )
         assert wrong.status_code == 401
-        accepted = client.post(
+        accepted = await client.post(
             f"/api/v1/automation-processes/{started.process_id}/results",
             headers={"X-Nebula-Api-Key": started.results_api_key},
             json={"status": "complete", "summary": "scan finished", "exit_code": 0},
@@ -118,36 +123,38 @@ def test_background_command_issues_lan_results_url_and_api_key(tmp_path):
             "status": "completed",
             "exit_code": 0,
         }
-        replay = client.post(
+        replay = await client.post(
             f"/api/v1/automation-processes/{started.process_id}/results",
             headers={"X-Nebula-Api-Key": started.results_api_key},
             json={"status": "complete", "summary": "scan finished", "exit_code": 0},
         )
         assert replay.status_code == 200, replay.text
-        changed = client.post(
+        changed = await client.post(
             f"/api/v1/automation-processes/{started.process_id}/results",
             headers={"X-Nebula-Api-Key": started.results_api_key},
             json={"status": "complete", "summary": "again"},
         )
         assert changed.status_code == 409
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
+async def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
     async def scenario():
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
         manager.callback_origin = "http://10.0.0.8:8765"
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
-        profile = store.create(
+        profile = await store.create(
             ProviderProfile(
                 id="provider",
                 name="Local",
@@ -162,7 +169,7 @@ def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
             provider_factory=lambda _: FakeProvider(profile.id, local=True),
             workspace_resolver=lambda _: tmp_path / "workspaces" / engagement.id,
         )
-        session = store.create(
+        session = await store.create(
             ChatSession(
                 id="session-callback",
                 engagement_id=engagement.id,
@@ -171,7 +178,7 @@ def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
                 model="model-a",
             )
         )
-        turn = store.create(
+        turn = await store.create(
             ChatTurn(
                 id="turn-callback",
                 engagement_id=engagement.id,
@@ -193,31 +200,38 @@ def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
             chat_session_id=session.id,
             chat_turn_id=turn.id,
         )
-        store.update(
-            ChatTurn,
-            turn.id,
-            {
-                "status": ChatTurnStatus.WAITING_CALLBACK,
-                "tool_history": [
-                    {
-                        "step": 0,
-                        "model_call_id": "call-1",
-                        "tool_call_id": "tool-scan",
-                        "name": "run_command",
-                        "status": "waiting_callback",
-                        "process_id": started.process_id,
-                        "results_url": started.results_url,
-                        "arguments": {"command": "wait-forever", "background": True},
-                    }
-                ],
-            },
-            expected_revision=turn.revision,
+        (
+            await store.update(
+                ChatTurn,
+                turn.id,
+                {
+                    "status": ChatTurnStatus.WAITING_CALLBACK,
+                    "tool_history": [
+                        {
+                            "step": 0,
+                            "model_call_id": "call-1",
+                            "tool_call_id": "tool-scan",
+                            "name": "run_command",
+                            "status": "waiting_callback",
+                            "process_id": started.process_id,
+                            "results_url": started.results_url,
+                            "arguments": {
+                                "command": "wait-forever",
+                                "background": True,
+                            },
+                        }
+                    ],
+                },
+                expected_revision=turn.revision,
+            )
         )
-        waiting = store.get(ChatTurn, turn.id)
-        manager.accept_results(
-            started.process_id,
-            started.results_api_key or "",
-            ProcessResultsRequest(status="complete", summary="ports enumerated"),
+        waiting = await store.get(ChatTurn, turn.id)
+        (
+            await manager.accept_results(
+                started.process_id,
+                started.results_api_key or "",
+                ProcessResultsRequest(status="complete", summary="ports enumerated"),
+            )
         )
         prepared = type("Prepared", (), {})()
         prepared.turn = waiting
@@ -226,32 +240,34 @@ def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
             events.append(item)
         assert events[0][0] == "tool_completed"
         assert events[0][1]["status"] == "complete"
-        latest = store.get(ChatTurn, waiting.id)
+        latest = await store.get(ChatTurn, waiting.id)
         assert latest.status == ChatTurnStatus.ROUTING
         assert latest.tool_history[-1]["status"] == "complete"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_terminal_background_process_without_callback_becomes_unknown_failure(
+async def test_terminal_background_process_without_callback_becomes_unknown_failure(
     tmp_path,
 ):
     """A dead callback producer must not leave its tool and turn looking live."""
 
     async def scenario():
-        manager, store, artifacts, engagement, sessions = runtime(tmp_path)
+        manager, store, artifacts, engagement, sessions = await runtime(tmp_path)
         manager.callback_origin = "http://10.0.0.8:8765"
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
-        profile = store.create(
+        profile = await store.create(
             ProviderProfile(
                 id="provider-missing-callback",
                 name="Local",
@@ -266,7 +282,7 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
             provider_factory=lambda _: FakeProvider(profile.id, local=True),
             workspace_resolver=lambda _: tmp_path / "workspaces" / engagement.id,
         )
-        session = store.create(
+        session = await store.create(
             ChatSession(
                 id="session-missing-callback",
                 engagement_id=engagement.id,
@@ -275,7 +291,7 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
                 model="model-a",
             )
         )
-        turn = store.create(
+        turn = await store.create(
             ChatTurn(
                 id="turn-missing-callback",
                 engagement_id=engagement.id,
@@ -288,7 +304,7 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
                 },
             )
         )
-        call = store.create(
+        call = await store.create(
             DurableToolCall(
                 id="tool-missing-callback",
                 engagement_id=engagement.id,
@@ -314,7 +330,7 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
             chat_session_id=session.id,
             chat_turn_id=turn.id,
         )
-        turn = store.update(
+        turn = await store.update(
             ChatTurn,
             turn.id,
             {
@@ -350,9 +366,9 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
         chat.start_provider_turn = (  # type: ignore[method-assign]
             lambda prepared, **_kwargs: resumed.append(prepared) or prepared
         )
-        assert chat.reconcile_waiting_callbacks() == [turn.id]
+        assert (await chat.reconcile_waiting_callbacks()) == [turn.id]
         assert resumed == [turn.id]
-        latest = store.get(ChatTurn, turn.id)
+        latest = await store.get(ChatTurn, turn.id)
         receipt = json.loads(latest.tool_history[-1]["provider_result"])
         assert receipt["schema"] == "nebula.tool-failure/v1"
         assert receipt["category"] == "missing_callback"
@@ -360,13 +376,13 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
         assert receipt["retry_safe"] is False
         assert latest.status == ChatTurnStatus.ROUTING
         assert latest.tool_history[-1]["status"] == "failed"
-        durable_call = store.get(DurableToolCall, call.id)
+        durable_call = await store.get(DurableToolCall, call.id)
         assert durable_call.status == ToolCallStatus.FAILED
         assert durable_call.result == receipt
 
         # A competing wake may have settled the turn before startup recovery
         # revisits the old callback step. The durable tool row must still close.
-        settled_call = store.create(
+        settled_call = await store.create(
             DurableToolCall(
                 id="tool-settled-missing-callback",
                 engagement_id=engagement.id,
@@ -381,42 +397,44 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
                 started_at=utc_now(),
             )
         )
-        store.create(
-            ChatTurn(
-                id="turn-settled-missing-callback",
-                engagement_id=engagement.id,
-                session_id=session.id,
-                provider_profile_id=profile.id,
-                model="model-a",
-                status=ChatTurnStatus.COMPLETE,
-                request_snapshot={
-                    "model_request": {"model": "model-a", "messages": []}
-                },
-                tool_history=[
-                    {
-                        "step": 0,
-                        "model_call_id": "call-settled",
-                        "tool_call_id": settled_call.id,
-                        "name": "run_command",
-                        "status": "waiting_callback",
-                        "process_id": started.process_id,
-                        "arguments": {
-                            "command": "wait-forever",
-                            "background": True,
-                        },
-                    }
-                ],
+        (
+            await store.create(
+                ChatTurn(
+                    id="turn-settled-missing-callback",
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    status=ChatTurnStatus.COMPLETE,
+                    request_snapshot={
+                        "model_request": {"model": "model-a", "messages": []}
+                    },
+                    tool_history=[
+                        {
+                            "step": 0,
+                            "model_call_id": "call-settled",
+                            "tool_call_id": settled_call.id,
+                            "name": "run_command",
+                            "status": "waiting_callback",
+                            "process_id": started.process_id,
+                            "arguments": {
+                                "command": "wait-forever",
+                                "background": True,
+                            },
+                        }
+                    ],
+                )
             )
         )
-        chat.reconcile_waiting_callbacks()
-        settled_call = store.get(DurableToolCall, settled_call.id)
+        (await chat.reconcile_waiting_callbacks())
+        settled_call = await store.get(DurableToolCall, settled_call.id)
         assert settled_call.status == ToolCallStatus.FAILED
         assert isinstance(settled_call.result, dict)
         assert settled_call.result["category"] == "missing_callback"
         assert settled_call.result["side_effects"] == "unknown"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 async def _approved_background_command_chat(
@@ -427,18 +445,20 @@ async def _approved_background_command_chat(
 ):
     """A provider turn whose approved background command waits for its webhook."""
 
-    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+    manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
     manager.callback_origin = "http://10.0.0.8:8765"
-    policy = manager.project_policy(engagement.id)
-    manager.update_project_policy(
-        engagement.id,
-        approval_policy=approval_policy,
-        network_enabled=True,
-        runner_profile_id="runner",
-        max_timeout_ms=30_000,
-        expected_revision=policy.revision,
+    policy = await manager.project_policy(engagement.id)
+    (
+        await manager.update_project_policy(
+            engagement.id,
+            approval_policy=approval_policy,
+            network_enabled=True,
+            runner_profile_id="runner",
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="provider",
             name="Local",
@@ -449,7 +469,7 @@ async def _approved_background_command_chat(
             metadata={"default_model": "model-a"},
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session-approval",
             engagement_id=engagement.id,
@@ -463,7 +483,7 @@ async def _approved_background_command_chat(
             },
         )
     )
-    user = store.create(
+    user = await store.create(
         ChatMessage(
             id="user-message",
             engagement_id=engagement.id,
@@ -473,7 +493,7 @@ async def _approved_background_command_chat(
             content="Scan the host in the background.",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="turn-approval",
             engagement_id=engagement.id,
@@ -508,7 +528,7 @@ async def _approved_background_command_chat(
     )
     chat = ChatService(store, provider_factory=lambda _: provider, worker_id="worker")
     assert engagement.scope_policy_id is not None
-    scope = store.get(ScopePolicy, engagement.scope_policy_id)
+    scope = await store.get(ScopePolicy, engagement.scope_policy_id)
 
     def prepared_for(current: ChatTurn) -> PreparedChat:
         return PreparedChat(
@@ -546,25 +566,27 @@ def _results_key(manager, process_id: str) -> str:
     return manager._processes[process_id].backend.extra_env["NEBULA_RESULTS_KEY"]
 
 
-def _approve_pending(store, turn_id: str) -> ChatTurn:
-    paused = store.get(ChatTurn, turn_id)
+async def _approve_pending(store, turn_id: str) -> ChatTurn:
+    paused = await store.get(ChatTurn, turn_id)
     assert paused.status == ChatTurnStatus.WAITING_APPROVAL
     assert paused.approval_id is not None
-    approval = store.get(Approval, paused.approval_id)
-    store.update(
-        Approval,
-        approval.id,
-        {
-            "status": ApprovalStatus.APPROVED,
-            "decided_by": "operator",
-            "decided_at": utc_now(),
-        },
-        expected_revision=approval.revision,
+    approval = await store.get(Approval, paused.approval_id)
+    (
+        await store.update(
+            Approval,
+            approval.id,
+            {
+                "status": ApprovalStatus.APPROVED,
+                "decided_by": "operator",
+                "decided_at": utc_now(),
+            },
+            expected_revision=approval.revision,
+        )
     )
     return paused
 
 
-def test_approved_background_command_waits_for_its_callback(tmp_path):
+async def test_approved_background_command_waits_for_its_callback(tmp_path):
     """An approval resume must park a background command exactly like a fresh run.
 
     The receipt of an approved background command carries its results_url;
@@ -583,7 +605,7 @@ def test_approved_background_command_waits_for_its_callback(tmp_path):
         ) = await _approved_background_command_chat(tmp_path)
         events = [item async for item in chat.stream(prepared_for(turn))]
         assert events[-1][0] == "approval_required"
-        paused = _approve_pending(store, turn.id)
+        paused = await _approve_pending(store, turn.id)
 
         events = [item async for item in chat.stream(prepared_for(paused))]
 
@@ -595,7 +617,7 @@ def test_approved_background_command_waits_for_its_callback(tmp_path):
         assert callback["results_url"] == (
             f"http://10.0.0.8:8765/api/v1/automation-processes/{process_id}/results"
         )
-        waiting = store.get(ChatTurn, turn.id)
+        waiting = await store.get(ChatTurn, turn.id)
         assert waiting.status == ChatTurnStatus.WAITING_CALLBACK
         assert waiting.approval_id is None
         assert waiting.execution_claim_id is None
@@ -620,15 +642,15 @@ def test_approved_background_command_waits_for_its_callback(tmp_path):
         assert events[1][1]["status"] == "complete"
         assert events[1][1]["summary"] == "ports enumerated"
         assert events[-1][0] == "done"
-        finished = store.get(ChatTurn, turn.id)
+        finished = await store.get(ChatTurn, turn.id)
         assert finished.status == ChatTurnStatus.COMPLETE
         assert finished.tool_history[-1]["status"] == "complete"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_approval_and_results_webhook_resume_through_provider_admission(tmp_path):
+async def test_approval_and_results_webhook_resume_through_provider_admission(tmp_path):
     """The operator's resume and the webhook wake both reach their parked step.
 
     Both go through ``start_provider_turn`` and provider admission, exactly as
@@ -650,13 +672,13 @@ def test_approval_and_results_webhook_resume_through_provider_admission(tmp_path
         chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "approval_required"
-        _approve_pending(store, turn.id)
+        (await _approve_pending(store, turn.id))
 
         chat.start_provider_turn(chat.prepare_resume(turn.id))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         # The approved command ran and now waits for its results callback.
         assert events == ["queued", "admitted", "started", "callback_required"]
-        waiting = store.get(ChatTurn, turn.id)
+        waiting = await store.get(ChatTurn, turn.id)
         assert waiting.status == ChatTurnStatus.WAITING_CALLBACK
         entry = waiting.tool_history[-1]
         results_api_key = _results_key(manager, entry["process_id"])
@@ -671,7 +693,7 @@ def test_approval_and_results_webhook_resume_through_provider_admission(tmp_path
 
         assert events[:4] == ["queued", "admitted", "started", "tool_completed"]
         assert events[-1] == "done"
-        finished = store.get(ChatTurn, turn.id)
+        finished = await store.get(ChatTurn, turn.id)
         assert finished.status == ChatTurnStatus.COMPLETE
         (step,) = chat._turn_history(finished)
         assert step["status"] == "complete"
@@ -685,7 +707,7 @@ def test_approval_and_results_webhook_resume_through_provider_admission(tmp_path
         assert replayed["results_api_key"] is None
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 class _ReactiveProvider(ScriptedProvider):
@@ -755,7 +777,7 @@ def _assert_bounded_history_result(output: object) -> dict[str, Any]:
     return output
 
 
-def test_callback_result_reaches_the_model_through_the_results_webhook(
+async def test_callback_result_reaches_the_model_through_the_results_webhook(
     tmp_path, monkeypatch
 ):
     """The posted summary and output reach the next provider request.
@@ -797,7 +819,7 @@ def test_callback_result_reaches_the_model_through_the_results_webhook(
         chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "callback_required", events
-        waiting = store.get(ChatTurn, turn.id)
+        waiting = await store.get(ChatTurn, turn.id)
         assert waiting.status == ChatTurnStatus.WAITING_CALLBACK
         entry = waiting.tool_history[-1]
         results_api_key = _results_key(manager, entry["process_id"])
@@ -846,7 +868,7 @@ def test_callback_result_reaches_the_model_through_the_results_webhook(
         completed = events[3][1]
         assert completed["status"] == "complete"
         assert nonce in completed["summary"]
-        finished = store.get(ChatTurn, turn.id)
+        finished = await store.get(ChatTurn, turn.id)
         assert finished.status == ChatTurnStatus.COMPLETE
 
         routed = provider.routed()
@@ -867,7 +889,7 @@ def test_callback_result_reaches_the_model_through_the_results_webhook(
             item.model_dump(mode="json") for item in receipt.artifacts
         ]
         # The durable tool row records the same valid receipt.
-        call = store.get(DurableToolCall, receipt.tool_call_id)
+        call = await store.get(DurableToolCall, receipt.tool_call_id)
         assert call.status == ToolCallStatus.COMPLETE
         assert ToolResultReceipt.model_validate(call.result) == receipt
 
@@ -880,10 +902,10 @@ def test_callback_result_reaches_the_model_through_the_results_webhook(
         assert routed[-1].tool_results[0].output == replayed
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
+async def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
     """A command that reports failure gives the model its own account of it."""
 
     async def scenario():
@@ -911,7 +933,7 @@ def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
         chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "callback_required", events
-        entry = store.get(ChatTurn, turn.id).tool_history[-1]
+        entry = (await store.get(ChatTurn, turn.id)).tool_history[-1]
         manager.accept_results(
             entry["process_id"],
             _results_key(manager, entry["process_id"]),
@@ -936,17 +958,17 @@ def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
         assert receipt.exit_code == 2
         assert receipt.summary == "target 203.0.113.7 refused every probe"
         assert [item.kind for item in receipt.artifacts] == ["stdout"]
-        (step,) = chat._turn_history(store.get(ChatTurn, turn.id))
+        (step,) = chat._turn_history((await store.get(ChatTurn, turn.id)))
         assert step["status"] == "failed"
-        call = store.get(DurableToolCall, receipt.tool_call_id)
+        call = await store.get(DurableToolCall, receipt.tool_call_id)
         assert call.status == ToolCallStatus.FAILED
         assert ToolResultReceipt.model_validate(call.result) == receipt
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_producer_that_ends_without_its_callback_reaches_the_model_as_unknown(
+async def test_producer_that_ends_without_its_callback_reaches_the_model_as_unknown(
     tmp_path,
 ):
     """A process that exits without posting gives the model an unknown effect.
@@ -982,7 +1004,7 @@ def test_producer_that_ends_without_its_callback_reaches_the_model_as_unknown(
         chat.start_provider_turn(prepared_for(turn))
         events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
         assert events[-1] == "callback_required", events
-        entry = store.get(ChatTurn, turn.id).tool_history[-1]
+        entry = (await store.get(ChatTurn, turn.id)).tool_history[-1]
 
         managed = manager._processes[entry["process_id"]]
         await managed.backend.terminate()
@@ -1007,12 +1029,12 @@ def test_producer_that_ends_without_its_callback_reaches_the_model_as_unknown(
             execution.stdout_artifact_id,
             execution.stderr_artifact_id,
         }
-        call = store.get(DurableToolCall, entry["tool_call_id"])
+        call = await store.get(DurableToolCall, entry["tool_call_id"])
         assert call.status == ToolCallStatus.FAILED
         assert call.result == failure
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def _rows_holding(database: Path, needle: str) -> list[str]:
@@ -1035,7 +1057,7 @@ def _rows_holding(database: Path, needle: str) -> list[str]:
         ]
 
 
-def test_results_key_reaches_only_the_process(tmp_path, monkeypatch):
+async def test_results_key_reaches_only_the_process(tmp_path, monkeypatch):
     """The results key authorizes one POST; nothing durable or visible holds it.
 
     The process gets it as NEBULA_RESULTS_KEY. No database row, stream event
@@ -1065,14 +1087,14 @@ def test_results_key_reaches_only_the_process(tmp_path, monkeypatch):
         chat.start_provider_turn(prepared_for(turn))
         parked = [item async for item in chat.follow_provider_turn(turn.id)]
         assert parked[-1][0] == "callback_required", parked
-        (step,) = chat._turn_history(store.get(ChatTurn, turn.id))
+        (step,) = chat._turn_history((await store.get(ChatTurn, turn.id)))
         process_id = step["process_id"]
         key = _results_key(manager, process_id)
         assert key
         assert manager._processes[process_id].backend.extra_env[
             "NEBULA_RESULTS_URL"
         ] == (f"http://10.0.0.8:8765/api/v1/automation-processes/{process_id}/results")
-        execution = store.get(CommandExecution, manager._execution_id(process_id))
+        execution = await store.get(CommandExecution, manager._execution_id(process_id))
         assert (
             execution.metadata["results_key_sha256"]
             == hashlib.sha256(key.encode("utf-8")).hexdigest()
@@ -1080,7 +1102,9 @@ def test_results_key_reaches_only_the_process(tmp_path, monkeypatch):
         waiting = json.loads(step["provider_result"])
         assert waiting["results_api_key"] is None
         assert waiting["results_url"] == step["results_url"]
-        assert store.get(DurableToolCall, step["tool_call_id"]).result == waiting
+        assert (
+            await store.get(DurableToolCall, step["tool_call_id"])
+        ).result == waiting
         assert key not in json.dumps(parked, default=str)
         assert _rows_holding(tmp_path / "nebula.db", key) == []
 
@@ -1120,10 +1144,10 @@ def test_results_key_reaches_only_the_process(tmp_path, monkeypatch):
         assert _rows_holding(tmp_path / "nebula.db", key) == []
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
+async def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
     tmp_path,
 ):
     """Rows written while waiting receipts carried the key keep it at rest only.
@@ -1134,7 +1158,7 @@ def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
     """
 
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Legacy callback"))
+    engagement = await store.create(Engagement(name="Legacy callback"))
     legacy_key = "legacy-results-key-5d0c1e9a7b"
     results_url = "http://10.0.0.8:8765/api/v1/automation-processes/proc/results"
     receipt = {
@@ -1163,7 +1187,7 @@ def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
     }
     turns = {}
     for turn_id in ("turn-before-ledger", "turn-in-ledger"):
-        turns[turn_id] = store.create(
+        turns[turn_id] = await store.create(
             ChatTurn(
                 id=turn_id,
                 engagement_id=engagement.id,
@@ -1175,7 +1199,7 @@ def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
                 tool_history=[entry] if turn_id == "turn-before-ledger" else [],
             )
         )
-    with store.database.session() as session:
+    async with store.database.session() as session:
         # A ledger row written while the waiting receipt carried the key.
         session.add(
             ChatTurnStepEventRow(
@@ -1190,47 +1214,51 @@ def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
                 idempotency_key="legacy-waiting",
             )
         )
-    store.create(
-        DurableToolCall(
-            id="tool-legacy",
-            engagement_id=engagement.id,
-            run_id="turn-in-ledger",
-            origin=ToolCallOrigin.CHAT,
-            chat_session_id="session-legacy",
-            chat_turn_id="turn-in-ledger",
-            tool_name="run_command",
-            status=ToolCallStatus.RUNNING,
-            risk_class=RiskClass.ACTIVE_SCAN,
-            arguments=entry["arguments"],
-            result=receipt,
-            started_at=utc_now(),
+    (
+        await store.create(
+            DurableToolCall(
+                id="tool-legacy",
+                engagement_id=engagement.id,
+                run_id="turn-in-ledger",
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id="session-legacy",
+                chat_turn_id="turn-in-ledger",
+                tool_name="run_command",
+                status=ToolCallStatus.RUNNING,
+                risk_class=RiskClass.ACTIVE_SCAN,
+                arguments=entry["arguments"],
+                result=receipt,
+                started_at=utc_now(),
+            )
         )
     )
     assert _rows_holding(tmp_path / "nebula.db", legacy_key)
 
     ledger = ChatTurnLedger(store.database)
     for turn in turns.values():
-        (read,) = ledger.history(turn)
+        (read,) = await ledger.history(turn)
         assert legacy_key not in json.dumps(read)
         assert json.loads(read["provider_result"])["results_url"] == results_url
     # The folded history is cached per turn and extended with new rows only;
     # neither the cached fold nor an extended one brings the key back.
     in_ledger = turns["turn-in-ledger"]
-    assert legacy_key not in json.dumps(ledger.history(in_ledger))
-    ledger.append(
-        in_ledger.id,
-        {**entry, "step": 1, "model_call_id": "call-2", "status": "complete"},
+    assert legacy_key not in json.dumps((await ledger.history(in_ledger)))
+    (
+        await ledger.append(
+            in_ledger.id,
+            {**entry, "step": 1, "model_call_id": "call-2", "status": "complete"},
+        )
     )
-    extended = ledger.history(in_ledger)
+    extended = await ledger.history(in_ledger)
     assert [item["step"] for item in extended] == [0, 1]
     assert legacy_key not in json.dumps(extended)
-    tail = ledger.tail("turn-in-ledger", 5)
-    event = ledger.event("turn-in-ledger", "legacy-waiting")
+    tail = await ledger.tail("turn-in-ledger", 5)
+    event = await ledger.event("turn-in-ledger", "legacy-waiting")
     assert tail is not None and event is not None
     assert legacy_key not in json.dumps([tail, event])
     # Importing the pre-ledger turn does not copy the key into a new row.
-    ledger.import_legacy(turns["turn-before-ledger"])
-    assert ledger.has_events("turn-before-ledger")
+    (await ledger.import_legacy(turns["turn-before-ledger"]))
+    assert await ledger.has_events("turn-before-ledger")
     with sqlite3.connect(f"file:{tmp_path / 'nebula.db'}?mode=ro", uri=True) as db:
         imported = db.execute(
             "select payload from chat_turn_step_events where turn_id = ?",
@@ -1249,8 +1277,8 @@ def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
 
     client = TestClient(create_app(store, auth_token="test-token"))
     headers = {"Authorization": "Bearer test-token"}
-    single = client.get("/api/v1/tool-calls/tool-legacy", headers=headers)
-    listed = client.get(
+    single = await client.get("/api/v1/tool-calls/tool-legacy", headers=headers)
+    listed = await client.get(
         "/api/v1/tool-calls", params={"engagement_id": engagement.id}, headers=headers
     )
     assert single.status_code == 200, single.text
@@ -1260,7 +1288,7 @@ def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
     assert legacy_key not in listed.text
 
 
-def test_process_output_that_ends_after_its_callback_joins_the_record(tmp_path):
+async def test_process_output_that_ends_after_its_callback_joins_the_record(tmp_path):
     """Captured stdout and stderr are linked even when results arrived first.
 
     The callback settled the outcome, so status and exit code stay as posted,
@@ -1268,16 +1296,18 @@ def test_process_output_that_ends_after_its_callback_joins_the_record(tmp_path):
     """
 
     async def scenario():
-        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
         manager.callback_origin = "http://10.0.0.8:8765"
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         notified: list[str] = []
         manager.bind_process_terminal_observer(notified.append)
@@ -1290,7 +1320,7 @@ def test_process_output_that_ends_after_its_callback_joins_the_record(tmp_path):
             chat_session_id="session-1",
             chat_turn_id="turn-1",
         )
-        accepted = manager.accept_results(
+        accepted = await manager.accept_results(
             started.process_id,
             started.results_api_key or "",
             ProcessResultsRequest(status="complete", summary="posted", exit_code=0),
@@ -1310,30 +1340,32 @@ def test_process_output_that_ends_after_its_callback_joins_the_record(tmp_path):
         assert finished.observed_stdout_bytes > 0
         # The callback already woke the owner; the exit does not wake it again.
         assert notified == []
-        assert store.get(CommandExecution, finished.id) == finished
+        assert (await store.get(CommandExecution, finished.id)) == finished
         io = await manager.process_io(
             started.process_id, ProcessIORequest(), engagement_id=engagement.id
         )
         assert io.stdout_artifact_id == finished.stdout_artifact_id
         assert io.stderr_artifact_id == finished.stderr_artifact_id
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_results_webhook_bounds_what_a_command_posts(tmp_path):
+async def test_results_webhook_bounds_what_a_command_posts(tmp_path):
     """Oversized results are refused with the limit; the process can still post."""
 
     async def scenario():
-        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
         manager.callback_origin = "http://10.0.0.8:8765"
-        policy = manager.project_policy(engagement.id)
-        manager.update_project_policy(
-            engagement.id,
-            approval_policy=AutomationApprovalPolicy.NEVER,
-            network_enabled=True,
-            runner_profile_id="runner",
-            max_timeout_ms=30_000,
-            expected_revision=policy.revision,
+        policy = await manager.project_policy(engagement.id)
+        (
+            await manager.update_project_policy(
+                engagement.id,
+                approval_policy=AutomationApprovalPolicy.NEVER,
+                network_enabled=True,
+                runner_profile_id="runner",
+                max_timeout_ms=30_000,
+                expected_revision=policy.revision,
+            )
         )
         started = await manager.run_command(
             engagement_id=engagement.id,
@@ -1369,7 +1401,7 @@ def test_results_webhook_bounds_what_a_command_posts(tmp_path):
             )
             assert oversized_body.status_code == 413, oversized_body.text
             assert "1 MiB" in oversized_body.text
-            execution = store.get(
+            execution = await store.get(
                 CommandExecution, manager._execution_id(started.process_id)
             )
             assert execution.status == CommandExecutionStatus.RUNNING
@@ -1386,7 +1418,7 @@ def test_results_webhook_bounds_what_a_command_posts(tmp_path):
             )
             assert within.status_code == 200, within.text
             assert within.json()["status"] == "completed"
-        recorded = store.get(
+        recorded = await store.get(
             CommandExecution, manager._execution_id(started.process_id)
         )
         # The posted output lives in its artifacts, not on the record that the
@@ -1398,4 +1430,7 @@ def test_results_webhook_bounds_what_a_command_posts(tmp_path):
         with pytest.raises(ValueError, match="the limit is"):
             ProcessResultsRequest(output={"rows": ["x" * 100] * 1_000})
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

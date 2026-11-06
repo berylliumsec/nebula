@@ -108,8 +108,8 @@ async def smoke(
                 )
                 os.environ["NEBULA_BROWSERD_TOKEN"] = settings.token
             store = NebulaStore(root / "core.db")
-            project = store.create(Engagement(name="Isolated browser journey"))
-            scope = store.create(
+            project = await store.create(Engagement(name="Isolated browser journey"))
+            scope = await store.create(
                 ScopePolicy(
                     engagement_id=project.id,
                     allowed_domains=[]
@@ -118,7 +118,7 @@ async def smoke(
                     allowed_cidrs=["127.0.0.1/32"] if automatic_host else [],
                 )
             )
-            store.update(Engagement, project.id, {"scope_policy_id": scope.id})
+            (await store.update(Engagement, project.id, {"scope_policy_id": scope.id}))
             app = create_app(
                 store,
                 auth_token=core_token,
@@ -193,7 +193,7 @@ async def smoke(
                     await client.put(endpoint + "/control?paused=false")
                 ).raise_for_status()
                 companion = BrowserCompanion(store, BrowserEngineRegistry())
-                protected_action = companion.propose(
+                protected_action = await companion.propose(
                     session["session_id"],
                     CompanionRequest(
                         operation="fill",
@@ -212,8 +212,8 @@ async def smoke(
                     approved.json()["status"] == "complete"
                     and secret not in approved.text
                 )
-                identity_id = store.get(
-                    BrowserSession, session["session_id"]
+                identity_id = (
+                    await store.get(BrowserSession, session["session_id"])
                 ).identity_id
                 live_page = await manager.page_for_screencast(identity_id, tab)
                 assert (
@@ -324,7 +324,7 @@ async def smoke(
                         json={"decision": "approve"},
                     )
                 ).status_code == 409
-                chat = store.create(
+                chat = await store.create(
                     ChatSession(
                         engagement_id=project.id,
                         title="Saved conversation",
@@ -527,13 +527,13 @@ async def smoke(
                         )
                         wrapper.chmod(0o700)
                         profile.executable = str(wrapper)
-                    store.create(profile)
+                    (await store.create(profile))
                     health = await client.post(
                         f"/api/v1/harnesses/{profile.id}/health", timeout=60
                     )
                     health.raise_for_status()
-                    available = store.get(
-                        HarnessProfile, profile.id
+                    available = (
+                        await store.get(HarnessProfile, profile.id)
                     ).capabilities.model_options
                     model = next(
                         option.model for option in available if option.image_input
@@ -601,7 +601,7 @@ async def smoke(
                     )
                     if completion.is_error:
                         raise RuntimeError(f"Harness journey failed: {completion.text}")
-                    calls = store.list_entities(
+                    calls = await store.list_entities(
                         ToolCall, engagement_id=project.id, limit=100
                     )
                     screenshot_calls = [
@@ -616,8 +616,10 @@ async def smoke(
                         json.dumps(
                             [
                                 event.model_dump(mode="json")
-                                for event in store.replay_operation_events(
-                                    completion.json()["harness_turn_id"], limit=1000
+                                for event in (
+                                    await store.replay_operation_events(
+                                        completion.json()["harness_turn_id"], limit=1000
+                                    )
                                 )
                             ],
                             indent=2,
@@ -882,8 +884,10 @@ async def smoke(
                     assert "INSTRUCTION-WAS-FOLLOWED" not in untrusted_answer
                     untrusted_calls = [
                         call
-                        for call in store.list_entities(
-                            ToolCall, engagement_id=project.id, limit=1000
+                        for call in (
+                            await store.list_entities(
+                                ToolCall, engagement_id=project.id, limit=1000
+                            )
                         )
                         if call.chat_turn_id == untrusted.json()["turn_id"]
                     ]
@@ -940,7 +944,9 @@ async def smoke(
                         pairing.raise_for_status()
 
                         async def restart_browser() -> None:
-                            current = store.get(BrowserSession, session["session_id"])
+                            current = await store.get(
+                                BrowserSession, session["session_id"]
+                            )
                             live = await manager.page_for_screencast(
                                 current.identity_id, current.active_tab_id
                             )

@@ -8,6 +8,12 @@ without a model call, or waits for a compaction still running. The background
 work never fails or delays the turn that triggered it.
 """
 
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -51,13 +57,13 @@ class GatedProvider(ReportingProvider):
         return await super().complete(request)
 
 
-def _chat(tmp_path, *, share: float):
+async def _chat(tmp_path, *, share: float):
     """A saved conversation at about ``share`` of the fallback target."""
 
     store = NebulaStore(tmp_path / "precompaction.db")
-    engagement = store.create(Engagement(id="eng-pre", name="Precompaction"))
-    profile = store.create(_profile(local=True))
-    session = store.create(
+    engagement = await store.create(Engagement(id="eng-pre", name="Precompaction"))
+    profile = await store.create(_profile(local=True))
+    session = await store.create(
         ChatSession(
             id="session-pre",
             engagement_id=engagement.id,
@@ -69,19 +75,21 @@ def _chat(tmp_path, *, share: float):
     target = resolve_context_limits(profile).target_input_tokens
     count = 12
     size = int(target * share * 3) // count
-    store.create_many(
-        [
-            ChatMessage(
-                id=f"history-{sequence:02d}",
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=f"Note {sequence} about the harbor rollout: "
-                + "x" * max(0, size - 40),
-            )
-            for sequence in range(1, count + 1)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    id=f"history-{sequence:02d}",
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                    content=f"Note {sequence} about the harbor rollout: "
+                    + "x" * max(0, size - 40),
+                )
+                for sequence in range(1, count + 1)
+            ]
+        )
     )
     provider = GatedProvider(profile.id)
     service = ChatService(store, provider_factory=lambda _: provider)
@@ -116,8 +124,8 @@ def _compactions(provider) -> list[ModelRequest]:
     ]
 
 
-def _snapshots(store) -> list[ContextSnapshot]:
-    return store.list_entities(ContextSnapshot, limit=20)
+async def _snapshots(store) -> list[ContextSnapshot]:
+    return await store.list_entities(ContextSnapshot, limit=20)
 
 
 def _long_question(profile, share: float) -> str:
@@ -125,8 +133,8 @@ def _long_question(profile, share: float) -> str:
     return "What changed in the rollout? " + "y" * int(target * share * 3)
 
 
-def test_the_turn_past_the_target_reuses_the_background_snapshot(tmp_path):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
+async def test_the_turn_past_the_target_reuses_the_background_snapshot(tmp_path):
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.8)
 
     async def scenario():
         first, completion = await _turn(service, session, profile, "Noted?")
@@ -136,31 +144,31 @@ def test_the_turn_past_the_target_reuses_the_background_snapshot(tmp_path):
         await _background(service, session.id)
         prepared = _compactions(provider)
         assert prepared, "a conversation past the threshold is compacted after the turn"
-        [snapshot] = _snapshots(store)
+        [snapshot] = await _snapshots(store)
         assert snapshot.status == ContextSnapshotStatus.READY
         # The next request still fits the target and is sent whole, so the
         # context status does not claim the prepared snapshot serves it.
-        status = service.context_status(session.id)
+        status = await service.context_status(session.id)
         assert status.status == "not_needed"
         assert status.snapshot is None
 
         second, _ = await _turn(service, session, profile, _long_question(profile, 0.3))
         return snapshot, len(prepared), second
 
-    snapshot, compaction_calls, second = asyncio.run(scenario())
+    snapshot, compaction_calls, second = await scenario()
 
     # The turn that crossed the target made no compactor call of its own.
     assert len(_compactions(provider)) == compaction_calls
     assert second.context_snapshot is not None
     assert second.context_snapshot.id == snapshot.id
     assert second.model_request.messages[0].content.startswith(MEMORY_HEADING)
-    assert service.context_status(session.id).status == "ready"
+    assert (await service.context_status(session.id)).status == "ready"
 
 
-def test_a_turn_arriving_during_the_background_compaction_waits_and_reuses_it(
+async def test_a_turn_arriving_during_the_background_compaction_waits_and_reuses_it(
     tmp_path,
 ):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.8)
 
     async def scenario():
         provider.gate = asyncio.Event()
@@ -184,9 +192,9 @@ def test_a_turn_arriving_during_the_background_compaction_waits_and_reuses_it(
         prepared, completion = await asyncio.wait_for(second, 10)
         return prepared, completion, background_calls
 
-    prepared, completion, background_calls = asyncio.run(scenario())
+    prepared, completion, background_calls = await scenario()
 
-    [snapshot] = _snapshots(store)
+    [snapshot] = await _snapshots(store)
     assert prepared.context_snapshot is not None
     assert prepared.context_snapshot.id == snapshot.id
     # Only the background task called the compactor; the turn reused it.
@@ -195,10 +203,10 @@ def test_a_turn_arriving_during_the_background_compaction_waits_and_reuses_it(
     assert completion.message.content
 
 
-def test_a_turn_before_the_background_compaction_starts_compacts_for_itself(
+async def test_a_turn_before_the_background_compaction_starts_compacts_for_itself(
     tmp_path,
 ):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.8)
 
     async def scenario():
         # Every background slot is busy, so this conversation's compaction
@@ -212,15 +220,19 @@ def test_a_turn_before_the_background_compaction_starts_compacts_for_itself(
         await asyncio.wait({queued.task})
         return second, queued
 
-    second, queued = asyncio.run(scenario())
+    second, queued = await scenario()
 
     assert queued.task.cancelled()
     assert second.context_snapshot is not None
-    assert [item.id for item in _snapshots(store)] == [second.context_snapshot.id]
+    assert [item.id for item in (await _snapshots(store))] == [
+        second.context_snapshot.id
+    ]
 
 
-def test_a_failed_background_compaction_leaves_the_turns_alone(tmp_path, monkeypatch):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
+async def test_a_failed_background_compaction_leaves_the_turns_alone(
+    tmp_path, monkeypatch
+):
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.8)
     failures: list[str] = []
     original = chat_module.ContextCompactor.compact
     calls = 0
@@ -247,35 +259,35 @@ def test_a_failed_background_compaction_leaves_the_turns_alone(tmp_path, monkeyp
         second, _ = await _turn(service, session, profile, _long_question(profile, 0.3))
         return completion, second
 
-    completion, second = asyncio.run(scenario())
+    completion, second = await scenario()
 
     assert "chat.context.precompaction_failed" in failures
     assert completion.message.content
-    saved = service.session_messages(session.id)
+    saved = await service.session_messages(session.id)
     assert saved[-1].role == ChatRole.ASSISTANT
     # The next turn compacted for itself, as it did before.
     assert second.context_snapshot is not None
     assert calls == 2
 
 
-def test_below_the_threshold_nothing_is_compacted_in_the_background(tmp_path):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.3)
+async def test_below_the_threshold_nothing_is_compacted_in_the_background(tmp_path):
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.3)
 
     async def scenario():
         await _turn(service, session, profile, "Noted?")
         await _background(service, session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
     assert _compactions(provider) == []
-    assert _snapshots(store) == []
+    assert (await _snapshots(store)) == []
 
 
-def test_a_goal_pays_for_its_background_compaction_and_one_it_cannot_afford_is_skipped(
+async def test_a_goal_pays_for_its_background_compaction_and_one_it_cannot_afford_is_skipped(
     tmp_path,
 ):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
-    goal = store.create(
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.8)
+    goal = await store.create(
         ChatGoal(
             id="goal-pre",
             engagement_id=session.engagement_id,
@@ -289,13 +301,13 @@ def test_a_goal_pays_for_its_background_compaction_and_one_it_cannot_afford_is_s
 
     async def scenario():
         await _turn(service, session, profile, "Noted?", goal_id=goal.id, stream=True)
-        before = store.get(ChatGoal, goal.id).usage.total_tokens
+        before = (await store.get(ChatGoal, goal.id)).usage.total_tokens
         await _background(service, session.id)
         return before
 
-    before = asyncio.run(scenario())
+    before = await scenario()
 
-    [snapshot] = _snapshots(store)
+    [snapshot] = await _snapshots(store)
     compactions = _compactions(provider)
     assert compactions
     # The goal is what the next turn continues, so it guides the memory ...
@@ -305,16 +317,15 @@ def test_a_goal_pays_for_its_background_compaction_and_one_it_cannot_afford_is_s
     # ... and pays for it, like a compaction its turn needed.
     assert snapshot.usage.total_tokens > 0
     assert (
-        store.get(ChatGoal, goal.id).usage.total_tokens
-        == before + snapshot.usage.total_tokens
-    )
+        await store.get(ChatGoal, goal.id)
+    ).usage.total_tokens == before + snapshot.usage.total_tokens
 
     # A goal left unable to pay for the archive is not compacted for.
     (tmp_path / "poor").mkdir()
-    store2, service2, session2, profile2, provider2 = _chat(
+    store2, service2, session2, profile2, provider2 = await _chat(
         tmp_path / "poor", share=0.8
     )
-    poor = store2.create(
+    poor = await store2.create(
         ChatGoal(
             id="goal-poor",
             engagement_id=session2.engagement_id,
@@ -331,29 +342,31 @@ def test_a_goal_pays_for_its_background_compaction_and_one_it_cannot_afford_is_s
             service2, session2, profile2, "Noted?", goal_id=poor.id, stream=True
         )
         # The turn spent nearly all of it before the background task ran.
-        spent = store2.get(ChatGoal, poor.id)
-        store2.update(
-            ChatGoal,
-            poor.id,
-            {
-                "usage": spent.usage.model_copy(
-                    update={"total_tokens": spent.token_budget - 500}
-                )
-            },
-            expected_revision=spent.revision,
+        spent = await store2.get(ChatGoal, poor.id)
+        (
+            await store2.update(
+                ChatGoal,
+                poor.id,
+                {
+                    "usage": spent.usage.model_copy(
+                        update={"total_tokens": spent.token_budget - 500}
+                    )
+                },
+                expected_revision=spent.revision,
+            )
         )
         await _background(service2, session2.id)
 
-    asyncio.run(poor_scenario())
+    (await poor_scenario())
 
     assert _compactions(provider2) == []
-    assert _snapshots(store2) == []
+    assert (await _snapshots(store2)) == []
 
 
-def test_core_shutdown_cancels_a_background_compaction_and_persists_nothing(
+async def test_core_shutdown_cancels_a_background_compaction_and_persists_nothing(
     tmp_path,
 ):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.8)
 
     async def scenario():
         provider.gate = asyncio.Event()
@@ -362,23 +375,23 @@ def test_core_shutdown_cancels_a_background_compaction_and_persists_nothing(
         await asyncio.wait_for(provider.entered.wait(), 5)
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
     assert service._precompactions == {}
     # Nothing half-done is stored: the next turn after a restart compacts
     # for itself.
-    assert _snapshots(store) == []
+    assert (await _snapshots(store)) == []
 
 
-def test_a_turn_the_current_snapshot_still_serves_does_not_wait_for_the_next(
+async def test_a_turn_the_current_snapshot_still_serves_does_not_wait_for_the_next(
     tmp_path,
 ):
-    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
+    store, service, session, profile, provider = await _chat(tmp_path, share=0.8)
 
     async def scenario():
         await _turn(service, session, profile, "Noted?")
         await _background(service, session.id)
-        [first] = _snapshots(store)
+        [first] = await _snapshots(store)
         # A long message crosses the target and is served by that snapshot;
         # another as long would not fit beside it, so the next one is being
         # prepared in the background, and stays unfinished here.
@@ -401,8 +414,11 @@ def test_a_turn_the_current_snapshot_still_serves_does_not_wait_for_the_next(
         await _background(service, session.id)
         return first, short
 
-    first, short = asyncio.run(scenario())
+    first, short = await scenario()
 
     assert short.context_snapshot is not None
     assert short.context_snapshot.id == first.id
-    assert len(_snapshots(store)) == 2
+    assert len((await _snapshots(store))) == 2
+
+
+pytestmark = pytest.mark.anyio

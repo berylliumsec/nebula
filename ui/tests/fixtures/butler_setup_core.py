@@ -38,9 +38,9 @@ class InertSetupIO:
         )
 
     async def verify(self, identity):
-        profile = self.store.get(RunnerProfile, identity)
+        profile = await self.store.get(RunnerProfile, identity)
         if not profile.healthy:
-            profile = self.store.update(
+            profile = await self.store.update(
                 RunnerProfile,
                 profile.id,
                 {
@@ -52,7 +52,7 @@ class InertSetupIO:
         return profile
 
     async def resolve(self, project_id, *, on_progress=None):
-        self.store.get(Engagement, project_id)
+        (await self.store.get(Engagement, project_id))
         profile = self.platform.resolve_human_terminal_profile(project_id)
         if on_progress is not None:
             self.attempts += 1

@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from .async_utils import async_first
+
 import hashlib
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .control_assistant_work import ControlAssistantWork
+    from .storage import NebulaStore
 
 from jsonschema import Draft202012Validator, ValidationError
 
 from .butler_instructions import read_butler_instructions
 from .harnesses import HarnessConfigurationError
-from .read_workers import read_in_worker
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerRecoveryCase,
@@ -92,8 +97,8 @@ async def measured_harness_capacity(
 class ButlerGlobalActions:
     def __init__(
         self,
-        store: Any,
-        work: Any,
+        store: NebulaStore,
+        work: ControlAssistantWork,
         instructions_root: Path,
         case_id: str,
         *,
@@ -105,8 +110,8 @@ class ButlerGlobalActions:
         self.case_id = case_id
         self.runtime_local = runtime_local
 
-    def _case(self) -> ButlerRecoveryCase:
-        case = self.store.get(ButlerRecoveryCase, self.case_id)
+    async def _case(self) -> ButlerRecoveryCase:
+        case = await self.store.get(ButlerRecoveryCase, self.case_id)
         if (
             case.status != "investigating"
             or case.signal != "butler.global_periodic_check"
@@ -114,15 +119,15 @@ class ButlerGlobalActions:
             raise ValueError("Nebula-wide Butler case is no longer active")
         return case
 
-    def _mandate(self) -> ButlerRecoveryCase:
+    async def _mandate(self) -> ButlerRecoveryCase:
         from .butler_oversight import ButlerEventPayload
         from .butler_recovery import ButlerRecoveryService
 
-        case = self._case()
+        case = await self._case()
         loaded = read_butler_instructions(self.instructions_root)
         if loaded is None:
             raise ValueError("Nebula-wide BUTLER.md was removed")
-        event = ButlerRecoveryService(self.store).source_event(case)
+        event = await ButlerRecoveryService(self.store).source_event(case)
         digest = ButlerEventPayload.model_validate(event.payload).metrics.get(
             "instructions_sha256"
         )
@@ -130,32 +135,32 @@ class ButlerGlobalActions:
             raise ValueError("Nebula-wide BUTLER.md changed during this check")
         return case
 
-    def _project(self, project_id: str) -> Engagement:
-        project = self.store.get(Engagement, project_id)
+    async def _project(self, project_id: str) -> Engagement:
+        project = await self.store.get(Engagement, project_id)
         if project.status == EngagementStatus.ARCHIVED:
             raise ValueError("Archived projects cannot be managed by Butler")
-        if not self._visible(project):
+        if not (await self._visible(project)):
             raise ValueError(
                 "Project is outside this Butler runtime's Act and privacy scope"
             )
         return project
 
-    def _visible(self, project: Engagement) -> bool:
-        policy = self.store.find_entity(
+    async def _visible(self, project: Engagement) -> bool:
+        policy = await self.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", project.id
         )
         if policy is None or policy.authority != "act":
             return False
         if not self.runtime_local and project.scope_policy_id:
-            scope = self.store.get(ScopePolicy, project.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, project.scope_policy_id)
             if scope.engagement_id != project.id or scope.local_only:
                 return False
         return True
 
-    def _act(self, project_id: str, expected: int) -> Engagement:
-        self._mandate()
-        project = self._project(project_id)
-        policy = self.store.find_entity(
+    async def _act(self, project_id: str, expected: int) -> Engagement:
+        (await self._mandate())
+        project = await self._project(project_id)
+        policy = await self.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", project_id
         )
         if (
@@ -168,24 +173,24 @@ class ButlerGlobalActions:
         return project
 
     async def projects(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(self._projects_read, arguments)
+        return await self._projects_read(arguments)
 
-    def _projects_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._case()
+    async def _projects_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        (await self._case())
         offset = arguments.get("offset", 0)
         projects = sorted(
-            (
+            [
                 project
-                for project in self.store.iter_readable_entities(Engagement)
+                async for project in self.store.iter_readable_entities(Engagement)
                 if project.status != EngagementStatus.ARCHIVED
                 and project.work_enabled
-                and self._visible(project)
-            ),
+                and (await self._visible(project))
+            ],
             key=lambda item: (item.created_at, item.id),
         )
         rows = []
         for project in projects[offset : offset + 50]:
-            policy = self.store.find_entity(
+            policy = await self.store.find_entity(
                 ButlerAuthorityPolicy, "engagement_id", project.id
             )
             rows.append(
@@ -203,39 +208,45 @@ class ButlerGlobalActions:
         return {
             "projects": rows,
             "next_offset": offset + 50 if offset + 50 < len(projects) else None,
-            "runtimes": self.work.catalog(self._case().engagement_id)["runtimes"],
+            "runtimes": (await self.work.catalog((await self._case()).engagement_id))[
+                "runtimes"
+            ],
         }
 
     async def project(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(self._project_read, arguments)
+        return await self._project_read(arguments)
 
-    def _project_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _project_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        project = self._project(project_id)
+        project = await self._project(project_id)
         return {
             "project": project.model_dump(mode="json"),
-            "work": self.work.overview(project_id),
-            "goals": self.work.goals_overview(project_id),
+            "work": (await self.work.overview(project_id)),
+            "goals": (await self.work.goals_overview(project_id)),
         }
 
     async def goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(self._goal_read, arguments)
+        return await self._goal_read(arguments)
 
-    def _goal_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._project(arguments["project_id"])
-        return self.work.goal_detail(arguments["project_id"], arguments["session_id"])
+    async def _goal_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        (await self._project(arguments["project_id"]))
+        return await self.work.goal_detail(
+            arguments["project_id"], arguments["session_id"]
+        )
 
     async def assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(self._assistant_defaults_read, arguments)
+        return await self._assistant_defaults_read(arguments)
 
-    def _assistant_defaults_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._project(arguments["project_id"])
-        return self.work.assistant_defaults(arguments["project_id"])
+    async def _assistant_defaults_read(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        (await self._project(arguments["project_id"]))
+        return await self.work.assistant_defaults(arguments["project_id"])
 
     async def set_assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        self._act(project_id, arguments["expected_authority_revision"])
-        return self.work.set_assistant_defaults(
+        (await self._act(project_id, arguments["expected_authority_revision"]))
+        return await self.work.set_assistant_defaults(
             project_id,
             {
                 "expected_revision": arguments["expected_revision"],
@@ -244,28 +255,32 @@ class ButlerGlobalActions:
         )
 
     async def chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(self._chat_settings_read, arguments)
+        return await self._chat_settings_read(arguments)
 
-    def _chat_settings_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._project(arguments["project_id"])
-        return self.work.chat_settings(arguments["project_id"], arguments["session_id"])
+    async def _chat_settings_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        (await self._project(arguments["project_id"]))
+        return await self.work.chat_settings(
+            arguments["project_id"], arguments["session_id"]
+        )
 
     async def chat_settings_many(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(self._chat_settings_many_read, arguments)
+        return await self._chat_settings_many_read(arguments)
 
-    def _chat_settings_many_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._project(arguments["project_id"])
-        return self.work.chat_settings_many(
+    async def _chat_settings_many_read(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        (await self._project(arguments["project_id"]))
+        return await self.work.chat_settings_many(
             arguments["project_id"], arguments["session_ids"]
         )
 
     async def work_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await read_in_worker(self._work_catalog_read, arguments)
+        return await self._work_catalog_read(arguments)
 
-    def _work_catalog_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _work_catalog_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        self._project(project_id)
-        return self.work.catalog(project_id, arguments.get("operation"))
+        (await self._project(project_id))
+        return await self.work.catalog(project_id, arguments.get("operation"))
 
     async def work_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._dispatch_work(arguments, change=False)
@@ -280,9 +295,9 @@ class ButlerGlobalActions:
 
         project_id = arguments["project_id"]
         if change:
-            self._act(project_id, arguments["expected_authority_revision"])
+            (await self._act(project_id, arguments["expected_authority_revision"]))
         else:
-            await read_in_worker(self._project, project_id)
+            await self._project(project_id)
         operation = arguments["operation"]
         entry = next((item for item in _ALL_WORK_TOOLS if item[0] == operation), None)
         if entry is None or entry[0] == "nebula.work.catalog":
@@ -299,13 +314,13 @@ class ButlerGlobalActions:
                 "read work_catalog for its exact schema"
             ) from exc
         if change:
-            self._act(project_id, arguments["expected_authority_revision"])
+            (await self._act(project_id, arguments["expected_authority_revision"]))
         return await dispatch_work_tool(self.work, project_id, operation, payload)
 
     async def set_chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        self._act(project_id, arguments["expected_authority_revision"])
-        return self.work.set_chat_settings(
+        (await self._act(project_id, arguments["expected_authority_revision"]))
+        return await self.work.set_chat_settings(
             project_id,
             {
                 key: value
@@ -315,18 +330,18 @@ class ButlerGlobalActions:
         )
 
     async def host_load(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await self.work.host_load(self._case().engagement_id, {})
+        return await self.work.host_load((await self._case()).engagement_id, {})
 
     async def host_cpu_budget(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await self.work.host_cpu_budget(self._case().engagement_id, {})
+        return await self.work.host_cpu_budget((await self._case()).engagement_id, {})
 
     async def harness_quota(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._project(arguments["project_id"])
+        (await self._project(arguments["project_id"]))
         return await self.work.harness_quota(arguments["project_id"], arguments)
 
     async def resume_project(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        project = self._act(project_id, arguments["expected_authority_revision"])
+        project = await self._act(project_id, arguments["expected_authority_revision"])
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project revision changed; read it again")
         if project.status not in {EngagementStatus.DRAFT, EngagementStatus.PAUSED}:
@@ -334,7 +349,7 @@ class ButlerGlobalActions:
                 "project": project.model_dump(mode="json"),
                 "already_active": project.status == EngagementStatus.ACTIVE,
             }
-        saved = self.store.update(
+        saved = await self.store.update(
             Engagement,
             project.id,
             {"status": EngagementStatus.ACTIVE},
@@ -342,12 +357,12 @@ class ButlerGlobalActions:
         )
         return {"project": saved.model_dump(mode="json"), "resumed": True}
 
-    def _existing_goal(self, project_id: str, objective: str) -> ChatGoal | None:
+    async def _existing_goal(self, project_id: str, objective: str) -> ChatGoal | None:
         wanted = " ".join(objective.split()).casefold()
-        return next(
+        return await async_first(
             (
                 goal
-                for goal in self.store.iter_readable_entities(
+                async for goal in self.store.iter_readable_entities(
                     ChatGoal, engagement_id=project_id
                 )
                 if goal.parent_goal_id is None
@@ -358,15 +373,15 @@ class ButlerGlobalActions:
 
     async def create_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        project = self._act(project_id, arguments["expected_authority_revision"])
+        project = await self._act(project_id, arguments["expected_authority_revision"])
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project revision changed; read it again")
         if project.status != EngagementStatus.ACTIVE:
             raise ValueError("Activate the project before creating a goal")
-        existing = self._existing_goal(project_id, arguments["objective"])
+        existing = await self._existing_goal(project_id, arguments["objective"])
         if existing is not None:
             return {
-                **self.work.goal_detail(project_id, existing.session_id),
+                **(await self.work.goal_detail(project_id, existing.session_id)),
                 "already_exists": True,
             }
         goal_args = {
@@ -380,12 +395,12 @@ class ButlerGlobalActions:
                 "start",
             }
         }
-        project = self._act(project_id, arguments["expected_authority_revision"])
+        project = await self._act(project_id, arguments["expected_authority_revision"])
         if project.status != EngagementStatus.ACTIVE:
             raise ValueError("Activate the project before creating a goal")
         created = await self.work.create_goal_conversation(project_id, goal_args)
         if arguments.get("start", False):
-            self._act(project_id, arguments["expected_authority_revision"])
+            (await self._act(project_id, arguments["expected_authority_revision"]))
             started = await self.work.goal_action(
                 project_id,
                 {
@@ -402,8 +417,8 @@ class ButlerGlobalActions:
 
         butler_sessions = [
             session
-            for session in self.store.iter_readable_entities(
-                ChatSession, engagement_id=self._case().engagement_id
+            async for session in self.store.iter_readable_entities(
+                ChatSession, engagement_id=(await self._case()).engagement_id
             )
             if session.metadata.get("control_assistant") is True
             and not session.metadata.get("archived_at")
@@ -417,7 +432,7 @@ class ButlerGlobalActions:
             else None
         )
         profiles = sorted(
-            self.store.iter_readable_entities(HarnessProfile),
+            [item async for item in self.store.iter_readable_entities(HarnessProfile)],
             key=lambda profile: (profile.id != preferred_id, profile.id),
         )
         available: list[tuple[tuple[int, float], bool, HarnessProfile]] = []
@@ -440,7 +455,7 @@ class ButlerGlobalActions:
             ):
                 continue
             try:
-                self.work.harness._validate_harness_privacy(
+                await self.work.harness._validate_harness_privacy(
                     project_id,
                     profile,
                     [],
@@ -468,24 +483,24 @@ class ButlerGlobalActions:
     async def create_recovery_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Create one typed recovery goal and report its result through this case."""
 
-        case = self._mandate()
+        case = await self._mandate()
         project_id = arguments["project_id"]
-        project = self._act(project_id, arguments["expected_authority_revision"])
+        project = await self._act(project_id, arguments["expected_authority_revision"])
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project revision changed; read it again")
         if project.status != EngagementStatus.ACTIVE:
             raise ValueError("Activate the project before creating a recovery goal")
-        source = self.store.get(ChatGoal, arguments["source_goal_id"])
+        source = await self.store.get(ChatGoal, arguments["source_goal_id"])
         if (
             source.engagement_id != project_id
             or source.parent_goal_id is not None
             or source.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}
         ):
             raise ValueError("Read a paused or blocked main goal in this project first")
-        existing = next(
+        existing = await async_first(
             (
                 goal
-                for goal in self.store.iter_readable_entities(
+                async for goal in self.store.iter_readable_entities(
                     ChatGoal, engagement_id=project_id
                 )
                 if goal.metadata.get("butler_recovery_source_goal_id") == source.id
@@ -498,8 +513,8 @@ class ButlerGlobalActions:
             if existing.id not in case.recovery_goal_ids:
                 from .butler_oversight import _entity_in_transaction
 
-                with self.store.transaction() as transaction:
-                    current = _entity_in_transaction(
+                async with self.store.transaction() as transaction:
+                    current = await _entity_in_transaction(
                         transaction, ButlerRecoveryCase, case.id
                     )
                     if current is None or current.status != "investigating":
@@ -507,24 +522,26 @@ class ButlerGlobalActions:
                             "Scheduled Butler check changed; read it again"
                         )
                     if existing.id not in current.recovery_goal_ids:
-                        transaction.update(
-                            ButlerRecoveryCase,
-                            current.id,
-                            {
-                                "recovery_goal_ids": [
-                                    *current.recovery_goal_ids,
-                                    existing.id,
-                                ]
-                            },
-                            expected_revision=current.revision,
+                        (
+                            await transaction.update(
+                                ButlerRecoveryCase,
+                                current.id,
+                                {
+                                    "recovery_goal_ids": [
+                                        *current.recovery_goal_ids,
+                                        existing.id,
+                                    ]
+                                },
+                                expected_revision=current.revision,
+                            )
                         )
             result = {
-                **self.work.goal_detail(project_id, existing.session_id),
+                **(await self.work.goal_detail(project_id, existing.session_id)),
                 "already_exists": True,
                 "source_goal_id": source.id,
             }
             if arguments.get("start", True) and existing.status == ChatGoalStatus.DRAFT:
-                self._act(project_id, arguments["expected_authority_revision"])
+                (await self._act(project_id, arguments["expected_authority_revision"]))
                 started = await self.work.goal_action(
                     project_id,
                     {
@@ -570,10 +587,10 @@ class ButlerGlobalActions:
                 "butler_recovery_source_goal_id": source.id,
             }
         )
-        self._act(project_id, arguments["expected_authority_revision"])
+        (await self._act(project_id, arguments["expected_authority_revision"]))
         created = await self.work.create_goal_conversation(project_id, goal_args)
         if arguments.get("start", True):
-            self._act(project_id, arguments["expected_authority_revision"])
+            (await self._act(project_id, arguments["expected_authority_revision"]))
             started = await self.work.goal_action(
                 project_id,
                 {
@@ -592,13 +609,13 @@ class ButlerGlobalActions:
 
     async def goal_action(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        project = self._act(project_id, arguments["expected_authority_revision"])
+        project = await self._act(project_id, arguments["expected_authority_revision"])
         if (
             arguments["action"] in {"start", "resume"}
             and project.status != EngagementStatus.ACTIVE
         ):
             raise ValueError("Activate the project before starting or resuming a goal")
-        current = self.work.goal_detail(project_id, arguments["session_id"])
+        current = await self.work.goal_detail(project_id, arguments["session_id"])
         goal = current.get("goal")
         if (
             current.get("kind") != "main"
@@ -606,7 +623,7 @@ class ButlerGlobalActions:
             or goal["revision"] != arguments["expected_revision"]
         ):
             raise ValueError("Main goal changed; read it again")
-        self._act(project_id, arguments["expected_authority_revision"])
+        (await self._act(project_id, arguments["expected_authority_revision"]))
         return await self.work.goal_action(
             project_id,
             {
@@ -618,8 +635,8 @@ class ButlerGlobalActions:
 
     async def update_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        self._act(project_id, arguments["expected_authority_revision"])
-        current = self.work.goal_detail(project_id, arguments["session_id"])
+        (await self._act(project_id, arguments["expected_authority_revision"]))
+        current = await self.work.goal_detail(project_id, arguments["session_id"])
         goal = current.get("goal")
         if (
             current.get("kind") != "main"
@@ -627,7 +644,7 @@ class ButlerGlobalActions:
             or goal["revision"] != arguments["expected_revision"]
         ):
             raise ValueError("Main goal changed; read it again")
-        self._act(project_id, arguments["expected_authority_revision"])
+        (await self._act(project_id, arguments["expected_authority_revision"]))
         return await self.work.update_goal(
             project_id,
             {
@@ -641,12 +658,12 @@ class ButlerGlobalActions:
         """Move one pre-admission planning failure to a linked provider draft."""
 
         project_id = arguments["project_id"]
-        project = self._act(project_id, arguments["expected_authority_revision"])
+        project = await self._act(project_id, arguments["expected_authority_revision"])
         if project.status != EngagementStatus.ACTIVE:
             raise ValueError("Activate the project before handing off a goal")
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project changed; read its revision again")
-        current = self.work.goal_detail(project_id, arguments["session_id"])
+        current = await self.work.goal_detail(project_id, arguments["session_id"])
         source = current.get("goal")
         if current.get("kind") != "main" or source is None:
             raise ValueError("Handoff requires a listed main goal")
@@ -656,7 +673,7 @@ class ButlerGlobalActions:
             "metadata", {}
         ).get("handoff_target_session_id"):
             raise ValueError("Source goal changed; read it again")
-        self._act(project_id, arguments["expected_authority_revision"])
+        (await self._act(project_id, arguments["expected_authority_revision"]))
         handoff = await self.work.handoff_goal(
             project_id,
             {
@@ -674,7 +691,7 @@ class ButlerGlobalActions:
             },
         )
         if arguments.get("start", True) and handoff["goal"]["status"] == "draft":
-            self._act(project_id, arguments["expected_authority_revision"])
+            (await self._act(project_id, arguments["expected_authority_revision"]))
             handoff = {
                 **await self.work.goal_action(
                     project_id,
@@ -694,7 +711,7 @@ class ButlerGlobalActions:
         from .setup import create_engagement_with_default_scope
 
         parent_id = arguments["parent_project_id"]
-        parent = self._act(parent_id, arguments["expected_authority_revision"])
+        parent = await self._act(parent_id, arguments["expected_authority_revision"])
         if parent.revision != arguments["expected_parent_revision"]:
             raise ValueError("Parent project revision changed; read it again")
         if parent.status != EngagementStatus.ACTIVE:
@@ -707,20 +724,20 @@ class ButlerGlobalActions:
             "butler-child:"
             + hashlib.sha256(f"{parent_id}\0{normalized}".encode()).hexdigest()
         )
-        existing = self.store.find_entity(Engagement, "id", child_id)
+        existing = await self.store.find_entity(Engagement, "id", child_id)
         if existing is None:
-            existing = next(
+            existing = await async_first(
                 (
                     item
-                    for item in self.store.iter_readable_entities(Engagement)
+                    async for item in self.store.iter_readable_entities(Engagement)
                     if item.parent_engagement_id == parent_id
                     and " ".join(item.name.split()).casefold() == normalized
                 ),
                 None,
             )
         if existing is None:
-            self._act(parent_id, arguments["expected_authority_revision"])
-            existing = create_engagement_with_default_scope(
+            (await self._act(parent_id, arguments["expected_authority_revision"]))
+            existing = await create_engagement_with_default_scope(
                 self.store,
                 Engagement(
                     id=child_id,
@@ -741,19 +758,23 @@ class ButlerGlobalActions:
         if initial_goal is None and arguments.get("start_initial_goal"):
             raise ValueError("Provide initial_goal before requesting its start")
         if initial_goal is not None:
-            current = self._existing_goal(existing.id, initial_goal["objective"])
+            current = await self._existing_goal(existing.id, initial_goal["objective"])
             if current is None:
-                self._act(parent_id, arguments["expected_authority_revision"])
+                (await self._act(parent_id, arguments["expected_authority_revision"]))
                 saved = await self.work.create_goal_conversation(
                     existing.id, initial_goal
                 )
             else:
-                saved = self.work.goal_detail(existing.id, current.session_id)
+                saved = await self.work.goal_detail(existing.id, current.session_id)
             result["goal"] = saved
             if arguments.get("start_initial_goal", False):
                 goal = saved["goal"]
                 if goal["status"] == "draft":
-                    self._act(parent_id, arguments["expected_authority_revision"])
+                    (
+                        await self._act(
+                            parent_id, arguments["expected_authority_revision"]
+                        )
+                    )
                     saved = await self.work.goal_action(
                         existing.id,
                         {

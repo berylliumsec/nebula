@@ -105,8 +105,16 @@ test("work hub import finds a project and its saved task after refresh", async (
       "from pathlib import Path",
       "from nebula.v3.domain import ChatSession",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
-      "store.create(ChatSession(id='sample-active-session', engagement_id=sys.argv[2], title='Sample research handoff', model='test-model', provider_profile_id='provider-1'))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+      "        (await store.create(ChatSession(id='sample-active-session', engagement_id=sys.argv[2], title='Sample research handoff', model='test-model', provider_profile_id='provider-1')))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), core.dataDir, parentId], { cwd: repository, env: { ...process.env, PYTHONPATH: path.join(repository, "src") }, encoding: "utf8" });
     expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0);
     const linked = await api.patch("work/projects", { data: { project_ids: [importedResult.projects.at(-1)!.engagement_id], parent_engagement_id: parentId } });

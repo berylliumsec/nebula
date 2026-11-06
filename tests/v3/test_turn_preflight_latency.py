@@ -9,6 +9,11 @@ planning and resent generations are bounded, and every routing step records
 when its provider request left and answered.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 import time
@@ -78,28 +83,30 @@ class _PlanningProvider(FakeProvider):
         return await super().complete(request)
 
 
-def _knowledge_service(tmp_path, monkeypatch, jev, *, plan_seconds=0.2):
+async def _knowledge_service(tmp_path, monkeypatch, jev, *, plan_seconds=0.2):
     timeline = _Timeline()
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(jev))
+    service, request = await _mcp_service(tmp_path, monkeypatch, lambda: _client(jev))
     provider = _PlanningProvider(timeline, plan_seconds=plan_seconds)
     service.provider_factory = lambda _: provider
-    service.store.create(
-        KnowledgeSource(
-            id="source-a",
-            engagement_id=request.engagement_id,
-            name="notes.txt",
-            source_type="text/plain",
-            artifact_id="artifact-a",
-            citation="Uploaded notes",
-            metadata={
-                "chunks": [{"id": "chunk-a", "text": "login bug notes", "page": 1}]
-            },
+    (
+        await service.store.create(
+            KnowledgeSource(
+                id="source-a",
+                engagement_id=request.engagement_id,
+                name="notes.txt",
+                source_type="text/plain",
+                artifact_id="artifact-a",
+                citation="Uploaded notes",
+                metadata={
+                    "chunks": [{"id": "chunk-a", "text": "login bug notes", "page": 1}]
+                },
+            )
         )
     )
     return service, request.model_copy(update={"include_knowledge": True}), timeline
 
 
-def test_tool_ranking_overlaps_knowledge_planning(tmp_path, monkeypatch):
+async def test_tool_ranking_overlaps_knowledge_planning(tmp_path, monkeypatch):
     timeline = None
 
     async def jev(_request):
@@ -108,9 +115,9 @@ def test_tool_ranking_overlaps_knowledge_planning(tmp_path, monkeypatch):
         timeline.mark("jev_finished")
         return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.8}))
 
-    service, request, timeline = _knowledge_service(tmp_path, monkeypatch, jev)
+    service, request, timeline = await _knowledge_service(tmp_path, monkeypatch, jev)
 
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     marks = timeline.marks
     # Both round trips were in flight at once; the turn used to wait for the
@@ -124,7 +131,7 @@ def test_tool_ranking_overlaps_knowledge_planning(tmp_path, monkeypatch):
     assert snapshot["preparation"]["started_at"] < prepared.turn.queued_at.isoformat()
 
 
-def test_a_failed_preparation_cancels_its_pending_ranking(tmp_path, monkeypatch):
+async def test_a_failed_preparation_cancels_its_pending_ranking(tmp_path, monkeypatch):
     cancelled = asyncio.Event()
 
     async def jev(_request):
@@ -135,7 +142,7 @@ def test_a_failed_preparation_cancels_its_pending_ranking(tmp_path, monkeypatch)
             raise
         raise AssertionError("the ranking outlived its turn")
 
-    service, request, _ = _knowledge_service(tmp_path, monkeypatch, jev)
+    service, request, _ = await _knowledge_service(tmp_path, monkeypatch, jev)
 
     def refuse(*_args, **_kwargs):
         raise ChatPrivacyError("selected knowledge is local-only")
@@ -150,31 +157,31 @@ def test_a_failed_preparation_cancels_its_pending_ranking(tmp_path, monkeypatch)
         assert asyncio.all_tasks() == {asyncio.current_task()}
 
     started = time.perf_counter()
-    asyncio.run(prepare())
+    (await prepare())
     assert time.perf_counter() - started < 5
 
 
-def test_slow_knowledge_planning_falls_back_to_the_operators_words(
+async def test_slow_knowledge_planning_falls_back_to_the_operators_words(
     tmp_path, monkeypatch
 ):
     async def jev(_request):
         return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.8}))
 
-    service, request, timeline = _knowledge_service(
+    service, request, timeline = await _knowledge_service(
         tmp_path, monkeypatch, jev, plan_seconds=30
     )
     monkeypatch.setattr(chat_module, "_RETRIEVAL_PLAN_TIMEOUT_SECONDS", 0.1)
     searched = []
     original = service._retrieve
 
-    def retrieve(engagement_id, queries, **kwargs):
+    async def retrieve(engagement_id, queries, **kwargs):
         searched.append(queries)
-        return original(engagement_id, queries, **kwargs)
+        return await original(engagement_id, queries, **kwargs)
 
     service._retrieve = retrieve
 
     started = time.perf_counter()
-    prepared = service.prepare(request)
+    prepared = await service.prepare(request)
 
     # The turn exists without waiting out the provider's request timeout.
     assert time.perf_counter() - started < 5
@@ -183,7 +190,7 @@ def test_slow_knowledge_planning_falls_back_to_the_operators_words(
     assert prepared.turn is not None
 
 
-def test_jev_sees_each_operator_message_once_when_a_client_replays_history(
+async def test_jev_sees_each_operator_message_once_when_a_client_replays_history(
     tmp_path, monkeypatch
 ):
     states = []
@@ -192,38 +199,42 @@ def test_jev_sees_each_operator_message_once_when_a_client_replays_history(
         states.append(json.loads(request.content)["state"])
         return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.8}))
 
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(jev))
+    service, request = await _mcp_service(tmp_path, monkeypatch, lambda: _client(jev))
     store = service.store
     history = [
         {"role": "user", "content": "list the open issues"},
         {"role": "assistant", "content": "There are two."},
     ]
     for session_id in ("session-replayed", "session-appended"):
-        store.create(
-            ChatSession(
-                id=session_id,
-                engagement_id=request.engagement_id,
-                title="Same history",
-                provider_profile_id=request.provider_id,
-                model="model-a",
+        (
+            await store.create(
+                ChatSession(
+                    id=session_id,
+                    engagement_id=request.engagement_id,
+                    title="Same history",
+                    provider_profile_id=request.provider_id,
+                    model="model-a",
+                )
             )
         )
-        store.create_many(
-            [
-                ChatMessage(
-                    engagement_id=request.engagement_id,
-                    session_id=session_id,
-                    sequence=index + 1,
-                    role=ChatRole(item["role"]),
-                    content=item["content"],
-                )
-                for index, item in enumerate(history)
-            ]
+        (
+            await store.create_many(
+                [
+                    ChatMessage(
+                        engagement_id=request.engagement_id,
+                        session_id=session_id,
+                        sequence=index + 1,
+                        role=ChatRole(item["role"]),
+                        content=item["content"],
+                    )
+                    for index, item in enumerate(history)
+                ]
+            )
         )
     asked = {"role": "user", "content": "find the login bug"}
 
-    def ask(session_id, messages):
-        return service.prepare(
+    async def ask(session_id, messages):
+        return await service.prepare(
             ChatCompletionRequest(
                 provider_id=request.provider_id,
                 engagement_id=request.engagement_id,
@@ -236,8 +247,8 @@ def test_jev_sees_each_operator_message_once_when_a_client_replays_history(
         )
 
     # One client replays the transcript, another sends only the new message.
-    ask("session-replayed", [*history, asked])
-    appended = ask("session-appended", [asked])
+    (await ask("session-replayed", [*history, asked]))
+    appended = await ask("session-appended", [asked])
 
     # Replaying used to repeat every earlier operator message, so Jev read a
     # different request and the identical one missed its cache.
@@ -250,7 +261,7 @@ def test_jev_sees_each_operator_message_once_when_a_client_replays_history(
     assert appended.turn.request_snapshot["tool_suggestions"]["cached"] is True
 
 
-def test_routing_steps_record_their_provider_request_timing(tmp_path):
+async def test_routing_steps_record_their_provider_request_timing(tmp_path):
     class SlowRouting(ScriptedProvider):
         async def complete(self, request):
             if request.metadata.get("operation") != "conversation_naming":
@@ -269,18 +280,22 @@ def test_routing_steps_record_their_provider_request_timing(tmp_path):
         ),
         _response(text="Read all three."),
     ]
-    store, service, prepared, _ = _tool_loop(tmp_path, responses, RecordingBroker())
+    store, service, prepared, _ = await _tool_loop(
+        tmp_path, responses, RecordingBroker()
+    )
     prepared.provider = SlowRouting(responses)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read all three."
-    with store.database.session() as session:
+    async with store.database.session() as session:
         rows = list(
-            session.scalars(
-                select(ChatTurnStepEventRow)
-                .where(ChatTurnStepEventRow.turn_id == "turn")
-                .order_by(ChatTurnStepEventRow.sequence)
+            (
+                await session.scalars(
+                    select(ChatTurnStepEventRow)
+                    .where(ChatTurnStepEventRow.turn_id == "turn")
+                    .order_by(ChatTurnStepEventRow.sequence)
+                )
             )
         )
     # Every row of a step carries the routing response that issued it: the
@@ -334,7 +349,9 @@ def _hello() -> ModelRequest:
     )
 
 
-def test_a_stalled_generation_is_not_resent_once_its_allowance_is_spent(monkeypatch):
+async def test_a_stalled_generation_is_not_resent_once_its_allowance_is_spent(
+    monkeypatch,
+):
     monkeypatch.setenv(KEY_ENV, "not-a-real-key")
     # The read timeout fires when the allowance runs out.
     requests, transport = _stalling([0.3], httpx.ReadTimeout)
@@ -342,14 +359,14 @@ def test_a_stalled_generation_is_not_resent_once_its_allowance_is_spent(monkeypa
 
     started = time.perf_counter()
     with pytest.raises(ProviderOverloadedError, match="timed out"):
-        asyncio.run(provider.complete(_hello()))
+        (await provider.complete(_hello()))
 
     # Three attempts used to wait three full allowances (3 x 600 s by default).
     assert len(requests) == 1
     assert time.perf_counter() - started < 0.6
 
 
-def test_a_resend_gets_only_what_is_left_of_the_allowance(monkeypatch):
+async def test_a_resend_gets_only_what_is_left_of_the_allowance(monkeypatch):
     monkeypatch.setenv(KEY_ENV, "not-a-real-key")
     # The connection tears early, and the resend hangs.
     requests, transport = _stalling([0.05, 30], httpx.RemoteProtocolError)
@@ -357,13 +374,13 @@ def test_a_resend_gets_only_what_is_left_of_the_allowance(monkeypatch):
 
     started = time.perf_counter()
     with pytest.raises(ProviderOverloadedError, match="0.4 s request allowance"):
-        asyncio.run(provider.complete(_hello()))
+        (await provider.complete(_hello()))
 
     assert len(requests) == 2
     assert time.perf_counter() - started < 2
 
 
-def test_a_quick_transient_failure_is_still_resent(monkeypatch):
+async def test_a_quick_transient_failure_is_still_resent(monkeypatch):
     monkeypatch.setenv(KEY_ENV, "not-a-real-key")
     attempts = []
 
@@ -387,15 +404,15 @@ def test_a_quick_transient_failure_is_still_resent(monkeypatch):
 
     provider = _generation(httpx.MockTransport(handler), request_timeout_seconds=5)
 
-    assert asyncio.run(provider.complete(_hello())).text == "ok"
+    assert (await provider.complete(_hello())).text == "ok"
     assert len(attempts) == 2
 
 
-def _long_chat(tmp_path: Path):
+async def _long_chat(tmp_path: Path):
     store = NebulaStore(tmp_path / "long-chat.db")
-    engagement = store.create(Engagement(id="eng-long", name="Long chat"))
-    profile = store.create(_profile(local=True))
-    session = store.create(
+    engagement = await store.create(Engagement(id="eng-long", name="Long chat"))
+    profile = await store.create(_profile(local=True))
+    session = await store.create(
         ChatSession(
             id="session-long",
             engagement_id=engagement.id,
@@ -404,19 +421,21 @@ def _long_chat(tmp_path: Path):
             model="model-a",
         )
     )
-    store.create_many(
-        [
-            ChatMessage(
-                id=f"long-{sequence:02d}",
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
-                content=f"Historical evidence {sequence}: "
-                + ("bounded context " * 180),
-            )
-            for sequence in range(1, 13)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    id=f"long-{sequence:02d}",
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                    content=f"Historical evidence {sequence}: "
+                    + ("bounded context " * 180),
+                )
+                for sequence in range(1, 13)
+            ]
+        )
     )
     provider = FakeProvider(profile.id, local=True)
     service = ChatService(store, provider_factory=lambda _: provider)
@@ -445,8 +464,8 @@ def _turn(service, session, profile, provider, content):
 FOLLOW_UP = "more detail " * 150
 
 
-def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
-    store, service, session, profile, provider = _long_chat(tmp_path)
+async def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
+    store, service, session, profile, provider = await _long_chat(tmp_path)
     limits = chat_module.resolve_context_limits(profile)
 
     first, compacted = _turn(service, session, profile, provider, FOLLOW_UP)
@@ -465,7 +484,7 @@ def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
         assert prepared.context_usage.total_tokens == 0
         after = [
             message.content
-            for message in service.session_messages(session.id)
+            for message in (await service.session_messages(session.id))
             if message.sequence > snapshot.compacted_through
         ]
         sent = prepared.model_request.messages
@@ -478,7 +497,7 @@ def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
             chat_module.estimate_messages(sent, prepared.model_request.instructions)
             <= limits.target_input_tokens
         )
-        assert service.context_status(session.id).status == "ready"
+        assert (await service.context_status(session.id)).status == "ready"
     # The tail moved past the snapshot's boundary on these turns, and each
     # used to summarise the whole archive again; now the history kept word
     # for word outgrows the recent-tail share before anything compacts anew.
@@ -499,18 +518,20 @@ def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
     assert prepared.context_snapshot.compacted_through > snapshot.compacted_through
 
 
-def test_a_snapshot_over_a_retracted_message_is_not_reused(tmp_path):
-    store, service, session, profile, provider = _long_chat(tmp_path)
+async def test_a_snapshot_over_a_retracted_message_is_not_reused(tmp_path):
+    store, service, session, profile, provider = await _long_chat(tmp_path)
     first, _ = _turn(service, session, profile, provider, FOLLOW_UP)
     for index in range(2):
         _, compacted = _turn(service, session, profile, provider, FOLLOW_UP)
         assert compacted == 0
-    covered = store.get(ChatMessage, "long-03")
-    store.update(
-        ChatMessage,
-        covered.id,
-        {"metadata": {**covered.metadata, "retracted_at": "2026-09-24T00:00:00Z"}},
-        expected_revision=covered.revision,
+    covered = await store.get(ChatMessage, "long-03")
+    (
+        await store.update(
+            ChatMessage,
+            covered.id,
+            {"metadata": {**covered.metadata, "retracted_at": "2026-09-24T00:00:00Z"}},
+            expected_revision=covered.revision,
+        )
     )
 
     prepared, compacted = _turn(service, session, profile, provider, FOLLOW_UP)
@@ -521,3 +542,6 @@ def test_a_snapshot_over_a_retracted_message_is_not_reused(tmp_path):
     assert "long-03" not in {
         reference.source_id for reference in prepared.context_snapshot.source_references
     }
+
+
+pytestmark = pytest.mark.anyio

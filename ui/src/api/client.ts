@@ -3656,6 +3656,20 @@ export function chatRequestBody(
   };
 }
 
+function mapPendingRuntimeSwitch(value: unknown): import("./types").PendingRuntimeSwitch | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const pending = value as JsonObject;
+  const binding = pending.binding && typeof pending.binding === "object" && !Array.isArray(pending.binding)
+    ? pending.binding as JsonObject : undefined;
+  if (!binding || (binding.backend !== "provider" && binding.backend !== "harness")
+      || (pending.status !== "waiting_for_idle" && pending.status !== "needs_review")
+      || typeof pending.id !== "string" || typeof binding.model !== "string") return undefined;
+  const profileId = binding.backend === "provider" ? binding.provider_profile_id : binding.harness_profile_id;
+  if (typeof profileId !== "string") return undefined;
+  return {id: pending.id, status: pending.status, backend: binding.backend,
+    profileId, model: binding.model, reason: typeof pending.reason === "string" ? pending.reason : undefined};
+}
+
 function mapChatSession(value: WireChatSession): ChatSessionSummary {
   const savedConfig = value.metadata?.assistant_config;
   const assistantConfig = savedConfig && typeof savedConfig === "object" && !Array.isArray(savedConfig)
@@ -3678,6 +3692,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     isControlAssistant: value.metadata?.control_assistant === true,
     isButlerInitiated: value.metadata?.butler_initiated === true,
     assistantConfig,
+    pendingRuntimeSwitch: mapPendingRuntimeSwitch(value.metadata?.pending_runtime_switch),
     planningEnabled: assistantConfig?.planningEnabled ?? value.metadata?.planning_enabled === true,
     inheritedMessageCount: typeof value.metadata?.inherited_message_count === "number"
       ? value.metadata.inherited_message_count : undefined,
@@ -10150,6 +10165,8 @@ export class ApiClient {
       targetProviderId: String(value.target_provider_id),
       targetModel: String(value.target_model),
       compatible: value.compatible === true,
+      activation: value.activation === "after_active_work" ? "after_active_work" : "immediate",
+      activationReason: typeof value.activation_reason === "string" ? value.activation_reason : undefined,
       requiresCompactionConfirmation: value.requires_compaction_confirmation === true,
       confirmationToken: typeof value.confirmation_token === "string" ? value.confirmation_token : undefined,
       reason: typeof value.reason === "string" ? value.reason : undefined,

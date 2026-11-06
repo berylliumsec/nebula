@@ -12,7 +12,7 @@ from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from sqlalchemy import event
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -62,6 +62,7 @@ class PerformanceTelemetry:
         self._operations: dict[str, _Timing] = {}
         self._slow: deque[dict[str, Any]] = deque(maxlen=self.max_slow)
         self._overflow = 0
+        self.database_snapshot: Callable[[], dict[str, Any]] | None = None
 
     @contextmanager
     def activate(self, request: _Request | None = None) -> Iterator[None]:
@@ -197,6 +198,9 @@ class PerformanceTelemetry:
             )
         return {
             "schema": "nebula.performance/v1",
+            "database_pool": self.database_snapshot()
+            if self.database_snapshot is not None
+            else None,
             "uptime_seconds": round(time.perf_counter() - self._started, 3),
             "limits": {
                 "operations": self.max_operations + 1,
@@ -234,7 +238,12 @@ def _source_location() -> str | None:
         del frame
 
 
-def install_sql_timing(engine: Any, performance: PerformanceTelemetry) -> None:
+def install_sql_timing(
+    engine: Any,
+    performance: PerformanceTelemetry,
+    *,
+    enabled: Callable[[], bool] | None = None,
+) -> None:
     """Use SQLAlchemy's public events; never retain SQL or bind parameters."""
 
     def before(
@@ -245,6 +254,8 @@ def install_sql_timing(engine: Any, performance: PerformanceTelemetry) -> None:
         context: Any,
         _many: bool,
     ) -> None:
+        if enabled is not None and not enabled():
+            return
         context._nebula_perf_started = time.perf_counter()
         compiled = context.compiled
         kind = getattr(getattr(compiled, "statement", None), "__visit_name__", "other")

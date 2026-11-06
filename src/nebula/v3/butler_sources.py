@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 
 from .domain import Engagement, EngagementStatus, KnowledgeSource, RiskClass
@@ -54,9 +56,9 @@ class ButlerSources:
             "has_original": bool(source.artifact_id),
         }
 
-    def list_sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def list_sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.list_entities(
+        rows = await self.store.list_entities(
             KnowledgeSource, engagement_id=self.project_id, offset=offset, limit=51
         )
         return {
@@ -64,17 +66,19 @@ class ButlerSources:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def _source(self, source_id: str) -> KnowledgeSource:
-        source = self.store.get(KnowledgeSource, source_id)
+    async def _source(self, source_id: str) -> KnowledgeSource:
+        source = await self.store.get(KnowledgeSource, source_id)
         if source.engagement_id != self.project_id:
             raise ValueError("choose a source from the selected project")
         return source
 
-    def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._summary(self._source(arguments["source_id"]))
+    async def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._summary((await self._source(arguments["source_id"])))
 
-    def prepare(self, operation: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self.store.get(Engagement, self.project_id)
+    async def prepare(
+        self, operation: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        project = await self.store.get(Engagement, self.project_id)
         if operation != "download" and project.status == EngagementStatus.ARCHIVED:
             raise ValueError("restore the project before changing its sources")
         action: dict[str, Any] = {
@@ -84,7 +88,7 @@ class ButlerSources:
         if operation == "add":
             action["input_kind"] = arguments.get("input_kind", "file")
         else:
-            source = self._source(arguments["source_id"])
+            source = await self._source(arguments["source_id"])
             if source.revision != arguments["expected_revision"]:
                 raise ValueError("source changed; read its current revision")
             if operation in {"download", "reindex"} and not source.artifact_id:
@@ -163,11 +167,11 @@ class ButlerSources:
                 if selected_read:
                     if selected_handler:
                         return await read_in_worker(selected_handler, arguments)
-                    return await read_in_worker(self.prepare, selected, arguments)
+                    return await self.prepare(selected, arguments)
                 return (
-                    selected_handler(arguments)
+                    (await call_async(selected_handler, arguments))
                     if selected_handler
-                    else self.prepare(selected, arguments)
+                    else (await self.prepare(selected, arguments))
                 )
 
             result.append(

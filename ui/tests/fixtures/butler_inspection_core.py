@@ -22,10 +22,10 @@ from nebula.v3.domain import (
 )
 
 
-def seed_inspection(store, artifacts):
-    project = store.create(Engagement(name="Inspection fixture"))
-    foreign = store.create(Engagement(name="Other inspection fixture"))
-    provider = store.create(
+async def seed_inspection(store, artifacts):
+    project = await store.create(Engagement(name="Inspection fixture"))
+    foreign = await store.create(Engagement(name="Other inspection fixture"))
+    provider = await store.create(
         ProviderProfile(
             name="Inspection model",
             provider_type="vllm",
@@ -38,7 +38,7 @@ def seed_inspection(store, artifacts):
             },
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Inspection conversation",
@@ -46,7 +46,7 @@ def seed_inspection(store, artifacts):
             model="security-model",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=chat.id,
@@ -56,7 +56,7 @@ def seed_inspection(store, artifacts):
             reasoning="Synthetic saved reasoning. " * 500,
         )
     )
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             engagement_id=project.id,
             session_id=chat.id,
@@ -66,7 +66,7 @@ def seed_inspection(store, artifacts):
             metadata={"chat_turn_id": turn.id},
         )
     )
-    call = store.create(
+    call = await store.create(
         ToolCall(
             engagement_id=project.id,
             run_id=turn.id,
@@ -81,7 +81,7 @@ def seed_inspection(store, artifacts):
     raw_bytes = (
         b"progress recorded\npassword=RAW_INSPECTION_SECRET\nfinished observation\n"
     )
-    output = store.create(
+    output = await store.create(
         artifacts.put_bytes(
             raw_bytes,
             engagement_id=project.id,
@@ -90,7 +90,7 @@ def seed_inspection(store, artifacts):
             metadata={"tool_call_id": call.id, "kind": "stdout", "searchable": True},
         )
     )
-    source_artifact = store.create(
+    source_artifact = await store.create(
         artifacts.put_bytes(
             b"SAVED_SOURCE_SELECTION_PRIVATE\n",
             engagement_id=project.id,
@@ -98,7 +98,7 @@ def seed_inspection(store, artifacts):
             media_type="text/plain",
         )
     )
-    source = store.create(
+    source = await store.create(
         KnowledgeSource(
             engagement_id=project.id,
             name="selected-source.txt",
@@ -109,11 +109,11 @@ def seed_inspection(store, artifacts):
         )
     )
 
-    def execution(name, status):
+    async def execution(name, status):
         identity = str(uuid4())
         source_bytes = f"# Inert {name} source, never executed.\n".encode()
         source_hash = hashlib.sha256(source_bytes).hexdigest()
-        source = store.create(
+        source = await store.create(
             artifacts.put_bytes(
                 source_bytes,
                 engagement_id=project.id,
@@ -122,7 +122,7 @@ def seed_inspection(store, artifacts):
                 metadata={"execution_id": identity},
             )
         )
-        raw = store.create(
+        raw = await store.create(
             artifacts.put_bytes(
                 raw_bytes,
                 engagement_id=project.id,
@@ -139,8 +139,8 @@ def seed_inspection(store, artifacts):
             parent_artifact_id=raw.id,
             metadata={"execution_id": identity, "redacted": True},
         )
-        redacted = store.create(redacted.model_copy(update={"redacted": True}))
-        return store.create(
+        redacted = await store.create(redacted.model_copy(update={"redacted": True}))
+        return await store.create(
             OperatorExecution(
                 id=identity,
                 engagement_id=project.id,
@@ -178,8 +178,8 @@ def seed_inspection(store, artifacts):
             )
         )
 
-    completed = execution("Completed inspection", "completed")
-    waiting = execution("Waiting inspection", "running")
+    completed = await execution("Completed inspection", "completed")
+    waiting = await execution("Waiting inspection", "running")
     return {
         "project": project,
         "foreign": foreign,
@@ -204,12 +204,14 @@ async def attach_inert_waiter(store, service, execution):
             started.set()
             await asyncio.Event().wait()
         finally:
-            current = store.get(OperatorExecution, execution.id)
-            store.update(
-                OperatorExecution,
-                execution.id,
-                {"status": "cancelled", "completed_at": utc_now()},
-                expected_revision=current.revision,
+            current = await store.get(OperatorExecution, execution.id)
+            (
+                await store.update(
+                    OperatorExecution,
+                    execution.id,
+                    {"status": "cancelled", "completed_at": utc_now()},
+                    expected_revision=current.revision,
+                )
             )
 
     task = asyncio.create_task(wait())
@@ -234,7 +236,7 @@ def create_fixture_app(*args: Any, **kwargs: Any):
 
     async def initialize():
         await startup()
-        data = seed_inspection(store, artifacts)
+        data = await seed_inspection(store, artifacts)
         await attach_inert_waiter(store, service, data["waiting"])
 
     service.startup = initialize

@@ -14,6 +14,11 @@ and cost estimates read ``input_tokens`` as the prompt size, so usage is
 normalized to the whole prompt, with reads and writes recorded apart.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import copy
 import json
@@ -340,7 +345,7 @@ def test_thinking_and_empty_text_blocks_never_carry_a_breakpoint():
     }
 
 
-def test_anthropic_usage_counts_the_whole_prompt_with_reads_and_writes_apart():
+async def test_anthropic_usage_counts_the_whole_prompt_with_reads_and_writes_apart():
     """Anthropic's ``input_tokens`` excludes cache reads and writes."""
 
     wire = _Anthropic(
@@ -351,7 +356,7 @@ def test_anthropic_usage_counts_the_whole_prompt_with_reads_and_writes_apart():
             "output_tokens": 20,
         }
     )
-    response = asyncio.run(wire.provider().complete(_step(1, "x", CLAUDE)))
+    response = await wire.provider().complete(_step(1, "x", CLAUDE))
 
     assert response.usage == ModelUsage(
         input_tokens=9_450,
@@ -461,7 +466,7 @@ def test_bedrock_respects_the_profile_switch(monkeypatch):
     assert _marked(sent) == []
 
 
-def test_bedrock_usage_counts_cache_reads_and_writes_in_the_prompt(monkeypatch):
+async def test_bedrock_usage_counts_cache_reads_and_writes_in_the_prompt(monkeypatch):
     _Converse(
         monkeypatch,
         {
@@ -477,7 +482,7 @@ def test_bedrock_usage_counts_cache_reads_and_writes_in_the_prompt(monkeypatch):
         _config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK, model)
     )
 
-    response = asyncio.run(provider.complete(_step(1, "x", model)))
+    response = await provider.complete(_step(1, "x", model))
 
     assert response.usage == ModelUsage(
         input_tokens=9_450,
@@ -655,7 +660,7 @@ def test_prompt_cache_key_is_bounded_and_only_sent_with_a_session():
         assert "prompt_cache_key" not in provider._payload(request, "gpt-5.4-mini")
 
 
-def test_responses_usage_reads_its_cache_hits():
+async def test_responses_usage_reads_its_cache_hits():
     """The Responses adapter dropped ``input_tokens_details`` entirely."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -693,7 +698,7 @@ def test_responses_usage_reads_its_cache_hits():
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(provider.complete(_step(0, "x", "gpt-5.4-mini", tools=[])))
+    response = await provider.complete(_step(0, "x", "gpt-5.4-mini", tools=[]))
 
     assert response.usage == ModelUsage(
         input_tokens=2_634,
@@ -701,3 +706,6 @@ def test_responses_usage_reads_its_cache_hits():
         total_tokens=2_636,
         cached_input_tokens=2_432,
     )
+
+
+pytestmark = pytest.mark.anyio

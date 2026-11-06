@@ -271,22 +271,22 @@ def summarize(result: StructuredResult) -> StructuredResultSummary:
     )
 
 
-def publish_result(
+async def publish_result(
     store: NebulaStore,
     engagement_id: str,
     request: StructuredResultPublish,
 ) -> PublishOutcome:
     """Persist one published result, then enforce per-project retention."""
 
-    store.get(Engagement, engagement_id)
+    (await store.get(Engagement, engagement_id))
     stats = inspect_payload(request.result)
     hints = validate_hints(request.hints)
-    created = store.create(
+    created = await store.create(
         StructuredResult(
             engagement_id=engagement_id,
             stream=request.stream,
             stream_label=request.stream_label,
-            sequence=_next_sequence(store, engagement_id, request.stream),
+            sequence=(await _next_sequence(store, engagement_id, request.stream)),
             title=request.title,
             summary=request.summary,
             producer=request.producer,
@@ -301,26 +301,32 @@ def publish_result(
         )
     )
     return PublishOutcome(
-        result=created, retention_removed=_prune(store, engagement_id)
+        result=created, retention_removed=(await _prune(store, engagement_id))
     )
 
 
-def _next_sequence(store: NebulaStore, engagement_id: str, stream: str | None) -> int:
+async def _next_sequence(
+    store: NebulaStore, engagement_id: str, stream: str | None
+) -> int:
     """Number the snapshots of one stream so a series reads in order."""
 
     if stream is None:
         return 1
     existing = [
-        item for item in _all_results(store, engagement_id) if item.stream == stream
+        item
+        for item in (await _all_results(store, engagement_id))
+        if item.stream == stream
     ]
     return max((item.sequence for item in existing), default=0) + 1
 
 
-def _all_results(store: NebulaStore, engagement_id: str) -> list[StructuredResult]:
+async def _all_results(
+    store: NebulaStore, engagement_id: str
+) -> list[StructuredResult]:
     collected: list[StructuredResult] = []
     offset = 0
     while True:
-        page = store.list_entities(
+        page = await store.list_entities(
             StructuredResult, engagement_id=engagement_id, offset=offset, limit=1_000
         )
         collected.extend(page)
@@ -329,21 +335,21 @@ def _all_results(store: NebulaStore, engagement_id: str) -> list[StructuredResul
         offset += 1_000
 
 
-def _prune(store: NebulaStore, engagement_id: str) -> list[str]:
+async def _prune(store: NebulaStore, engagement_id: str) -> list[str]:
     """Drop the oldest results past the cap, and report exactly which ones."""
 
-    total = store.count(StructuredResult, engagement_id=engagement_id)
+    total = await store.count(StructuredResult, engagement_id=engagement_id)
     if total <= MAX_RESULTS_PER_PROJECT:
         return []
     excess = total - MAX_RESULTS_PER_PROJECT
-    oldest = store.list_entities(
+    oldest = await store.list_entities(
         StructuredResult,
         engagement_id=engagement_id,
         limit=min(excess, 1_000),
     )
     removed: list[str] = []
     for stale in oldest:
-        store.delete(StructuredResult, stale.id)
+        (await store.delete(StructuredResult, stale.id))
         removed.append(stale.id)
     return removed
 
@@ -355,7 +361,7 @@ def structured_results_router(store: NebulaStore) -> APIRouter:
         "/projects/{project_id}/structured-results",
         response_model=list[StructuredResultSummary],
     )
-    def list_results(
+    async def list_results(
         project_id: str,
         request: Request,
         response: Response,
@@ -364,7 +370,7 @@ def structured_results_router(store: NebulaStore) -> APIRouter:
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=200),
     ) -> Any:
-        store.get(Engagement, project_id)
+        (await store.get(Engagement, project_id))
         # The conversation filter runs in SQL, so a chat's poll parses only
         # its own page of results instead of every result the project keeps.
         filters = {
@@ -375,7 +381,7 @@ def structured_results_router(store: NebulaStore) -> APIRouter:
             )
             if value is not None
         }
-        page = store.find_entities(
+        page = await store.find_entities(
             StructuredResult,
             filters,
             engagement_id=project_id,
@@ -393,9 +399,9 @@ def structured_results_router(store: NebulaStore) -> APIRouter:
         response_model=PublishOutcome,
         status_code=201,
     )
-    def publish(project_id: str, body: StructuredResultPublish) -> PublishOutcome:
+    async def publish(project_id: str, body: StructuredResultPublish) -> PublishOutcome:
         try:
-            return publish_result(store, project_id, body)
+            return await publish_result(store, project_id, body)
         except StructuredResultRejected as exc:
             # diagnostic-expected: a producer's payload problem, reported to it.
             raise HTTPException(422, str(exc)) from exc
@@ -404,24 +410,30 @@ def structured_results_router(store: NebulaStore) -> APIRouter:
         "/projects/{project_id}/structured-results/{result_id}",
         response_model=StructuredResult,
     )
-    def read_result(project_id: str, result_id: str) -> StructuredResult:
-        return _owned(store, project_id, result_id)
+    async def read_result(project_id: str, result_id: str) -> StructuredResult:
+        return await _owned(store, project_id, result_id)
 
     @router.delete(
         "/projects/{project_id}/structured-results/{result_id}", status_code=204
     )
-    def delete_result(
+    async def delete_result(
         project_id: str, result_id: str, expected_revision: int | None = None
     ) -> Response:
-        owned = _owned(store, project_id, result_id)
-        store.delete(StructuredResult, owned.id, expected_revision=expected_revision)
+        owned = await _owned(store, project_id, result_id)
+        (
+            await store.delete(
+                StructuredResult, owned.id, expected_revision=expected_revision
+            )
+        )
         return Response(status_code=204)
 
     return router
 
 
-def _owned(store: NebulaStore, project_id: str, result_id: str) -> StructuredResult:
-    result = store.get(StructuredResult, result_id)
+async def _owned(
+    store: NebulaStore, project_id: str, result_id: str
+) -> StructuredResult:
+    result = await store.get(StructuredResult, result_id)
     if result.engagement_id != project_id:
         raise HTTPException(404, "That result belongs to another project")
     return result
@@ -547,7 +559,9 @@ class PublishResultTool(ToolPlugin):
                 chat_session_id=invocation.chat_session_id,
                 chat_turn_id=invocation.chat_turn_id,
             )
-            outcome = publish_result(self.store, invocation.engagement_id, request)
+            outcome = await publish_result(
+                self.store, invocation.engagement_id, request
+            )
         except (StructuredResultRejected, ValueError) as exc:
             # diagnostic-expected: returned to the model as a readable refusal.
             return self._failure(started, str(exc))

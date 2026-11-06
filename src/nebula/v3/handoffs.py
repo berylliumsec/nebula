@@ -70,7 +70,7 @@ class HandoffService:
     def _key(ref: ResourceRef) -> str:
         return f"{ref.kind.value}:{ref.id}"
 
-    def _validate_ref(self, project_id: str, ref: ResourceRef) -> None:
+    async def _validate_ref(self, project_id: str, ref: ResourceRef) -> None:
         if ref.project_id != project_id:
             raise ValueError("handoff references must belong to the requested project")
         entity_kind = RESOURCE_ENTITY_KINDS.get(ref.kind)
@@ -78,8 +78,8 @@ class HandoffService:
             if ref.kind in {ResourceKind.WORKSPACE_FILE, ResourceKind.BROWSER_TAB}:
                 return
             raise ValueError(f"unsupported handoff resource kind: {ref.kind.value}")
-        with self.store.database.session() as session:
-            row = session.get(EntityRow, ref.id)
+        async with self.store.database.session() as session:
+            row = await session.get(EntityRow, ref.id)
             if row is None or row.kind != entity_kind:
                 raise ValueError(
                     f"handoff source no longer exists: {ref.kind.value}/{ref.id}"
@@ -94,18 +94,18 @@ class HandoffService:
                     f"revision conflict: expected {ref.revision}, found {row.revision}"
                 )
 
-    def create(
+    async def create(
         self, request: HandoffCreateRequest, *, actor_id: str
     ) -> HandoffEnvelope:
-        self.store.get(Engagement, request.project_id)
+        (await self.store.get(Engagement, request.project_id))
         if not request.source_refs and not request.transient:
             raise ValueError(
                 "handoffs require a durable source or a transient-source marker"
             )
         for ref in request.source_refs:
-            self._validate_ref(request.project_id, ref)
+            (await self._validate_ref(request.project_id, ref))
         if request.target_ref:
-            self._validate_ref(request.project_id, request.target_ref)
+            (await self._validate_ref(request.project_id, request.target_ref))
         envelope = HandoffEnvelope(
             engagement_id=request.project_id,
             source_refs=request.source_refs,
@@ -117,28 +117,30 @@ class HandoffService:
             transient=request.transient,
             expires_at=utc_now() + HANDOFF_TTL,
         )
-        self.store.create_with_operation_event(
-            envelope,
-            operation_id=envelope.id,
-            operation_kind="handoff",
-            engagement_id=request.project_id,
-            event_type="handoff.created",
-            event_payload={
-                "handoff_id": envelope.id,
-                "action_id": envelope.action_id,
-                "source_count": len(envelope.source_refs),
-                "transient": envelope.transient,
-            },
-            actor_id=actor_id,
-            idempotency_key=f"handoff-created:{envelope.id}",
+        (
+            await self.store.create_with_operation_event(
+                envelope,
+                operation_id=envelope.id,
+                operation_kind="handoff",
+                engagement_id=request.project_id,
+                event_type="handoff.created",
+                event_payload={
+                    "handoff_id": envelope.id,
+                    "action_id": envelope.action_id,
+                    "source_count": len(envelope.source_refs),
+                    "transient": envelope.transient,
+                },
+                actor_id=actor_id,
+                idempotency_key=f"handoff-created:{envelope.id}",
+            )
         )
         return envelope
 
-    def _expire(self, envelope: HandoffEnvelope) -> HandoffEnvelope:
+    async def _expire(self, envelope: HandoffEnvelope) -> HandoffEnvelope:
         if envelope.status != HandoffStatus.PENDING or envelope.expires_at > utc_now():
             return envelope
         try:
-            updated, _ = self.store.update_with_operation_event(
+            updated, _ = await self.store.update_with_operation_event(
                 HandoffEnvelope,
                 envelope.id,
                 {"status": HandoffStatus.EXPIRED},
@@ -154,13 +156,13 @@ class HandoffService:
         except ConflictError:  # diagnostic-expected: a concurrent reader expired it or a device consumed it first
             # Every writer moves the envelope out of PENDING, so a read is never
             # a conflict for its caller: the stored row is the answer.
-            return self.store.get(HandoffEnvelope, envelope.id)
+            return await self.store.get(HandoffEnvelope, envelope.id)
         return updated
 
-    def get(self, handoff_id: str) -> HandoffEnvelope:
-        return self._expire(self.store.get(HandoffEnvelope, handoff_id))
+    async def get(self, handoff_id: str) -> HandoffEnvelope:
+        return await self._expire((await self.store.get(HandoffEnvelope, handoff_id)))
 
-    def list(
+    async def list(
         self, project_id: str, *, offset: int = 0, limit: int = 100
     ) -> list[HandoffEnvelope]:
         """Page a project's handoffs newest first; the recent ones are the live ones."""
@@ -178,17 +180,17 @@ class HandoffService:
             .offset(offset)
             .limit(limit)
         )
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             envelopes = [
                 HandoffEnvelope.model_validate(row.payload)
-                for row in session.scalars(statement)
+                for row in (await session.scalars(statement))
             ]
-        return [self._expire(item) for item in envelopes]
+        return [(await self._expire(item)) for item in envelopes]
 
-    def resolve(
+    async def resolve(
         self, handoff_id: str, *, current_device_id: str | None
     ) -> HandoffResolution:
-        envelope = self.get(handoff_id)
+        envelope = await self.get(handoff_id)
         sources: list[HandoffSourceState] = []
         for ref in envelope.source_refs:
             key = self._key(ref)
@@ -198,8 +200,8 @@ class HandoffService:
             if entity_kind is None:
                 state = "origin_required" if envelope.transient else "available"
             else:
-                with self.store.database.session() as session:
-                    row = session.get(EntityRow, ref.id)
+                async with self.store.database.session() as session:
+                    row = await session.get(EntityRow, ref.id)
                 if row is None or row.kind != entity_kind:
                     state = "deleted"
                 elif ref.revision is not None and row.revision != ref.revision:
@@ -236,17 +238,17 @@ class HandoffService:
             recovery = "ready"
         return HandoffResolution(envelope=envelope, sources=sources, recovery=recovery)
 
-    def consume(
+    async def consume(
         self, handoff_id: str, request: HandoffConsumeRequest
     ) -> HandoffEnvelope:
-        envelope = self.get(handoff_id)
+        envelope = await self.get(handoff_id)
         if envelope.status == HandoffStatus.CONSUMED:
             if envelope.consume_idempotency_key == request.idempotency_key:
                 return envelope
             raise ConflictError("handoff was already consumed")
         if envelope.status != HandoffStatus.PENDING:
             raise ConflictError(f"cannot consume a {envelope.status.value} handoff")
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             HandoffEnvelope,
             envelope.id,
             {
@@ -266,15 +268,15 @@ class HandoffService:
         )
         return updated
 
-    def cancel(
+    async def cancel(
         self, handoff_id: str, request: HandoffCancelRequest, *, actor_id: str
     ) -> HandoffEnvelope:
-        envelope = self.get(handoff_id)
+        envelope = await self.get(handoff_id)
         if envelope.status == HandoffStatus.CANCELLED:
             return envelope
         if envelope.status != HandoffStatus.PENDING:
             raise ConflictError(f"cannot cancel a {envelope.status.value} handoff")
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             HandoffEnvelope,
             envelope.id,
             {"status": HandoffStatus.CANCELLED},

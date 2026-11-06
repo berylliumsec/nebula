@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
+from .async_utils import MaybeAsync
+
 from .diagnostics import record_caught_exception
 
 import asyncio
@@ -10,7 +14,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Iterable, Sequence
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, Field, ValidationError
@@ -476,7 +480,7 @@ class _MemoryChecks:
     texts: dict[ReferenceKey, str]
     objective: str | None
     # Whether an ("evidence" | "artifact", id) exists in the owner's project.
-    known_id: Callable[[str, str], bool]
+    known_id: MaybeAsync[[str, str], bool]
     ids: _SourceIds
 
 
@@ -791,7 +795,7 @@ def resolve_context_limits(
     )
 
 
-def default_output_tokens(
+async def default_output_tokens(
     store: NebulaStore,
     provider_id: str | None,
     model: str | None,
@@ -808,7 +812,7 @@ def default_output_tokens(
     output = DEFAULT_MAX_OUTPUT_TOKENS
     if provider_id:
         try:
-            profile = store.get(ProviderProfile, provider_id)
+            profile = await store.get(ProviderProfile, provider_id)
             output = resolve_context_limits(profile, model=model).max_output_tokens
         except (
             NotFoundError,
@@ -1448,13 +1452,13 @@ class ContextCompactor:
             setattr(store, "_context_compaction_locks", locks)
         self._locks: dict[tuple[str, str], asyncio.Lock] = locks
 
-    def snapshots(
+    async def snapshots(
         self, owner_type: ContextOwnerType, owner_id: str, engagement_id: str
     ) -> list[ContextSnapshot]:
         found: list[ContextSnapshot] = []
         offset = 0
         while True:
-            page = self.store.list_entities(
+            page = await self.store.list_entities(
                 ContextSnapshot,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -1470,10 +1474,10 @@ class ContextCompactor:
             offset += len(page)
         return sorted(found, key=lambda item: (item.version, item.created_at, item.id))
 
-    def latest(
+    async def latest(
         self, owner_type: ContextOwnerType, owner_id: str, engagement_id: str
     ) -> ContextSnapshot | None:
-        snapshots = self.snapshots(owner_type, owner_id, engagement_id)
+        snapshots = await self.snapshots(owner_type, owner_id, engagement_id)
         return snapshots[-1] if snapshots else None
 
     async def compact(
@@ -1523,9 +1527,9 @@ class ContextCompactor:
             raise ContextCompactionError(
                 "context compaction requires canonical sources"
             )
-        self._validate_canonical_sources(owner_type, owner_id, sources)
+        (await self._validate_canonical_sources(owner_type, owner_id, sources))
         source_sha256 = source_digest(sources)
-        previous = self.snapshots(owner_type, owner_id, engagement_id)
+        previous = await self.snapshots(owner_type, owner_id, engagement_id)
         for snapshot in reversed(previous):
             if (
                 snapshot.status == ContextSnapshotStatus.READY
@@ -1628,13 +1632,13 @@ class ContextCompactor:
                 segment_count=progress.segments,
                 reused_segments=progress.reused,
             )
-            self._persist(snapshot)
+            (await self._persist(snapshot))
             if isinstance(exc, ContextCapacityError):
                 # Keep the capacity subclass: chat maps it to a configuration
                 # error the operator must act on, not a retryable failure.
                 raise ContextCapacityError(safe_error, usage=usage) from exc
             raise ContextCompactionError(safe_error, usage=usage) from exc
-        self._persist(snapshot)
+        (await self._persist(snapshot))
         return CompactionResult(snapshot=snapshot, created=True)
 
     async def _hierarchical_memory(
@@ -1693,7 +1697,7 @@ class ContextCompactor:
                 objective=objective,
                 plan=plan,
             )
-            cached = self._cached_segment(owner_type, owner_id, digest)
+            cached = await self._cached_segment(owner_type, owner_id, digest)
             if cached is not None:
                 progress.reused += 1
                 progress.dropped += cached.dropped_items
@@ -1717,20 +1721,22 @@ class ContextCompactor:
                 )
             else:
                 memory = result.memory
-                self._store_segment(
-                    ContextSegment(
-                        id=self._segment_id(owner_type, owner_id, digest),
-                        engagement_id=engagement_id,
-                        owner_type=owner_type,
-                        owner_id=owner_id,
-                        digest=digest,
-                        provider_profile_id=profile.id,
-                        model=model,
-                        prompt_version=CONTEXT_PROMPT_VERSION,
-                        source_references=self._group_references(group),
-                        memory=memory,
-                        dropped_items=result.dropped_items,
-                        usage=result.usage,
+                (
+                    await self._store_segment(
+                        ContextSegment(
+                            id=self._segment_id(owner_type, owner_id, digest),
+                            engagement_id=engagement_id,
+                            owner_type=owner_type,
+                            owner_id=owner_id,
+                            digest=digest,
+                            provider_profile_id=profile.id,
+                            model=model,
+                            prompt_version=CONTEXT_PROMPT_VERSION,
+                            source_references=self._group_references(group),
+                            memory=memory,
+                            dropped_items=result.dropped_items,
+                            usage=result.usage,
+                        )
                     )
                 )
             memories.append((memory, covered))
@@ -2179,7 +2185,7 @@ class ContextCompactor:
                     None, ["the response called a tool; return only the JSON"], 0
                 )
             else:
-                checked = self._check_memory(previous_output, allowed, checks)
+                checked = await self._check_memory(previous_output, allowed, checks)
             if checked.memory is not None and not checked.problems:
                 return _MemoryResult(checked.memory, usage, checked.dropped)
             if checked.memory is not None and (
@@ -2298,7 +2304,7 @@ class ContextCompactor:
         stripped = text.strip().rstrip("`").rstrip()
         return "{" in stripped and not stripped.endswith("}")
 
-    def _check_memory(
+    async def _check_memory(
         self,
         text: str,
         allowed: set[ReferenceKey],
@@ -2403,7 +2409,7 @@ class ContextCompactor:
                     isinstance(value, str)
                     and value.strip()
                     and _identifier_present(value.strip(), folded_call_text)
-                    and checks.known_id(kind, value.strip())
+                    and await call_async(checks.known_id, kind, value.strip())
                 ):
                     if value.strip() not in values:
                         values.append(value.strip())
@@ -2569,12 +2575,12 @@ class ContextCompactor:
             )
         return {key: "\n".join(parts) for key, parts in texts.items()}
 
-    def _id_checker(self, engagement_id: str) -> Callable[[str, str], bool]:
+    def _id_checker(self, engagement_id: str) -> MaybeAsync[[str, str], bool]:
         """Whether an evidence or artifact ID exists in the owner's project."""
 
         known: dict[tuple[str, str], bool] = {}
 
-        def exists(kind: str, value: str) -> bool:
+        async def exists(kind: str, value: str) -> bool:
             cached = known.get((kind, value))
             if cached is not None:
                 return cached
@@ -2582,7 +2588,9 @@ class ContextCompactor:
                 Evidence if kind == "evidence" else Artifact
             )
             try:
-                found = self.store.get(model, value).engagement_id == engagement_id
+                found = (
+                    await self.store.get(model, value)
+                ).engagement_id == engagement_id
             except NotFoundError:
                 # diagnostic-expected: an ID the model named that the project lacks is dropped from the memory
                 found = False
@@ -2650,11 +2658,11 @@ class ContextCompactor:
             )
         )
 
-    def _cached_segment(
+    async def _cached_segment(
         self, owner_type: ContextOwnerType, owner_id: str, digest: str
     ) -> ContextSegment | None:
         try:
-            segment = self.store.get(
+            segment = await self.store.get(
                 ContextSegment, self._segment_id(owner_type, owner_id, digest)
             )
         except NotFoundError:
@@ -2669,7 +2677,7 @@ class ContextCompactor:
             return None
         return segment
 
-    def _store_segment(self, segment: ContextSegment) -> None:
+    async def _store_segment(self, segment: ContextSegment) -> None:
         """Keep a leaf memory for later compactions of the same owner.
 
         Written as soon as the group is summarised, so the work survives a
@@ -2677,7 +2685,7 @@ class ContextCompactor:
         """
 
         try:
-            self.store.create(segment)
+            (await self.store.create(segment))
         except ConflictError:
             # diagnostic-expected: the same group was already stored; its digest fixes its memory's inputs
             return
@@ -2702,18 +2710,18 @@ class ContextCompactor:
             raise ValueError("response did not contain a JSON object")
         return stripped[start : end + 1]
 
-    def _validate_canonical_sources(
+    async def _validate_canonical_sources(
         self,
         owner_type: ContextOwnerType,
         owner_id: str,
         sources: list[ContextSource],
     ) -> None:
         if owner_type == ContextOwnerType.CHAT_SESSION:
-            session = self.store.get(ChatSession, owner_id)
+            session = await self.store.get(ChatSession, owner_id)
             messages: dict[str, ChatMessage] = {}
             offset = 0
             while True:
-                page = self.store.list_entities(
+                page = await self.store.list_entities(
                     ChatMessage,
                     engagement_id=session.engagement_id,
                     offset=offset,
@@ -2740,7 +2748,7 @@ class ContextCompactor:
         event_sources: dict[str, RunEvent] = {}
         cursor = 0
         while True:
-            events = self.store.replay_events(
+            events = await self.store.replay_events(
                 owner_id, after_sequence=cursor, limit=10_000
             )
             event_sources.update((event.id, event) for event in events)
@@ -2750,13 +2758,13 @@ class ContextCompactor:
         for source in sources:
             reference = source.reference
             if reference.source_kind in {"task", "task_result"}:
-                task = self.store.get(Task, reference.source_id)
+                task = await self.store.get(Task, reference.source_id)
                 if task.run_id != owner_id:
                     raise ValueError(
                         "mission memory task source belongs to another run"
                     )
             elif reference.source_kind == "agent_attempt":
-                attempt = self.store.get(AgentAttempt, reference.source_id)
+                attempt = await self.store.get(AgentAttempt, reference.source_id)
                 if attempt.run_id != owner_id:
                     raise ValueError("mission memory attempt belongs to another run")
             elif reference.source_kind == "run_event":
@@ -2796,7 +2804,7 @@ class ContextCompactor:
             return source.provenance
         return source.provenance or (source.reference,)
 
-    def _persist(self, snapshot: ContextSnapshot) -> None:
+    async def _persist(self, snapshot: ContextSnapshot) -> None:
         owner_model: type[ChatSession] | type[AgentRun]
         owner_model = (
             ChatSession
@@ -2804,7 +2812,7 @@ class ContextCompactor:
             else AgentRun
         )
         for _ in range(3):
-            owner = self.store.get(owner_model, snapshot.owner_id)
+            owner = await self.store.get(owner_model, snapshot.owner_id)
             metadata = dict(owner.metadata)
             metadata["context_compaction"] = {
                 "snapshot_id": snapshot.id,
@@ -2814,13 +2822,15 @@ class ContextCompactor:
                 "updated_at": utc_now().isoformat(),
             }
             try:
-                with self.store.transaction() as transaction:
-                    transaction.add(snapshot)
-                    transaction.update(
-                        owner_model,
-                        owner.id,
-                        {"metadata": metadata},
-                        expected_revision=owner.revision,
+                async with self.store.transaction() as transaction:
+                    (await transaction.add(snapshot))
+                    (
+                        await transaction.update(
+                            owner_model,
+                            owner.id,
+                            {"metadata": metadata},
+                            expected_revision=owner.revision,
+                        )
                     )
                 return
             except ConflictError as caught_error:
@@ -2832,7 +2842,7 @@ class ContextCompactor:
                     stage="context",
                 )
                 try:
-                    existing = self.store.get(ContextSnapshot, snapshot.id)
+                    existing = await self.store.get(ContextSnapshot, snapshot.id)
                 except NotFoundError as caught_error:
                     record_caught_exception(
                         "knowledge",

@@ -106,14 +106,14 @@ def queue_is_dormant(queue: ChatQueue) -> bool:
     return ready is None or ready["status"] == "needs_review"
 
 
-def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
+async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
     """Called inside the same transaction that persists the new turn."""
     if claim is None:
         return
     queue_id, revision, item_id = claim
     from .domain import ChatQueue
 
-    row = transaction.session.get(EntityRow, queue_id)
+    row = await transaction.session.get(EntityRow, queue_id)
     if row is None:
         raise ConflictError("Follow-up queue was removed")
     queue = ChatQueue.model_validate(row.payload)
@@ -127,7 +127,7 @@ def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
         if request["backend"] == "harness"
         else request.get("provider_id")
     )
-    profile_row = transaction.session.get(EntityRow, profile_id)
+    profile_row = await transaction.session.get(EntityRow, profile_id)
     if (
         not profile_row
         or not profile_row.payload.get("enabled")
@@ -135,7 +135,7 @@ def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
     ):
         raise ConflictError("Runtime authorization changed during preparation")
     if item.get("device_id"):
-        device_row = transaction.session.get(EntityRow, item["device_id"])
+        device_row = await transaction.session.get(EntityRow, item["device_id"])
         if device_row is None:
             raise ConflictError("Authorizing device was removed")
         device = PairedDeviceSession.model_validate(device_row.payload)
@@ -147,8 +147,10 @@ def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
         ):
             raise ConflictError("Authorizing device expired during preparation")
     item.update(status="sending", turn_id=turn_id, harness_turn_id=harness_turn_id)
-    transaction.update(
-        ChatQueue, queue_id, {"items": items}, expected_revision=revision
+    (
+        await transaction.update(
+            ChatQueue, queue_id, {"items": items}, expected_revision=revision
+        )
     )
 
 
@@ -177,10 +179,10 @@ class ChatQueueService:
         # Queue id -> revision at which ``step`` found nothing to act on.
         self._dormant = {}
 
-    def get(self, session_id):
-        session = self.store.get(ChatSession, session_id)
+    async def get(self, session_id):
+        session = await self.store.get(ChatSession, session_id)
         try:
-            return self.store.get(ChatQueue, "chat-queue-" + session_id)
+            return await self.store.get(ChatQueue, "chat-queue-" + session_id)
         except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
             return ChatQueue(
                 id="chat-queue-" + session_id,
@@ -188,33 +190,33 @@ class ChatQueueService:
                 engagement_id=session.engagement_id,
             )
 
-    def exists(self, session_id):
+    async def exists(self, session_id):
         try:
-            self.store.get(ChatQueue, "chat-queue-" + session_id)
+            (await self.store.get(ChatQueue, "chat-queue-" + session_id))
             return True
         except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
             return False
 
-    def latest_turn(self, session_id):
+    async def latest_turn(self, session_id):
         """The conversation's newest turn, as a header: the worker asks every
         half second and needs only its identity and status."""
-        with self.store.database.session() as database:
-            return latest_turn_header(database, session_id)
+        async with self.store.database.session() as database:
+            return await latest_turn_header(database, session_id)
 
-    def turn(self, session_id, turn_id):
-        with self.store.database.session() as database:
-            header = turn_header(database, session_id, turn_id)
+    async def turn(self, session_id, turn_id):
+        async with self.store.database.session() as database:
+            header = await turn_header(database, session_id, turn_id)
         if header is None:
             raise NotFoundError(f"chat turn not found: {turn_id}")
         return header
 
-    def write(self, session_id, body, device_id=None):
-        session = self.store.get(ChatSession, session_id)
-        project_workspace_path = self.store.get(
-            Engagement, session.engagement_id
+    async def write(self, session_id, body, device_id=None):
+        session = await self.store.get(ChatSession, session_id)
+        project_workspace_path = (
+            await self.store.get(Engagement, session.engagement_id)
         ).workspace_path
-        present = self.exists(session_id)
-        queue = self.get(session_id)
+        present = await self.exists(session_id)
+        queue = await self.get(session_id)
         items = [dict(item) for item in queue.items]
         if body.action == "enqueue" and body.idempotency_key:
             previous = next(
@@ -279,7 +281,7 @@ class ChatQueueService:
                 raise HTTPException(
                     422, "Follow-up cannot change the conversation runtime"
                 )
-            profile = self.store.get(
+            profile = await self.store.get(
                 HarnessProfile
                 if session.backend == ChatBackend.HARNESS
                 else ProviderProfile,
@@ -325,7 +327,7 @@ class ChatQueueService:
                 else:
                     items.append(item)
                 # A user explicitly enqueueing while idle authorizes moving on from a previous failure.
-                latest = self.latest_turn(session_id)
+                latest = await self.latest_turn(session_id)
                 if latest and latest.status in TERMINAL:
                     changes["resume_after_turn_id"] = latest.id
                 if not present or body.paused or body.imported_uncertain:
@@ -344,7 +346,7 @@ class ChatQueueService:
                 item.update(payload)
         elif body.action in {"pause", "resume"}:
             changes["paused"] = body.action == "pause"
-            latest = self.latest_turn(session_id)
+            latest = await self.latest_turn(session_id)
             if body.action == "resume":
                 changes["resume_after_turn_id"] = latest.id if latest else None
         elif body.action in {"remove", "clear"}:
@@ -398,35 +400,37 @@ class ChatQueueService:
             items.append(retry)
             changes["paused"] = True
         changes["items"] = retire_settled_items(items)
-        with self.store.transaction(immediate=True) as transaction:
-            transaction.assert_project_workspace(
-                session.engagement_id, project_workspace_path
+        async with self.store.transaction(immediate=True) as transaction:
+            (
+                await transaction.assert_project_workspace(
+                    session.engagement_id, project_workspace_path
+                )
             )
             if present:
-                return transaction.update(
+                return await transaction.update(
                     ChatQueue,
                     queue.id,
                     changes,
                     expected_revision=body.expected_revision,
                 )
-            return transaction.add(queue.model_copy(update=changes))
+            return await transaction.add(queue.model_copy(update=changes))
 
-    def review(self, queue, item_id, detail):
+    async def review(self, queue, item_id, detail):
         items = [dict(item) for item in queue.items]
         for item in items:
             if item["id"] == item_id:
                 item.update(status="needs_review", detail=detail)
-        return self.store.update(
+        return await self.store.update(
             ChatQueue,
             queue.id,
             {"items": items, "paused": True},
             expected_revision=queue.revision,
         )
 
-    def authorization_valid(self, item):
+    async def authorization_valid(self, item):
         device_id = item.get("device_id")
         if device_id:
-            device = self.store.get(PairedDeviceSession, device_id)
+            device = await self.store.get(PairedDeviceSession, device_id)
             now = utc_now()
             if (
                 device.revoked_at
@@ -437,7 +441,7 @@ class ChatQueueService:
                     "The device that authorized this follow-up has expired or was revoked"
                 )
         request = ChatCompletionRequest.model_validate(item["request"])
-        profile = self.store.get(
+        profile = await self.store.get(
             HarnessProfile
             if request.backend == ChatBackend.HARNESS
             else ProviderProfile,
@@ -451,21 +455,23 @@ class ChatQueueService:
             )
         return request
 
-    def _requeue_claim(self, queue_id, item_id):
+    async def _requeue_claim(self, queue_id, item_id):
         """Return an unlinked claim to the queue so the next poll retries it."""
         for _ in range(3):
-            current = self.store.get(ChatQueue, queue_id)
+            current = await self.store.get(ChatQueue, queue_id)
             items = [dict(row) for row in current.items]
             row = next((row for row in items if row["id"] == item_id), None)
             if row is None or row["status"] != "claiming":
                 return
             row["status"] = "queued"
             try:
-                self.store.update(
-                    ChatQueue,
-                    current.id,
-                    {"items": items},
-                    expected_revision=current.revision,
+                (
+                    await self.store.update(
+                        ChatQueue,
+                        current.id,
+                        {"items": items},
+                        expected_revision=current.revision,
+                    )
                 )
                 return
             except (
@@ -473,16 +479,16 @@ class ChatQueueService:
             ):  # diagnostic-expected: reread the queue and retry the requeue
                 continue
 
-    def _session_busy(self, session_id, seen):
+    async def _session_busy(self, session_id, seen):
         """True when a response the drainer did not start now occupies the session."""
-        current = self.latest_turn(session_id)
+        current = await self.latest_turn(session_id)
         if current is None:
             return False
         if seen is None or current.id != seen.id:
             return True
         return current.status not in TERMINAL
 
-    def _review_failed_dispatch(self, queue_id, item_id, exc):
+    async def _review_failed_dispatch(self, queue_id, item_id, exc):
         record_caught_exception(
             "chat",
             "chat.queue.dispatch_failed",
@@ -490,11 +496,13 @@ class ChatQueueService:
             exc,
             stage="queue",
         )
-        current = self.store.get(ChatQueue, queue_id)
-        self.review(
-            current,
-            item_id,
-            "Follow-up could not be dispatched. Inspect the conversation before retrying",
+        current = await self.store.get(ChatQueue, queue_id)
+        (
+            await self.review(
+                current,
+                item_id,
+                "Follow-up could not be dispatched. Inspect the conversation before retrying",
+            )
         )
 
     async def step(self, queue, recovering=False):
@@ -505,7 +513,7 @@ class ChatQueueService:
         settled = {}
         for item in queue.items:
             if item["status"] == "needs_review" and item.get("turn_id"):
-                status = self.turn(queue.session_id, item["turn_id"]).status
+                status = (await self.turn(queue.session_id, item["turn_id"])).status
                 if status in {"cancelled", "complete"}:
                     settled[item["id"]] = status
         if settled:
@@ -521,14 +529,16 @@ class ChatQueueService:
                     completed = {**item, "status": "complete"}
                     completed.pop("detail", None)
                     items.append(completed)
-            self.store.update(
-                ChatQueue,
-                queue.id,
-                {
-                    "items": retire_settled_items(items),
-                    "paused": queue.paused or "cancelled" in settled.values(),
-                },
-                expected_revision=queue.revision,
+            (
+                await self.store.update(
+                    ChatQueue,
+                    queue.id,
+                    {
+                        "items": retire_settled_items(items),
+                        "paused": queue.paused or "cancelled" in settled.values(),
+                    },
+                    expected_revision=queue.revision,
+                )
             )
             return
         sending = next(
@@ -538,35 +548,41 @@ class ChatQueueService:
         if sending:
             if sending["status"] == "claiming":
                 if sending["id"] not in self._inflight:
-                    self.review(
-                        queue,
-                        sending["id"],
-                        "Core restarted during dispatch. Review before retrying as a new message"
-                        if recovering
-                        else "Dispatch was interrupted before a response was linked. Review before retrying as a new message",
+                    (
+                        await self.review(
+                            queue,
+                            sending["id"],
+                            "Core restarted during dispatch. Review before retrying as a new message"
+                            if recovering
+                            else "Dispatch was interrupted before a response was linked. Review before retrying as a new message",
+                        )
                     )
                 return
-            turn = self.turn(queue.session_id, sending["turn_id"])
+            turn = await self.turn(queue.session_id, sending["turn_id"])
             if turn.status in TERMINAL:
                 if turn.status not in {"complete", "cancelled"}:
-                    self.review(
-                        queue,
-                        sending["id"],
-                        f"Response stopped or failed: {turn.error or turn.status}. Inspect its source turn before retrying as a new message",
+                    (
+                        await self.review(
+                            queue,
+                            sending["id"],
+                            f"Response stopped or failed: {turn.error or turn.status}. Inspect its source turn before retrying as a new message",
+                        )
                     )
                 else:
                     items = [dict(item) for item in queue.items]
                     next(item for item in items if item["id"] == sending["id"])[
                         "status"
                     ] = turn.status
-                    self.store.update(
-                        ChatQueue,
-                        queue.id,
-                        {
-                            "items": retire_settled_items(items),
-                            "paused": queue.paused or turn.status == "cancelled",
-                        },
-                        expected_revision=queue.revision,
+                    (
+                        await self.store.update(
+                            ChatQueue,
+                            queue.id,
+                            {
+                                "items": retire_settled_items(items),
+                                "paused": queue.paused or turn.status == "cancelled",
+                            },
+                            expected_revision=queue.revision,
+                        )
                     )
             elif turn.status in {"waiting_approval", "waiting_callback"}:
                 # Pending input or a background result blocks dispatch; resolving
@@ -580,10 +596,12 @@ class ChatQueueService:
                 # follow-up sending until the same turn reaches a durable end.
                 return
             elif recovering:
-                self.review(
-                    queue,
-                    sending["id"],
-                    "Core restarted with a response in progress. Delivery is uncertain; inspect the conversation",
+                (
+                    await self.review(
+                        queue,
+                        sending["id"],
+                        "Core restarted with a response in progress. Delivery is uncertain; inspect the conversation",
+                    )
                 )
             return
         if queue.paused:
@@ -591,7 +609,7 @@ class ChatQueueService:
         item = next((item for item in queue.items if item["status"] in EDITABLE), None)
         if not item or item["status"] == "needs_review":
             return
-        latest = self.latest_turn(queue.session_id)
+        latest = await self.latest_turn(queue.session_id)
         if latest and latest.status not in TERMINAL:
             return
         if (
@@ -599,26 +617,30 @@ class ChatQueueService:
             and latest.status != "complete"
             and queue.resume_after_turn_id != latest.id
         ):
-            self.review(
-                queue,
-                item["id"],
-                "Previous response stopped or failed. Review the next message before resuming",
+            (
+                await self.review(
+                    queue,
+                    item["id"],
+                    "Previous response stopped or failed. Review the next message before resuming",
+                )
             )
             return
         self._inflight.add(item["id"])
         try:
-            request = self.authorization_valid(item)
+            request = await self.authorization_valid(item)
             if request.backend == ChatBackend.PROVIDER:
                 # Model and effort are conversation settings the operator can
                 # change while earlier work runs; the follow-up is the next turn,
                 # so it uses the current ones. Another provider is a different
                 # authorization, which the operator reviews instead.
-                session = self.store.get(ChatSession, queue.session_id)
+                session = await self.store.get(ChatSession, queue.session_id)
                 if session.provider_profile_id != request.provider_id:
-                    self.review(
-                        queue,
-                        item["id"],
-                        "The conversation moved to another provider after this message was queued. Review it before sending",
+                    (
+                        await self.review(
+                            queue,
+                            item["id"],
+                            "The conversation moved to another provider after this message was queued. Review it before sending",
+                        )
                     )
                     return
                 request = request.model_copy(
@@ -631,7 +653,7 @@ class ChatQueueService:
                 )
             items = [dict(row) for row in queue.items]
             next(row for row in items if row["id"] == item["id"])["status"] = "claiming"
-            claimed = self.store.update(
+            claimed = await self.store.update(
                 ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
             )
             claim = (claimed.id, claimed.revision, item["id"])
@@ -690,47 +712,53 @@ class ChatQueueService:
             ConflictError
         ):  # diagnostic-expected: concurrent mutation wins and dispatch is paused
             # A concurrent edit/pause or turn reservation wins. Do not run a stale request.
-            current = self.store.get(ChatQueue, queue.id)
+            current = await self.store.get(ChatQueue, queue.id)
             if any(
                 row["id"] == item["id"] and row["status"] == "claiming"
                 for row in current.items
             ):
-                self.review(
-                    current,
-                    item["id"],
-                    "Queue or runtime changed during dispatch. Reload and review this message",
+                (
+                    await self.review(
+                        current,
+                        item["id"],
+                        "Queue or runtime changed during dispatch. Reload and review this message",
+                    )
                 )
             elif current.revision == queue.revision:
-                self.review(
-                    current,
-                    item["id"],
-                    "Runtime authorization changed. Edit the follow-up to review its configuration",
+                (
+                    await self.review(
+                        current,
+                        item["id"],
+                        "Runtime authorization changed. Edit the follow-up to review its configuration",
+                    )
                 )
         except ChatHistoryConflict as exc:  # diagnostic-expected: a direct Send that won the race is busy, not a failure
             # The conversation grew a response this drainer did not start: an
             # operator's direct Send won the race. That is not a failure of the
             # follow-up, so leave it queued and let a later poll dispatch it once
             # the response settles instead of parking the queue for review.
-            if self._session_busy(queue.session_id, latest):
-                self._requeue_claim(queue.id, item["id"])
+            if await self._session_busy(queue.session_id, latest):
+                (await self._requeue_claim(queue.id, item["id"]))
             else:
-                self._review_failed_dispatch(queue.id, item["id"], exc)
+                (await self._review_failed_dispatch(queue.id, item["id"], exc))
         except Exception as exc:  # diagnostic-expected: recorded and parked for review by _review_failed_dispatch
-            self._review_failed_dispatch(queue.id, item["id"], exc)
+            (await self._review_failed_dispatch(queue.id, item["id"], exc))
         finally:
             self._inflight.discard(item["id"])
 
-    def queues(self, *, skip_dormant=False):
+    async def queues(self, *, skip_dormant=False):
         """Every queue, or with ``skip_dormant`` only those ``step`` could act on.
 
         Row versions are read without payloads; a queue last seen dormant at
         its current revision is not parsed again until a write changes it.
         """
-        with self.store.database.session() as database:
+        async with self.store.database.session() as database:
             versions = dict(
-                database.execute(
-                    select(EntityRow.id, EntityRow.revision).where(
-                        EntityRow.kind == "chat_queues"
+                (
+                    await database.execute(
+                        select(EntityRow.id, EntityRow.revision).where(
+                            EntityRow.kind == "chat_queues"
+                        )
                     )
                 ).all()
             )
@@ -750,9 +778,11 @@ class ChatQueueService:
             # An unreadable queue is skipped and recorded; it must not stop
             # Core starting or every other conversation's follow-ups.
             return readable_entities(
-                database.scalars(
-                    select(EntityRow).where(
-                        EntityRow.kind == "chat_queues", EntityRow.id.in_(wanted)
+                (
+                    await database.scalars(
+                        select(EntityRow).where(
+                            EntityRow.kind == "chat_queues", EntityRow.id.in_(wanted)
+                        )
                     )
                 ),
                 ChatQueue,
@@ -765,7 +795,7 @@ class ChatQueueService:
             self._dormant.pop(queue.id, None)
 
     async def startup(self):
-        for queue in self.queues():
+        for queue in await self.queues():
             try:
                 await self.step(queue, recovering=True)
             except (
@@ -792,7 +822,7 @@ class ChatQueueService:
 
     async def run(self):
         while True:
-            for queue in self.queues(skip_dormant=True):
+            for queue in await self.queues(skip_dormant=True):
                 try:
                     await self.step(queue)
                     self._remember_dormancy(queue)
@@ -840,12 +870,12 @@ def queue_router(service):
         return unchanged or value
 
     @router.post("/chat/sessions/{session_id}/queue")
-    def write_queue(session_id: str, body: QueueWrite, request: Request):
+    async def write_queue(session_id: str, body: QueueWrite, request: Request):
         queue = service.write(
             session_id, body, getattr(request.state, "auth_device_id", None)
         )
         if body.action == "enqueue":
-            unarchive_chat_session(service.store, session_id)
+            (await unarchive_chat_session(service.store, session_id))
         return queue
 
     return router

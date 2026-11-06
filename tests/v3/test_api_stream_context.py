@@ -1,10 +1,15 @@
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 
 from nebula.v3.api import _correlated_stream
 from nebula.v3 import diagnostics
 
 
-def test_stream_correlation_does_not_leak_and_closes_from_another_task():
+async def test_stream_correlation_does_not_leak_and_closes_from_another_task():
     async def scenario():
         observed = []
 
@@ -23,10 +28,10 @@ def test_stream_correlation_does_not_leak_and_closes_from_another_task():
         assert diagnostics._request_id.get() is None
         assert observed == ["stream-request", "closed"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_quiet_chat_heartbeat_arrives_within_the_streaming_status_budget():
+async def test_quiet_chat_heartbeat_arrives_within_the_streaming_status_budget():
     async def scenario():
         release = asyncio.Event()
         closed = asyncio.Event()
@@ -58,4 +63,7 @@ def test_quiet_chat_heartbeat_arrives_within_the_streaming_status_budget():
         assert closed.is_set()
         assert diagnostics._request_id.get() is None
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

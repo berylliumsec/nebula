@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync, call_async
+
+from .async_utils import resolve_workspace
+
 from .host_load import HostLoadGate
 from .host_cpu_budget import (
     HostCpuBudget,
@@ -223,8 +227,7 @@ from .container_terminal import (
     MAX_TERMINAL_INPUT_BYTES,
     TERMINAL_MAX_DURATION_SECONDS,
 )
-from .database import Database
-from .read_workers import read_in_worker
+from .database import Database, DatabaseBusyError
 from .work import (
     WorkAgentActivity,
     WorkCheckIn,
@@ -1012,16 +1015,16 @@ class StructuredConflictError(ConflictError):
         self.code = code
 
 
-def _observation_dependencies(
+async def _observation_dependencies(
     store: NebulaStore, observation_id: str
 ) -> ObservationDependencies:
-    observation = store.get(Observation, observation_id)
+    observation = await store.get(Observation, observation_id)
     reports: list[ObservationReportDependency] = []
     reports = [
         ObservationReportDependency(
             id=report.id, title=report.title, status=report.status
         )
-        for report in store.iter_reference_candidates(
+        async for report in store.iter_reference_candidates(
             Report,
             [("observation_ids", observation_id, True)],
             engagement_id=observation.engagement_id,
@@ -1951,8 +1954,6 @@ def create_app(
             frame["operation_id"] = correlation_operation
         return frame
 
-    if bootstrap_workspace:
-        bootstrap_scratch_project(store)
     executable_missions_enabled = (
         tool_platform.execution_enabled
         if enable_executable_missions is None and tool_platform is not None
@@ -1992,8 +1993,6 @@ def create_app(
         os.environ.get("NEBULA_AGENT_SECURITY_ENABLED") == "1"
         or os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
     )
-    if agent_security_enabled:
-        agent_security_tools.register_profile()
     browser_companion = BrowserCompanion(
         store,
         browser_assessments.engines,
@@ -2005,17 +2004,19 @@ def create_app(
         store, browser_automation
     )
 
-    def harness_workspace(engagement_id: str) -> Path:
+    async def harness_workspace(engagement_id: str) -> Path:
         if automation_runtime is not None:
-            return automation_runtime.workspace_resolver(engagement_id)
+            return await resolve_workspace(
+                automation_runtime.workspace_resolver, engagement_id
+            )
         if tool_platform is None:
             raise HarnessUnavailableError(
                 "harness execution requires an engagement workspace"
             )
-        return tool_platform.workspace_for(engagement_id)
+        return await tool_platform.workspace_for(engagement_id)
 
-    def native_workspace(engagement_id: str) -> Path:
-        engagement = store.get(Engagement, engagement_id)
+    async def native_workspace(engagement_id: str) -> Path:
+        engagement = await store.get(Engagement, engagement_id)
         if engagement.workspace_path:
             workspace = (
                 Path(engagement.workspace_path).expanduser().resolve(strict=True)
@@ -2024,9 +2025,11 @@ def create_app(
                 raise ValueError("configured project workspace is not a directory")
             return workspace
         if automation_runtime is not None:
-            return automation_runtime.workspace_resolver(engagement_id)
+            return await resolve_workspace(
+                automation_runtime.workspace_resolver, engagement_id
+            )
         if tool_platform is not None:
-            return tool_platform.workspace_for(engagement_id)
+            return await tool_platform.workspace_for(engagement_id)
         raise ValueError(
             "native provider skills require an available project workspace"
         )
@@ -2057,8 +2060,6 @@ def create_app(
     from .notebook_mcp import NotebookMcpTools
 
     notebook_mcp = NotebookMcpTools(store, notebook_service)
-    for existing_project in store.iter_readable_entities(Engagement):
-        notebook_mcp.register_profile(existing_project.id)
     automation_tool_platform = (
         AutomationToolPlatform(
             manager=automation_runtime,
@@ -2166,9 +2167,11 @@ def create_app(
         mission_components_factory = automation_tool_platform.mission_components
     else:
 
-        def mission_components_factory(run: AgentRun, provider: Any):
+        async def mission_components_factory(run: AgentRun, provider: Any):
             if run.metadata.get("browser_autonomy"):
-                return browser_automation_platform.mission_components(run, provider)
+                return await browser_automation_platform.mission_components(
+                    run, provider
+                )
             raise RuntimeError("automation command runtime is unavailable")
 
     missions = mission_service or MissionService(
@@ -2183,8 +2186,8 @@ def create_app(
     entity_validator = ApiEntityValidator(store)
     operators = OperatorProfileService(store)
 
-    def active_operator_id() -> str:
-        active = operators.active_profile_or_none()
+    async def active_operator_id() -> str:
+        active = await operators.active_profile_or_none()
         # Work can begin before the user chooses a display name. Attribute that
         # technical activity to the system rather than inventing a human actor.
         return active.id if active is not None else "system"
@@ -2403,7 +2406,13 @@ def create_app(
     store.application_model_service = application_model
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
+    async def runtime_lifespan(_: FastAPI):
+        if bootstrap_workspace:
+            (await bootstrap_scratch_project(store))
+        if agent_security_enabled:
+            (await agent_security_tools.register_profile())
+        async for existing_project in store.iter_readable_entities(Engagement):
+            (await notebook_mcp.register_profile(existing_project.id))
         install_asyncio_exception_hook()
         started: list[tuple[str, str, Callable[[], Any]]] = []
         loop_lag_monitor.start()
@@ -2508,8 +2517,7 @@ def create_app(
                     )
             if knowledge_index is not None and knowledge_index.status.state == "ready":
                 try:
-                    await asyncio.to_thread(
-                        migrate_inline_knowledge_indexes,
+                    await migrate_inline_knowledge_indexes(
                         store=store,
                         knowledge_index=knowledge_index,
                     )
@@ -2619,7 +2627,8 @@ def create_app(
                             exc,
                             stage="schedule",
                         )
-                    # Its scans run off the event loop and read only rows
+                    await provider_chat.runtime_switcher.reconcile()
+                    # Its scans run asynchronously and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
                     try:
@@ -2656,6 +2665,12 @@ def create_app(
                 harness_runtime.shutdown,
             )
             await start_component(
+                "chat",
+                "runtime-switches",
+                provider_chat.runtime_switcher.startup,
+                provider_chat.runtime_switcher.shutdown,
+            )
+            await start_component(
                 "butler",
                 "project-oversight",
                 butler_oversight.startup,
@@ -2664,7 +2679,7 @@ def create_app(
             await start_component(
                 "missions", "service", missions.startup, missions.shutdown
             )
-            provider_chat.resume_turns_stopped_by_core()
+            (await provider_chat.resume_turns_stopped_by_core())
             await provider_chat.subagents.reconcile_after_restart()
             await start_component(
                 "missions",
@@ -2685,8 +2700,7 @@ def create_app(
             # them. Paused batches keep live writes flowing while it runs.
             prune_stop = threading.Event()
             prune_task = create_diagnostic_task(
-                asyncio.to_thread(
-                    prune_orphaned_event_history,
+                prune_orphaned_event_history(
                     store.database,
                     pause=pause_between_batches,
                     stop=prune_stop,
@@ -2700,22 +2714,37 @@ def create_app(
             async def _stop_event_history_prune() -> None:
                 prune_stop.set()
                 await asyncio.wait({prune_task})
-                await asyncio.to_thread(store.event_history.close)
+                await store.event_history.close()
 
             started.append(
                 ("storage", "event-history-prune", _stop_event_history_prune)
             )
         except BaseException:
-            await stop_components()
+            from .async_utils import finish_cleanup
+
+            await finish_cleanup(stop_components())
             raise
         try:
             yield
         finally:
-            failures = await stop_components()
+            from .async_utils import finish_cleanup
+
+            failures = await finish_cleanup(stop_components())
             if failures:
                 raise RuntimeError(
                     f"{len(failures)} Nebula Core service cleanup operation(s) failed"
                 ) from failures[0]
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        from .async_utils import close_store_resources
+
+        await store.database.initialize()
+        try:
+            async with runtime_lifespan(application):
+                yield
+        finally:
+            await close_store_resources([store])
 
     app = FastAPI(
         title="Nebula 3 Core API",
@@ -3266,13 +3295,13 @@ def create_app(
     pending_pairings: dict[str, dict[str, Any]] = {}
     app.state.pending_pairings = pending_pairings
 
-    def _device_for_token(raw_token: str | None) -> PairedDeviceSession | None:
+    async def _device_for_token(raw_token: str | None) -> PairedDeviceSession | None:
         if not raw_token:
             return None
         digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         # Look the hash up in the database: scanning the oldest 1,000 sessions
         # stopped recognising any device paired after that many pairings.
-        device = store.find_entity(PairedDeviceSession, "token_sha256", digest)
+        device = await store.find_entity(PairedDeviceSession, "token_sha256", digest)
         if device is None:
             return None
         now = utc_now()
@@ -3284,8 +3313,8 @@ def create_app(
             return None
         return device
 
-    def _cookie_websocket_authenticated(websocket: WebSocket) -> bool:
-        device = _device_for_token(websocket.cookies.get("nebula_device"))
+    async def _cookie_websocket_authenticated(websocket: WebSocket) -> bool:
+        device = await _device_for_token(websocket.cookies.get("nebula_device"))
         host = websocket.headers.get("host", "")
         origin = websocket.headers.get("origin", "")
         parsed = urlsplit(f"//{host}")
@@ -3327,7 +3356,7 @@ def create_app(
             and _secret_matches(credentials.credentials, token)
         ):
             return credentials.credentials
-        device = _device_for_token(request.cookies.get("nebula_device"))
+        device = await _device_for_token(request.cookies.get("nebula_device"))
         if device is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -3374,31 +3403,27 @@ def create_app(
                 )
         now = utc_now()
         if (now - device.last_used_at).total_seconds() >= 300:
-            store.update(
-                PairedDeviceSession,
-                device.id,
-                {
-                    "last_used_at": now,
-                    "idle_expires_at": min(
-                        now + timedelta(days=30), device.absolute_expires_at
-                    ),
-                },
-                expected_revision=device.revision,
+            (
+                await store.update(
+                    PairedDeviceSession,
+                    device.id,
+                    {
+                        "last_used_at": now,
+                        "idle_expires_at": min(
+                            now + timedelta(days=30), device.absolute_expires_at
+                        ),
+                    },
+                    expected_revision=device.revision,
+                )
             )
         return f"device:{device.id}"
 
-    # Admit before dispatching to workers. The default DB pool has 15 total
-    # connections, while AnyIO permits 40 workers; slow lists must leave room
-    # for ordinary authenticated reads that still acquire on the event loop.
-    entity_listing_slots = asyncio.Semaphore(4)
+    # Reserve connection capacity for interactive reads using the discovered
+    # deployment budget. Bulk admission is independent of thread-worker limits.
 
     async def require_entity_listing_capacity() -> AsyncIterator[None]:
-        with performance.span("worker.entity_listing_wait"):
-            await entity_listing_slots.acquire()
-        try:
+        async with store.database.bulk():
             yield
-        finally:
-            entity_listing_slots.release()
 
     def _device_response(
         device: PairedDeviceSession, *, current_id: str | None = None
@@ -3489,7 +3514,7 @@ def create_app(
         raw_token = secrets.token_urlsafe(32)
         csrf = secrets.token_urlsafe(32)
         now = utc_now()
-        device = store.create(
+        device = await store.create(
             PairedDeviceSession(
                 name=body.name or pending["name"],
                 token_sha256=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
@@ -3532,10 +3557,16 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_paired_devices(request: Request) -> list[PairedDeviceResponse]:
-        current = _device_for_token(request.cookies.get("nebula_device"))
+        current = await _device_for_token(request.cookies.get("nebula_device"))
         return [
             _device_response(device, current_id=current.id if current else None)
-            for device in store.find_entities(PairedDeviceSession, {"revoked_at": None})
+            for device in (
+                # Keep authentication's small control-state read on the capacity
+                # reserved for ordinary requests while bulk catalogs are busy.
+                await store.find_entities(
+                    PairedDeviceSession, {"revoked_at": None}, bulk=False
+                )
+            )
         ]
 
     @app.put(
@@ -3553,7 +3584,7 @@ def create_app(
                 status_code=403,
                 detail="capability heartbeat requires paired-device authentication",
             )
-        device = action_broker.heartbeat(device_id, snapshot)
+        device = await action_broker.heartbeat(device_id, snapshot)
         return _device_response(device, current_id=device.id)
 
     @app.delete(
@@ -3565,19 +3596,35 @@ def create_app(
     async def revoke_paired_device(
         device_id: str, request: Request, response: Response
     ) -> Response:
-        device = store.get(PairedDeviceSession, device_id)
-        current = _device_for_token(request.cookies.get("nebula_device"))
+        device = await store.get(PairedDeviceSession, device_id)
+        current = await _device_for_token(request.cookies.get("nebula_device"))
         if device.revoked_at is None:
-            store.update(
-                PairedDeviceSession,
-                device.id,
-                {"revoked_at": utc_now()},
-                expected_revision=device.revision,
+            (
+                await store.update(
+                    PairedDeviceSession,
+                    device.id,
+                    {"revoked_at": utc_now()},
+                    expected_revision=device.revision,
+                )
             )
         if current is not None and current.id == device.id:
             response.delete_cookie("nebula_device", path="/")
             response.delete_cookie("nebula_csrf", path="/")
         response.status_code = 204
+        return response
+
+    @app.exception_handler(DatabaseBusyError)
+    async def database_busy_handler(
+        request: Request, exc: DatabaseBusyError
+    ) -> JSONResponse:
+        response = diagnostic_error_response(
+            request,
+            exc,
+            status_code=503,
+            detail="Database capacity is busy. Refresh saved state before retrying.",
+            code="database_busy",
+        )
+        response.headers["Retry-After"] = "1"
         return response
 
     @app.exception_handler(NotFoundError)
@@ -4051,14 +4098,14 @@ def create_app(
                 and entity_type == "harness_turn"
                 and isinstance(entity_id, str)
             ):
-                turn = store.get(HarnessTurn, entity_id)
-                session = store.get(HarnessSession, turn.harness_session_id)
+                turn = await store.get(HarnessTurn, entity_id)
+                session = await store.get(HarnessSession, turn.harness_session_id)
                 health_result = await harness_runtime.health(session.harness_profile_id)
                 health_payload: Any = health_result.model_dump(mode="json")
             else:
                 health_payload = {
                     "diagnostics": manager.status(),
-                    "storage": store.database.health(),
+                    "storage": (await store.database.health()),
                 }
             still_active = await asyncio.to_thread(manager.incident, error_id)
             result = {
@@ -4323,14 +4370,14 @@ def create_app(
             ),
             "api_version": "v1",
             "terminal_client_protocol": 1,
-            "scheduler": provider_chat.provider_scheduler.metrics(),
+            "scheduler": (await provider_chat.provider_scheduler.metrics()),
             "diagnostics": {
                 **diagnostic_health,
                 "browser_event_ingress": (
                     "enabled" if allow_browser_diagnostic_events else "disabled"
                 ),
             },
-            **store.database.health(),
+            **(await store.database.health()),
         }
 
     @app.post(
@@ -4354,7 +4401,7 @@ def create_app(
                 state="inaccessible",
             )
         try:
-            entity = store.get(model, ref.id)
+            entity = await store.get(model, ref.id)
         except NotFoundError:
             # diagnostic-expected: absence is the successful deleted-resource
             # resolution result surfaced to canonical-route recovery UI.
@@ -4398,8 +4445,7 @@ def create_app(
         limit: int = Query(default=30, ge=1, le=100),
     ) -> SearchResponse:
         try:
-            return await read_in_worker(
-                federated_search.search,
+            return await federated_search.search(
                 query=query,
                 active_project=active_project,
                 scope=scope,
@@ -4435,7 +4481,7 @@ def create_app(
             if resource_kind is not None and resource_id is not None
             else None
         )
-        return relation_service.list_relations(
+        return await relation_service.list_relations(
             project_id, resource=resource, predicate=predicate, limit=limit
         )
 
@@ -4450,7 +4496,7 @@ def create_app(
         project_id: str, request: ResourceRelationCreate
     ) -> ResourceRelation:
         try:
-            return relation_service.create(project_id, request)
+            return await relation_service.create(project_id, request)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -4466,7 +4512,7 @@ def create_app(
         if request.project_id != project_id:
             raise HTTPException(status_code=422, detail="project identity mismatch")
         try:
-            return relation_service.reconcile(request)
+            return await relation_service.reconcile(request)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -4481,7 +4527,7 @@ def create_app(
         relation_id: str,
         expected_revision: int = Query(ge=1),
     ) -> Response:
-        relation_service.delete(project_id, relation_id, expected_revision)
+        (await relation_service.delete(project_id, relation_id, expected_revision))
         return Response(status_code=204)
 
     @app.post(
@@ -4493,7 +4539,7 @@ def create_app(
     async def resolve_resource_actions(
         request: ActionResolutionRequest,
     ) -> list[ActionDescriptor]:
-        return action_registry.resolve(request)
+        return await action_registry.resolve(request)
 
     @app.post(
         f"{API_PREFIX}/action-intents",
@@ -4504,7 +4550,7 @@ def create_app(
     )
     async def create_action_intent(request: ActionIntentCreateRequest) -> ActionIntent:
         try:
-            return action_broker.create(request)
+            return await action_broker.create(request)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -4519,7 +4565,7 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=1_000),
     ) -> list[ActionIntent]:
-        return action_broker.list_intents(project_id, offset=offset, limit=limit)
+        return await action_broker.list_intents(project_id, offset=offset, limit=limit)
 
     @app.post(
         f"{API_PREFIX}/handoffs",
@@ -4533,7 +4579,7 @@ def create_app(
     ) -> HandoffEnvelope:
         actor_id = getattr(request.state, "auth_device_id", None) or "operator"
         try:
-            return handoff_service.create(payload, actor_id=actor_id)
+            return await handoff_service.create(payload, actor_id=actor_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -4548,7 +4594,7 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> list[HandoffEnvelope]:
-        return handoff_service.list(project_id, offset=offset, limit=limit)
+        return await handoff_service.list(project_id, offset=offset, limit=limit)
 
     @app.get(
         f"{API_PREFIX}/handoffs/{{handoff_id}}",
@@ -4562,7 +4608,9 @@ def create_app(
         current_device = (
             getattr(request.state, "auth_device_id", None) or device_id or "core-ui"
         )
-        return handoff_service.resolve(handoff_id, current_device_id=current_device)
+        return await handoff_service.resolve(
+            handoff_id, current_device_id=current_device
+        )
 
     @app.post(
         f"{API_PREFIX}/handoffs/{{handoff_id}}/consume",
@@ -4573,7 +4621,7 @@ def create_app(
     async def consume_handoff(
         handoff_id: str, payload: HandoffConsumeRequest
     ) -> HandoffEnvelope:
-        return handoff_service.consume(handoff_id, payload)
+        return await handoff_service.consume(handoff_id, payload)
 
     @app.post(
         f"{API_PREFIX}/handoffs/{{handoff_id}}/cancel",
@@ -4585,7 +4633,7 @@ def create_app(
         handoff_id: str, payload: HandoffCancelRequest, request: Request
     ) -> HandoffEnvelope:
         actor_id = getattr(request.state, "auth_device_id", None) or "operator"
-        return handoff_service.cancel(handoff_id, payload, actor_id=actor_id)
+        return await handoff_service.cancel(handoff_id, payload, actor_id=actor_id)
 
     @app.post(
         f"{API_PREFIX}/action-intents/{{intent_id}}/claim",
@@ -4596,7 +4644,7 @@ def create_app(
     async def claim_action_intent(
         intent_id: str, request: ActionIntentClaimRequest
     ) -> ActionIntent:
-        return action_broker.claim(intent_id, request)
+        return await action_broker.claim(intent_id, request)
 
     @app.post(
         f"{API_PREFIX}/action-intents/{{intent_id}}/prepare",
@@ -4607,7 +4655,7 @@ def create_app(
     async def prepare_action_intent(
         intent_id: str, request: ActionIntentPrepareRequest
     ) -> ActionIntent:
-        return action_broker.prepare(intent_id, request)
+        return await action_broker.prepare(intent_id, request)
 
     @app.post(
         f"{API_PREFIX}/action-intents/{{intent_id}}/commit",
@@ -4618,7 +4666,7 @@ def create_app(
     async def commit_action_intent(
         intent_id: str, request: ActionIntentCommitRequest
     ) -> ActionIntent:
-        return action_broker.commit(intent_id, request)
+        return await action_broker.commit(intent_id, request)
 
     @app.post(
         f"{API_PREFIX}/action-intents/{{intent_id}}/result",
@@ -4629,7 +4677,7 @@ def create_app(
     async def finish_action_intent(
         intent_id: str, request: ActionIntentResultRequest
     ) -> ActionIntent:
-        return action_broker.result(intent_id, request)
+        return await action_broker.result(intent_id, request)
 
     @app.post(
         f"{API_PREFIX}/action-intents/{{intent_id}}/cancel",
@@ -4641,7 +4689,7 @@ def create_app(
         intent_id: str, body: ActionIntentCancelRequest, request: Request
     ) -> ActionIntent:
         actor_id = getattr(request.state, "auth_device_id", None) or "operator"
-        return action_broker.cancel(intent_id, body, str(actor_id))
+        return await action_broker.cancel(intent_id, body, str(actor_id))
 
     @app.get(
         f"{API_PREFIX}/harness-catalog",
@@ -4730,7 +4778,7 @@ def create_app(
     async def import_external_harness_session(
         profile_id: str, request: ExternalHarnessSessionImportRequest
     ) -> HarnessSession:
-        return harness_runtime.import_external_session(
+        return await harness_runtime.import_external_session(
             engagement_id=request.engagement_id,
             profile_id=profile_id,
             external_session_id=request.external_session_id,
@@ -4747,7 +4795,7 @@ def create_app(
     async def get_harness_session_activity(
         session_id: str,
     ) -> HarnessSessionActivity:
-        return harness_runtime.session_activity(session_id)
+        return await harness_runtime.session_activity(session_id)
 
     @app.get(
         f"{API_PREFIX}/harness-turns/{{turn_id}}/events",
@@ -4760,7 +4808,7 @@ def create_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=1_000, ge=1, le=10_000),
     ) -> HarnessActivityEventList:
-        return harness_runtime.activity_events(
+        return await harness_runtime.activity_events(
             turn_id, after_sequence=after, limit=limit
         )
 
@@ -4776,11 +4824,11 @@ def create_app(
             default=None, alias="status"
         ),
     ) -> list[HarnessInteraction]:
-        turn = store.get(HarnessTurn, turn_id)
+        turn = await store.get(HarnessTurn, turn_id)
         filters: dict[str, str] = {"harness_turn_id": turn.id}
         if interaction_status is not None:
             filters["status"] = interaction_status.value
-        return store.find_entities(
+        return await store.find_entities(
             HarnessInteraction, filters, engagement_id=turn.engagement_id
         )
 
@@ -4810,7 +4858,7 @@ def create_app(
         turn_id: str, request: HarnessSteerRequest
     ) -> HarnessTurn:
         return await harness_runtime.steer_turn(
-            turn_id, request.text, actor_id=active_operator_id()
+            turn_id, request.text, actor_id=(await active_operator_id())
         )
 
     @app.post(
@@ -4831,7 +4879,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def retry_harness_turn(turn_id: str) -> HarnessTurn:
-        return await harness_runtime.retry_turn(turn_id, actor_id=active_operator_id())
+        return await harness_runtime.retry_turn(
+            turn_id, actor_id=(await active_operator_id())
+        )
 
     @app.post(
         f"{API_PREFIX}/harness-turns/{{turn_id}}/tasks/{{task_id}}/stop",
@@ -4881,12 +4931,16 @@ def create_app(
         supplied = protocol_token or supplied
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         try:
-            harness_runtime.activity_events(turn_id, after_sequence=after, limit=1)
+            (
+                await harness_runtime.activity_events(
+                    turn_id, after_sequence=after, limit=1
+                )
+            )
         except (
             NotFoundError
         ):  # diagnostic-expected: WebSocket close is the protocol response
@@ -4955,7 +5009,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def import_mcp_servers(request: McpImportRequest) -> McpImportReport:
-        return import_mcp_config(request, store=store, credential_store=credentials)
+        return await import_mcp_config(
+            request, store=store, credential_store=credentials
+        )
 
     @app.get(
         f"{API_PREFIX}/mcp-servers/schema",
@@ -4975,9 +5031,12 @@ def create_app(
         profile_id: list[str] | None = Query(default=None, max_length=200),
     ) -> McpExportReport:
         profiles = (
-            [store.get(McpServerProfile, item) for item in dict.fromkeys(profile_id)]
+            [
+                (await store.get(McpServerProfile, item))
+                for item in dict.fromkeys(profile_id)
+            ]
             if profile_id
-            else all_mcp_profiles(store)
+            else (await all_mcp_profiles(store))
         )
         return export_mcp_config(profiles)
 
@@ -5001,7 +5060,7 @@ def create_app(
     async def discover_ssh_environments(
         resolve: bool = Query(default=True),
     ) -> SshEnvironmentDiscovery:
-        return await asyncio.to_thread(ssh_environments.discover, resolve=resolve)
+        return await ssh_environments.discover(resolve=resolve)
 
     @app.put(
         f"{API_PREFIX}/ssh-environments/{{alias}}",
@@ -5012,7 +5071,7 @@ def create_app(
     async def save_ssh_environment(
         alias: str, request: SshEnvironmentSettings
     ) -> SshEnvironment:
-        return await asyncio.to_thread(ssh_environments.save, alias, request)
+        return await ssh_environments.save(alias, request)
 
     @app.post(
         f"{API_PREFIX}/ssh-environments/{{alias}}/probe",
@@ -5032,9 +5091,7 @@ def create_app(
     async def forget_ssh_environment(
         alias: str, expected_revision: int | None = Query(default=None, ge=1)
     ) -> Response:
-        await asyncio.to_thread(
-            ssh_environments.forget, alias, expected_revision=expected_revision
-        )
+        await ssh_environments.forget(alias, expected_revision=expected_revision)
         return Response(status_code=204)
 
     @app.get(
@@ -5179,7 +5236,7 @@ def create_app(
     async def select_setup_runtime(
         request: RunnerSelectionRequest,
     ) -> SetupControlResponse:
-        return await setup_control(setup.select_runner(request))
+        return await setup_control((await setup.select_runner(request)))
 
     @app.post(
         f"{API_PREFIX}/setup/image/prepare",
@@ -5190,7 +5247,7 @@ def create_app(
     async def prepare_setup_image(
         request: ImagePreparationRequest,
     ) -> SetupControlResponse:
-        return await setup_control(setup.prepare_image(request))
+        return await setup_control((await setup.prepare_image(request)))
 
     @app.post(
         f"{API_PREFIX}/setup/image/retry",
@@ -5201,7 +5258,7 @@ def create_app(
     async def retry_setup_image(
         request: ImagePreparationRequest,
     ) -> SetupControlResponse:
-        return await setup_control(setup.retry_image_preparation(request))
+        return await setup_control((await setup.retry_image_preparation(request)))
 
     @app.post(
         f"{API_PREFIX}/setup/image/cancel",
@@ -5212,7 +5269,7 @@ def create_app(
     async def cancel_setup_image(
         request: ImagePreparationCancellationRequest,
     ) -> SetupControlResponse:
-        return await setup_control(setup.cancel_image_preparation(request))
+        return await setup_control((await setup.cancel_image_preparation(request)))
 
     def require_execution_service() -> ExecutionService:
         if executions is None:
@@ -5289,7 +5346,7 @@ def create_app(
     async def container_terminal_capabilities(
         engagement_id: str,
     ) -> ContainerTerminalCapabilities:
-        return require_container_terminal_service().capabilities(engagement_id)
+        return await require_container_terminal_service().capabilities(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/recording-tools",
@@ -5300,7 +5357,7 @@ def create_app(
     async def terminal_recording_tools(
         engagement_id: str,
     ) -> TerminalRecordingTools:
-        return terminal_commands.recording_tools(engagement_id)
+        return await terminal_commands.recording_tools(engagement_id)
 
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/recording-tools",
@@ -5313,10 +5370,10 @@ def create_app(
         request: TerminalRecordingToolsUpdate,
     ) -> TerminalRecordingTools:
         try:
-            return terminal_commands.update_recording_tools(
+            return await terminal_commands.update_recording_tools(
                 engagement_id,
                 request,
-                actor_id=active_operator_id(),
+                actor_id=(await active_operator_id()),
             )
         except TerminalRecordingToolsConflict as exc:
             record_caught_exception(
@@ -5337,7 +5394,7 @@ def create_app(
     async def terminal_command_history_status(
         engagement_id: str,
     ) -> TerminalCommandHistoryStatus:
-        return terminal_commands.status(engagement_id)
+        return await terminal_commands.status(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/terminal/commands",
@@ -5359,7 +5416,7 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=1_000),
     ) -> TerminalCommandPage:
-        return terminal_commands.list(
+        return await terminal_commands.list(
             engagement_id,
             search=search,
             operator_id=operator_id,
@@ -5393,7 +5450,7 @@ def create_app(
                 "raw terminal output may contain unredacted secrets; acknowledge the warning to download it",
                 status_code=428,
             )
-        data, media_type = terminal_commands.output_bytes(
+        data, media_type = await terminal_commands.output_bytes(
             engagement_id, command_id, raw=raw
         )
         if offset > len(data):
@@ -5437,7 +5494,9 @@ def create_app(
         request: TerminalCommandHistoryPreferenceUpdate,
     ) -> TerminalCommandHistoryStatus:
         try:
-            return terminal_commands.set_enabled(engagement_id, enabled=request.enabled)
+            return await terminal_commands.set_enabled(
+                engagement_id, enabled=request.enabled
+            )
         except TerminalAuditImmutableError as exc:
             record_caught_exception(
                 "api",
@@ -5458,7 +5517,7 @@ def create_app(
         engagement_id: str,
     ) -> TerminalCommandHistoryClearResult:
         try:
-            cleared = terminal_commands.clear(engagement_id)
+            cleared = await terminal_commands.clear(engagement_id)
         except TerminalAuditImmutableError as exc:
             record_caught_exception(
                 "api",
@@ -5547,7 +5606,7 @@ def create_app(
     ) -> ContainerTerminalRecoveryResponse:
         response.headers["Cache-Control"] = "private, no-store"
         if container_terminals is None:
-            store.get(Engagement, engagement_id)
+            (await store.get(Engagement, engagement_id))
             return ContainerTerminalRecoveryResponse(active=False)
         return await container_terminals.recover(engagement_id)
 
@@ -5563,7 +5622,7 @@ def create_app(
     ) -> ContainerTerminalRecoveryListResponse:
         response.headers["Cache-Control"] = "private, no-store"
         if container_terminals is None:
-            store.get(Engagement, engagement_id)
+            (await store.get(Engagement, engagement_id))
             return ContainerTerminalRecoveryListResponse()
         return await container_terminals.recover_all(engagement_id)
 
@@ -5579,7 +5638,7 @@ def create_app(
     ) -> ContainerTerminalSessionList:
         response.headers["Cache-Control"] = "private, no-store"
         if container_terminals is None:
-            store.get(Engagement, engagement_id)
+            (await store.get(Engagement, engagement_id))
             return ContainerTerminalSessionList(engagement_id=engagement_id)
         return await container_terminals.list_sessions(engagement_id)
 
@@ -5684,7 +5743,7 @@ def create_app(
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             emit_diagnostic(
                 "warning",
@@ -6144,7 +6203,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def execution_capabilities(engagement_id: str) -> ExecutionCapabilities:
-        return require_execution_service().capabilities(engagement_id)
+        return await require_execution_service().capabilities(engagement_id)
 
     @app.post(
         f"{API_PREFIX}/executions/preflight",
@@ -6186,8 +6245,8 @@ def create_app(
         date_to: datetime | None = Query(default=None),
         query: str | None = Query(default=None, max_length=500),
     ) -> list[OperatorExecution]:
-        store.get(Engagement, engagement_id)
-        return require_execution_service().list_executions(
+        (await store.get(Engagement, engagement_id))
+        return await require_execution_service().list_executions(
             engagement_id,
             offset=offset,
             limit=limit,
@@ -6206,7 +6265,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def execution_detail(execution_id: str) -> OperatorExecution:
-        return store.get(OperatorExecution, execution_id)
+        return await store.get(OperatorExecution, execution_id)
 
     @app.post(
         f"{API_PREFIX}/executions/{{execution_id}}/cancel",
@@ -6235,8 +6294,8 @@ def create_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=1000, ge=1, le=10_000),
     ) -> OperationEventList:
-        store.get(OperatorExecution, execution_id)
-        events = store.replay_operation_events(
+        (await store.get(OperatorExecution, execution_id))
+        events = await store.replay_operation_events(
             execution_id, after_sequence=after, limit=limit
         )
         return OperationEventList(
@@ -6265,7 +6324,7 @@ def create_app(
                 "raw output may contain unredacted secrets; acknowledge the warning to download it",
                 status_code=428,
             )
-        data, media_type = require_execution_service().output_bytes(
+        data, media_type = await require_execution_service().output_bytes(
             execution_id, stream, raw=raw
         )
         if offset > len(data):
@@ -6351,7 +6410,7 @@ def create_app(
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             emit_diagnostic(
                 "warning",
@@ -6367,7 +6426,7 @@ def create_app(
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         try:
-            store.get(OperatorExecution, execution_id)
+            (await store.get(OperatorExecution, execution_id))
         except NotFoundError as caught_error:
             record_caught_exception(
                 "executions",
@@ -6398,7 +6457,7 @@ def create_app(
         )
         try:
             while True:
-                events = store.replay_operation_events(
+                events = await store.replay_operation_events(
                     execution_id, after_sequence=cursor, limit=1000
                 )
                 if events and events[0].sequence > cursor + 1:
@@ -6439,7 +6498,7 @@ def create_app(
             finished = False
             while True:
                 await asyncio.sleep(0.25)
-                events = store.replay_operation_events(
+                events = await store.replay_operation_events(
                     execution_id, after_sequence=cursor, limit=1000
                 )
                 if events:
@@ -6485,9 +6544,8 @@ def create_app(
                     return
                 else:
                     finished = (
-                        store.get(OperatorExecution, execution_id).status
-                        in TERMINAL_EXECUTION_STATUSES
-                    )
+                        await store.get(OperatorExecution, execution_id)
+                    ).status in TERMINAL_EXECUTION_STATUSES
                     if finished:
                         # Poll once more so events written with the terminal
                         # transition go out before the complete frame.
@@ -6574,7 +6632,7 @@ def create_app(
     async def edit_execution_draft_note(
         draft_id: str, request: DraftEditRequest
     ) -> GeneratedDraft:
-        return require_execution_ai_service().edit(draft_id, request)
+        return await require_execution_ai_service().edit(draft_id, request)
 
     @app.post(
         f"{API_PREFIX}/generated-drafts/{{draft_id}}/accept",
@@ -6585,7 +6643,7 @@ def create_app(
     async def accept_execution_draft_note(
         draft_id: str, request: DraftTransitionRequest
     ) -> GeneratedDraft:
-        return require_execution_ai_service().accept(draft_id, request)
+        return await require_execution_ai_service().accept(draft_id, request)
 
     @app.post(
         f"{API_PREFIX}/generated-drafts/{{draft_id}}/reject",
@@ -6596,7 +6654,7 @@ def create_app(
     async def reject_execution_draft_note(
         draft_id: str, request: DraftTransitionRequest
     ) -> GeneratedDraft:
-        return require_execution_ai_service().reject(draft_id, request)
+        return await require_execution_ai_service().reject(draft_id, request)
 
     @app.post(
         f"{API_PREFIX}/executions/{{execution_id}}/chat-attachments",
@@ -6608,7 +6666,9 @@ def create_app(
     async def attach_execution_to_chat(
         execution_id: str, request: ExecutionChatAttachRequest
     ) -> ExecutionChatAttachment:
-        return require_execution_ai_service().attach_to_chat(execution_id, request)
+        return await require_execution_ai_service().attach_to_chat(
+            execution_id, request
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
@@ -6617,7 +6677,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_post_tool_assistant(engagement_id: str) -> PostToolAssistantRead:
-        return require_execution_ai_service().read_config(engagement_id)
+        return await require_execution_ai_service().read_config(engagement_id)
 
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-assistant",
@@ -6629,14 +6689,16 @@ def create_app(
         engagement_id: str, request: PostToolAssistantRequest
     ) -> PostToolAssistantRead:
         service = require_execution_ai_service()
-        service.set_config(
-            engagement_id,
-            PostToolAssistantConfig.model_validate(
-                request.model_dump(exclude={"expected_revision"})
-            ),
-            expected_revision=request.expected_revision,
+        (
+            await service.set_config(
+                engagement_id,
+                PostToolAssistantConfig.model_validate(
+                    request.model_dump(exclude={"expected_revision"})
+                ),
+                expected_revision=request.expected_revision,
+            )
         )
-        return service.read_config(engagement_id)
+        return await service.read_config(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/post-tool-results",
@@ -6645,7 +6707,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_post_tool_results(engagement_id: str) -> list[GeneratedDraft]:
-        return require_execution_ai_service().list_results(engagement_id)
+        return await require_execution_ai_service().list_results(engagement_id)
 
     @app.post(
         f"{API_PREFIX}/generated-drafts/{{draft_id}}/dismiss-suggestion",
@@ -6654,7 +6716,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def dismiss_post_tool_suggestion(draft_id: str) -> GeneratedDraft:
-        return require_execution_ai_service().dismiss_suggestion(draft_id)
+        return await require_execution_ai_service().dismiss_suggestion(draft_id)
 
     @app.get(
         f"{API_PREFIX}/workspace-folders",
@@ -6825,8 +6887,7 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=1000),
     ) -> WorkspaceListing:
-        return await asyncio.to_thread(
-            require_workspace_service().list,
+        return await require_workspace_service().list(
             engagement_id,
             path,
             offset=offset,
@@ -6846,8 +6907,7 @@ def create_app(
         path: str = Query(default="", max_length=4096),
         limit: int = Query(default=100, ge=1, le=200),
     ) -> WorkspaceSearchResult:
-        return await asyncio.to_thread(
-            require_workspace_service().search,
+        return await require_workspace_service().search(
             engagement_id,
             query,
             mode=mode,
@@ -6862,7 +6922,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def workspace_tasks(engagement_id: str) -> WorkspaceTaskList:
-        return await asyncio.to_thread(require_workspace_service().tasks, engagement_id)
+        return await require_workspace_service().tasks(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/debug-configurations",
@@ -6874,8 +6934,7 @@ def create_app(
         engagement_id: str,
         path: str = Query(min_length=1, max_length=4096),
     ) -> WorkspaceDebugConfigurationList:
-        return await asyncio.to_thread(
-            require_workspace_service().debug_configurations,
+        return await require_workspace_service().debug_configurations(
             engagement_id,
             path,
         )
@@ -6939,7 +6998,7 @@ def create_app(
         supplied = protocol_token or supplied
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
             return
@@ -7082,7 +7141,7 @@ def create_app(
     async def code_diagnostics(
         request: LanguageDiagnosticsRequest,
     ) -> LanguageDiagnosticsResponse:
-        store.get(Engagement, request.engagement_id)
+        (await store.get(Engagement, request.engagement_id))
         return await analyze_documents(request)
 
     @app.post(
@@ -7094,7 +7153,7 @@ def create_app(
     async def code_completions(
         request: CodeCompletionRequest,
     ) -> CodeCompletionResponse:
-        store.get(Engagement, request.engagement_id)
+        (await store.get(Engagement, request.engagement_id))
         try:
             items = await run_analysis(
                 complete_code, request.source, request.path, request.offset
@@ -7135,12 +7194,12 @@ def create_app(
         supplied = protocol_token or supplied
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         try:
-            store.get(Engagement, engagement_id)
+            (await store.get(Engagement, engagement_id))
         except NotFoundError:
             # diagnostic-expected: missing engagement is an authenticated protocol
             # rejection surfaced through the WebSocket close reason.
@@ -7187,9 +7246,7 @@ def create_app(
         engagement_id: str,
         path: str = Query(min_length=1, max_length=4096),
     ) -> WorkspacePreview:
-        return await asyncio.to_thread(
-            require_workspace_service().preview, engagement_id, path
-        )
+        return await require_workspace_service().preview(engagement_id, path)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/download",
@@ -7200,7 +7257,7 @@ def create_app(
         engagement_id: str,
         path: str = Query(min_length=1, max_length=4096),
     ) -> StreamingResponse:
-        download = require_workspace_service().download(engagement_id, path)
+        download = await require_workspace_service().download(engagement_id, path)
 
         async def download_chunks() -> Any:
             started_at = time.monotonic()
@@ -7328,9 +7385,7 @@ def create_app(
     async def inspect_workspace_entry(
         engagement_id: str, path: str = Query(default="", max_length=4096)
     ) -> WorkspaceEntryState:
-        return await asyncio.to_thread(
-            require_workspace_service().inspect_entry, engagement_id, path
-        )
+        return await require_workspace_service().inspect_entry(engagement_id, path)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/directory",
@@ -7342,8 +7397,8 @@ def create_app(
     async def create_workspace_directory(
         engagement_id: str, request: WorkspaceCreateDirectoryRequest
     ) -> WorkspaceMutationResult:
-        return await asyncio.to_thread(
-            require_workspace_service().create_directory, engagement_id, request
+        return await require_workspace_service().create_directory(
+            engagement_id, request
         )
 
     @app.patch(
@@ -7355,9 +7410,7 @@ def create_app(
     async def rename_workspace_entry(
         engagement_id: str, request: WorkspaceRenameRequest
     ) -> WorkspaceMutationResult:
-        return await asyncio.to_thread(
-            require_workspace_service().rename, engagement_id, request
-        )
+        return await require_workspace_service().rename(engagement_id, request)
 
     @app.delete(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
@@ -7379,8 +7432,7 @@ def create_app(
             pattern=r"^[0-9a-f]{64}$",
         ),
     ) -> WorkspaceMutationResult:
-        return await asyncio.to_thread(
-            require_workspace_service().delete,
+        return await require_workspace_service().delete(
             engagement_id,
             path,
             expected_sha256=if_match,
@@ -7397,9 +7449,7 @@ def create_app(
     async def promote_workspace_file(
         engagement_id: str, request: WorkspacePromotionRequest
     ) -> Evidence:
-        return await asyncio.to_thread(
-            require_workspace_service().promote, engagement_id, request
-        )
+        return await require_workspace_service().promote(engagement_id, request)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset",
@@ -7413,11 +7463,11 @@ def create_app(
         workspace = require_workspace_service()
         if container_terminals is not None:
             async with container_terminals.guard_workspace_operation(engagement_id):
-                return await asyncio.to_thread(workspace.reset, engagement_id, request)
+                return await workspace.reset(engagement_id, request)
         if executions is not None:
             async with executions.engagement_lock(engagement_id):
-                return await asyncio.to_thread(workspace.reset, engagement_id, request)
-        return await asyncio.to_thread(workspace.reset, engagement_id, request)
+                return await workspace.reset(engagement_id, request)
+        return await workspace.reset(engagement_id, request)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/relink",
@@ -7430,19 +7480,19 @@ def create_app(
     ) -> Engagement:
         path = _resolve_engagement_workspace_path(request.path)
 
-        def save() -> Engagement:
-            return store.relink_project_workspace(
+        async def save() -> Engagement:
+            return await store.relink_project_workspace(
                 engagement_id, path, expected_revision=request.expected_revision
             )
 
         async with notebook_service.guard_workspace_relink(engagement_id):
             if container_terminals is not None:
                 async with container_terminals.guard_workspace_operation(engagement_id):
-                    return await asyncio.to_thread(save)
+                    return await save()
             if executions is not None:
                 async with executions.engagement_lock(engagement_id):
-                    return await asyncio.to_thread(save)
-            return await asyncio.to_thread(save)
+                    return await save()
+            return await save()
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset-status",
@@ -7457,7 +7507,7 @@ def create_app(
             if container_terminals is not None
             else 0
         )
-        return workspace.reset_status(
+        return await workspace.reset_status(
             engagement_id, active_terminal_count=active_terminals
         )
 
@@ -7470,7 +7520,7 @@ def create_app(
     async def observation_dependencies(
         observation_id: str,
     ) -> ObservationDependencies:
-        return await read_in_worker(_observation_dependencies, store, observation_id)
+        return await _observation_dependencies(store, observation_id)
 
     @app.post(
         f"{API_PREFIX}/observations/butler-drafts",
@@ -7492,8 +7542,8 @@ def create_app(
         )
         if not note.title:
             raise ValueError("note title cannot be blank")
-        entity_validator.validate_create(note)
-        created = relation_service.create_legacy_entity(note)
+        (await entity_validator.validate_create(note))
+        created = await relation_service.create_legacy_entity(note)
         assert isinstance(created, Observation)
         return created
 
@@ -7526,8 +7576,8 @@ def create_app(
             finding_ids=request.finding_ids,
             observation_ids=request.observation_ids,
         )
-        entity_validator.validate_create(report)
-        created = relation_service.create_legacy_entity(report)
+        (await entity_validator.validate_create(report))
+        created = await relation_service.create_legacy_entity(report)
         assert isinstance(created, Report)
         return created
 
@@ -7540,9 +7590,9 @@ def create_app(
     async def sign_off_saved_report(
         report_id: str, request: ReportSignoffRequest
     ) -> Report:
-        signed = sign_off_report(store, report_id, request)
+        signed = await sign_off_report(store, report_id, request)
         try:
-            butler_memory_service.capture_signed_report(store, signed)
+            (await butler_memory_service.capture_signed_report(store, signed))
         except (
             Exception
         ) as exc:  # diagnostic-expected: signed Core record remains authoritative
@@ -7576,9 +7626,7 @@ def create_app(
     )
     async def download_report_pdf(render_id: str) -> FileResponse:
         # pdf() re-hashes the rendered PDF; keep that off the event loop.
-        artifact, path = await asyncio.to_thread(
-            require_report_render_service().pdf, render_id
-        )
+        artifact, path = await require_report_render_service().pdf(render_id)
         return FileResponse(
             path,
             media_type="application/pdf",
@@ -7616,7 +7664,7 @@ def create_app(
                 status_code=503,
                 detail="engagement bundle export requires an artifact store",
             )
-        engagement = store.get(Engagement, engagement_id)
+        engagement = await store.get(Engagement, engagement_id)
         with tempfile.NamedTemporaryFile(
             prefix="nebula-export-",
             suffix=".nebula.zip",
@@ -7625,8 +7673,7 @@ def create_app(
         ) as temporary:
             destination = Path(temporary.name)
         try:
-            await asyncio.to_thread(
-                export_engagement,
+            await export_engagement(
                 engagement_id=engagement.id,
                 destination=destination,
                 store=store,
@@ -7657,7 +7704,7 @@ def create_app(
             },
         )
 
-    def mission_command_run(approval: Approval) -> AgentRun | None:
+    async def mission_command_run(approval: Approval) -> AgentRun | None:
         """The native Mission a command approval pauses, if one does.
 
         A command card is owned by whatever awaited the command: a chat, a
@@ -7668,11 +7715,11 @@ def create_app(
         if (
             approval.origin != ToolCallOrigin.MISSION
             or approval.exact_request.get("tool_name") != "run_command"
-            or approval_harness_turn(store, approval) is not None
+            or (await approval_harness_turn(store, approval)) is not None
         ):
             return None
         try:
-            run = store.get(AgentRun, approval.run_id)
+            run = await store.get(AgentRun, approval.run_id)
         except NotFoundError:
             # diagnostic-expected: a command card owned by a non-Mission runtime names no run.
             return None
@@ -7687,7 +7734,7 @@ def create_app(
     async def decide_approval(
         approval_id: str, request: ApprovalDecisionRequest
     ) -> Approval:
-        approval = store.get(Approval, approval_id)
+        approval = await store.get(Approval, approval_id)
         if approval.status != ApprovalStatus.PENDING:
             expected = {
                 "approve": "edited"
@@ -7707,15 +7754,15 @@ def create_app(
                 if (
                     approval.origin == ToolCallOrigin.MISSION
                     and request.decision != "stop"
-                    and approval_harness_turn(store, approval) is None
+                    and (await approval_harness_turn(store, approval)) is None
                     and (
                         approval.exact_request.get("tool_name") != "run_command"
-                        or mission_command_run(approval) is not None
+                        or (await mission_command_run(approval)) is not None
                     )
-                    and missions.approval_resume_pending(approval)
+                    and (await missions.approval_resume_pending(approval))
                 ):
                     await missions.resume_after_approval(
-                        approval, actor_id=active_operator_id()
+                        approval, actor_id=(await active_operator_id())
                     )
                 return approval
             raise HTTPException(
@@ -7732,13 +7779,13 @@ def create_app(
                 detail="command approvals apply to exact shell text and cannot be edited",
             )
         approval_run = (
-            mission_command_run(approval)
+            (await mission_command_run(approval))
             if automation_approval
-            else store.get(AgentRun, approval.run_id)
+            else (await store.get(AgentRun, approval.run_id))
             if approval.origin == ToolCallOrigin.MISSION
             else None
         )
-        harness_turn = approval_harness_turn(store, approval)
+        harness_turn = await approval_harness_turn(store, approval)
         if harness_turn is not None and request.edited_arguments is not None:
             raise HTTPException(
                 status_code=422,
@@ -7752,26 +7799,30 @@ def create_app(
                 "decision_note": "approval expired before an operator decision",
             }
             if automation_approval and approval_run is None:
-                store.update(
-                    Approval,
-                    approval.id,
-                    expiry_changes,
-                    expected_revision=approval.revision,
+                (
+                    await store.update(
+                        Approval,
+                        approval.id,
+                        expiry_changes,
+                        expected_revision=approval.revision,
+                    )
                 )
             else:
-                store.update_with_event(
-                    Approval,
-                    approval.id,
-                    expiry_changes,
-                    expected_revision=approval.revision,
-                    run_id=approval.run_id,
-                    event_type="approval.expired",
-                    event_payload={
-                        "approval_id": approval.id,
-                        "status": ApprovalStatus.EXPIRED.value,
-                    },
-                    actor_id="system",
-                    idempotency_key=f"approval:{approval.id}:expired",
+                (
+                    await store.update_with_event(
+                        Approval,
+                        approval.id,
+                        expiry_changes,
+                        expected_revision=approval.revision,
+                        run_id=approval.run_id,
+                        event_type="approval.expired",
+                        event_payload={
+                            "approval_id": approval.id,
+                            "status": ApprovalStatus.EXPIRED.value,
+                        },
+                        actor_id="system",
+                        idempotency_key=f"approval:{approval.id}:expired",
+                    )
                 )
             raise HTTPException(status_code=410, detail="approval has expired")
         status_by_decision = {
@@ -7783,7 +7834,7 @@ def create_app(
             "reject": ApprovalStatus.REJECTED,
             "stop": ApprovalStatus.CANCELLED,
         }
-        operator_id = active_operator_id()
+        operator_id = await active_operator_id()
         changes: dict[str, Any] = {
             "status": status_by_decision[request.decision],
             "decided_by": operator_id,
@@ -7795,7 +7846,7 @@ def create_app(
             # the fact that delivery still needs reconciliation.
             from .approval_delivery import decision_delivery_intent
 
-            changes["continuation"] = decision_delivery_intent(
+            changes["continuation"] = await decision_delivery_intent(
                 store, approval, harness_turn
             )
         if request.edited_arguments is not None:
@@ -7808,14 +7859,14 @@ def create_app(
             changes["exact_request"] = exact
         if automation_approval and approval_run is None:
             # A chat or harness command card has no run event log.
-            updated = store.update(
+            updated = await store.update(
                 Approval,
                 approval.id,
                 changes,
                 expected_revision=approval.revision,
             )
         else:
-            updated, _ = store.update_with_event(
+            updated, _ = await store.update_with_event(
                 Approval,
                 approval.id,
                 changes,
@@ -7845,10 +7896,10 @@ def create_app(
                         reason=request.reason or "Stopped from an approval decision",
                         actor_id=operator_id,
                     )
-            return store.get(Approval, updated.id)
+            return await store.get(Approval, updated.id)
         if approval.origin == ToolCallOrigin.CHAT:
             if request.decision == "stop":
-                chat_service().cancel_turn(approval.run_id)
+                (await chat_service().cancel_turn(approval.run_id))
             return updated
         if (
             approval_run is not None
@@ -7870,7 +7921,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def global_overview() -> dict[str, Any]:
-        return await read_in_worker(store.overview)
+        return await store.overview()
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/overview",
@@ -7878,11 +7929,11 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def engagement_overview(engagement_id: str) -> dict[str, Any]:
-        def read_overview() -> dict[str, Any]:
-            store.get(Engagement, engagement_id)
-            return store.overview(engagement_id)
+        async def read_overview() -> dict[str, Any]:
+            (await store.get(Engagement, engagement_id))
+            return await store.overview(engagement_id)
 
-        return await read_in_worker(read_overview)
+        return await read_overview()
 
     @app.get(
         f"{API_PREFIX}/operator-profiles",
@@ -7891,7 +7942,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_operator_profiles() -> list[OperatorProfile]:
-        return operators.list_profiles()
+        return await operators.list_profiles()
 
     @app.get(
         f"{API_PREFIX}/operator-profiles/active",
@@ -7900,7 +7951,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def active_operator_profile() -> OperatorProfile:
-        return operators.active_profile()
+        return await operators.active_profile()
 
     @app.get(
         f"{API_PREFIX}/operator-profiles/{{profile_id}}",
@@ -7909,7 +7960,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_operator_profile(profile_id: str) -> OperatorProfile:
-        return operators.get_profile(profile_id)
+        return await operators.get_profile(profile_id)
 
     @app.post(
         f"{API_PREFIX}/operator-profiles",
@@ -7921,7 +7972,7 @@ def create_app(
     async def create_operator_profile(
         request: OperatorProfileCreateRequest,
     ) -> OperatorProfile:
-        return operators.create_profile(
+        return await operators.create_profile(
             display_name=request.display_name,
             email=request.email,
             role=request.role,
@@ -7946,7 +7997,7 @@ def create_app(
             raise ValueError("display_name cannot be null")
         if changes.get("metadata", {}) is None:
             raise ValueError("metadata cannot be null")
-        return operators.update_profile(
+        return await operators.update_profile(
             profile_id,
             changes,
             expected_revision=request.expected_revision,
@@ -7962,7 +8013,7 @@ def create_app(
         profile_id: str,
         request: OperatorProfileActivateRequest,
     ) -> OperatorProfile:
-        return operators.activate_profile(
+        return await operators.activate_profile(
             profile_id,
             expected_revision=request.expected_revision,
         )
@@ -7977,7 +8028,7 @@ def create_app(
         profile_id: str,
         if_match: int | None = Header(default=None, alias="If-Match"),
     ) -> Response:
-        operators.delete_profile(profile_id, expected_revision=if_match)
+        (await operators.delete_profile(profile_id, expected_revision=if_match))
         return Response(status_code=204)
 
     @app.post(
@@ -8003,7 +8054,7 @@ def create_app(
             )
         if request.captured_by is not None:
             try:
-                operators.get_profile(request.captured_by)
+                (await operators.get_profile(request.captured_by))
             except NotFoundError as exc:
                 record_caught_exception(
                     "api",
@@ -8020,8 +8071,7 @@ def create_app(
                     ),
                 ) from exc
         try:
-            evidence = await asyncio.to_thread(
-                upload_evidence,
+            evidence = await upload_evidence(
                 store=store,
                 artifact_store=artifact_store,
                 request=request,
@@ -8153,8 +8203,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_scope_imports(engagement_id: str) -> list[ScopeImport]:
-        store.get(Engagement, engagement_id)
-        return store.list_latest_entities(ScopeImport, engagement_id=engagement_id)
+        (await store.get(Engagement, engagement_id))
+        return await store.list_latest_entities(
+            ScopeImport, engagement_id=engagement_id
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports/{{scope_import_id}}",
@@ -8163,7 +8215,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_scope_import(engagement_id: str, scope_import_id: str) -> ScopeImport:
-        result = store.get(ScopeImport, scope_import_id)
+        result = await store.get(ScopeImport, scope_import_id)
         if result.engagement_id != engagement_id:
             raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
         return result
@@ -8179,12 +8231,14 @@ def create_app(
         scope_import_id: str,
         request: ScopeImportApplyRequest,
     ) -> ScopeImportApplyResult:
-        scope_import = store.get(ScopeImport, scope_import_id)
+        scope_import = await store.get(ScopeImport, scope_import_id)
         if scope_import.engagement_id != engagement_id:
             raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
-        result = require_scope_import_service().apply(scope_import_id, request)
-        browser_automation.invalidate_scope_revision(
-            engagement_id, result.scope.revision, active_operator_id()
+        result = await require_scope_import_service().apply(scope_import_id, request)
+        (
+            await browser_automation.invalidate_scope_revision(
+                engagement_id, result.scope.revision, (await active_operator_id())
+            )
         )
         return result
 
@@ -8197,10 +8251,10 @@ def create_app(
     async def discard_scope_import(
         engagement_id: str, scope_import_id: str
     ) -> ScopeImport:
-        result = store.get(ScopeImport, scope_import_id)
+        result = await store.get(ScopeImport, scope_import_id)
         if result.engagement_id != engagement_id:
             raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
-        return require_scope_import_service().discard(scope_import_id)
+        return await require_scope_import_service().discard(scope_import_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/assistant-defaults",
@@ -8209,7 +8263,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_assistant_defaults(engagement_id: str) -> AssistantDefaults:
-        return store.get(Engagement, engagement_id).assistant_defaults
+        return (await store.get(Engagement, engagement_id)).assistant_defaults
 
     @app.get(
         f"{API_PREFIX}/work/items",
@@ -8221,8 +8275,8 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=500, ge=1, le=500),
     ) -> list[WorkItem]:
-        return await read_in_worker(
-            store.list_entities, WorkItem, offset=offset, limit=limit, newest_first=True
+        return await store.list_entities(
+            WorkItem, offset=offset, limit=limit, newest_first=True
         )
 
     @app.get(
@@ -8239,16 +8293,14 @@ def create_app(
         ),
     ) -> list[WorkUpdate]:
         if source_session_id is not None:
-            return await read_in_worker(
-                store.find_entities,
+            return await store.find_entities(
                 WorkUpdate,
                 {"source_session_id": source_session_id},
                 offset=offset,
                 limit=limit,
                 newest_first=True,
             )
-        return await read_in_worker(
-            store.list_entities,
+        return await store.list_entities(
             WorkUpdate,
             offset=offset,
             limit=limit,
@@ -8264,15 +8316,15 @@ def create_app(
     async def active_work_agents() -> Response:
         """One response for the overview, independent of project count."""
 
-        def roster_response() -> JSONResponse:
+        async def roster_response() -> JSONResponse:
             return JSONResponse(
                 [
                     agent.model_dump(mode="json")
-                    for agent in work_service.active_agents()
+                    for agent in (await work_service.active_agents())
                 ]
             )
 
-        return await read_in_worker(roster_response)
+        return await roster_response()
 
     @app.get(
         f"{API_PREFIX}/work/events",
@@ -8321,7 +8373,9 @@ def create_app(
             else project
             for project in body.projects
         ]
-        return work_service.import_batch(body.model_copy(update={"projects": projects}))
+        return await work_service.import_batch(
+            body.model_copy(update={"projects": projects})
+        )
 
     @app.patch(
         f"{API_PREFIX}/work/projects",
@@ -8332,7 +8386,7 @@ def create_app(
     async def update_work_projects(
         body: WorkProjectBatchUpdate,
     ) -> WorkProjectBatchResult:
-        return work_service.update_projects(body)
+        return await work_service.update_projects(body)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work",
@@ -8341,7 +8395,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_work(engagement_id: str) -> list[WorkItem]:
-        return await read_in_worker(work_service.list, engagement_id)
+        return await work_service.list(engagement_id)
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/setting",
@@ -8352,7 +8406,7 @@ def create_app(
     async def set_work_enabled(
         engagement_id: str, body: WorkSettingPatch
     ) -> Engagement:
-        return work_service.set_enabled(
+        return await work_service.set_enabled(
             engagement_id, body.enabled, expected_revision=body.expected_revision
         )
 
@@ -8363,7 +8417,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def create_work(engagement_id: str, body: WorkCreate) -> WorkItem:
-        return work_service.create(engagement_id, body, actor_id=active_operator_id())
+        return await work_service.create(
+            engagement_id, body, actor_id=(await active_operator_id())
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}",
@@ -8372,7 +8428,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_work(engagement_id: str, item_id: str) -> WorkItem:
-        return work_service.get(engagement_id, item_id)
+        return await work_service.get(engagement_id, item_id)
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}",
@@ -8381,7 +8437,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def patch_work(engagement_id: str, item_id: str, body: WorkPatch) -> WorkItem:
-        return work_service.patch(engagement_id, item_id, body)
+        return await work_service.patch(engagement_id, item_id, body)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}/updates",
@@ -8390,7 +8446,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_work_updates(engagement_id: str, item_id: str) -> list[WorkUpdate]:
-        return await read_in_worker(work_service.updates, engagement_id, item_id)
+        return await work_service.updates(engagement_id, item_id)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}/updates",
@@ -8401,12 +8457,12 @@ def create_app(
     async def add_work_update(
         engagement_id: str, item_id: str, body: WorkCheckIn
     ) -> WorkUpdate:
-        return work_service.check_in(
+        return await work_service.check_in(
             engagement_id,
             item_id,
             body,
             actor_kind="operator",
-            actor_id=active_operator_id(),
+            actor_id=(await active_operator_id()),
         )
 
     @app.patch(
@@ -8422,14 +8478,14 @@ def create_app(
         if unknown:
             raise ValueError(f"unknown assistant defaults: {sorted(unknown)}")
         for _ in range(3):
-            engagement = store.get(Engagement, engagement_id)
+            engagement = await store.get(Engagement, engagement_id)
             values = engagement.assistant_defaults.model_dump(mode="json")
             values.update(request.changes)
             defaults = AssistantDefaults.model_validate(values)
             if defaults == engagement.assistant_defaults:
                 return defaults
             try:
-                updated = store.update(
+                updated = await store.update(
                     Engagement,
                     engagement_id,
                     {"assistant_defaults": defaults.model_dump(mode="json")},
@@ -8449,11 +8505,11 @@ def create_app(
         tags=["engagements"],
         dependencies=[Depends(require_auth)],
     )
-    def engagement_scope(engagement_id: str) -> ScopePolicy:
-        engagement = store.get(Engagement, engagement_id)
+    async def engagement_scope(engagement_id: str) -> ScopePolicy:
+        engagement = await store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
             return ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
-        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        scope = await store.get(ScopePolicy, engagement.scope_policy_id)
         if scope.engagement_id != engagement.id:
             raise ConflictError("engagement scope policy ownership is inconsistent")
         return scope
@@ -8464,14 +8520,14 @@ def create_app(
         tags=["engagements"],
         dependencies=[Depends(require_auth), Depends(require_entity_listing_capacity)],
     )
-    def engagement_scope_tool_candidates(
+    async def engagement_scope_tool_candidates(
         engagement_id: str,
     ) -> list[ScopeToolCandidate]:
         """Tools an operator can pin to every request, from probed MCP servers."""
 
-        scope = engagement_scope(engagement_id)
+        scope = await engagement_scope(engagement_id)
         candidates: list[ScopeToolCandidate] = []
-        for profile in store.iter_readable_entities(McpServerProfile):
+        async for profile in store.iter_readable_entities(McpServerProfile):
             if not profile.enabled or profile.capabilities.checked_at is None:
                 continue
             if (
@@ -8504,8 +8560,8 @@ def create_app(
     async def replace_engagement_scope(
         engagement_id: str, request: ScopePolicyUpdateRequest
     ) -> ScopePolicy:
-        engagement = store.get(Engagement, engagement_id)
-        operator_id = active_operator_id()
+        engagement = await store.get(Engagement, engagement_id)
+        operator_id = await active_operator_id()
         payload = request.model_dump(exclude={"expected_revision", "grants"})
         for optional in (
             "bypass_permissions",
@@ -8528,17 +8584,19 @@ def create_app(
             }
 
         if engagement.scope_policy_id:
-            current = store.get(ScopePolicy, engagement.scope_policy_id)
+            current = await store.get(ScopePolicy, engagement.scope_policy_id)
             if current.engagement_id != engagement.id:
                 raise ConflictError("engagement scope policy ownership is inconsistent")
-            updated = store.update(
+            updated = await store.update(
                 ScopePolicy,
                 current.id,
                 attributed(current.grants),
                 expected_revision=request.expected_revision or current.revision,
             )
-            browser_automation.invalidate_scope_revision(
-                engagement.id, updated.revision, operator_id
+            (
+                await browser_automation.invalidate_scope_revision(
+                    engagement.id, updated.revision, operator_id
+                )
             )
             return updated
 
@@ -8549,7 +8607,7 @@ def create_app(
             **attributed([]),
         )
         try:
-            scope = store.create(candidate)
+            scope = await store.create(candidate)
         except ConflictError as caught_error:
             record_caught_exception(
                 "api",
@@ -8558,23 +8616,27 @@ def create_app(
                 caught_error,
                 stage="api",
             )
-            scope = store.get(ScopePolicy, scope_id)
+            scope = await store.get(ScopePolicy, scope_id)
             if scope.engagement_id != engagement.id:
                 raise
-            scope = store.update(
+            scope = await store.update(
                 ScopePolicy,
                 scope.id,
                 attributed(scope.grants),
                 expected_revision=request.expected_revision or scope.revision,
             )
-        store.update(
-            Engagement,
-            engagement.id,
-            {"scope_policy_id": scope.id},
-            expected_revision=engagement.revision,
+        (
+            await store.update(
+                Engagement,
+                engagement.id,
+                {"scope_policy_id": scope.id},
+                expected_revision=engagement.revision,
+            )
         )
-        browser_automation.invalidate_scope_revision(
-            engagement.id, scope.revision, operator_id
+        (
+            await browser_automation.invalidate_scope_revision(
+                engagement.id, scope.revision, operator_id
+            )
         )
         return scope
 
@@ -8605,16 +8667,18 @@ def create_app(
             )
         return await automation_runtime.prepare()
 
-    def typesafe_status() -> TypeSafeIntegrationStatus:
+    async def typesafe_status() -> TypeSafeIntegrationStatus:
         projects_using = 0
         offset = 0
-        while page := store.list_entities(ScopePolicy, offset=offset, limit=1_000):
+        while page := (
+            await store.list_entities(ScopePolicy, offset=offset, limit=1_000)
+        ):
             projects_using += sum(
                 1 for scope in page if scope.tool_suggestions and not scope.local_only
             )
             offset += len(page)
-        source, available = key_source(store, credentials)
-        settings = load_settings(store)
+        source, available = await key_source(store, credentials)
+        settings = await load_settings(store)
         vault_state = credentials.vault_state
         return TypeSafeIntegrationStatus(
             source=source,
@@ -8626,15 +8690,21 @@ def create_app(
         )
 
     async def save_typesafe_settings(**changes: Any) -> None:
-        settings = load_settings(store)
+        settings = await load_settings(store)
         if settings is None:
-            store.create(ToolSuggestionSettings(id=TYPESAFE_SETTINGS_ID, **changes))
+            (
+                await store.create(
+                    ToolSuggestionSettings(id=TYPESAFE_SETTINGS_ID, **changes)
+                )
+            )
         else:
-            store.update(
-                ToolSuggestionSettings,
-                settings.id,
-                changes,
-                expected_revision=settings.revision,
+            (
+                await store.update(
+                    ToolSuggestionSettings,
+                    settings.id,
+                    changes,
+                    expected_revision=settings.revision,
+                )
             )
 
     @app.get(
@@ -8644,7 +8714,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_typesafe_integration() -> TypeSafeIntegrationStatus:
-        return await asyncio.to_thread(typesafe_status)
+        return await typesafe_status()
 
     @app.put(
         f"{API_PREFIX}/integrations/typesafe",
@@ -8666,7 +8736,7 @@ def create_app(
             )
         except CredentialError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        previous = load_settings(store)
+        previous = await load_settings(store)
         try:
             await save_typesafe_settings(secret_ref=secret.reference, last_test=None)
         except Exception:
@@ -8683,9 +8753,9 @@ def create_app(
                     exc,
                     stage="integrations",
                 )
-        result = await check_connection(resolve_jev_client(store, credentials))
+        result = await check_connection((await resolve_jev_client(store, credentials)))
         await save_typesafe_settings(last_test=result)
-        return await asyncio.to_thread(typesafe_status)
+        return await typesafe_status()
 
     @app.post(
         f"{API_PREFIX}/integrations/typesafe/test",
@@ -8694,9 +8764,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def test_typesafe_key() -> TypeSafeIntegrationStatus:
-        result = await check_connection(resolve_jev_client(store, credentials))
+        result = await check_connection((await resolve_jev_client(store, credentials)))
         await save_typesafe_settings(last_test=result)
-        return await asyncio.to_thread(typesafe_status)
+        return await typesafe_status()
 
     @app.delete(
         f"{API_PREFIX}/integrations/typesafe",
@@ -8705,7 +8775,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def delete_typesafe_key() -> TypeSafeIntegrationStatus:
-        settings = load_settings(store)
+        settings = await load_settings(store)
         if settings is not None and settings.secret_ref:
             try:
                 await asyncio.to_thread(credentials.delete, settings.secret_ref)
@@ -8713,7 +8783,7 @@ def create_app(
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
         if settings is not None:
             await save_typesafe_settings(secret_ref=None, last_test=None)
-        return await asyncio.to_thread(typesafe_status)
+        return await typesafe_status()
 
     def require_search_runtime() -> Any:
         if tool_platform is None:
@@ -8724,8 +8794,8 @@ def create_app(
         return tool_platform.search_runtime
 
     async def web_search_status() -> WebSearchStatus:
-        projects_using = await read_in_worker(store.web_search_project_count)
-        settings = await asyncio.to_thread(load_web_search_settings, store)
+        projects_using = await store.web_search_project_count()
+        settings = await load_web_search_settings(store)
         if tool_platform is None:
             return WebSearchStatus(
                 runtime_available=False,
@@ -8867,7 +8937,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_vpn_profiles() -> list[dict[str, Any]]:
-        profiles = list(store.list_entities(VpnProfile, limit=1_000))
+        profiles = list((await store.list_entities(VpnProfile, limit=1_000)))
         # Vault status opens a D-Bus connection; keep that off the event loop.
         return await asyncio.to_thread(
             lambda: [public_vpn_profile(profile) for profile in profiles]
@@ -8884,7 +8954,7 @@ def create_app(
             parsed = parse_openvpn_profile(
                 request.config, username=request.username, password=request.password
             )
-            if store.find_entities(
+            if await store.find_entities(
                 VpnProfile, {"fingerprint": parsed.fingerprint}, limit=1
             ):
                 raise HTTPException(
@@ -8897,7 +8967,7 @@ def create_app(
                 ),
             )
             try:
-                profile = store.create(
+                profile = await store.create(
                     VpnProfile(
                         name=request.name.strip(),
                         filename=request.filename,
@@ -8927,8 +8997,8 @@ def create_app(
     async def delete_vpn_profile(
         profile_id: str, request: VpnProfileDeleteRequest
     ) -> Response:
-        profile = store.get(VpnProfile, profile_id)
-        if store.find_entities(
+        profile = await store.get(VpnProfile, profile_id)
+        if await store.find_entities(
             AutomationProjectPolicy, {"vpn_profile_id": profile_id}, limit=1
         ):
             raise HTTPException(
@@ -8941,7 +9011,7 @@ def create_app(
             if status
             not in {AutomationSessionStatus.CLOSED, AutomationSessionStatus.FAILED}
         ]
-        if store.find_entities(
+        if await store.find_entities(
             AutomationSession,
             {"vpn_profile_id": profile_id, "status": active_statuses},
             limit=1,
@@ -8968,8 +9038,10 @@ def create_app(
                 status_code=409,
                 detail=f"VPN profile was not removed. {exc}",
             ) from exc
-        store.delete(
-            VpnProfile, profile_id, expected_revision=request.expected_revision
+        (
+            await store.delete(
+                VpnProfile, profile_id, expected_revision=request.expected_revision
+            )
         )
         return Response(status_code=204)
 
@@ -8986,7 +9058,7 @@ def create_app(
             raise HTTPException(
                 status_code=501, detail="automation runtime is not configured"
             )
-        return automation_runtime.project_policy(engagement_id)
+        return await automation_runtime.project_policy(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/status",
@@ -8994,9 +9066,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def notebook_status(engagement_id: str) -> dict[str, Any]:
-        profile = notebook_mcp.register_profile(engagement_id)
+        profile = await notebook_mcp.register_profile(engagement_id)
         return {
-            **notebook_service.status(engagement_id),
+            **(await notebook_service.status(engagement_id)),
             "mcp_profile_id": profile.id,
             "mcp_enabled": profile.enabled,
         }
@@ -9009,7 +9081,7 @@ def create_app(
     async def list_notebooks(
         engagement_id: str, refresh: bool = False
     ) -> list[dict[str, Any]]:
-        notebook_mcp.register_profile(engagement_id)
+        (await notebook_mcp.register_profile(engagement_id))
         return await notebook_service.list_async(engagement_id, refresh=refresh)
 
     @app.get(
@@ -9018,7 +9090,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def notebook_file_index(engagement_id: str) -> dict[str, Any]:
-        return notebook_service.file_index_status(engagement_id)
+        return await notebook_service.file_index_status(engagement_id)
 
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/file-index",
@@ -9070,7 +9142,7 @@ def create_app(
     async def read_notebook(
         engagement_id: str, path: str = Query(min_length=1, max_length=4096)
     ) -> dict[str, Any]:
-        return notebook_service.read(engagement_id, path)
+        return await notebook_service.read(engagement_id, path)
 
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/cell",
@@ -9114,7 +9186,7 @@ def create_app(
     async def recent_notebook_runs(
         engagement_id: str, path: str = Query(min_length=1, max_length=4096)
     ) -> list[dict[str, Any]]:
-        return notebook_service.recent_runs(engagement_id, path)
+        return await notebook_service.recent_runs(engagement_id, path)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs/active",
@@ -9123,7 +9195,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def active_notebook_runs(engagement_id: str) -> list[NotebookRun]:
-        return notebook_service.active_runs(engagement_id)
+        return await notebook_service.active_runs(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/runs/{{run_id}}",
@@ -9133,7 +9205,7 @@ def create_app(
     async def read_notebook_run(
         engagement_id: str, run_id: str, after_sequence: int = Query(default=0, ge=0)
     ) -> dict[str, Any]:
-        return notebook_service.run(
+        return await notebook_service.run(
             run_id, engagement_id=engagement_id, after_sequence=after_sequence
         )
 
@@ -9146,7 +9218,7 @@ def create_app(
         engagement_id: str, run_id: str, after_sequence: int = Query(default=0, ge=0)
     ) -> StreamingResponse:
         # Validate project ownership before sending streaming response headers.
-        first = notebook_service.run(
+        first = await notebook_service.run(
             run_id, engagement_id=engagement_id, after_sequence=after_sequence
         )
 
@@ -9163,7 +9235,7 @@ def create_app(
                 if current["run"]["status"] not in {"queued", "running"}:
                     break
                 await asyncio.sleep(0.08)
-                current = notebook_service.run(
+                current = await notebook_service.run(
                     run_id, engagement_id=engagement_id, after_sequence=cursor
                 )
 
@@ -9200,7 +9272,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def notebook_kernel_status(engagement_id: str, path: str) -> dict[str, Any]:
-        return notebook_service.kernel_status(engagement_id, path)
+        return await notebook_service.kernel_status(engagement_id, path)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/notebooks/kernel/restart",
@@ -9255,28 +9327,28 @@ def create_app(
     async def pin_chat_notebook(
         session_id: str, body: NotebookPinRequest
     ) -> ChatSession:
-        return notebook_service.pin(
+        return await notebook_service.pin(
             session_id, body.path, expected_revision=body.expected_revision
         )
 
-    def browser_security_policy(engagement_id: str) -> AutomationProjectPolicy:
+    async def browser_security_policy(engagement_id: str) -> AutomationProjectPolicy:
         if automation_runtime is not None:
-            return automation_runtime.project_policy(engagement_id)
-        store.get(Engagement, engagement_id)
+            return await automation_runtime.project_policy(engagement_id)
+        (await store.get(Engagement, engagement_id))
         policy_id = str(
             uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")
         )
         try:
-            return store.get(AutomationProjectPolicy, policy_id)
+            return await store.get(AutomationProjectPolicy, policy_id)
         except NotFoundError:
             # diagnostic-expected: first read creates the Project approval policy.
             try:
-                return store.create(
+                return await store.create(
                     AutomationProjectPolicy(id=policy_id, engagement_id=engagement_id)
                 )
             except ConflictError:
                 # diagnostic-expected: a concurrent first read already created the policy.
-                return store.get(AutomationProjectPolicy, policy_id)
+                return await store.get(AutomationProjectPolicy, policy_id)
 
     @app.get(
         f"{API_PREFIX}/desktop-browser-mode",
@@ -9295,7 +9367,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def start_agent_security(engagement_id: str) -> dict[str, str]:
-        store.get(Engagement, engagement_id)
+        (await store.get(Engagement, engagement_id))
         try:
             session = await agent_security_sessions.ensure(engagement_id)
         except Exception as exc:
@@ -9317,7 +9389,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def agent_security_status(engagement_id: str) -> dict[str, Any]:
-        store.get(Engagement, engagement_id)
+        (await store.get(Engagement, engagement_id))
         result = await agent_security_tools.call_tool(engagement_id, "status", {})
         return result["structuredContent"]
 
@@ -9327,7 +9399,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def stop_agent_security(engagement_id: str) -> dict[str, int]:
-        store.get(Engagement, engagement_id)
+        (await store.get(Engagement, engagement_id))
         stopped = await agent_security_tools.stop(
             engagement_id,
             reason="Operator emergency stop",
@@ -9340,7 +9412,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_browser_security_approval(engagement_id: str) -> dict[str, Any]:
-        policy = browser_security_policy(engagement_id)
+        policy = await browser_security_policy(engagement_id)
         return {
             "allow_all": policy.browser_security_allow_all,
             "revision": policy.revision,
@@ -9356,8 +9428,8 @@ def create_app(
         request: BrowserSecurityApprovalUpdate,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> dict[str, Any]:
-        current = browser_security_policy(engagement_id)
-        updated, _ = store.update_with_operation_event(
+        current = await browser_security_policy(engagement_id)
+        updated, _ = await store.update_with_operation_event(
             AutomationProjectPolicy,
             current.id,
             {"browser_security_allow_all": request.allow_all},
@@ -9376,21 +9448,23 @@ def create_app(
         stopped = 0
         if current.browser_security_allow_all and not request.allow_all:
             if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
-                for session in store.find_entities(
+                for session in await store.find_entities(
                     BrowserSession,
                     {"runtime_kind": "electron_visible"},
                     engagement_id=engagement_id,
                 ):
-                    browser_companion.takeover(session.id, True)
+                    (await browser_companion.takeover(session.id, True))
             run_ids = {
                 lease.run_id
-                for lease in store.find_entities(
-                    BrowserAutomationLease, {}, engagement_id=engagement_id
+                for lease in (
+                    await store.find_entities(
+                        BrowserAutomationLease, {}, engagement_id=engagement_id
+                    )
                 )
                 if lease.status == BrowserAutomationLeaseStatus.ACTIVE
             }
             for run_id in run_ids:
-                stopped += browser_automation.revoke_run(
+                stopped += await browser_automation.revoke_run(
                     run_id,
                     "Project browser and security approval revoked",
                     x_nebula_actor,
@@ -9417,7 +9491,7 @@ def create_app(
             raise HTTPException(
                 status_code=501, detail="automation runtime is not configured"
             )
-        current = automation_runtime.project_policy(engagement_id)
+        current = await automation_runtime.project_policy(engagement_id)
         if (
             request.expected_revision is not None
             and request.expected_revision != current.revision
@@ -9431,7 +9505,7 @@ def create_app(
                 engagement_id, request.execution_mode
             )
         try:
-            return automation_runtime.update_project_policy(
+            return await automation_runtime.update_project_policy(
                 engagement_id,
                 approval_policy=request.approval_policy,
                 execution_mode=request.execution_mode,
@@ -9463,7 +9537,7 @@ def create_app(
                 status_code=501, detail="automation runtime is not configured"
             )
         approval = (
-            store.get(Approval, request.approval_id)
+            (await store.get(Approval, request.approval_id))
             if request.approval_id is not None
             else None
         )
@@ -9477,7 +9551,7 @@ def create_app(
                 owner_id=owner_id,
                 request=command,
                 approval=approval,
-                requested_by=active_operator_id(),
+                requested_by=(await active_operator_id()),
             )
         except CommandApprovalRequired as exc:
             # diagnostic-expected: a durable approval pause is a normal policy state.
@@ -9557,7 +9631,9 @@ def create_app(
         )
         request = ProcessResultsRequest.model_validate_json(body)
         try:
-            execution = automation_runtime.accept_results(process_id, api_key, request)
+            execution = await automation_runtime.accept_results(
+                process_id, api_key, request
+            )
         except AutomationPolicyDenied as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         except ConflictError as exc:
@@ -9565,7 +9641,7 @@ def create_app(
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         try:
-            chat_service().continue_after_tool_callback(process_id)
+            (await chat_service().continue_after_tool_callback(process_id))
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -9593,7 +9669,7 @@ def create_app(
             raise HTTPException(
                 status_code=501, detail="automation runtime is not configured"
             )
-        return automation_runtime.list_processes(session_id)
+        return await automation_runtime.list_processes(session_id)
 
     @app.delete(
         f"{API_PREFIX}/automation-sessions/{{session_id}}",
@@ -9615,7 +9691,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def runner_profiles() -> list[RunnerProfile]:
-        return store.list_entities(RunnerProfile, limit=1_000)
+        return await store.list_entities(RunnerProfile, limit=1_000)
 
     @app.put(
         f"{API_PREFIX}/runner-profiles/{{profile_id}}",
@@ -9628,7 +9704,7 @@ def create_app(
     ) -> RunnerProfile:
         payload = request.model_dump(exclude={"expected_revision"})
         try:
-            existing = store.get(RunnerProfile, profile_id)
+            existing = await store.get(RunnerProfile, profile_id)
         except NotFoundError as caught_error:
             record_caught_exception(
                 "api",
@@ -9641,9 +9717,9 @@ def create_app(
                 raise ConflictError(
                     "Runner profile changed; read it again"
                 ) from caught_error
-            profile = store.create(RunnerProfile(id=profile_id, **payload))
+            profile = await store.create(RunnerProfile(id=profile_id, **payload))
         else:
-            profile = store.update(
+            profile = await store.update(
                 RunnerProfile,
                 existing.id,
                 payload,
@@ -9663,8 +9739,10 @@ def create_app(
     async def start_mission(request: MissionStartRequest) -> AgentRun:
         if request.browser_autonomy is not None:
             try:
-                browser_automation.validate_autonomy(
-                    request.engagement_id, request.browser_autonomy
+                (
+                    await browser_automation.validate_autonomy(
+                        request.engagement_id, request.browser_autonomy
+                    )
                 )
             except Exception as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -9709,7 +9787,7 @@ def create_app(
                 status_code=409,
                 detail="automation command runtime is unavailable",
             )
-        operator_id = active_operator_id()
+        operator_id = await active_operator_id()
         requested_tool_calls = request.max_tool_calls
         if request.browser_autonomy is not None and requested_tool_calls == 0:
             requested_tool_calls = min(request.browser_autonomy.max_commands, 100)
@@ -9793,8 +9871,8 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def stop_mission(run_id: str, request: MissionStopRequest) -> AgentRun:
-        operator_id = active_operator_id()
-        run = store.get(AgentRun, run_id)
+        operator_id = await active_operator_id()
+        run = await store.get(AgentRun, run_id)
         if run.metadata.get("supervisor_mode") == "conversation":
             return await delegated_missions.stop(run_id, reason=request.reason)
         if run.backend == RunBackend.HARNESS:
@@ -9817,7 +9895,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def retry_mission(run_id: str, request: MissionRetryRequest) -> AgentRun:
-        prior = store.get(AgentRun, run_id)
+        prior = await store.get(AgentRun, run_id)
         if prior.status not in {
             RunStatus.COMPLETE,
             RunStatus.FAILED,
@@ -9842,7 +9920,7 @@ def create_app(
         stages = prior.metadata.get("stages")
         stages = stages if isinstance(stages, list) else []
         name = str(prior.metadata.get("name") or prior.objective)
-        operator_id = active_operator_id()
+        operator_id = await active_operator_id()
         if prior.metadata.get("supervisor_mode") == "conversation":
             options = prior.runtime_snapshot.get("runtime_options") or {}
             return await delegated_missions.start(
@@ -9923,13 +10001,13 @@ def create_app(
     async def reconcile_mission_effect(
         run_id: str, request: MissionEffectReconciliationRequest
     ) -> AgentRun:
-        return missions.reconcile_restart_effect(
+        return await missions.reconcile_restart_effect(
             run_id,
             request.tool_call_id,
             outcome=request.outcome,
             detail=request.detail,
             expected_revision=request.expected_revision,
-            actor_id=active_operator_id(),
+            actor_id=(await active_operator_id()),
         )
 
     @app.delete(
@@ -9939,8 +10017,8 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def delete_mission(run_id: str) -> Response:
-        run = store.get(AgentRun, run_id)
-        store.delete_run(run_id, expected_revision=run.revision)
+        run = await store.get(AgentRun, run_id)
+        (await store.delete_run(run_id, expected_revision=run.revision))
         return Response(status_code=204)
 
     @app.post(
@@ -9952,16 +10030,20 @@ def create_app(
     async def steer_harness_run(
         run_id: str, request: HarnessSteerRequest
     ) -> HarnessTurn:
-        run = store.get(AgentRun, run_id)
+        run = await store.get(AgentRun, run_id)
         if run.metadata.get("supervisor_mode") == "conversation":
-            turn = store.get(ChatTurn, str(run.metadata["supervisor_chat_turn_id"]))
+            turn = await store.get(
+                ChatTurn, str(run.metadata["supervisor_chat_turn_id"])
+            )
             if not turn.harness_turn_id:
                 raise HarnessStateError("this supervisor is not a harness turn")
             return await harness_runtime.steer_turn(
-                turn.harness_turn_id, request.text, actor_id=active_operator_id()
+                turn.harness_turn_id,
+                request.text,
+                actor_id=(await active_operator_id()),
             )
         return await harness_runtime.steer(
-            run_id, request.text, actor_id=active_operator_id()
+            run_id, request.text, actor_id=(await active_operator_id())
         )
 
     @app.post(
@@ -9971,14 +10053,14 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def discuss_run(run_id: str) -> ChatSession:
-        run = store.get(AgentRun, run_id)
+        run = await store.get(AgentRun, run_id)
         if run.metadata.get("supervisor_mode") == "conversation":
-            return store.get(
+            return await store.get(
                 ChatSession, str(run.metadata["supervisor_chat_session_id"])
             )
         if run.backend == RunBackend.HARNESS:
-            return harness_runtime.attach_run_to_chat(run_id)
-        return chat_service().attach_native_run_to_chat(run_id)
+            return await harness_runtime.attach_run_to_chat(run_id)
+        return await chat_service().attach_native_run_to_chat(run_id)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/continue-as-mission",
@@ -9990,10 +10072,10 @@ def create_app(
     async def continue_chat_as_mission(
         session_id: str, request: HarnessMissionHandoffRequest
     ) -> AgentRun:
-        chat = store.get(ChatSession, session_id)
+        chat = await store.get(ChatSession, session_id)
         if chat.backend != ChatBackend.HARNESS or not chat.harness_session_id:
             raise HarnessStateError("only harness chats can continue as a mission")
-        messages = chat_service().session_messages(session_id)
+        messages = await chat_service().session_messages(session_id)
         objective = request.objective or next(
             (
                 message.content
@@ -10019,7 +10101,7 @@ def create_app(
                 per_target_active_operations=1,
             ),
             harness_session_id=chat.harness_session_id,
-            actor_id=active_operator_id(),
+            actor_id=(await active_operator_id()),
             allow_remote_mcp=request.allow_cloud_tool_results,
         )
 
@@ -10076,8 +10158,7 @@ def create_app(
                 ),
             )
         try:
-            created = await asyncio.to_thread(
-                ingest_document,
+            created = await ingest_document(
                 store=store,
                 artifact_store=artifact_store,
                 engagement_id=request.engagement_id,
@@ -10149,11 +10230,10 @@ def create_app(
                 detail="knowledge ingestion requires an artifact store",
             )
         # Validate ownership before performing any outbound network request.
-        store.get(Engagement, request.engagement_id)
+        (await store.get(Engagement, request.engagement_id))
         try:
             fetched = await asyncio.to_thread(url_fetcher, request.url)
-            created = await asyncio.to_thread(
-                ingest_document,
+            created = await ingest_document(
                 store=store,
                 artifact_store=artifact_store,
                 engagement_id=request.engagement_id,
@@ -10217,8 +10297,7 @@ def create_app(
                 detail="knowledge reindexing requires an artifact store",
             )
         try:
-            updated = await asyncio.to_thread(
-                reindex_document,
+            updated = await reindex_document(
                 store=store,
                 artifact_store=artifact_store,
                 source_id=knowledge_id,
@@ -10273,12 +10352,12 @@ def create_app(
     ) -> Response:
         """Remove a retrieval source while retaining its immutable artifact."""
 
-        source = store.get(KnowledgeSource, knowledge_id)
+        source = await store.get(KnowledgeSource, knowledge_id)
         if engagement_id is not None and source.engagement_id != engagement_id:
             raise HTTPException(
                 status_code=404, detail="source is not in the selected project"
             )
-        store.delete(KnowledgeSource, knowledge_id, expected_revision=if_match)
+        (await store.delete(KnowledgeSource, knowledge_id, expected_revision=if_match))
         if knowledge_index is not None:
             try:
                 await asyncio.to_thread(knowledge_index.delete_source, knowledge_id)
@@ -10308,10 +10387,12 @@ def create_app(
     ) -> list[LibraryItem]:
         return [
             library_item_summary(item)
-            for item in store.list_entities(
-                LibraryItem,
-                offset=offset,
-                limit=limit,
+            for item in (
+                await store.list_entities(
+                    LibraryItem,
+                    offset=offset,
+                    limit=limit,
+                )
             )
         ]
 
@@ -10322,7 +10403,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_library_item(item_id: str) -> LibraryItem:
-        return library_item_summary(store.get(LibraryItem, item_id))
+        return library_item_summary((await store.get(LibraryItem, item_id)))
 
     @app.post(
         f"{API_PREFIX}/library/items/ingest",
@@ -10355,8 +10436,7 @@ def create_app(
                 ),
             )
         try:
-            created = await asyncio.to_thread(
-                ingest_library_item,
+            created = await ingest_library_item(
                 store=store,
                 artifact_store=artifact_store,
                 filename=request.filename,
@@ -10405,8 +10485,7 @@ def create_app(
                 detail="Library reindexing requires an artifact store",
             )
         try:
-            updated = await asyncio.to_thread(
-                reindex_library_item,
+            updated = await reindex_library_item(
                 store=store,
                 artifact_store=artifact_store,
                 item_id=item_id,
@@ -10437,7 +10516,7 @@ def create_app(
     ) -> Response:
         """Remove an item from retrieval while retaining its immutable artifact."""
 
-        store.delete(LibraryItem, item_id, expected_revision=expected_revision)
+        (await store.delete(LibraryItem, item_id, expected_revision=expected_revision))
         if knowledge_index is not None:
             try:
                 await asyncio.to_thread(knowledge_index.delete_library_item, item_id)
@@ -10462,7 +10541,7 @@ def create_app(
     )
     async def schema_information() -> dict[str, Any]:
         return {
-            "schema_version": store.database.current_schema_version(),
+            "schema_version": (await store.database.current_schema_version()),
             "dialect": store.database.engine.dialect.name,
             "resources": sorted(
                 kind
@@ -10568,7 +10647,7 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return Response(status_code=204)
 
-    def persist_provider_model_catalog(
+    async def persist_provider_model_catalog(
         profile: ProviderProfile, health: ProviderHealth
     ) -> ProviderProfile:
         """Persist bounded exact-model limits without churning unchanged profiles."""
@@ -10607,7 +10686,7 @@ def create_app(
             and not upstream_changed
         ):
             return profile
-        return store.update(
+        return await store.update(
             ProviderProfile,
             profile.id,
             {
@@ -10664,9 +10743,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def refresh_provider_health(provider_id: str) -> ProviderHealth:
-        profile = store.get(ProviderProfile, provider_id)
+        profile = await store.get(ProviderProfile, provider_id)
         health = await _provider_health(profile, provider_factory)
-        stored = persist_provider_model_catalog(profile, health)
+        stored = await persist_provider_model_catalog(profile, health)
         return health.model_copy(update={"provider_revision": stored.revision})
 
     @app.post(
@@ -10678,7 +10757,7 @@ def create_app(
     async def refresh_openrouter_credits(provider_id: str) -> OpenRouterCreditSnapshot:
         """Check account credits with the separate OpenRouter management key."""
 
-        profile = store.get(ProviderProfile, provider_id)
+        profile = await store.get(ProviderProfile, provider_id)
         if profile.provider_type != ProviderFlavor.OPENROUTER.value:
             raise HTTPException(
                 status_code=422,
@@ -10696,7 +10775,7 @@ def create_app(
         provider_id: str,
         request: ProviderCapabilityVerifyRequest,
     ) -> ProviderCapabilityVerifyResponse:
-        profile = store.get(ProviderProfile, provider_id)
+        profile = await store.get(ProviderProfile, provider_id)
         if profile.revision != request.expected_revision:
             raise ConflictError(
                 f"revision conflict: expected {request.expected_revision}, "
@@ -10716,7 +10795,7 @@ def create_app(
         profiles: list[ProviderProfile] = []
         offset = 0
         while True:
-            page = store.list_entities(
+            page = await store.list_entities(
                 ProviderProfile,
                 offset=offset,
                 limit=1_000,
@@ -10730,7 +10809,7 @@ def create_app(
         async def checked(profile: ProviderProfile) -> ProviderHealth:
             async with semaphore:
                 health = await _provider_health(profile, provider_factory)
-                stored = persist_provider_model_catalog(profile, health)
+                stored = await persist_provider_model_catalog(profile, health)
                 return health.model_copy(update={"provider_revision": stored.revision})
 
         return list(await asyncio.gather(*(checked(profile) for profile in profiles)))
@@ -10749,7 +10828,7 @@ def create_app(
             raise HTTPException(
                 status_code=503, detail="chat images require an artifact store"
             )
-        store.get(Engagement, request.engagement_id)
+        (await store.get(Engagement, request.engagement_id))
         try:
             raw = base64.b64decode(request.content_base64, validate=True)
             image = await asyncio.to_thread(
@@ -10765,7 +10844,7 @@ def create_app(
             source="chat-upload",
             metadata={"sensitive": True, "chat_image_original": True},
         )
-        original = store.create(original)
+        original = await store.create(original)
         extension = "png" if image.preview_media_type == "image/png" else "jpg"
         preview = artifact_store.put_bytes(
             image.preview,
@@ -10781,7 +10860,7 @@ def create_app(
                 "height": image.height,
             },
         )
-        preview = store.create(preview)
+        preview = await store.create(preview)
         return ChatImageUploadResponse(
             artifact_id=original.id,
             preview_artifact_id=preview.id,
@@ -10800,7 +10879,7 @@ def create_app(
             raise HTTPException(
                 status_code=503, detail="chat images require an artifact store"
             )
-        artifact = store.get(Artifact, artifact_id)
+        artifact = await store.get(Artifact, artifact_id)
         if artifact.metadata.get("chat_image_preview") is not True:
             raise HTTPException(
                 status_code=404, detail="chat image preview is unavailable"
@@ -10831,7 +10910,7 @@ def create_app(
                 raise ChatConfigurationError(
                     "Butler requires a selected project before starting a conversation"
                 )
-            reserved = reserve_butler_session(
+            reserved = await reserve_butler_session(
                 store,
                 harness_runtime,
                 ButlerSessionReservation(
@@ -10849,11 +10928,13 @@ def create_app(
             )
             request = request.model_copy(update={"session_id": reserved.id})
         scoped_chat = (
-            store.get(ChatSession, request.session_id) if request.session_id else None
+            (await store.get(ChatSession, request.session_id))
+            if request.session_id
+            else None
         )
         request = isolate_settings_assistant_request(request, scoped_chat)
         if request.session_id:
-            selected_chat = store.get(ChatSession, request.session_id)
+            selected_chat = await store.get(ChatSession, request.session_id)
             if selected_chat.metadata.get("side_chat") is True:
                 # The side pane is a history-only conversation. A stale tab or
                 # direct API caller cannot attach the parent's project tools,
@@ -10876,11 +10957,11 @@ def create_app(
                         "allow_cloud_tool_results": False,
                     }
                 )
-            unarchive_chat_session(store, selected_chat.id)
+            (await unarchive_chat_session(store, selected_chat.id))
         if request.backend == ChatBackend.HARNESS:
             engagement_id = request.engagement_id
             if request.session_id:
-                existing_chat = store.get(ChatSession, request.session_id)
+                existing_chat = await store.get(ChatSession, request.session_id)
                 engagement_id = engagement_id or existing_chat.engagement_id
             if not engagement_id:
                 raise HarnessConfigurationError(
@@ -10920,7 +11001,7 @@ def create_app(
                     profile_id=request.harness_profile_id or "",
                     force_reload=False,
                 )
-            chat, chat_turn, harness_turn = harness_runtime.prepare_chat(
+            chat, chat_turn, harness_turn = await harness_runtime.prepare_chat(
                 engagement_id=engagement_id,
                 profile_id=request.harness_profile_id or "",
                 model=request.model,
@@ -10963,8 +11044,8 @@ def create_app(
                 control_assistant=request.control_assistant,
             )
             if companion_ids:
-                browser_companion.bind(next(iter(companion_ids)), chat.id)
-            harness_runtime.start_chat_turn(harness_turn.id)
+                (await browser_companion.bind(next(iter(companion_ids)), chat.id))
+            (await harness_runtime.start_chat_turn(harness_turn.id))
 
             async def harness_events() -> Any:
                 # Bind browser navigation before any runtime event or login failure.
@@ -11011,9 +11092,9 @@ def create_app(
                     yield event.type, payload
                 if failed:
                     return
-                completed_turn = store.get(ChatTurn, chat_turn.id)
+                completed_turn = await store.get(ChatTurn, chat_turn.id)
                 if not completed_turn.final_message_id:
-                    stopped = _stopped_harness_turn_frame(
+                    stopped = await _stopped_harness_turn_frame(
                         store, chat_turn.id, harness_turn.id
                     )
                     if stopped is not None:
@@ -11034,7 +11115,7 @@ def create_app(
                     raise HarnessError(
                         "harness turn completed without a durable message"
                     )
-                message = store.get(ChatMessage, completed_turn.final_message_id)
+                message = await store.get(ChatMessage, completed_turn.final_message_id)
 
                 async def name_conversation() -> None:
                     from .chat_naming import should_name, substantive_prompt
@@ -11042,11 +11123,14 @@ def create_app(
                     naming_prompt = substantive_prompt(
                         [
                             item.content
-                            for item in chat_service().session_messages(chat.id)
+                            for item in (await chat_service().session_messages(chat.id))
                             if item.role.value == "user"
                         ]
                     )
-                    if should_name(store.get(ChatSession, chat.id)) and naming_prompt:
+                    if (
+                        should_name((await store.get(ChatSession, chat.id)))
+                        and naming_prompt
+                    ):
                         try:
                             naming_turn = await harness_runtime.analyze_structured(
                                 engagement_id=chat.engagement_id,
@@ -11075,22 +11159,24 @@ def create_app(
                                 raise HarnessError(
                                     "harness returned an empty conversation name"
                                 )
-                            latest_chat = store.get(ChatSession, chat.id)
+                            latest_chat = await store.get(ChatSession, chat.id)
                             if (
                                 latest_chat.metadata.get("initial_title_state")
                                 != "operator"
                             ):
-                                store.update(
-                                    ChatSession,
-                                    chat.id,
-                                    {
-                                        "title": title,
-                                        "metadata": {
-                                            **latest_chat.metadata,
-                                            "initial_title_state": "generated",
+                                (
+                                    await store.update(
+                                        ChatSession,
+                                        chat.id,
+                                        {
+                                            "title": title,
+                                            "metadata": {
+                                                **latest_chat.metadata,
+                                                "initial_title_state": "generated",
+                                            },
                                         },
-                                    },
-                                    expected_revision=latest_chat.revision,
+                                        expected_revision=latest_chat.revision,
+                                    )
                                 )
                         except Exception as exc:
                             # The first answer is already durable. Naming is an optional
@@ -11102,21 +11188,23 @@ def create_app(
                                 exc,
                                 stage="conversation-naming",
                             )
-                            latest_chat = store.get(ChatSession, chat.id)
+                            latest_chat = await store.get(ChatSession, chat.id)
                             if (
                                 latest_chat.metadata.get("initial_title_state")
                                 != "operator"
                             ):
-                                store.update(
-                                    ChatSession,
-                                    chat.id,
-                                    {
-                                        "metadata": {
-                                            **latest_chat.metadata,
-                                            "initial_title_state": "failed",
-                                        }
-                                    },
-                                    expected_revision=latest_chat.revision,
+                                (
+                                    await store.update(
+                                        ChatSession,
+                                        chat.id,
+                                        {
+                                            "metadata": {
+                                                **latest_chat.metadata,
+                                                "initial_title_state": "failed",
+                                            }
+                                        },
+                                        expected_revision=latest_chat.revision,
+                                    )
                                 )
 
                 chat_service().start_optional_naming(name_conversation())
@@ -11261,7 +11349,7 @@ def create_app(
             accepted_turn_id = result.turn_id
         else:
             accepted_turn_id = (
-                service.start_provider_turn(prepared)
+                (await service.start_provider_turn(prepared))
                 if prepared.turn is not None
                 else None
             )
@@ -11376,8 +11464,8 @@ def create_app(
         epoch: str | None = Query(default=None, min_length=1, max_length=64),
     ) -> StreamingResponse:
         """Attach a viewer only. Never create, resume or retry execution."""
-        turn = store.get(ChatTurn, turn_id)
-        chat = store.get(ChatSession, turn.session_id)
+        turn = await store.get(ChatTurn, turn_id)
+        chat = await store.get(ChatSession, turn.session_id)
         service = chat_service()
         if (
             not turn.harness_turn_id
@@ -11415,7 +11503,7 @@ def create_app(
                     return
                 except (ChatError, ProviderError, ConflictError) as exc:
                     # diagnostic-expected: recover a durable completion or surface the error frame.
-                    if not store.get(ChatTurn, turn_id).final_message_id:
+                    if not (await store.get(ChatTurn, turn_id)).final_message_id:
                         yield _server_sent_event(
                             "error", {"type": "error", "detail": str(exc)}
                         )
@@ -11425,9 +11513,13 @@ def create_app(
                     # failure on the turn; the follower gets its durable error
                     # frame below instead of a torn stream.
                     pass
-            completed = store.get(ChatTurn, turn_id)
+            completed = await store.get(ChatTurn, turn_id)
             stopped = (
-                _stopped_harness_turn_frame(store, turn_id, completed.harness_turn_id)
+                (
+                    await _stopped_harness_turn_frame(
+                        store, turn_id, completed.harness_turn_id
+                    )
+                )
                 if completed.harness_turn_id and not completed.final_message_id
                 else None
             )
@@ -11444,7 +11536,7 @@ def create_app(
                     },
                 )
                 return
-            message = store.get(ChatMessage, completed.final_message_id)
+            message = await store.get(ChatMessage, completed.final_message_id)
             progress_prefix_utf16_length = message.metadata.get(
                 "progress_prefix_utf16_length"
             )
@@ -11503,17 +11595,17 @@ def create_app(
         prepared = (
             None
             if service.has_active_provider_turn(turn_id)
-            else service.prepare_resume(turn_id)
+            else (await service.prepare_resume(turn_id))
         )
         if prepared is not None:
-            service.start_provider_turn(prepared)
+            (await service.start_provider_turn(prepared))
 
         async def event_stream() -> Any:
             started_at = time.monotonic()
             event_count = 0
             outcome = "success"
-            turn = store.get(ChatTurn, turn_id)
-            chat_session = store.get(ChatSession, turn.session_id)
+            turn = await store.get(ChatTurn, turn_id)
+            chat_session = await store.get(ChatSession, turn.session_id)
             emit_diagnostic(
                 "info",
                 "chat",
@@ -11589,13 +11681,13 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_chat_session_state(
+    async def get_chat_session_state(
         session_id: str, request: Request, response: Response
     ) -> Any:
         from .session_state import session_state
 
-        state = session_state(
-            store, store.get(ChatSession, session_id), harness_runtime
+        state = await session_state(
+            store, (await store.get(ChatSession, session_id)), harness_runtime
         )
         # The display revision advances exactly when the projection changes,
         # so it validates the whole snapshot for an unchanged poll.
@@ -11610,14 +11702,14 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_pending_chat_turn(
+    async def get_pending_chat_turn(
         session_id: str,
         view: Literal["summary", "status"] = "summary",
     ) -> ChatTurnSummary | PendingChatTurnStatus | None:
         service = chat_service()
-        turn = service.pending_turn(session_id)
+        turn = await service.pending_turn(session_id)
         if turn is None:
-            turn = service.recoverable_final_answer_turn(session_id)
+            turn = await service.recoverable_final_answer_turn(session_id)
         if turn is None:
             return None
         if view == "status":
@@ -11629,7 +11721,7 @@ def create_app(
                 status=turn.status,
                 revision=turn.revision,
             )
-        return _chat_turn_summary(service, turn)
+        return await _chat_turn_summary(service, turn)
 
     @app.post(
         f"{API_PREFIX}/chat/turns/{{turn_id}}/cancel",
@@ -11638,13 +11730,15 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def cancel_chat_turn(turn_id: str) -> ChatTurnSummary:
-        turn = store.get(ChatTurn, turn_id)
+        turn = await store.get(ChatTurn, turn_id)
         if turn.backend == ChatBackend.HARNESS and turn.harness_turn_id:
             await harness_runtime.cancel_turn(
                 turn.harness_turn_id, reason="Stopped by operator"
             )
-            return _chat_turn_summary(chat_service(), store.get(ChatTurn, turn.id))
-        return _chat_turn_summary(
+            return await _chat_turn_summary(
+                chat_service(), (await store.get(ChatTurn, turn.id))
+            )
+        return await _chat_turn_summary(
             chat_service(), await chat_service().stop_provider_turn(turn_id)
         )
 
@@ -11657,14 +11751,16 @@ def create_app(
     async def reconcile_chat_tool(
         turn_id: str, request: ChatToolReconciliationRequest
     ) -> ChatTurnSummary:
-        return _chat_turn_summary(
+        return await _chat_turn_summary(
             chat_service(),
-            chat_service().reconcile_interrupted_tool(
-                turn_id,
-                request.tool_call_id,
-                outcome=request.outcome,
-                detail=request.detail,
-                expected_revision=request.expected_revision,
+            (
+                await chat_service().reconcile_interrupted_tool(
+                    turn_id,
+                    request.tool_call_id,
+                    outcome=request.outcome,
+                    detail=request.detail,
+                    expected_revision=request.expected_revision,
+                )
             ),
         )
 
@@ -11677,14 +11773,16 @@ def create_app(
     async def reconcile_chat_hook(
         turn_id: str, request: ChatHookReconciliationRequest
     ) -> ChatTurnSummary:
-        return _chat_turn_summary(
+        return await _chat_turn_summary(
             chat_service(),
-            chat_service().reconcile_interrupted_hook(
-                turn_id,
-                request.hook_execution_id,
-                outcome=request.outcome,
-                detail=request.detail,
-                expected_revision=request.expected_revision,
+            (
+                await chat_service().reconcile_interrupted_hook(
+                    turn_id,
+                    request.hook_execution_id,
+                    outcome=request.outcome,
+                    detail=request.detail,
+                    expected_revision=request.expected_revision,
+                )
             ),
         )
 
@@ -11694,7 +11792,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def list_chat_hook_executions(
+    async def list_chat_hook_executions(
         turn_id: str,
     ) -> list[NativeHookExecutionSummary]:
         return [
@@ -11715,7 +11813,7 @@ def create_app(
                 ),
                 reconciliation=item.reconciliation,
             )
-            for item in chat_service().list_turn_hook_executions(turn_id)
+            for item in (await chat_service().list_turn_hook_executions(turn_id))
         ]
 
     @app.get(
@@ -11724,7 +11822,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def list_session_hook_executions(
+    async def list_session_hook_executions(
         session_id: str,
     ) -> list[NativeHookExecutionSummary]:
         return [
@@ -11745,7 +11843,7 @@ def create_app(
                 ),
                 reconciliation=item.reconciliation,
             )
-            for item in chat_service().list_session_hook_executions(session_id)
+            for item in (await chat_service().list_session_hook_executions(session_id))
         ]
 
     @app.get(
@@ -11753,15 +11851,16 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def list_chat_subagents(
+    async def list_chat_subagents(
         session_id: str, request: Request, response: Response
     ) -> Any:
-        store.get(ChatSession, session_id)
+        (await store.get(ChatSession, session_id))
         subagents = chat_service().subagents
         listing = {
             "session_id": session_id,
             "subagents": [
-                subagents.view(item) for item in subagents.for_session(session_id)
+                (await subagents.view(item))
+                for item in (await subagents.for_session(session_id))
             ],
         }
         # The subagent rail polls this while a response runs; a list that
@@ -11776,10 +11875,10 @@ def create_app(
     )
     async def stop_chat_subagent(session_id: str, subagent_id: str) -> dict[str, Any]:
         subagents = chat_service().subagents
-        record = subagents.get(subagent_id)
+        record = await subagents.get(subagent_id)
         if record.parent_session_id != session_id:
             raise NotFoundError(f"chat_subagents entity not found: {subagent_id}")
-        return subagents.view(await subagents.stop(record.id))
+        return await subagents.view(await subagents.stop(record.id))
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/subagents/stop",
@@ -11787,14 +11886,15 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def stop_all_chat_subagents(session_id: str) -> dict[str, Any]:
-        store.get(ChatSession, session_id)
+        (await store.get(ChatSession, session_id))
         subagents = chat_service().subagents
-        for record in subagents.active(subagents.for_session(session_id)):
+        for record in subagents.active((await subagents.for_session(session_id))):
             await subagents.stop(record.id)
         return {
             "session_id": session_id,
             "subagents": [
-                subagents.view(item) for item in subagents.for_session(session_id)
+                (await subagents.view(item))
+                for item in (await subagents.for_session(session_id))
             ],
         }
 
@@ -11809,7 +11909,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_chat_checkpoints(session_id: str):
-        return checkpoint_service.list_for_session(session_id)
+        return await checkpoint_service.list_for_session(session_id)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/checkpoints",
@@ -11820,7 +11920,7 @@ def create_app(
         session_id: str, body: CheckpointCaptureRequest = Body()
     ):
         try:
-            return checkpoint_service.capture(
+            return await checkpoint_service.capture(
                 session_id, label=body.label, paths=body.paths
             )
         except NativeCheckpointError as exc:
@@ -11833,7 +11933,7 @@ def create_app(
     )
     async def preview_chat_checkpoint(checkpoint_id: str):
         try:
-            return checkpoint_service.preview(checkpoint_id)
+            return await checkpoint_service.preview(checkpoint_id)
         except NativeCheckpointError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -11844,7 +11944,7 @@ def create_app(
     )
     async def restore_chat_checkpoint(checkpoint_id: str):
         try:
-            return checkpoint_service.restore(checkpoint_id)
+            return await checkpoint_service.restore(checkpoint_id)
         except NativeCheckpointError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -11854,7 +11954,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_chat_schedule(session_id: str):
-        return schedule_service.get(session_id)
+        return await schedule_service.get(session_id)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/schedule",
@@ -11862,7 +11962,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def create_chat_schedule(session_id: str, body: ScheduleCreate = Body()):
-        return schedule_service.create(session_id, body)
+        return await schedule_service.create(session_id, body)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/schedule/actions",
@@ -11870,7 +11970,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def write_chat_schedule(session_id: str, body: ScheduleWrite = Body()):
-        return schedule_service.write(session_id, body)
+        return await schedule_service.write(session_id, body)
 
     from .application_model.api import model_router
 
@@ -11881,10 +11981,12 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_provider_skills(engagement_id: str) -> list[SkillSummary]:
-        store.get(Engagement, engagement_id)
+        (await store.get(Engagement, engagement_id))
         try:
             return discover_skills(
-                native_skill_roots(native_workspace(engagement_id), managed_skill_root)
+                native_skill_roots(
+                    (await native_workspace(engagement_id)), managed_skill_root
+                )
             )
         except (ValueError, OSError) as exc:
             # An OSError names the host path it failed on; keep it off the wire.
@@ -11899,7 +12001,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def provider_skill_catalog(engagement_id: str) -> SkillCatalogInfo:
-        workspace = native_workspace(engagement_id)
+        workspace = await native_workspace(engagement_id)
         return SkillCatalogInfo(
             project_root=str((workspace / ".agents" / "skills").resolve()),
             managed_root=str(managed_skill_root.resolve()),
@@ -11912,9 +12014,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_provider_hooks(engagement_id: str) -> list[NativeHookDescriptor]:
-        store.get(Engagement, engagement_id)
+        (await store.get(Engagement, engagement_id))
         try:
-            return discover_native_hooks(native_workspace(engagement_id))
+            return discover_native_hooks((await native_workspace(engagement_id)))
         except (NativeHookError, OSError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -11945,15 +12047,15 @@ def create_app(
 
     app.include_router(storage_router(storage_integrations, require_auth))
 
-    def resolve_goal_skill_snapshots(
+    async def resolve_goal_skill_snapshots(
         session_id: str,
         selections: list[SkillSelection],
         existing: list[SkillSnapshot],
     ) -> list[SkillSnapshot]:
-        session = store.get(ChatSession, session_id)
+        session = await store.get(ChatSession, session_id)
         catalog = discover_skills(
             native_skill_roots(
-                native_workspace(session.engagement_id), managed_skill_root
+                (await native_workspace(session.engagement_id)), managed_skill_root
             )
         )
         retained = {(item.name, item.path): item for item in existing}
@@ -11966,10 +12068,14 @@ def create_app(
     async def dispatch_conversation_goal(
         session_id: str, instruction: str
     ) -> str | None:
-        session = store.get(ChatSession, session_id)
+        session = await provider_chat.runtime_switcher.settle(session_id, explicit=True)
+        if session is None:
+            return None
         if session.backend == ChatBackend.HARNESS:
             return await harness_runtime.dispatch_running_goal(session_id, instruction)
         return await provider_chat.dispatch_running_goal(session_id, instruction)
+
+    provider_chat.goal_dispatcher = dispatch_conversation_goal
 
     app.include_router(
         goals_router(
@@ -12041,14 +12147,16 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def list_chat_session_activity(
+    async def list_chat_session_activity(
         engagement_id: str, request: Request, response: Response
     ) -> Any:
         activity: list[ChatSessionActivity] = []
-        pending = chat_service().pending_turns(engagement_id)
+        pending = await chat_service().pending_turns(engagement_id)
         offset = 0
-        while page := store.list_entities(
-            ChatSession, engagement_id=engagement_id, offset=offset, limit=1_000
+        while page := (
+            await store.list_entities(
+                ChatSession, engagement_id=engagement_id, offset=offset, limit=1_000
+            )
         ):
             offset += len(page)
             for session in page:
@@ -12073,7 +12181,7 @@ def create_app(
                                 # an interrupted turn's full record is read.
                                 or turn.status == ChatTurnStatus.INTERRUPTED
                                 and not core_resumes_interrupted_turn(
-                                    store.get(ChatTurn, turn.id)
+                                    (await store.get(ChatTurn, turn.id))
                                 )
                             )
                             else "working"
@@ -12091,21 +12199,21 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def list_chat_attention(request: Request, response: Response) -> Any:
+    async def list_chat_attention(request: Request, response: Response) -> Any:
         """One Core-owned list of operator actions blocking ordinary chats."""
 
         items: list[ChatAttentionItem] = []
         sessions: dict[str, ChatSession | None] = {}
         projects: dict[str, Engagement | None] = {}
 
-        def target(
+        async def target(
             session_id: str | None, turn_id: str | None
         ) -> tuple[ChatSession, Engagement] | None:
             if not session_id or not turn_id:
                 return None
             if session_id not in sessions:
                 try:
-                    sessions[session_id] = store.get(ChatSession, session_id)
+                    sessions[session_id] = await store.get(ChatSession, session_id)
                 except NotFoundError:
                     # diagnostic-expected: a deleted chat has no pending action to open.
                     sessions[session_id] = None
@@ -12119,7 +12227,7 @@ def create_app(
                 return None
             if session.engagement_id not in projects:
                 try:
-                    projects[session.engagement_id] = store.get(
+                    projects[session.engagement_id] = await store.get(
                         Engagement, session.engagement_id
                     )
                 except NotFoundError:
@@ -12129,7 +12237,7 @@ def create_app(
             if not project or project.status == EngagementStatus.ARCHIVED:
                 return None
             try:
-                turn = store.get(ChatTurn, turn_id)
+                turn = await store.get(ChatTurn, turn_id)
             except NotFoundError:
                 # diagnostic-expected: the turn may disappear after the pending-action scan.
                 return None
@@ -12141,14 +12249,14 @@ def create_app(
                 return None
             return session, project
 
-        for approval in store.find_entities(
+        for approval in await store.find_entities(
             Approval,
             {
                 "status": ApprovalStatus.PENDING.value,
                 "origin": ToolCallOrigin.CHAT.value,
             },
         ):
-            resolved = target(approval.chat_session_id, approval.chat_turn_id)
+            resolved = await target(approval.chat_session_id, approval.chat_turn_id)
             if not resolved:
                 continue
             session, project = resolved
@@ -12164,7 +12272,7 @@ def create_app(
                 )
             )
 
-        for interaction in store.find_entities(
+        for interaction in await store.find_entities(
             HarnessInteraction,
             {
                 "status": HarnessInteractionStatus.PENDING.value,
@@ -12174,11 +12282,13 @@ def create_app(
             if not interaction.chat_session_id:
                 continue
             try:
-                harness_turn = store.get(HarnessTurn, interaction.harness_turn_id)
+                harness_turn = await store.get(HarnessTurn, interaction.harness_turn_id)
             except NotFoundError:
                 # diagnostic-expected: the harness turn may disappear after the pending-action scan.
                 continue
-            resolved = target(interaction.chat_session_id, harness_turn.chat_turn_id)
+            resolved = await target(
+                interaction.chat_session_id, harness_turn.chat_turn_id
+            )
             if not resolved:
                 continue
             session, project = resolved
@@ -12206,17 +12316,19 @@ def create_app(
         tags=["chat-sessions"],
         dependencies=[Depends(require_auth)],
     )
-    def get_control_assistant_session(engagement_id: str) -> ChatSession | None:
-        store.get(Engagement, engagement_id)
+    async def get_control_assistant_session(engagement_id: str) -> ChatSession | None:
+        (await store.get(Engagement, engagement_id))
         return next(
             (
                 item
-                for item in store.find_entities(
-                    ChatSession,
-                    {},
-                    engagement_id=engagement_id,
-                    newest_first=True,
-                    limit=None,
+                for item in (
+                    await store.find_entities(
+                        ChatSession,
+                        {},
+                        engagement_id=engagement_id,
+                        newest_first=True,
+                        limit=None,
+                    )
                 )
                 if item.metadata.get("control_assistant") is True
                 and item.metadata.get("archived_at") is None
@@ -12230,12 +12342,12 @@ def create_app(
         tags=["butler-memory"],
         dependencies=[Depends(require_auth)],
     )
-    def list_butler_memory(
+    async def list_butler_memory(
         engagement_id: str,
         limit: int = Query(default=100, ge=1, le=200),
     ) -> ButlerMemoryList:
-        store.get(Engagement, engagement_id)
-        return butler_memory_service.list(engagement_id, limit=limit)
+        (await store.get(Engagement, engagement_id))
+        return await butler_memory_service.list(engagement_id, limit=limit)
 
     @app.post(
         f"{API_PREFIX}/butler/memory/search",
@@ -12243,9 +12355,11 @@ def create_app(
         tags=["butler-memory"],
         dependencies=[Depends(require_auth)],
     )
-    def search_butler_memory(request: ButlerMemorySearchRequest) -> ButlerMemoryList:
-        store.get(Engagement, request.engagement_id)
-        return butler_memory_service.search(
+    async def search_butler_memory(
+        request: ButlerMemorySearchRequest,
+    ) -> ButlerMemoryList:
+        (await store.get(Engagement, request.engagement_id))
+        return await butler_memory_service.search(
             request.engagement_id, request.query, limit=request.limit
         )
 
@@ -12255,12 +12369,12 @@ def create_app(
         response_model=ButlerMemoryItem,
         dependencies=[Depends(require_auth)],
     )
-    def edit_butler_memory(
+    async def edit_butler_memory(
         item_id: str, request: ButlerMemoryEditRequest
     ) -> ButlerMemoryItem:
-        store.get(Engagement, request.engagement_id)
+        (await store.get(Engagement, request.engagement_id))
         try:
-            return butler_memory_service.update(
+            return await butler_memory_service.update(
                 request.engagement_id,
                 item_id,
                 request.content,
@@ -12279,15 +12393,17 @@ def create_app(
         status_code=204,
         dependencies=[Depends(require_auth)],
     )
-    def delete_butler_memory(
+    async def delete_butler_memory(
         item_id: str,
         engagement_id: str,
         expected_revision: int = Query(ge=1),
     ) -> Response:
-        store.get(Engagement, engagement_id)
+        (await store.get(Engagement, engagement_id))
         try:
-            butler_memory_service.delete(
-                engagement_id, item_id, expected_revision=expected_revision
+            (
+                await butler_memory_service.delete(
+                    engagement_id, item_id, expected_revision=expected_revision
+                )
             )
         except MemoryNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -12301,15 +12417,15 @@ def create_app(
         tags=["chat-sessions"],
         dependencies=[Depends(require_auth)],
     )
-    def get_or_create_control_assistant_session(
+    async def get_or_create_control_assistant_session(
         request: ButlerSessionReservation,
     ) -> ChatSession:
-        return reserve_butler_session(store, harness_runtime, request)
+        return await reserve_butler_session(store, harness_runtime, request)
 
-    def _live_api_key() -> str:
+    async def _live_api_key() -> str:
         # An OpenAI-compatible or custom endpoint must not have its credential
         # forwarded to OpenAI's fixed Live endpoint.
-        for profile in store.find_entities(ProviderProfile, {}, limit=None):
+        for profile in await store.find_entities(ProviderProfile, {}, limit=None):
             if (
                 not profile.enabled
                 or profile.provider_type
@@ -12340,8 +12456,10 @@ def create_app(
             detail="GPT-Live needs a direct OpenAI API key. Configure an enabled OpenAI provider or set OPENAI_API_KEY on the Nebula host, then retry.",
         )
 
-    def voice_settings() -> ButlerVoiceSettings | None:
-        return next(iter(store.list_entities(ButlerVoiceSettings, limit=1)), None)
+    async def voice_settings() -> ButlerVoiceSettings | None:
+        return next(
+            iter((await store.list_entities(ButlerVoiceSettings, limit=1))), None
+        )
 
     def voice_settings_response(
         settings: ButlerVoiceSettings, *, saved: bool
@@ -12357,7 +12475,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_voice_settings() -> dict[str, int]:
-        settings = voice_settings()
+        settings = await voice_settings()
         if settings is None:
             return {"auto_pause_seconds": 20, "revision": 0}
         return voice_settings_response(settings, saved=True)
@@ -12370,12 +12488,12 @@ def create_app(
     async def update_voice_settings(
         request: ButlerVoiceSettingsUpdate,
     ) -> dict[str, int]:
-        current = voice_settings()
+        current = await voice_settings()
         if current is None:
             if request.expected_revision != 0:
                 raise ConflictError("voice settings revision conflict")
             try:
-                saved = store.create(
+                saved = await store.create(
                     ButlerVoiceSettings(
                         id="butler-voice", auto_pause_seconds=request.auto_pause_seconds
                     )
@@ -12383,7 +12501,7 @@ def create_app(
             except ConflictError:
                 raise ConflictError("voice settings revision conflict")
         else:
-            saved = store.update(
+            saved = await store.update(
                 ButlerVoiceSettings,
                 current.id,
                 {"auto_pause_seconds": request.auto_pause_seconds},
@@ -12397,16 +12515,18 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def start_voice_session(request: VoiceSessionRequest) -> dict[str, str | int]:
-        project = store.get(Engagement, request.engagement_id)
+        project = await store.get(Engagement, request.engagement_id)
         if not request.sdp.startswith("v=0\r\n"):
             raise HTTPException(
                 status_code=422, detail="A WebRTC SDP offer is required"
             )
         try:
             result = await create_live_session(
-                api_key=_live_api_key(), project_name=project.name, sdp=request.sdp
+                api_key=(await _live_api_key()),
+                project_name=project.name,
+                sdp=request.sdp,
             )
-            settings = voice_settings()
+            settings = await voice_settings()
             return {
                 **result,
                 "auto_pause_seconds": settings.auto_pause_seconds if settings else 20,
@@ -12450,17 +12570,17 @@ def create_app(
         tags=["voice"],
         dependencies=[Depends(require_auth)],
     )
-    def voice_work_roster(engagement_id: str) -> dict[str, Any]:
-        return control_assistant_work.overview(engagement_id)
+    async def voice_work_roster(engagement_id: str) -> dict[str, Any]:
+        return await control_assistant_work.overview(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/voice/work/chats/{{session_id}}",
         tags=["voice"],
         dependencies=[Depends(require_auth)],
     )
-    def voice_chat_detail(session_id: str, engagement_id: str) -> dict[str, Any]:
+    async def voice_chat_detail(session_id: str, engagement_id: str) -> dict[str, Any]:
         try:
-            return control_assistant_work.chat_detail(engagement_id, session_id)
+            return await control_assistant_work.chat_detail(engagement_id, session_id)
         except ValueError as exc:
             raise HTTPException(
                 status_code=404, detail="Chat is not in this project"
@@ -12471,9 +12591,9 @@ def create_app(
         tags=["voice"],
         dependencies=[Depends(require_auth)],
     )
-    def voice_mission_detail(run_id: str, engagement_id: str) -> dict[str, Any]:
+    async def voice_mission_detail(run_id: str, engagement_id: str) -> dict[str, Any]:
         try:
-            return control_assistant_work.mission_detail(engagement_id, run_id)
+            return await control_assistant_work.mission_detail(engagement_id, run_id)
         except ValueError as exc:
             raise HTTPException(
                 status_code=404, detail="Mission is not in this project"
@@ -12485,7 +12605,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def list_chat_session_messages(
+    async def list_chat_session_messages(
         session_id: str,
         include_replaced: bool = False,
         limit: int | None = Query(default=None, ge=1, le=200),
@@ -12496,7 +12616,7 @@ def create_app(
                 raise HTTPException(
                     status_code=422, detail="Paged history requires include_replaced"
                 )
-            page = chat_service().session_messages_page(
+            page = await chat_service().session_messages_page(
                 session_id, limit=limit, before_message_id=before_message_id
             )
             return [
@@ -12510,7 +12630,7 @@ def create_app(
                 else item
                 for item in page
             ]
-        return chat_service().session_messages(
+        return await chat_service().session_messages(
             session_id, include_replaced=include_replaced
         )
 
@@ -12519,9 +12639,11 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_chat_message_reasoning(session_id: str, message_id: str) -> dict[str, str]:
-        store.get(ChatSession, session_id)
-        message = store.get(ChatMessage, message_id)
+    async def get_chat_message_reasoning(
+        session_id: str, message_id: str
+    ) -> dict[str, str]:
+        (await store.get(ChatSession, session_id))
+        message = await store.get(ChatMessage, message_id)
         if message.session_id != session_id:
             raise HTTPException(
                 status_code=404, detail="Message not found in conversation"
@@ -12534,8 +12656,8 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_chat_session_context(session_id: str) -> ContextStatus:
-        session = store.get(ChatSession, session_id)
+    async def get_chat_session_context(session_id: str) -> ContextStatus:
+        session = await store.get(ChatSession, session_id)
         if session.backend == ChatBackend.HARNESS:
             return ContextStatus(
                 owner_type=ContextOwnerType.CHAT_SESSION,
@@ -12547,7 +12669,7 @@ def create_app(
                 capacity_source="runtime",
                 estimated_input_tokens=0,
             )
-        return chat_service().context_status(session_id)
+        return await chat_service().context_status(session_id)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/runtime-switch/preflight",
@@ -12558,7 +12680,7 @@ def create_app(
     async def preflight_chat_runtime_switch(
         session_id: str, request: ChatRuntimeSwitchPreflightRequest
     ) -> ChatRuntimeSwitchPreflight:
-        return chat_service().runtime_switch_preflight(session_id, request)
+        return await chat_service().runtime_switch_preflight(session_id, request)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/runtime-switch",
@@ -12569,19 +12691,20 @@ def create_app(
     async def apply_chat_runtime_switch(
         session_id: str, request: ChatRuntimeSwitchRequest
     ) -> ChatSession:
-        return chat_service().apply_runtime_switch(session_id, request)
+        return await chat_service().apply_runtime_switch(session_id, request)
 
     @app.get(
         f"{API_PREFIX}/chat-sessions/{{session_id}}/assistant-config",
         tags=["chat-sessions"],
         dependencies=[Depends(require_auth)],
     )
-    def get_chat_assistant_config(session_id: str) -> dict[str, Any]:
-        session = store.get(ChatSession, session_id)
+    async def get_chat_assistant_config(session_id: str) -> dict[str, Any]:
+        session = await store.get(ChatSession, session_id)
         return {
             "session_id": session.id,
             "revision": session.revision,
-            "settings": chat_assistant_config(store, session),
+            "settings": (await chat_assistant_config(store, session)),
+            "pending_runtime_switch": session.metadata.get("pending_runtime_switch"),
         }
 
     @app.get(
@@ -12589,20 +12712,24 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_chat_task_plans(session_id: str) -> dict[str, Any]:
-        session = store.get(ChatSession, session_id)
+    async def get_chat_task_plans(session_id: str) -> dict[str, Any]:
+        session = await store.get(ChatSession, session_id)
         return {
             "session_id": session.id,
             "plans": [
                 item.model_dump(mode="json")
-                for item in store.list_session_entities(
-                    ChatTaskPlan, session.id, newest_first=True, limit=50
+                for item in (
+                    await store.list_session_entities(
+                        ChatTaskPlan, session.id, newest_first=True, limit=50
+                    )
                 )
             ],
             "directives": [
                 item.model_dump(mode="json")
-                for item in store.list_session_entities(
-                    ChatPlanDirective, session.id, newest_first=True, limit=50
+                for item in (
+                    await store.list_session_entities(
+                        ChatPlanDirective, session.id, newest_first=True, limit=50
+                    )
                 )
             ],
         }
@@ -12612,11 +12739,11 @@ def create_app(
         tags=["chat-sessions"],
         dependencies=[Depends(require_auth)],
     )
-    def set_chat_assistant_config(
+    async def set_chat_assistant_config(
         session_id: str, request: ChatAssistantConfigWrite
     ) -> dict[str, Any]:
-        session = store.get(ChatSession, session_id)
-        current = chat_assistant_config(store, session)
+        session = await store.get(ChatSession, session_id)
+        current = await chat_assistant_config(store, session)
         selected = {
             **current,
             **request.settings.model_dump(exclude_unset=True, mode="json"),
@@ -12627,7 +12754,7 @@ def create_app(
             and (selected["profile_id"], selected["model"])
             != (session.provider_profile_id, session.model)
         ):
-            preflight = chat_service().runtime_switch_preflight(
+            preflight = await chat_service().runtime_switch_preflight(
                 session.id,
                 ChatRuntimeSwitchPreflightRequest(
                     provider_id=selected["profile_id"],
@@ -12640,7 +12767,7 @@ def create_app(
                 raise ValueError(
                     preflight.reason or "open the chat to confirm this runtime switch"
                 )
-        saved = update_chat_assistant_config(
+        saved = await update_chat_assistant_config(
             store,
             session,
             request.settings,
@@ -12650,7 +12777,8 @@ def create_app(
         return {
             "session_id": saved.id,
             "revision": saved.revision,
-            "settings": chat_assistant_config(store, saved),
+            "settings": (await chat_assistant_config(store, saved)),
+            "pending_runtime_switch": saved.metadata.get("pending_runtime_switch"),
         }
 
     @app.patch(
@@ -12662,10 +12790,10 @@ def create_app(
     async def update_chat_session(
         session_id: str, request: ChatSessionUpdateRequest
     ) -> ChatSession:
-        current = store.get(ChatSession, session_id)
+        current = await store.get(ChatSession, session_id)
         # Reasoning effort is read when a turn starts, so changing it while a
         # response runs is safe and applies to the next turn.
-        if chat_service().pending_turn(session_id) is not None and (
+        if (await chat_service().pending_turn(session_id)) is not None and (
             request.title is not None
             or request.archived is not None
             or request.mcp_server_ids is not None
@@ -12695,7 +12823,7 @@ def create_app(
                 metadata["flag_color"] = request.flag_color
         if request.mcp_server_ids is not None:
             for profile_id in request.mcp_server_ids:
-                profile = store.get(McpServerProfile, profile_id)
+                profile = await store.get(McpServerProfile, profile_id)
                 if not profile.enabled:
                     raise ConflictError(
                         f"MCP server {profile.name!r} is disabled and cannot be selected"
@@ -12803,7 +12931,7 @@ def create_app(
                     synced[config_field] = getattr(request, field)
             metadata["assistant_config"] = synced
         changes["metadata"] = metadata
-        updated = store.update(
+        updated = await store.update(
             ChatSession,
             session_id,
             changes,
@@ -12811,9 +12939,9 @@ def create_app(
         )
         # A hidden conversation must not keep spending tokens on a schedule.
         if request.archived is True:
-            schedule_service.pause_for_archive(session_id)
+            (await schedule_service.pause_for_archive(session_id))
         elif request.archived is False:
-            schedule_service.resume_after_unarchive(session_id)
+            (await schedule_service.resume_after_unarchive(session_id))
         return updated
 
     @app.post(
@@ -12827,7 +12955,7 @@ def create_app(
     ) -> ChatSessionRewind:
         """Retract an operator message and its replies without leaving the chat."""
 
-        session, retained, replaced = chat_service().rewind_session(
+        session, retained, replaced = await chat_service().rewind_session(
             session_id,
             before_message_id=request.before_message_id,
             expected_revision=request.expected_revision,
@@ -12838,7 +12966,7 @@ def create_app(
         if session.backend == ChatBackend.HARNESS:
             # The vendor session keeps its own transcript, so the conversation
             # continues on a fresh one that replays only the retained messages.
-            session = harness_runtime.rewind_chat_session(
+            session = await harness_runtime.rewind_chat_session(
                 session, reason="operator_edit"
             )
         return ChatSessionRewind(session=session, messages=retained, replaced=replaced)
@@ -12871,7 +12999,7 @@ def create_app(
                 status_code=422,
                 detail="Latest-message branching is only for side chats",
             )
-        source = store.get(ChatSession, session_id)
+        source = await store.get(ChatSession, session_id)
         harness_session_id: str | None = None
         if source.backend == ChatBackend.HARNESS:
             if not source.harness_session_id:
@@ -12881,20 +13009,24 @@ def create_app(
             if request.side_chat:
                 # A side pane receives the saved chat transcript through the
                 # handoff path, not the parent's vendor settings or runtime.
-                harness_session_id = harness_runtime.create_session(
-                    engagement_id=source.engagement_id,
-                    profile_id=source.harness_profile_id or "",
-                    model=source.model,
-                    mcp_server_ids=[],
-                    tools_enabled=False,
+                harness_session_id = (
+                    await harness_runtime.create_session(
+                        engagement_id=source.engagement_id,
+                        profile_id=source.harness_profile_id or "",
+                        model=source.model,
+                        mcp_server_ids=[],
+                        tools_enabled=False,
+                    )
                 ).id
             else:
-                harness_session_id = harness_runtime.fork_session(
-                    source.harness_session_id,
-                    reason=f"conversation fork through {request.through_message_id}",
+                harness_session_id = (
+                    await harness_runtime.fork_session(
+                        source.harness_session_id,
+                        reason=f"conversation fork through {request.through_message_id}",
+                    )
                 ).id
         try:
-            fork = chat_service().fork_session(
+            fork = await chat_service().fork_session(
                 session_id,
                 through_message_id=request.through_message_id,
                 before_message_id=request.before_message_id,
@@ -12909,7 +13041,7 @@ def create_app(
             # validated; do not leave it behind as an orphan "starting" session.
             if harness_session_id is not None:
                 with suppress(NotFoundError):
-                    store.delete(HarnessSession, harness_session_id)
+                    (await store.delete(HarnessSession, harness_session_id))
             raise
         return await harness_runtime.maybe_fork_native_codex_chat(
             source=source,
@@ -12927,7 +13059,7 @@ def create_app(
         session_id: str,
         if_match: int | None = Header(default=None, alias="If-Match"),
     ) -> Response:
-        chat = store.get(ChatSession, session_id)
+        chat = await store.get(ChatSession, session_id)
         if if_match is not None and chat.revision != if_match:
             raise ConflictError(
                 f"revision conflict: expected {if_match}, found {chat.revision}"
@@ -12938,22 +13070,24 @@ def create_app(
             # raises HarnessStateError, which surfaces as 409 like elsewhere.
             # A mission continued from this chat keeps using the same vendor
             # session, so one a run references is left open.
-            shared_with_run = store.find_entity(
+            shared_with_run = await store.find_entity(
                 AgentRun, "harness_session_id", chat.harness_session_id
             )
             if shared_with_run is None:
                 # A refused delete (active turn, running subagent, stale
                 # revision) keeps the conversation, so it must keep its live
                 # vendor session: check before anything is closed.
-                store.validate_chat_session_delete(
-                    session_id, expected_revision=if_match
+                (
+                    await store.validate_chat_session_delete(
+                        session_id, expected_revision=if_match
+                    )
                 )
                 try:
                     await harness_runtime.close_session(chat.harness_session_id)
                 except NotFoundError:
                     # diagnostic-expected: the vendor session row is already gone, so nothing is live.
                     pass
-        store.delete_chat_session(session_id, expected_revision=if_match)
+        (await store.delete_chat_session(session_id, expected_revision=if_match))
         return Response(status_code=204)
 
     @app.get(
@@ -12963,7 +13097,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_run_context(run_id: str) -> ContextStatus:
-        run = store.get(AgentRun, run_id)
+        run = await store.get(AgentRun, run_id)
         if run.backend == RunBackend.HARNESS:
             return ContextStatus(
                 owner_type=ContextOwnerType.AGENT_RUN,
@@ -12975,7 +13109,7 @@ def create_app(
                 capacity_source="runtime",
                 estimated_input_tokens=0,
             )
-        latest = ContextCompactor(store).latest(
+        latest = await ContextCompactor(store).latest(
             ContextOwnerType.AGENT_RUN, run.id, run.engagement_id
         )
         provider_id = (
@@ -12984,7 +13118,7 @@ def create_app(
             else run.supervisor_provider_id
         )
         if provider_id:
-            profile = store.get(ProviderProfile, provider_id)
+            profile = await store.get(ProviderProfile, provider_id)
             limits = resolve_context_limits(
                 profile,
                 model=latest.model if latest is not None else run.supervisor_model,
@@ -13001,7 +13135,7 @@ def create_app(
         estimated_input_tokens = 0
         offset = 0
         while True:
-            page = store.list_entities(
+            page = await store.list_entities(
                 Task,
                 engagement_id=run.engagement_id,
                 offset=offset,
@@ -13029,7 +13163,7 @@ def create_app(
             offset += len(page)
         offset = 0
         while True:
-            attempt_page = store.list_entities(
+            attempt_page = await store.list_entities(
                 AgentAttempt,
                 engagement_id=run.engagement_id,
                 offset=offset,
@@ -13135,8 +13269,8 @@ def create_app(
         async def append_run_event(
             run_id: str, request: EventAppendRequest
         ) -> RunEvent:
-            store.get(AgentRun, run_id)
-            return store.append_event(
+            (await store.get(AgentRun, run_id))
+            return await store.append_event(
                 run_id,
                 request.event_type,
                 request.payload,
@@ -13155,15 +13289,17 @@ def create_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=1000, ge=1, le=10_000),
     ) -> EventList:
-        def read_events() -> EventList:
-            store.get(AgentRun, run_id)
-            events = store.replay_events(run_id, after_sequence=after, limit=limit)
+        async def read_events() -> EventList:
+            (await store.get(AgentRun, run_id))
+            events = await store.replay_events(
+                run_id, after_sequence=after, limit=limit
+            )
             return EventList(
                 events=events,
                 next_sequence=events[-1].sequence if events else after,
             )
 
-        return await read_in_worker(read_events)
+        return await read_events()
 
     @app.websocket(f"{API_PREFIX}/runs/{{run_id}}/events/ws")
     async def run_event_socket(
@@ -13222,7 +13358,7 @@ def create_app(
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             emit_diagnostic(
                 "warning",
@@ -13238,7 +13374,7 @@ def create_app(
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         try:
-            store.get(AgentRun, run_id)
+            (await store.get(AgentRun, run_id))
         except NotFoundError as caught_error:
             record_caught_exception(
                 "missions",
@@ -13269,7 +13405,9 @@ def create_app(
         )
         try:
             while True:
-                events = store.replay_events(run_id, after_sequence=cursor, limit=1000)
+                events = await store.replay_events(
+                    run_id, after_sequence=cursor, limit=1000
+                )
                 if not events:
                     break
                 if events[0].sequence > cursor + 1:
@@ -13308,7 +13446,9 @@ def create_app(
             finished = False
             while True:
                 await asyncio.sleep(0.25)
-                events = store.replay_events(run_id, after_sequence=cursor, limit=1000)
+                events = await store.replay_events(
+                    run_id, after_sequence=cursor, limit=1000
+                )
                 if events:
                     if events[0].sequence > cursor + 1:
                         emit_diagnostic(
@@ -13349,8 +13489,8 @@ def create_app(
                     return
                 else:
                     finished = (
-                        store.get(AgentRun, run_id).status in _TERMINAL_RUN_STATUSES
-                    )
+                        await store.get(AgentRun, run_id)
+                    ).status in _TERMINAL_RUN_STATUSES
                     if finished:
                         # Poll once more so events written with the terminal
                         # transition go out before the complete frame.
@@ -13415,11 +13555,11 @@ def create_app(
                 Depends(require_entity_listing_capacity),
             ],
         )
-        def tool_call_artifacts(tool_call_id: str) -> list[Artifact]:
+        async def tool_call_artifacts(tool_call_id: str) -> list[Artifact]:
             # FastAPI's capacity-limited worker pool owns the entire sync read,
             # including Session creation/use/close inside each store method.
-            call = store.get(ToolCall, tool_call_id)
-            return store.list_tool_call_artifacts(call.engagement_id, call.id)
+            call = await store.get(ToolCall, tool_call_id)
+            return await store.list_tool_call_artifacts(call.engagement_id, call.id)
 
         @app.post(
             f"{API_PREFIX}/tool-calls/{{tool_call_id}}/output/search",
@@ -13429,10 +13569,9 @@ def create_app(
         async def search_tool_call_output(
             tool_call_id: str, request: ToolOutputSearchRequest
         ) -> dict[str, Any]:
-            call = store.get(ToolCall, tool_call_id)
+            call = await store.get(ToolCall, tool_call_id)
             try:
-                return await asyncio.to_thread(
-                    ToolOutputService(store, artifact_store).search,
+                return await ToolOutputService(store, artifact_store).search(
                     engagement_id=call.engagement_id,
                     owner_id=call.run_id,
                     tool_call_id=call.id,
@@ -13451,14 +13590,13 @@ def create_app(
         async def read_tool_output_artifact(
             artifact_id: str, request: ToolOutputReadRequest
         ) -> dict[str, Any]:
-            artifact = store.get(Artifact, artifact_id)
+            artifact = await store.get(Artifact, artifact_id)
             call_id = artifact.metadata.get("tool_call_id")
             if not isinstance(call_id, str):
                 raise HTTPException(status_code=404, detail="artifact is unavailable")
-            call = store.get(ToolCall, call_id)
+            call = await store.get(ToolCall, call_id)
             try:
-                return await asyncio.to_thread(
-                    ToolOutputService(store, artifact_store).read,
+                return await ToolOutputService(store, artifact_store).read(
                     engagement_id=call.engagement_id,
                     owner_id=call.run_id,
                     artifact_id=artifact.id,
@@ -13474,14 +13612,14 @@ def create_app(
             tags=["artifacts"],
             dependencies=[Depends(require_auth)],
         )
-        def artifact_content(
+        async def artifact_content(
             artifact_id: str,
             sensitive_data_acknowledged: str | None = Header(
                 default=None,
                 alias="X-Nebula-Sensitive-Data-Acknowledged",
             ),
         ) -> FileResponse:
-            artifact = store.get(Artifact, artifact_id)
+            artifact = await store.get(Artifact, artifact_id)
             if (
                 isinstance(artifact.metadata.get("tool_call_id"), str)
                 and (sensitive_data_acknowledged or "").lower() != "true"
@@ -13493,13 +13631,18 @@ def create_app(
                         "acknowledgement"
                     ),
                 )
-            path = artifact_store.path_for(artifact)
-            if not path.is_file():
-                raise NotFoundError(f"artifact content not found: {artifact_id}")
-            if not artifact_store.verify(artifact):
-                raise ArtifactStoreError(
-                    f"artifact content failed integrity verification: {artifact_id}"
-                )
+
+            def verified_path() -> Path:
+                path = artifact_store.path_for(artifact)
+                if not path.is_file():
+                    raise NotFoundError(f"artifact content not found: {artifact_id}")
+                if not artifact_store.verify(artifact):
+                    raise ArtifactStoreError(
+                        f"artifact content failed integrity verification: {artifact_id}"
+                    )
+                return path
+
+            path = await asyncio.to_thread(verified_path)
             return FileResponse(
                 path,
                 media_type=artifact.media_type,
@@ -13553,7 +13696,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def browser_assessment_detail(assessment_id: str) -> BrowserAssessment:
-        return store.get(BrowserAssessment, assessment_id)
+        return await store.get(BrowserAssessment, assessment_id)
 
     @app.post(
         f"{API_PREFIX}/browser-assessments/{{assessment_id}}/transition",
@@ -13595,7 +13738,7 @@ def create_app(
         assessment_id: str,
         expected_revision: int = Query(ge=1),
     ) -> Response:
-        browser_assessments.delete(assessment_id, expected_revision)
+        (await browser_assessments.delete(assessment_id, expected_revision))
         return Response(status_code=204)
 
     @app.get(
@@ -13609,8 +13752,8 @@ def create_app(
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=1000, ge=1, le=10_000),
     ) -> OperationEventList:
-        store.get(BrowserAssessment, assessment_id)
-        events = store.replay_operation_events(
+        (await store.get(BrowserAssessment, assessment_id))
+        events = await store.replay_operation_events(
             assessment_id, after_sequence=after, limit=limit
         )
         return OperationEventList(
@@ -13656,12 +13799,12 @@ def create_app(
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
             return
         try:
-            store.get(BrowserAssessment, assessment_id)
+            (await store.get(BrowserAssessment, assessment_id))
         except NotFoundError:
             # diagnostic-expected: a missing assessment is a bounded protocol close.
             await websocket.close(code=4404, reason="assessment not found")
@@ -13673,7 +13816,7 @@ def create_app(
         cursor = after
         try:
             while True:
-                events = store.replay_operation_events(
+                events = await store.replay_operation_events(
                     assessment_id, after_sequence=cursor, limit=1000
                 )
                 for event in events:
@@ -13690,7 +13833,7 @@ def create_app(
             finished = False
             while True:
                 await asyncio.sleep(0.25)
-                events = store.replay_operation_events(
+                events = await store.replay_operation_events(
                     assessment_id, after_sequence=cursor, limit=1000
                 )
                 if events:
@@ -13710,9 +13853,8 @@ def create_app(
                     await websocket.close(code=1000)
                     return
                 finished = (
-                    store.get(BrowserAssessment, assessment_id).status
-                    in _TERMINAL_ASSESSMENT_STATUSES
-                )
+                    await store.get(BrowserAssessment, assessment_id)
+                ).status in _TERMINAL_ASSESSMENT_STATUSES
                 if finished:
                     # Poll once more so events written with the terminal
                     # transition go out before the complete frame.
@@ -13762,7 +13904,7 @@ def create_app(
         request: BrowserIssueCandidateCreateRequest,
         x_nebula_actor: str = Header(default="engine", alias="X-Nebula-Actor"),
     ) -> BrowserIssueCandidate:
-        return browser_assessments.create_candidate(request, x_nebula_actor)
+        return await browser_assessments.create_candidate(request, x_nebula_actor)
 
     @app.post(
         f"{API_PREFIX}/browser-issue-candidates/{{candidate_id}}/validation-grant",
@@ -13776,7 +13918,7 @@ def create_app(
         request: BrowserValidationGrantRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserValidationGrant:
-        return browser_assessments.grant_validation(
+        return await browser_assessments.grant_validation(
             candidate_id, request, x_nebula_actor
         )
 
@@ -13791,7 +13933,7 @@ def create_app(
         request: BrowserValidationRevokeRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserValidationGrant:
-        return browser_assessments.revoke_validation(
+        return await browser_assessments.revoke_validation(
             candidate_id, request, x_nebula_actor
         )
 
@@ -13806,7 +13948,7 @@ def create_app(
         request: BrowserValidationResultRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserIssueCandidate:
-        return browser_assessments.finish_validation(
+        return await browser_assessments.finish_validation(
             candidate_id, request, x_nebula_actor
         )
 
@@ -13817,7 +13959,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def browser_automation_status(engagement_id: str) -> BrowserAutomationStatus:
-        return browser_automation.status(engagement_id)
+        return await browser_automation.status(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/browser-automation",
@@ -13826,8 +13968,8 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def run_browser_automation_status(run_id: str) -> BrowserAutomationStatus:
-        run = store.get(AgentRun, run_id)
-        return browser_automation.status(run.engagement_id, run_id=run_id)
+        run = await store.get(AgentRun, run_id)
+        return await browser_automation.status(run.engagement_id, run_id=run_id)
 
     @app.post(
         f"{API_PREFIX}/browser-automation/leases/{{lease_id}}/commands",
@@ -13841,7 +13983,9 @@ def create_app(
         request: BrowserCommandCreateRequest,
         x_nebula_actor: str = Header(default="agent", alias="X-Nebula-Actor"),
     ) -> BrowserCommand:
-        return browser_automation.enqueue_command(lease_id, request, x_nebula_actor)
+        return await browser_automation.enqueue_command(
+            lease_id, request, x_nebula_actor
+        )
 
     @app.post(
         f"{API_PREFIX}/browser-automation/commands/{{command_id}}/claim",
@@ -13852,7 +13996,7 @@ def create_app(
     async def claim_browser_command(
         command_id: str, request: BrowserCommandClaimRequest
     ) -> BrowserCommand:
-        return browser_automation.claim_command(command_id, request)
+        return await browser_automation.claim_command(command_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-automation/commands/{{command_id}}/result",
@@ -13863,7 +14007,7 @@ def create_app(
     async def finish_browser_command(
         command_id: str, request: BrowserCommandResultRequest
     ) -> BrowserCommand:
-        return browser_automation.finish_command(command_id, request)
+        return await browser_automation.finish_command(command_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-automation/leases/{{lease_id}}/rules",
@@ -13877,7 +14021,7 @@ def create_app(
         request: BrowserProxyRuleRequest,
         x_nebula_actor: str = Header(default="agent", alias="X-Nebula-Actor"),
     ) -> BrowserProxyRule:
-        return browser_automation.add_rule(lease_id, request, x_nebula_actor)
+        return await browser_automation.add_rule(lease_id, request, x_nebula_actor)
 
     @app.delete(
         f"{API_PREFIX}/browser-automation/rules/{{rule_id}}",
@@ -13889,7 +14033,7 @@ def create_app(
         rule_id: str,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserProxyRule:
-        return browser_automation.remove_rule(rule_id, x_nebula_actor)
+        return await browser_automation.remove_rule(rule_id, x_nebula_actor)
 
     @app.post(
         f"{API_PREFIX}/runs/{{run_id}}/browser-automation/stop",
@@ -13901,14 +14045,16 @@ def create_app(
         run_id: str,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserAutomationStatus:
-        run = store.get(AgentRun, run_id)
-        browser_automation.revoke_run(
-            run_id, "Emergency stop requested by operator", x_nebula_actor
+        run = await store.get(AgentRun, run_id)
+        (
+            await browser_automation.revoke_run(
+                run_id, "Emergency stop requested by operator", x_nebula_actor
+            )
         )
         await agent_security_tools.stop(
             run.engagement_id, reason="Emergency stop requested by operator"
         )
-        return browser_automation.status(run.engagement_id, run_id=run_id)
+        return await browser_automation.status(run.engagement_id, run_id=run_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-workspace",
@@ -13917,7 +14063,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def browser_workspace(engagement_id: str) -> BrowserWorkspace:
-        return browser_security.workspace(engagement_id)
+        return await browser_security.workspace(engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-research",
@@ -13928,8 +14074,8 @@ def create_app(
     async def browser_research_workspace(
         engagement_id: str,
     ) -> BrowserResearchWorkspace:
-        browser_research.interrupt_stale_intercepts(engagement_id)
-        return browser_research.workspace(engagement_id)
+        (await browser_research.interrupt_stale_intercepts(engagement_id))
+        return await browser_research.workspace(engagement_id)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-site-nodes",
@@ -13942,10 +14088,10 @@ def create_app(
         request: SiteNodeRecordRequest,
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> Any:
-        session = store.get(BrowserSession, request.session_id)
+        session = await store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
             raise HTTPException(status_code=404, detail="browser session not found")
-        return browser_research.record_site_node(request, x_nebula_actor)
+        return await browser_research.record_site_node(request, x_nebula_actor)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-site-edges",
@@ -13958,10 +14104,10 @@ def create_app(
         request: SiteEdgeRecordRequest,
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> Any:
-        session = store.get(BrowserSession, request.session_id)
+        session = await store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
             raise HTTPException(status_code=404, detail="browser session not found")
-        return browser_research.record_site_edge(request, x_nebula_actor)
+        return await browser_research.record_site_edge(request, x_nebula_actor)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-crawls",
@@ -13974,10 +14120,10 @@ def create_app(
         request: CrawlCreateRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> Any:
-        session = store.get(BrowserSession, request.session_id)
+        session = await store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
             raise HTTPException(status_code=404, detail="browser session not found")
-        return browser_research.create_crawl(request, x_nebula_actor)
+        return await browser_research.create_crawl(request, x_nebula_actor)
 
     @app.post(
         f"{API_PREFIX}/browser-crawls/{{crawl_id}}/state",
@@ -13987,7 +14133,7 @@ def create_app(
     async def transition_browser_crawl(
         crawl_id: str, request: CrawlStateRequest
     ) -> Any:
-        return browser_research.transition_crawl(crawl_id, request)
+        return await browser_research.transition_crawl(crawl_id, request)
 
     @app.delete(
         f"{API_PREFIX}/browser-crawls/{{crawl_id}}",
@@ -13998,7 +14144,7 @@ def create_app(
     async def delete_browser_crawl(
         crawl_id: str, expected_revision: int = Query(ge=1)
     ) -> Response:
-        browser_research.delete_crawl(crawl_id, expected_revision)
+        (await browser_research.delete_crawl(crawl_id, expected_revision))
         return Response(status_code=204)
 
     @app.post(
@@ -14012,7 +14158,9 @@ def create_app(
         request: InterceptCreateRequest,
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> Any:
-        return browser_research.pause_intercept(session_id, request, x_nebula_actor)
+        return await browser_research.pause_intercept(
+            session_id, request, x_nebula_actor
+        )
 
     @app.post(
         f"{API_PREFIX}/browser-intercepts/{{intercept_id}}/decision",
@@ -14022,7 +14170,7 @@ def create_app(
     async def decide_browser_intercept(
         intercept_id: str, request: InterceptDecisionRequest
     ) -> Any:
-        return browser_research.decide_intercept(intercept_id, request)
+        return await browser_research.decide_intercept(intercept_id, request)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-repeater-tabs",
@@ -14035,10 +14183,10 @@ def create_app(
         request: RepeaterTabCreateRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> Any:
-        session = store.get(BrowserSession, request.session_id)
+        session = await store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
             raise HTTPException(status_code=404, detail="browser session not found")
-        return browser_research.create_repeater_tab(request, x_nebula_actor)
+        return await browser_research.create_repeater_tab(request, x_nebula_actor)
 
     @app.put(
         f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}",
@@ -14050,7 +14198,9 @@ def create_app(
         request: RepeaterTabUpdateRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> Any:
-        return browser_research.update_repeater_tab(tab_id, request, x_nebula_actor)
+        return await browser_research.update_repeater_tab(
+            tab_id, request, x_nebula_actor
+        )
 
     @app.post(
         f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}/state",
@@ -14060,7 +14210,7 @@ def create_app(
     async def transition_browser_repeater_tab(
         tab_id: str, request: RepeaterStateRequest
     ) -> Any:
-        return browser_research.transition_repeater_tab(tab_id, request)
+        return await browser_research.transition_repeater_tab(tab_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}/results",
@@ -14070,7 +14220,7 @@ def create_app(
     async def record_browser_repeater_result(
         tab_id: str, request: RepeaterResultRequest
     ) -> Any:
-        return browser_research.record_repeater_result(tab_id, request)
+        return await browser_research.record_repeater_result(tab_id, request)
 
     @app.delete(
         f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}",
@@ -14081,7 +14231,7 @@ def create_app(
     async def delete_browser_repeater_tab(
         tab_id: str, expected_revision: int = Query(ge=1)
     ) -> Response:
-        browser_research.delete_repeater_tab(tab_id, expected_revision)
+        (await browser_research.delete_repeater_tab(tab_id, expected_revision))
         return Response(status_code=204)
 
     @app.post(
@@ -14095,10 +14245,10 @@ def create_app(
         request: AttackCreateRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> Any:
-        session = store.get(BrowserSession, request.session_id)
+        session = await store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
             raise HTTPException(status_code=404, detail="browser session not found")
-        return browser_research.create_attack(request, x_nebula_actor)
+        return await browser_research.create_attack(request, x_nebula_actor)
 
     @app.post(
         f"{API_PREFIX}/browser-attacks/{{attack_id}}/state",
@@ -14108,7 +14258,7 @@ def create_app(
     async def transition_browser_attack(
         attack_id: str, request: AttackStateRequest
     ) -> Any:
-        return browser_research.transition_attack(attack_id, request)
+        return await browser_research.transition_attack(attack_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-attacks/{{attack_id}}/results",
@@ -14121,7 +14271,9 @@ def create_app(
         request: AttackResultRequest,
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> Any:
-        return browser_research.add_attack_result(attack_id, request, x_nebula_actor)
+        return await browser_research.add_attack_result(
+            attack_id, request, x_nebula_actor
+        )
 
     @app.delete(
         f"{API_PREFIX}/browser-attacks/{{attack_id}}",
@@ -14132,7 +14284,7 @@ def create_app(
     async def delete_browser_attack(
         attack_id: str, expected_revision: int = Query(ge=1)
     ) -> Response:
-        browser_research.delete_attack(attack_id, expected_revision)
+        (await browser_research.delete_attack(attack_id, expected_revision))
         return Response(status_code=204)
 
     @app.post(
@@ -14162,10 +14314,10 @@ def create_app(
         request: TokenAnalysisRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> Any:
-        session = store.get(BrowserSession, request.session_id)
+        session = await store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
             raise HTTPException(status_code=404, detail="browser session not found")
-        return browser_research.analyze_tokens(request, x_nebula_actor)
+        return await browser_research.analyze_tokens(request, x_nebula_actor)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-findings",
@@ -14178,7 +14330,9 @@ def create_app(
         request: FindingPromotionRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> Any:
-        return browser_research.promote_finding(engagement_id, request, x_nebula_actor)
+        return await browser_research.promote_finding(
+            engagement_id, request, x_nebula_actor
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-har/import",
@@ -14190,7 +14344,7 @@ def create_app(
         request: HarImportRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> dict[str, Any]:
-        return browser_research.import_har(engagement_id, request, x_nebula_actor)
+        return await browser_research.import_har(engagement_id, request, x_nebula_actor)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-har/export",
@@ -14200,7 +14354,7 @@ def create_app(
     async def export_browser_har(
         engagement_id: str, session_id: str = Query(min_length=1, max_length=200)
     ) -> dict[str, Any]:
-        return browser_research.export_har(engagement_id, session_id)
+        return await browser_research.export_har(engagement_id, session_id)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-identities",
@@ -14214,7 +14368,9 @@ def create_app(
         request: BrowserIdentityCreateRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserIdentity:
-        return browser_security.create_identity(engagement_id, request, x_nebula_actor)
+        return await browser_security.create_identity(
+            engagement_id, request, x_nebula_actor
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-companion",
@@ -14253,7 +14409,7 @@ def create_app(
             )
         try:
             browser_security._require_in_scope(
-                browser_security._scope(engagement_id),
+                (await browser_security._scope(engagement_id)),
                 request.url,
                 "browser.navigate",
                 RiskClass.PASSIVE,
@@ -14270,7 +14426,7 @@ def create_app(
         session_id: str, request: CompanionBindingRequest
     ) -> dict[str, Any]:
         try:
-            browser_companion.bind(session_id, request.conversation_id)
+            (await browser_companion.bind(session_id, request.conversation_id))
             return {"conversation_id": request.conversation_id}
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -14325,7 +14481,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def browser_files(session_id: str) -> Any:
-        return browser_companion.file_catalog(session_id)
+        return await browser_companion.file_catalog(session_id)
 
     @app.post(
         f"{API_PREFIX}/browser-companion/{{session_id}}/files",
@@ -14333,7 +14489,7 @@ def create_app(
     )
     async def save_browser_file(session_id: str, request: CompanionFileCreate) -> Any:
         try:
-            return browser_companion.save_file(session_id, request)
+            return await browser_companion.save_file(session_id, request)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -14342,7 +14498,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def remove_browser_file(session_id: str, reference: str) -> Any:
-        return browser_companion.remove_file(session_id, reference)
+        return await browser_companion.remove_file(session_id, reference)
 
     @app.post(
         f"{API_PREFIX}/browser-companion/{{session_id}}/actions",
@@ -14359,7 +14515,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def browser_credentials(session_id: str) -> Any:
-        return browser_companion.credential_catalog(session_id)
+        return await browser_companion.credential_catalog(session_id)
 
     @app.post(
         f"{API_PREFIX}/browser-companion/{{session_id}}/credentials",
@@ -14368,14 +14524,14 @@ def create_app(
     async def save_browser_credential(
         session_id: str, request: CompanionCredentialCreate
     ) -> Any:
-        return browser_companion.save_credential(session_id, request)
+        return await browser_companion.save_credential(session_id, request)
 
     @app.delete(
         f"{API_PREFIX}/browser-companion/{{session_id}}/credentials/{{reference}}",
         dependencies=[Depends(require_auth)],
     )
     async def remove_browser_credential(session_id: str, reference: str) -> Any:
-        return browser_companion.remove_credential(session_id, reference)
+        return await browser_companion.remove_credential(session_id, reference)
 
     @app.put(
         f"{API_PREFIX}/browser-companion/{{session_id}}/active-tab/{{tab_id}}",
@@ -14395,7 +14551,7 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def companion_actions(session_id: str) -> Any:
-        return browser_companion.actions(session_id)
+        return await browser_companion.actions(session_id)
 
     @app.post(
         f"{API_PREFIX}/browser-companion/{{session_id}}/actions/{{action_id}}",
@@ -14416,11 +14572,11 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def companion_control_status(session_id: str) -> dict[str, Any]:
-        session = browser_companion.session(session_id)
+        session = await browser_companion.session(session_id)
         return {
             "paused": session.metadata.get("assistant_paused", True),
-            "approval_policy": browser_companion.approval_policy(
-                session.engagement_id
+            "approval_policy": (
+                await browser_companion.approval_policy(session.engagement_id)
             ).value,
         }
 
@@ -14431,7 +14587,7 @@ def create_app(
     async def companion_control(
         session_id: str, paused: bool = Query(default=True)
     ) -> dict[str, bool]:
-        browser_companion.takeover(session_id, paused)
+        (await browser_companion.takeover(session_id, paused))
         return {"paused": paused}
 
     @app.websocket(
@@ -14456,13 +14612,13 @@ def create_app(
         )
         if not allow_unauthenticated and (
             (not supplied or not _secret_matches(supplied, token))
-            and not _cookie_websocket_authenticated(websocket)
+            and not (await _cookie_websocket_authenticated(websocket))
         ):
             await websocket.close(code=4401, reason="valid authentication required")
             return
         try:
             try:
-                session = browser_companion.session(session_id)
+                session = await browser_companion.session(session_id)
             except NotFoundError:  # diagnostic-expected: a stale tab streams a companion session that was removed
                 await websocket.close(code=4404, reason="companion session not found")
                 return
@@ -14484,7 +14640,7 @@ def create_app(
 
                 async def frames() -> None:
                     async for frame in upstream:
-                        browser_companion.session(session_id)
+                        (await browser_companion.session(session_id))
                         await websocket.send_text(
                             frame if isinstance(frame, str) else frame.decode()
                         )
@@ -14492,7 +14648,7 @@ def create_app(
                 async def inputs() -> None:
                     while True:
                         await websocket.receive_json()
-                        browser_companion.session(session_id)
+                        (await browser_companion.session(session_id))
                         # Old clients must not mutate the page or invalidate an
                         # assistant approval through this passive viewing channel.
                         await websocket.close(
@@ -14541,7 +14697,9 @@ def create_app(
         request: BrowserSessionCreateRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserSession:
-        return browser_security.create_session(engagement_id, request, x_nebula_actor)
+        return await browser_security.create_session(
+            engagement_id, request, x_nebula_actor
+        )
 
     @app.put(
         f"{API_PREFIX}/browser-sessions/{{session_id}}/tabs",
@@ -14552,7 +14710,7 @@ def create_app(
     async def sync_browser_session_tabs(
         session_id: str, request: BrowserSessionSyncRequest
     ) -> BrowserSession:
-        return browser_security.sync_session(session_id, request)
+        return await browser_security.sync_session(session_id, request)
 
     @app.put(
         f"{API_PREFIX}/browser-sessions/{{session_id}}/capture-settings",
@@ -14565,7 +14723,7 @@ def create_app(
         request: BrowserCaptureSettingsRequest,
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserSession:
-        return browser_security.update_capture_settings(
+        return await browser_security.update_capture_settings(
             session_id, request, x_nebula_actor
         )
 
@@ -14581,7 +14739,7 @@ def create_app(
         request: BrowserBodyArtifactUploadRequest,
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> Artifact:
-        return browser_security.upload_body_artifact(
+        return await browser_security.upload_body_artifact(
             session_id, request, x_nebula_actor
         )
 
@@ -14597,7 +14755,9 @@ def create_app(
         request: BrowserTrafficRecordRequest,
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> BrowserTrafficExchange:
-        return browser_security.record_traffic(session_id, request, x_nebula_actor)
+        return await browser_security.record_traffic(
+            session_id, request, x_nebula_actor
+        )
 
     @app.post(
         f"{API_PREFIX}/browser-sessions/{{session_id}}/websocket-frames",
@@ -14611,7 +14771,7 @@ def create_app(
         request: BrowserWebSocketFrameRecordRequest,
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> BrowserWebSocketFrame:
-        return browser_security.record_websocket_frame(
+        return await browser_security.record_websocket_frame(
             session_id, request, x_nebula_actor
         )
 
@@ -14625,7 +14785,7 @@ def create_app(
     async def propose_browser_action(
         session_id: str, request: BrowserActionProposalRequest
     ) -> BrowserAction:
-        return browser_security.propose_action(session_id, request)
+        return await browser_security.propose_action(session_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-actions/{{action_id}}/decision",
@@ -14636,7 +14796,7 @@ def create_app(
     async def decide_browser_action(
         action_id: str, request: BrowserActionDecisionRequest
     ) -> BrowserAction:
-        return browser_security.decide_action(action_id, request)
+        return await browser_security.decide_action(action_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-actions/{{action_id}}/start",
@@ -14647,7 +14807,7 @@ def create_app(
     async def start_browser_action(
         action_id: str, request: BrowserActionExecutionRequest
     ) -> BrowserAction:
-        return browser_security.start_action(action_id, request)
+        return await browser_security.start_action(action_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-actions/{{action_id}}/result",
@@ -14658,7 +14818,7 @@ def create_app(
     async def finish_browser_action(
         action_id: str, request: BrowserActionResultRequest
     ) -> BrowserAction:
-        return browser_security.finish_action(action_id, request)
+        return await browser_security.finish_action(action_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-sessions/{{session_id}}/handoffs",
@@ -14670,24 +14830,26 @@ def create_app(
     async def create_browser_handoff(
         session_id: str, request: BrowserHandoffCreateRequest
     ) -> BrowserHandoff:
-        handoff = browser_security.create_handoff(session_id, request)
-        session = store.get(BrowserSession, session_id)
+        handoff = await browser_security.create_handoff(session_id, request)
+        session = await store.get(BrowserSession, session_id)
         try:
-            action_broker.create(
-                ActionIntentCreateRequest(
-                    project_id=handoff.engagement_id,
-                    resources=[
-                        ResourceRef(
-                            project_id=handoff.engagement_id,
-                            kind=ResourceKind.BROWSER_SESSION,
-                            id=session.id,
-                            revision=session.revision,
-                        )
-                    ],
-                    action_id="navigate",
-                    requester=request.requested_by_device_id,
-                    idempotency_key=f"browser-handoff:{handoff.id}",
-                    metadata={"legacy_handoff_id": handoff.id},
+            (
+                await action_broker.create(
+                    ActionIntentCreateRequest(
+                        project_id=handoff.engagement_id,
+                        resources=[
+                            ResourceRef(
+                                project_id=handoff.engagement_id,
+                                kind=ResourceKind.BROWSER_SESSION,
+                                id=session.id,
+                                revision=session.revision,
+                            )
+                        ],
+                        action_id="navigate",
+                        requester=request.requested_by_device_id,
+                        idempotency_key=f"browser-handoff:{handoff.id}",
+                        metadata={"legacy_handoff_id": handoff.id},
+                    )
                 )
             )
         except ConflictError:
@@ -14696,16 +14858,16 @@ def create_app(
             pass
         return handoff
 
-    def legacy_handoff_intent(handoff: BrowserHandoff) -> ActionIntent | None:
+    async def legacy_handoff_intent(handoff: BrowserHandoff) -> ActionIntent | None:
         """Return the device action queued for a legacy browser handoff, if any."""
 
-        matches = store.find_entities(
+        matches = await store.find_entities(
             ActionIntent,
             {"metadata.legacy_handoff_id": handoff.id},
             engagement_id=handoff.engagement_id,
             limit=1,
         )
-        return action_broker.get(matches[0].id) if matches else None
+        return (await action_broker.get(matches[0].id)) if matches else None
 
     @app.post(
         f"{API_PREFIX}/browser-handoffs/{{handoff_id}}/claim",
@@ -14716,17 +14878,17 @@ def create_app(
     async def claim_browser_handoff(
         handoff_id: str, request: BrowserHandoffClaimRequest
     ) -> BrowserHandoff:
-        handoff = store.get(BrowserHandoff, handoff_id)
-        intent = legacy_handoff_intent(handoff)
+        handoff = await store.get(BrowserHandoff, handoff_id)
+        intent = await legacy_handoff_intent(handoff)
         if intent is not None:
-            intent = action_broker.claim(
+            intent = await action_broker.claim(
                 intent.id,
                 ActionIntentClaimRequest(
                     device_id=request.desktop_device_id,
                     expected_revision=intent.revision,
                 ),
             )
-            intent = action_broker.prepare(
+            intent = await action_broker.prepare(
                 intent.id,
                 ActionIntentPrepareRequest(
                     device_id=request.desktop_device_id,
@@ -14734,11 +14896,13 @@ def create_app(
                     preflight_succeeded=True,
                 ),
             )
-            action_broker.commit(
-                intent.id,
-                ActionIntentCommitRequest(expected_revision=intent.revision),
+            (
+                await action_broker.commit(
+                    intent.id,
+                    ActionIntentCommitRequest(expected_revision=intent.revision),
+                )
             )
-        return browser_security.claim_handoff(handoff_id, request)
+        return await browser_security.claim_handoff(handoff_id, request)
 
     @app.post(
         f"{API_PREFIX}/browser-handoffs/{{handoff_id}}/result",
@@ -14749,35 +14913,43 @@ def create_app(
     async def finish_browser_handoff(
         handoff_id: str, request: BrowserHandoffResultRequest
     ) -> BrowserHandoff:
-        handoff = store.get(BrowserHandoff, handoff_id)
-        intent = legacy_handoff_intent(handoff)
+        handoff = await store.get(BrowserHandoff, handoff_id)
+        intent = await legacy_handoff_intent(handoff)
         if intent is not None:
-            action_broker.result(
-                intent.id,
-                ActionIntentResultRequest(
-                    device_id=request.desktop_device_id,
-                    expected_revision=intent.revision,
-                    succeeded=request.state == "complete",
-                    receipt={},
-                    error=request.error,
-                ),
+            (
+                await action_broker.result(
+                    intent.id,
+                    ActionIntentResultRequest(
+                        device_id=request.desktop_device_id,
+                        expected_revision=intent.revision,
+                        succeeded=request.state == "complete",
+                        receipt={},
+                        error=request.error,
+                    ),
+                )
             )
-        return browser_security.finish_handoff(handoff_id, request)
+        return await browser_security.finish_handoff(handoff_id, request)
 
     async def delete_archived_project(project: Engagement) -> None:
         if container_terminals is not None:
             async with container_terminals.guard_workspace_operation(project.id):
-                store.delete_archived_engagement(
-                    project.id, expected_revision=project.revision
+                (
+                    await store.delete_archived_engagement(
+                        project.id, expected_revision=project.revision
+                    )
                 )
         elif executions is not None:
             async with executions.engagement_lock(project.id):
-                store.delete_archived_engagement(
-                    project.id, expected_revision=project.revision
+                (
+                    await store.delete_archived_engagement(
+                        project.id, expected_revision=project.revision
+                    )
                 )
         else:
-            store.delete_archived_engagement(
-                project.id, expected_revision=project.revision
+            (
+                await store.delete_archived_engagement(
+                    project.id, expected_revision=project.revision
+                )
             )
 
     for resource, model in ENTITY_MODEL_BY_KIND.items():
@@ -14900,7 +15072,7 @@ def _resolve_engagement_workspace_path(workspace_path: str) -> str:
     return str(linked_workspace)
 
 
-def _stopped_harness_turn_frame(
+async def _stopped_harness_turn_frame(
     store: NebulaStore, chat_turn_id: str, harness_turn_id: str
 ) -> tuple[str, dict[str, Any]] | None:
     """Return the terminal frame of a harness turn that stopped without an answer.
@@ -14911,7 +15083,7 @@ def _stopped_harness_turn_frame(
     error, so this returns None for it.
     """
 
-    turn = store.get(HarnessTurn, harness_turn_id)
+    turn = await store.get(HarnessTurn, harness_turn_id)
     status = turn.status.value
     if status == "cancelled" or (
         status == "interrupted" and turn.metadata.get("stopped_by_harness") is True
@@ -15012,7 +15184,7 @@ def _setup_server_sent_event(event: SetupEvent) -> bytes:
     return (f"id: {event.sequence}\nevent: setup\ndata: {encoded}\n\n").encode()
 
 
-def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
+async def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
     recovery = turn.request_snapshot.get("recovery", {})
     unresolved = (
         recovery.get("unknown_tool_call_ids", [])
@@ -15026,7 +15198,7 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
         and isinstance(recovery.get("unknown_hook_execution_ids", []), list)
         else []
     )
-    history = service.turn_ledger.history(turn)
+    history = await service.turn_ledger.history(turn)
     waiting = (
         next(
             (
@@ -15048,14 +15220,14 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
         status=turn.status,
         queued_at=turn.queued_at,
         admitted_at=turn.admitted_at,
-        queue_position=service.provider_scheduler.position(turn.id),
+        queue_position=(await service.provider_scheduler.position(turn.id)),
         capacity_lane=turn.capacity_lane,
         admission_reason=turn.admission_reason,
         content=turn.content,
-        reasoning=service.turn_reasoning(turn),
+        reasoning=(await service.turn_reasoning(turn)),
         approval_id=turn.approval_id,
         harness_turn_id=turn.harness_turn_id,
-        tool_call_ids=service.turn_ledger.tool_call_ids(turn),
+        tool_call_ids=(await service.turn_ledger.tool_call_ids(turn)),
         tool_calls=[
             ChatTurnToolCallSummary(
                 tool_call_id=str(item["tool_call_id"]),
@@ -15448,7 +15620,7 @@ async def _verify_provider_capability(
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
-    updated = store.update(
+    updated = await store.update(
         ProviderProfile,
         profile.id,
         {
@@ -15632,7 +15804,7 @@ def _register_crud_routes(
     after_create: Callable[[Entity], Any] | None = None,
     after_write: Callable[[str], Any] | None = None,
     delete_archived_project: Callable[[Engagement], Any] | None = None,
-    actor_id: Callable[[], str],
+    actor_id: MaybeAsync[[], str],
 ) -> None:
     """Register typed routes while preserving concrete OpenAPI schemas.
 
@@ -15640,7 +15812,7 @@ def _register_crud_routes(
     dedicated routes attribute theirs.
     """
 
-    def attribute_scope_grants(entity: Any, current: Any = None) -> Any:
+    async def attribute_scope_grants(entity: Any, current: Any = None) -> Any:
         # A grant records who authorized it. These routes take the client's
         # whole record, so, as the project scope route does, Core keeps the
         # stored attribution of each grant saved unchanged and credits new or
@@ -15651,7 +15823,9 @@ def _register_crud_routes(
         stored = current.grants if isinstance(current, ScopePolicy) else []
         return entity.model_copy(
             update={
-                "grants": _attribute_scope_grants(entity.grants, stored, actor_id())
+                "grants": _attribute_scope_grants(
+                    entity.grants, stored, await call_async(actor_id)
+                )
             }
         )
 
@@ -15702,7 +15876,7 @@ def _register_crud_routes(
                     }
                 )
             entity = enforce_harness_command_boundary(entity)
-            entity = attribute_scope_grants(entity)
+            entity = await attribute_scope_grants(entity)
             if isinstance(entity, Engagement) and entity.workspace_path:
                 entity = entity.model_copy(
                     update={
@@ -15711,19 +15885,21 @@ def _register_crud_routes(
                         )
                     }
                 )
-            entity_validator.validate_create(entity)
+            (await entity_validator.validate_create(entity))
             created = (
-                create_engagement_with_default_scope(
-                    store,
-                    entity,
-                    host_access_acknowledged=host_access_acknowledged,
-                    actor_id=actor_id(),
-                    request_id=project_request_id,
+                (
+                    await create_engagement_with_default_scope(
+                        store,
+                        entity,
+                        host_access_acknowledged=host_access_acknowledged,
+                        actor_id=await call_async(actor_id),
+                        request_id=project_request_id,
+                    )
                 )
                 if isinstance(entity, Engagement)
-                else relation_service.create_legacy_entity(entity)
+                else (await relation_service.create_legacy_entity(entity))
                 if isinstance(entity, LEGACY_RELATION_MODELS)
-                else store.create(entity)
+                else (await store.create(entity))
             )
             if after_create is not None:
                 after_create(created)
@@ -15741,13 +15917,13 @@ def _register_crud_routes(
     def make_list() -> Callable[..., Any]:
         # Keep all synchronous reads and enrichment in FastAPI's bounded AnyIO
         # worker pool. Sessions are opened and closed by storage in that worker.
-        def list_entities(
+        async def list_entities(
             engagement_id: str | None = None,
             offset: int = Query(default=0, ge=0),
             limit: int = Query(default=100, ge=1, le=1000),
             recent_first: bool = False,
         ) -> list[Entity]:
-            entities = store.list_entities(
+            entities = await store.list_entities(
                 model,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -15755,7 +15931,7 @@ def _register_crud_routes(
                 recent_first=recent_first and model is ChatSession,
             )
             if model is ChatSession:
-                legacy_ids = store.butler_recovery_session_ids(
+                legacy_ids = await store.butler_recovery_session_ids(
                     item.id
                     for item in entities
                     if isinstance(item, ChatSession)
@@ -15770,10 +15946,12 @@ def _register_crud_routes(
                     for item in entities
                 ]
             if model is HarnessSession and entities:
-                chat_titles, run_titles, first_turns = (
-                    store.harness_session_title_sources(
-                        [item.id for item in entities], engagement_id=engagement_id
-                    )
+                (
+                    chat_titles,
+                    run_titles,
+                    first_turns,
+                ) = await store.harness_session_title_sources(
+                    [item.id for item in entities], engagement_id=engagement_id
                 )
 
                 named_sessions: list[Entity] = []
@@ -15816,7 +15994,7 @@ def _register_crud_routes(
                 ]
             return [
                 _public_entity(entity)
-                for entity in relation_service.project_legacy_many(entities)
+                for entity in (await relation_service.project_legacy_many(entities))
             ]
 
         list_entities.__name__ = f"list_{resource.replace('-', '_')}"
@@ -15825,11 +16003,11 @@ def _register_crud_routes(
 
     def make_get() -> Callable[..., Any]:
         async def get_entity(entity_id: str) -> Entity:
-            entity = store.get(model, entity_id)
+            entity = await store.get(model, entity_id)
             if (
                 isinstance(entity, ChatSession)
                 and entity.metadata.get("butler_initiated") is not True
-                and entity.id in store.butler_recovery_session_ids([entity.id])
+                and entity.id in (await store.butler_recovery_session_ids([entity.id]))
             ):
                 entity = entity.model_copy(
                     update={"metadata": {**entity.metadata, "butler_initiated": True}}
@@ -15839,7 +16017,7 @@ def _register_crud_routes(
                 if isinstance(entity, KnowledgeSource)
                 else entity
             )
-            return _public_entity(relation_service.project_legacy(entity))
+            return _public_entity((await relation_service.project_legacy(entity)))
 
         get_entity.__name__ = f"get_{resource.replace('-', '_')}"
         get_entity.__annotations__["return"] = model
@@ -15853,12 +16031,12 @@ def _register_crud_routes(
         ) -> Entity:
             if entity.id != entity_id:
                 raise ValueError("replacement id must match the resource id")
-            current = store.get(model, entity_id)
+            current = await store.get(model, entity_id)
             if if_match is not None and current.revision != if_match:
                 raise ConflictError(
                     f"revision conflict: expected {if_match}, found {current.revision}"
                 )
-            entity_validator.validate_update(current, entity)
+            (await entity_validator.validate_update(current, entity))
             if isinstance(current, ProviderProfile) and isinstance(
                 entity, ProviderProfile
             ):
@@ -15868,13 +16046,13 @@ def _register_crud_routes(
             ):
                 entity = _invalidate_harness_home_verification(current, entity)
             entity = enforce_harness_command_boundary(entity)
-            entity = attribute_scope_grants(entity, current)
+            entity = await attribute_scope_grants(entity, current)
             expected_revision = current.revision if if_match is None else if_match
             if isinstance(current, LEGACY_RELATION_MODELS):
-                return relation_service.replace_legacy_entity(
+                return await relation_service.replace_legacy_entity(
                     current, entity, expected_revision=expected_revision
                 )
-            saved = store.replace(
+            saved = await store.replace(
                 model, entity_id, entity, expected_revision=expected_revision
             )
             if after_write is not None:
@@ -15895,7 +16073,9 @@ def _register_crud_routes(
                 raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
             # Legacy relation arrays are edge projections: start the patch from
             # them so untouched arrays keep edges written via the relations API.
-            current = relation_service.project_legacy(store.get(model, entity_id))
+            current = await relation_service.project_legacy(
+                (await store.get(model, entity_id))
+            )
             if (
                 patch.expected_revision is not None
                 and current.revision != patch.expected_revision
@@ -15911,7 +16091,7 @@ def _register_crud_routes(
             changes = dict(patch.changes)
             if isinstance(candidate, ScopePolicy) and "grants" in changes:
                 # A patch that leaves the grants alone keeps who granted them.
-                candidate = attribute_scope_grants(candidate, current)
+                candidate = await attribute_scope_grants(candidate, current)
                 changes["grants"] = [
                     grant.model_dump(mode="python") for grant in candidate.grants
                 ]
@@ -15935,17 +16115,17 @@ def _register_crud_routes(
                     if key not in {"id", "created_at", "updated_at", "revision"}
                     and value != getattr(current, key)
                 }
-            entity_validator.validate_update(current, candidate)
+            (await entity_validator.validate_update(current, candidate))
             expected_revision = (
                 current.revision
                 if patch.expected_revision is None
                 else patch.expected_revision
             )
             if isinstance(current, LEGACY_RELATION_MODELS):
-                return relation_service.replace_legacy_entity(
+                return await relation_service.replace_legacy_entity(
                     current, candidate, expected_revision=expected_revision
                 )
-            saved = store.update(
+            saved = await store.update(
                 model,
                 entity_id,
                 changes,
@@ -15964,7 +16144,7 @@ def _register_crud_routes(
             entity_id: str,
             if_match: int | None = Header(default=None, alias="If-Match"),
         ) -> Response:
-            current = store.get(model, entity_id)
+            current = await store.get(model, entity_id)
             if (
                 isinstance(current, McpServerProfile)
                 and current.metadata.get("built_in") == "notebook_v1"
@@ -15987,20 +16167,23 @@ def _register_crud_routes(
                     return Response(status_code=204)
                 owned_scope: ScopePolicy | None = None
                 if current.scope_policy_id:
-                    candidate = store.get(ScopePolicy, current.scope_policy_id)
+                    candidate = await store.get(ScopePolicy, current.scope_policy_id)
                     if candidate.engagement_id == current.id:
                         owned_scope = candidate
                 owned_policies = list(
-                    store.iter_reference_candidates(
-                        AutomationProjectPolicy,
-                        [("engagement_id", entity_id, False)],
-                        engagement_id=entity_id,
-                    )
+                    [
+                        item
+                        async for item in store.iter_reference_candidates(
+                            AutomationProjectPolicy,
+                            [("engagement_id", entity_id, False)],
+                            engagement_id=entity_id,
+                        )
+                    ]
                 )
                 owned_configuration_ids = [policy.id for policy in owned_policies]
                 if owned_scope is not None:
                     owned_configuration_ids.append(owned_scope.id)
-                if store.engagement_has_dependents(
+                if await store.engagement_has_dependents(
                     entity_id,
                     exclude_entity_ids=owned_configuration_ids,
                 ):
@@ -16009,35 +16192,39 @@ def _register_crud_routes(
                         "archive it instead"
                     )
                 if owned_scope is not None or owned_policies:
-                    with store.transaction() as transaction:
+                    async with store.transaction() as transaction:
                         for policy in owned_policies:
-                            transaction.delete(
-                                AutomationProjectPolicy,
-                                policy.id,
-                                expected_revision=policy.revision,
+                            (
+                                await transaction.delete(
+                                    AutomationProjectPolicy,
+                                    policy.id,
+                                    expected_revision=policy.revision,
+                                )
                             )
                         if owned_scope is not None:
-                            transaction.delete(
-                                ScopePolicy,
-                                owned_scope.id,
-                                expected_revision=owned_scope.revision,
+                            (
+                                await transaction.delete(
+                                    ScopePolicy,
+                                    owned_scope.id,
+                                    expected_revision=owned_scope.revision,
+                                )
                             )
-                        transaction.delete(
-                            Engagement,
-                            current.id,
-                            expected_revision=current.revision,
+                        (
+                            await transaction.delete(
+                                Engagement,
+                                current.id,
+                                expected_revision=current.revision,
+                            )
                         )
                     return Response(status_code=204)
             if model is ProviderProfile:
-                if store.provider_has_history_references(entity_id):
+                if await store.provider_has_history_references(entity_id):
                     raise ConflictError(
                         "provider profile cannot be deleted while durable chat or run "
                         "history references it"
                     )
             if model is Observation:
-                dependencies = await read_in_worker(
-                    _observation_dependencies, store, entity_id
-                )
+                dependencies = await _observation_dependencies(store, entity_id)
                 if dependencies.reports:
                     final_reports = [
                         report
@@ -16061,10 +16248,10 @@ def _register_crud_routes(
                         )
                     raise StructuredConflictError("note_referenced_by_report", detail)
             # The scan reads every kind, so keep it off the event loop.
-            await asyncio.to_thread(entity_validator.validate_delete, current)
+            await entity_validator.validate_delete(current)
             # Always guard the final delete with the revision we validated so a
             # concurrent update cannot be removed using stale relationship data.
-            store.delete(model, entity_id, expected_revision=current.revision)
+            (await store.delete(model, entity_id, expected_revision=current.revision))
             return Response(status_code=204)
 
         delete_entity.__name__ = f"delete_{resource.replace('-', '_')}"

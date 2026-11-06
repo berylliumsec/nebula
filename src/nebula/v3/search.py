@@ -20,7 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .action_registry import ActionRegistry
 from .database import EntityRow, SearchDocumentRow
@@ -318,8 +318,8 @@ def _current_source(row: EntityRow) -> ColumnElement[bool]:
     )
 
 
-def _write_search_document(
-    session: Session, row: EntityRow, document_id: str, values: dict[str, Any]
+async def _write_search_document(
+    session: AsyncSession, row: EntityRow, document_id: str, values: dict[str, Any]
 ) -> None:
     """An older repair cannot insert over a newer edit or resurrect a deleted row."""
 
@@ -335,24 +335,28 @@ def _write_search_document(
             ]
         ).where(_current_source(row)),
     )
-    session.execute(
-        statement.on_conflict_do_update(
-            index_elements=[SearchDocumentRow.id],
-            set_={key: getattr(statement.excluded, key) for key in values},
-            where=SearchDocumentRow.revision <= statement.excluded.revision,
+    (
+        await session.execute(
+            statement.on_conflict_do_update(
+                index_elements=[SearchDocumentRow.id],
+                set_={key: getattr(statement.excluded, key) for key in values},
+                where=SearchDocumentRow.revision <= statement.excluded.revision,
+            )
         )
     )
 
 
-def upsert_search_document(session: Session, row: EntityRow) -> None:
+async def upsert_search_document(session: AsyncSession, row: EntityRow) -> None:
     projection = project_search_document(row.kind, row.payload)
     if projection is None:
         if row.kind in INDEXED_ENTITY_KINDS:
-            session.execute(
-                delete(SearchDocumentRow).where(
-                    SearchDocumentRow.id == row.id,
-                    SearchDocumentRow.revision <= row.revision,
-                    _current_source(row),
+            (
+                await session.execute(
+                    delete(SearchDocumentRow).where(
+                        SearchDocumentRow.id == row.id,
+                        SearchDocumentRow.revision <= row.revision,
+                        _current_source(row),
+                    )
                 )
             )
         return
@@ -367,7 +371,7 @@ def upsert_search_document(session: Session, row: EntityRow) -> None:
         content=projection.content,
         updated_at=row.updated_at,
     )
-    _write_search_document(session, row, row.id, values)
+    (await _write_search_document(session, row, row.id, values))
     if row.kind == "browser_sessions":
         tab_prefix = f"{row.id}::tab::"
         raw_tabs = row.payload.get("tabs")
@@ -390,13 +394,15 @@ def upsert_search_document(session: Session, row: EntityRow) -> None:
                 content=_safe_url(tab.get("url")),
                 updated_at=row.updated_at,
             )
-            _write_search_document(session, row, document_id, tab_values)
-        session.execute(
-            delete(SearchDocumentRow).where(
-                SearchDocumentRow.id.like(f"{tab_prefix}%"),
-                SearchDocumentRow.id.not_in(desired),
-                SearchDocumentRow.revision <= row.revision,
-                _current_source(row),
+            (await _write_search_document(session, row, document_id, tab_values))
+        (
+            await session.execute(
+                delete(SearchDocumentRow).where(
+                    SearchDocumentRow.id.like(f"{tab_prefix}%"),
+                    SearchDocumentRow.id.not_in(desired),
+                    SearchDocumentRow.revision <= row.revision,
+                    _current_source(row),
+                )
             )
         )
 
@@ -443,34 +449,43 @@ class FederatedSearch:
         self.store = store
         self.actions = actions
 
-    def repair_stale_projection(self) -> bool:
-        with self.store.search_projection_lock:
-            return self._repair_stale_projection()
+    async def repair_stale_projection(self) -> bool:
+        async with self.store.search_projection_lock:
+            return await self._repair_stale_projection()
 
-    def _repair_stale_projection(self) -> bool:
+    async def _repair_stale_projection(self) -> bool:
         repaired = False
-        with self.store.database.session() as session:
-            entity_signature = session.execute(
-                select(
-                    func.count(EntityRow.id),
-                    func.coalesce(func.sum(EntityRow.revision), 0),
-                    func.max(EntityRow.updated_at),
-                ).where(projected_entity_rows())
+        async with self.store.database.session(bulk=True) as session:
+            entity_signature = (
+                await session.execute(
+                    select(
+                        func.count(EntityRow.id),
+                        func.coalesce(func.sum(EntityRow.revision), 0),
+                        func.max(EntityRow.updated_at),
+                    ).where(projected_entity_rows())
+                )
             ).one()
-            document_signature = session.execute(
-                select(
-                    func.count(SearchDocumentRow.id),
-                    func.coalesce(func.sum(SearchDocumentRow.revision), 0),
-                    func.max(SearchDocumentRow.updated_at),
-                ).where(SearchDocumentRow.id == SearchDocumentRow.resource_id)
+            document_signature = (
+                await session.execute(
+                    select(
+                        func.count(SearchDocumentRow.id),
+                        func.coalesce(func.sum(SearchDocumentRow.revision), 0),
+                        func.max(SearchDocumentRow.updated_at),
+                    ).where(SearchDocumentRow.id == SearchDocumentRow.resource_id)
+                )
             ).one()
             if entity_signature == document_signature:
                 return False
             rows = list(
-                session.scalars(select(EntityRow).where(projected_entity_rows()))
+                (
+                    await session.scalars(
+                        select(EntityRow).where(projected_entity_rows())
+                    )
+                )
             )
             documents = {
-                item.id: item for item in session.scalars(select(SearchDocumentRow))
+                item.id: item
+                for item in (await session.scalars(select(SearchDocumentRow)))
             }
             row_ids = {row.id for row in rows}
             source_revisions = {row.id: row.revision for row in rows}
@@ -486,7 +501,7 @@ class FederatedSearch:
             for row in rows:
                 document = documents.get(row.id)
                 if document is None or document.revision != row.revision:
-                    upsert_search_document(session, row)
+                    (await upsert_search_document(session, row))
                     repaired = True
             for document in documents.values():
                 if document.id not in row_ids:
@@ -501,17 +516,19 @@ class FederatedSearch:
                         still_orphaned = exists(
                             source.where(EntityRow.revision == snapshot_revision)
                         )
-                    session.execute(
-                        delete(SearchDocumentRow).where(
-                            SearchDocumentRow.id == document.id,
-                            SearchDocumentRow.revision <= document.revision,
-                            still_orphaned,
+                    (
+                        await session.execute(
+                            delete(SearchDocumentRow).where(
+                                SearchDocumentRow.id == document.id,
+                                SearchDocumentRow.revision <= document.revision,
+                                still_orphaned,
+                            )
                         )
                     )
                     repaired = True
         return repaired
 
-    def search(
+    async def search(
         self,
         *,
         query: str,
@@ -523,9 +540,9 @@ class FederatedSearch:
         exclude_private_chats: bool = False,
     ) -> SearchResponse:
         offset = _decode_search_cursor(cursor)
-        repaired = self.repair_stale_projection()
+        repaired = await self.repair_stale_projection()
         terms = [term.casefold() for term in query.split() if term]
-        with self.store.database.session() as session:
+        async with self.store.database.session(bulk=True) as session:
             # Ranking needs these scalar projection fields, not 2,000 ORM
             # identities per request. Keep the same candidate bound and order.
             statement = select(SearchDocumentRow.__table__)
@@ -565,11 +582,13 @@ class FederatedSearch:
                         func.lower(SearchDocumentRow.content).like(pattern),
                     )
                 )
-            candidates = list(session.execute(statement.limit(2000)))
+            candidates = list((await session.execute(statement.limit(2000))))
             project_names = {
                 row.id: _text(row.payload.get("name"), 500)
-                for row in session.scalars(
-                    select(EntityRow).where(EntityRow.kind == "engagements")
+                for row in (
+                    await session.scalars(
+                        select(EntityRow).where(EntityRow.kind == "engagements")
+                    )
                 )
             }
 
@@ -598,7 +617,7 @@ class FederatedSearch:
             )
             for row in page
         ]
-        page_actions = self.actions.resolve_many(
+        page_actions = await self.actions.resolve_many(
             [ActionResolutionRequest(resources=[ref]) for ref in refs]
         )
         results: list[SearchResult] = []

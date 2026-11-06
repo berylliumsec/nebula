@@ -1,3 +1,8 @@
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import hashlib
 import json
 import sqlite3
@@ -53,14 +58,14 @@ def _checksums(root):
     }
 
 
-def test_import_is_side_by_side_typed_and_source_preserving(tmp_path):
+async def test_import_is_side_by_side_typed_and_source_preserving(tmp_path):
     source = tmp_path / "legacy"
     _make_legacy_engagement(source)
     before = _checksums(source)
     store = NebulaStore(tmp_path / "v3.db")
     artifacts = ArtifactStore(tmp_path / "artifact-store")
 
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
 
     assert report.status == "completed"
     assert report.source_unchanged is True
@@ -72,18 +77,18 @@ def test_import_is_side_by_side_typed_and_source_preserving(tmp_path):
     assert "tool_selections" not in report.imported_counts
     assert report.imported_counts["chroma_documents"] == 1
 
-    engagement = store.get(Engagement, report.target_engagement_id)
+    engagement = await store.get(Engagement, report.target_engagement_id)
     assert engagement.name == "Legacy Acme"
     assert engagement.metadata["legacy"]["selected_tools"] == ["nmap", "nikto"]
-    assert len(store.list_entities(Asset, engagement_id=engagement.id)) == 3
-    observations = store.list_entities(Observation, engagement_id=engagement.id)
+    assert len((await store.list_entities(Asset, engagement_id=engagement.id))) == 3
+    observations = await store.list_entities(Observation, engagement_id=engagement.id)
     assert any(item.body == "legacy knowledge" for item in observations)
     assert any("Investigate the HTTP service" in item.body for item in observations)
-    for artifact in store.list_entities(Artifact, engagement_id=engagement.id):
+    for artifact in await store.list_entities(Artifact, engagement_id=engagement.id):
         assert artifacts.verify(artifact)
 
 
-def test_invalid_legacy_data_rolls_back_and_reports_failure(tmp_path):
+async def test_invalid_legacy_data_rolls_back_and_reports_failure(tmp_path):
     source = tmp_path / "legacy"
     source.mkdir()
     (source / "engagement_details.json").write_text("not-json")
@@ -91,17 +96,17 @@ def test_invalid_legacy_data_rolls_back_and_reports_failure(tmp_path):
     store = NebulaStore(tmp_path / "v3.db")
     artifacts = ArtifactStore(tmp_path / "artifact-store")
 
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
 
     assert report.status == "failed"
     assert report.errors
     assert report.source_unchanged is True
     assert _checksums(source) == before
-    assert store.count(Engagement) == 0
+    assert (await store.count(Engagement)) == 0
     assert list(artifacts.iter_digests()) == []
 
 
-def test_database_failure_compensates_new_artifacts(tmp_path, monkeypatch):
+async def test_database_failure_compensates_new_artifacts(tmp_path, monkeypatch):
     source = tmp_path / "legacy"
     _make_legacy_engagement(source)
     store = NebulaStore(tmp_path / "v3.db")
@@ -111,21 +116,21 @@ def test_database_failure_compensates_new_artifacts(tmp_path, monkeypatch):
         raise RuntimeError("simulated database failure")
 
     monkeypatch.setattr(StoreTransaction, "add_all", fail_commit)
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
 
     assert report.status == "failed"
     assert "simulated database failure" in report.errors[0]
     assert report.source_unchanged is True
-    assert store.count(Engagement) == 0
+    assert (await store.count(Engagement)) == 0
     assert list(artifacts.iter_digests())
 
 
-def test_importer_refuses_to_place_destination_inside_source(tmp_path):
+async def test_importer_refuses_to_place_destination_inside_source(tmp_path):
     source = tmp_path / "legacy"
     _make_legacy_engagement(source)
     store = NebulaStore(tmp_path / "v3.db")
     artifacts = ArtifactStore(source / "v3-artifacts")
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
     assert report.status == "failed"
     assert "outside the source engagement" in report.errors[0]
 
@@ -135,7 +140,7 @@ def _write_details(root, details):
     (root / "engagement_details.json").write_text(json.dumps(details))
 
 
-def test_legacy_targets_expand_ranges_and_skip_unusable_values_with_warnings(
+async def test_legacy_targets_expand_ranges_and_skip_unusable_values_with_warnings(
     tmp_path,
 ):
     source = tmp_path / "legacy"
@@ -154,16 +159,16 @@ def test_legacy_targets_expand_ranges_and_skip_unusable_values_with_warnings(
     store = NebulaStore(tmp_path / "v3.db")
     artifacts = ArtifactStore(tmp_path / "artifact-store")
 
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
 
     assert report.status == "completed", report.errors
-    engagement = store.get(Engagement, report.target_engagement_id)
-    scope = store.get(ScopePolicy, engagement.scope_policy_id)
+    engagement = await store.get(Engagement, report.target_engagement_id)
+    scope = await store.get(ScopePolicy, engagement.scope_policy_id)
     assert scope.allowed_cidrs == ["10.0.0.1/32", "10.0.0.2/31", "10.0.0.4/32"]
     assert scope.allowed_domains == ["app.example.com"]
     assert any("10.0.0.5:8080" in warning for warning in report.warnings)
     assert any("10.0.0.0/24 (DMZ)" in warning for warning in report.warnings)
-    assets = store.list_entities(Asset, engagement_id=engagement.id)
+    assets = await store.list_entities(Asset, engagement_id=engagement.id)
     assert sorted(item.address for item in assets if item.address) == [
         "10.0.0.1/32",
         "10.0.0.2/31",
@@ -175,7 +180,7 @@ def test_legacy_targets_expand_ranges_and_skip_unusable_values_with_warnings(
     assert report.imported_counts["assets"] == 4
 
 
-def test_legacy_ipv6_networks_are_typed_by_prefix_length(tmp_path):
+async def test_legacy_ipv6_networks_are_typed_by_prefix_length(tmp_path):
     source = tmp_path / "legacy"
     _write_details(
         source,
@@ -187,10 +192,10 @@ def test_legacy_ipv6_networks_are_typed_by_prefix_length(tmp_path):
     store = NebulaStore(tmp_path / "v3.db")
     artifacts = ArtifactStore(tmp_path / "artifact-store")
 
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
 
     assert report.status == "completed", report.errors
-    assets = store.list_entities(Asset, engagement_id=report.target_engagement_id)
+    assets = await store.list_entities(Asset, engagement_id=report.target_engagement_id)
     assert {item.address: item.asset_type for item in assets} == {
         "2001:db8::/32": "network",
         "2001:db8::1/128": "host",
@@ -198,16 +203,18 @@ def test_legacy_ipv6_networks_are_typed_by_prefix_length(tmp_path):
     }
 
 
-def test_legacy_receipt_counts_observations_and_omits_fabricated_entries(tmp_path):
+async def test_legacy_receipt_counts_observations_and_omits_fabricated_entries(
+    tmp_path,
+):
     source = tmp_path / "legacy"
     _make_legacy_engagement(source)
     store = NebulaStore(tmp_path / "v3.db")
     artifacts = ArtifactStore(tmp_path / "artifact-store")
 
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
 
     assert report.status == "completed", report.errors
-    observations = store.list_entities(
+    observations = await store.list_entities(
         Observation, engagement_id=report.target_engagement_id
     )
     assert len(observations) == 3
@@ -216,7 +223,7 @@ def test_legacy_receipt_counts_observations_and_omits_fabricated_entries(tmp_pat
     assert "tool_selections" not in report.imported_counts
 
 
-def test_legacy_external_chroma_refusal_warns_once_without_a_sentinel_path(
+async def test_legacy_external_chroma_refusal_warns_once_without_a_sentinel_path(
     tmp_path,
 ):
     external = tmp_path / "external-chroma"
@@ -233,7 +240,7 @@ def test_legacy_external_chroma_refusal_warns_once_without_a_sentinel_path(
     store = NebulaStore(tmp_path / "v3.db")
     artifacts = ArtifactStore(tmp_path / "artifact-store")
 
-    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
 
     assert report.status == "completed", report.errors
     assert report.warnings == [
@@ -241,3 +248,6 @@ def test_legacy_external_chroma_refusal_warns_once_without_a_sentinel_path(
     ]
     assert "knowledge" not in report.imported_counts
     assert "chroma_documents" not in report.imported_counts
+
+
+pytestmark = pytest.mark.anyio

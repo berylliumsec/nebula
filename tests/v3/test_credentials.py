@@ -1,7 +1,11 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import os
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pydantic import SecretStr
 
 import nebula.v3.credentials as credentials_module
@@ -176,7 +180,9 @@ def test_provider_systemd_reference_uses_the_bounded_credential_resolver():
     assert resolved.config.resolve_api_key().get_secret_value() == "service-secret"
 
 
-def test_credential_api_is_write_only_and_persists_only_opaque_reference(tmp_path):
+async def test_credential_api_is_write_only_and_persists_only_opaque_reference(
+    tmp_path,
+):
     database_path = tmp_path / "credentials.db"
     store = NebulaStore(database_path)
     credential_store = CredentialStore(MemoryKeyring())
@@ -189,8 +195,8 @@ def test_credential_api_is_write_only_and_persists_only_opaque_reference(tmp_pat
     )
     auth = {"Authorization": "Bearer test-token"}
 
-    with client:
-        created = client.post(
+    async with client:
+        created = await client.post(
             "/api/v1/credentials",
             headers=auth,
             json={"secret": "never-persist-this", "persistence": "vault"},
@@ -200,7 +206,7 @@ def test_credential_api_is_write_only_and_persists_only_opaque_reference(tmp_pat
         assert payload["reference"].startswith("vault:")
         assert "never-persist-this" not in created.text
 
-        profile = client.post(
+        profile = await client.post(
             "/api/v1/providers",
             headers=auth,
             json={
@@ -214,13 +220,13 @@ def test_credential_api_is_write_only_and_persists_only_opaque_reference(tmp_pat
         assert profile.json()["secret_ref"] == payload["reference"]
         assert "never-persist-this" not in profile.text
 
-        status = client.get(
+        status = await client.get(
             f"/api/v1/credentials/{payload['reference']}/status", headers=auth
         )
         assert status.status_code == 200
         assert status.json()["available"] is True
 
-        removed = client.delete(
+        removed = await client.delete(
             f"/api/v1/credentials/{payload['reference']}", headers=auth
         )
         assert removed.status_code == 204
@@ -286,7 +292,7 @@ def test_unlocked_linux_vault_is_available_and_unreachable_one_is_not(monkeypatc
     assert unreachable.vault_available is False
 
 
-def test_vault_status_endpoint_reports_the_lock_state(tmp_path, monkeypatch):
+async def test_vault_status_endpoint_reports_the_lock_state(tmp_path, monkeypatch):
     credential_store = _fake_secret_service(monkeypatch, locked=True)
     client = TestClient(
         create_app(
@@ -297,17 +303,17 @@ def test_vault_status_endpoint_reports_the_lock_state(tmp_path, monkeypatch):
     )
     auth = {"Authorization": "Bearer test-token"}
 
-    with client:
-        status = client.get("/api/v1/credentials/vault", headers=auth)
+    async with client:
+        status = await client.get("/api/v1/credentials/vault", headers=auth)
         assert status.status_code == 200
         assert status.json() == {"state": "locked", "available": False}
 
-        integration = client.get("/api/v1/integrations/typesafe", headers=auth)
+        integration = await client.get("/api/v1/integrations/typesafe", headers=auth)
         assert integration.status_code == 200
         assert integration.json()["vault_state"] == "locked"
         assert integration.json()["vault_available"] is False
 
-        refused = client.post(
+        refused = await client.post(
             "/api/v1/credentials",
             headers=auth,
             json={"secret": "never-persist-this", "persistence": "vault"},
@@ -317,11 +323,15 @@ def test_vault_status_endpoint_reports_the_lock_state(tmp_path, monkeypatch):
         assert "never-persist-this" not in refused.text
 
 
-def test_locked_provider_credential_is_a_typed_retryable_503(tmp_path, monkeypatch):
+async def test_locked_provider_credential_is_a_typed_retryable_503(
+    tmp_path, monkeypatch
+):
     credential_store = _fake_secret_service(monkeypatch, locked=True)
     store = NebulaStore(tmp_path / "locked-provider.db")
-    engagement = store.create(Engagement(id="locked-project", name="Locked project"))
-    provider = store.create(
+    engagement = await store.create(
+        Engagement(id="locked-project", name="Locked project")
+    )
+    provider = await store.create(
         ProviderProfile(
             id="locked-provider",
             name="Locked provider",
@@ -339,8 +349,8 @@ def test_locked_provider_credential_is_a_typed_retryable_503(tmp_path, monkeypat
         )
     )
 
-    with client:
-        response = client.post(
+    async with client:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers={"Authorization": "Bearer test-token"},
             json={
@@ -465,7 +475,7 @@ def test_linux_vault_mutations_never_prompt(monkeypatch, operation, state):
     assert (len(calls) == 1) == (state == "locked")
 
 
-def test_failed_vpn_vault_delete_keeps_profile_and_core_responsive(tmp_path):
+async def test_failed_vpn_vault_delete_keeps_profile_and_core_responsive(tmp_path):
     import asyncio
     import threading
     import httpx
@@ -473,7 +483,7 @@ def test_failed_vpn_vault_delete_keeps_profile_and_core_responsive(tmp_path):
 
     store = NebulaStore(tmp_path / "core.db")
     credentials = CredentialStore(MemoryKeyring())
-    profile = store.create(
+    profile = await store.create(
         VpnProfile(
             name="Fixture",
             filename="fixture.ovpn",
@@ -523,14 +533,16 @@ def test_failed_vpn_vault_delete_keeps_profile_and_core_responsive(tmp_path):
             response = await deletion
             assert response.status_code == 409
             assert "not removed" in response.json()["detail"]
-            assert store.get(VpnProfile, profile.id).secret_ref == profile.secret_ref
+            assert (
+                await store.get(VpnProfile, profile.id)
+            ).secret_ref == profile.secret_ref
             credentials.delete = lambda _: None
             retry = await client.request(
                 "DELETE", path, json={"expected_revision": profile.revision}
             )
             assert retry.status_code == 204
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_core_imports_where_secretstorage_is_absent():
@@ -610,7 +622,7 @@ def test_chained_keyring_backend_uses_its_first_trusted_member():
     assert CredentialStore(ChainedKeyring(plaintext)).vault_available is False
 
 
-def test_credential_status_endpoints_run_off_the_event_loop(tmp_path):
+async def test_credential_status_endpoints_run_off_the_event_loop(tmp_path):
     import asyncio
     from nebula.v3.domain import VpnProfile
 
@@ -619,15 +631,17 @@ def test_credential_status_endpoints_run_off_the_event_loop(tmp_path):
     session = credential_store.create(
         CredentialCreateRequest(secret=SecretStr("secret"), persistence="session")
     )
-    store.create(
-        VpnProfile(
-            name="Fixture",
-            filename="fixture.ovpn",
-            remote_host="vpn.example.test",
-            remote_port=1194,
-            protocol="udp",
-            fingerprint="a" * 64,
-            secret_ref=session.reference,
+    (
+        await store.create(
+            VpnProfile(
+                name="Fixture",
+                filename="fixture.ovpn",
+                remote_host="vpn.example.test",
+                remote_port=1194,
+                protocol="udp",
+                fingerprint="a" * 64,
+                secret_ref=session.reference,
+            )
         )
     )
     calls = []
@@ -652,11 +666,11 @@ def test_credential_status_endpoints_run_off_the_event_loop(tmp_path):
         "remote-cert-tls server\n<ca>\ncertificate\n</ca>\n"
     )
 
-    with client:
-        listed = client.get("/api/v1/vpn-profiles", headers=auth)
+    async with client:
+        listed = await client.get("/api/v1/vpn-profiles", headers=auth)
         assert listed.status_code == 200
         assert listed.json()[0]["available"] is True
-        created = client.post(
+        created = await client.post(
             "/api/v1/vpn-profiles",
             headers=auth,
             json={
@@ -668,10 +682,13 @@ def test_credential_status_endpoints_run_off_the_event_loop(tmp_path):
         )
         assert created.status_code == 201
         assert created.json()["available"] is True
-        status = client.get(
+        status = await client.get(
             f"/api/v1/credentials/{session.reference}/status", headers=auth
         )
         assert status.status_code == 200
         assert status.json()["available"] is True
 
     assert calls == ["worker"] * 3
+
+
+pytestmark = pytest.mark.anyio

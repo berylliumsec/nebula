@@ -1,6 +1,10 @@
 from __future__ import annotations
+from nebula.v3.async_utils import async_any
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import threading
 from datetime import timedelta
 
@@ -57,7 +61,7 @@ from nebula.v3.tool_failures import FAILURE_SCHEMA, tool_failure
 from nebula.v3.tools import CapabilityInputError
 
 
-def _capabilities(tmp_path):
+async def _capabilities(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     runtime = RuntimePlatform(
@@ -66,9 +70,9 @@ def _capabilities(tmp_path):
     app = create_app(
         store, auth_token="test-token", artifact_store=artifacts, tool_platform=runtime
     )
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    provider = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -76,7 +80,7 @@ def _capabilities(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    own_chat = store.create(
+    own_chat = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Research agent",
@@ -84,7 +88,7 @@ def _capabilities(tmp_path):
             model="model-a",
         )
     )
-    foreign_chat = store.create(
+    foreign_chat = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Foreign agent",
@@ -92,21 +96,21 @@ def _capabilities(tmp_path):
             model="model-a",
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, selected.id, work=app.state.control_assistant_work
     )
     return store, selected, own_chat, foreign_chat, capabilities
 
 
-def _scheduled_capabilities(tmp_path):
-    store, project, chat, foreign_chat, ordinary = _capabilities(tmp_path)
-    project = store.update(
+async def _scheduled_capabilities(tmp_path):
+    store, project, chat, foreign_chat, ordinary = await _capabilities(tmp_path)
+    project = await store.update(
         Engagement,
         project.id,
         {"status": EngagementStatus.ACTIVE},
         expected_revision=project.revision,
     )
-    policy = store.create(
+    policy = await store.create(
         ButlerAuthorityPolicy(
             id=policy_id(project.id), engagement_id=project.id, authority="act"
         )
@@ -115,8 +119,8 @@ def _scheduled_capabilities(tmp_path):
     folder.mkdir()
     (folder / "BUTLER.md").write_text("Inspect and repair Act project goals.")
     digest = read_butler_instructions(tmp_path).sha256
-    with store.transaction(immediate=True) as transaction:
-        event = _append_project_event(
+    async with store.transaction(immediate=True) as transaction:
+        event = await _append_project_event(
             transaction,
             engagement_id=project.id,
             event_type="butler.global_periodic_check",
@@ -131,7 +135,7 @@ def _scheduled_capabilities(tmp_path):
             idempotency_key="scheduled-capability-case",
             now=utc_now(),
         )
-    case = store.create(
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=project.id,
             trigger="periodic",
@@ -143,7 +147,7 @@ def _scheduled_capabilities(tmp_path):
             summary="Global work check",
         )
     )
-    scheduled = ButlerCapabilities(
+    scheduled = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         project.id,
@@ -155,9 +159,9 @@ def _scheduled_capabilities(tmp_path):
     return store, project, chat, foreign_chat, policy, case, scheduled
 
 
-def test_global_create_goal_exposes_and_saves_harness_max_effort(tmp_path):
-    store, project, _, _, policy, _, butler = _scheduled_capabilities(tmp_path)
-    profile = store.create(
+async def test_global_create_goal_exposes_and_saves_harness_max_effort(tmp_path):
+    store, project, _, _, policy, _, butler = await _scheduled_capabilities(tmp_path)
+    profile = await store.create(
         HarnessProfile(
             name="Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -198,20 +202,20 @@ def test_global_create_goal_exposes_and_saves_harness_max_effort(tmp_path):
             change=True,
         )
         assert created["goal"]["status"] == "draft"
-        session = store.get(ChatSession, created["session_id"])
-        harness = store.get(HarnessSession, session.harness_session_id)
+        session = await store.get(ChatSession, created["session_id"])
+        harness = await store.get(HarnessSession, session.harness_session_id)
         assert harness.metadata["runtime_options"]["reasoning_effort"] == "max"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_global_chat_settings_batch_avoids_catalog_and_stays_project_bound(
+async def test_global_chat_settings_batch_avoids_catalog_and_stays_project_bound(
     tmp_path, monkeypatch
 ):
-    store, project, chat, foreign_chat, _, _, scheduled = _scheduled_capabilities(
+    store, project, chat, foreign_chat, _, _, scheduled = await _scheduled_capabilities(
         tmp_path
     )
-    second = store.create(
+    second = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Second agent",
@@ -221,10 +225,10 @@ def test_global_chat_settings_batch_avoids_catalog_and_stays_project_bound(
     )
     original = store.find_entities
 
-    def without_catalog(model, *args, **kwargs):
+    async def without_catalog(model, *args, **kwargs):
         if model is McpServerProfile:
             raise AssertionError("batch read must not load the global MCP catalog")
-        return original(model, *args, **kwargs)
+        return await original(model, *args, **kwargs)
 
     monkeypatch.setattr(store, "find_entities", without_catalog)
 
@@ -258,11 +262,11 @@ def test_global_chat_settings_batch_avoids_catalog_and_stays_project_bound(
                 change=False,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_global_chat_settings_read_runs_outside_event_loop(tmp_path, monkeypatch):
-    _, project, chat, _, _, _, scheduled = _scheduled_capabilities(tmp_path)
+async def test_global_chat_settings_read_runs_outside_event_loop(tmp_path, monkeypatch):
+    _, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
     read_threads = []
 
     def read_settings(project_id, session_id):
@@ -283,12 +287,12 @@ def test_global_chat_settings_read_runs_outside_event_loop(tmp_path, monkeypatch
         assert result["session_id"] == chat.id
         assert read_threads and read_threads[0] != loop_thread
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
-    store, selected, chat, _, capabilities = _capabilities(tmp_path)
-    first = store.create(
+async def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
+    store, selected, chat, _, capabilities = await _capabilities(tmp_path)
+    first = await store.create(
         ChatMessage(
             engagement_id=selected.id,
             session_id=chat.id,
@@ -297,13 +301,15 @@ def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
             content="Original question",
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=selected.id,
-            session_id=chat.id,
-            sequence=2,
-            role=ChatRole.ASSISTANT,
-            content="Original answer",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=selected.id,
+                session_id=chat.id,
+                sequence=2,
+                role=ChatRole.ASSISTANT,
+                content="Original answer",
+            )
         )
     )
 
@@ -347,12 +353,16 @@ def test_interactive_butler_discovers_and_uses_chat_rewind(tmp_path):
             )
         )["messages"] == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_path):
-    store, selected, _, _, capabilities = _capabilities(tmp_path)
-    older = [store.create(Engagement(name=f"Project {index}")) for index in range(51)]
+async def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(
+    tmp_path,
+):
+    store, selected, _, _, capabilities = await _capabilities(tmp_path)
+    older = [
+        (await store.create(Engagement(name=f"Project {index}"))) for index in range(51)
+    ]
 
     async def scenario():
         found = await capabilities.search({"query": "archive project"})
@@ -393,8 +403,8 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
             "expected_revision": selected.revision,
             "name": selected.name,
         }
-        assert store.get(Engagement, selected.id).status == selected.status
-        renamed = store.update(
+        assert (await store.get(Engagement, selected.id)).status == selected.status
+        renamed = await store.update(
             Engagement,
             selected.id,
             {"name": "Changed on another device"},
@@ -424,7 +434,7 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
             change=True,
         )
         assert rename["client_action"]["old_name"] == renamed.name
-        assert store.get(Engagement, selected.id).name == renamed.name
+        assert (await store.get(Engagement, selected.id)).name == renamed.name
         relink = await capabilities.invoke(
             {
                 "operation": "nebula.projects.relink",
@@ -463,8 +473,8 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
         assert linked["client_action"]["name"] == "Linked project"
         assert linked["client_action"]["request_id"]
         assert "workspace_path" not in linked["client_action"]
-        assert len(store.list_entities(Engagement, limit=1000)) == 53
-        archived = store.update(
+        assert len((await store.list_entities(Engagement, limit=1000))) == 53
+        archived = await store.update(
             Engagement,
             selected.id,
             {"status": EngagementStatus.ARCHIVED},
@@ -492,14 +502,20 @@ def test_interactive_butler_prepares_project_lifecycle_with_exact_revisions(tmp_
             change=True,
         )
         assert delete["client_action"]["kind"] == "project_delete"
-        assert store.get(Engagement, selected.id).status == EngagementStatus.ARCHIVED
+        assert (
+            await store.get(Engagement, selected.id)
+        ).status == EngagementStatus.ARCHIVED
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_path):
-    store, selected, own_chat, foreign_chat, capabilities = _capabilities(tmp_path)
-    private = store.create(
+async def test_interactive_butler_prepares_device_chat_export_without_transcript(
+    tmp_path,
+):
+    store, selected, own_chat, foreign_chat, capabilities = await _capabilities(
+        tmp_path
+    )
+    private = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Private side chat",
@@ -534,7 +550,7 @@ def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_p
             "expected_revision": own_chat.revision,
         }
         assert "messages" not in prepared and "transcript" not in prepared
-        assert store.get(ChatSession, own_chat.id).revision == own_chat.revision
+        assert (await store.get(ChatSession, own_chat.id)).revision == own_chat.revision
         for target in (foreign_chat, private):
             with pytest.raises(ValueError, match="saved main chat"):
                 await capabilities.invoke(
@@ -547,11 +563,13 @@ def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_p
                     },
                     change=True,
                 )
-        store.update(
-            ChatSession,
-            own_chat.id,
-            {"title": "Changed on another device"},
-            expected_revision=own_chat.revision,
+        (
+            await store.update(
+                ChatSession,
+                own_chat.id,
+                {"title": "Changed on another device"},
+                expected_revision=own_chat.revision,
+            )
         )
         with pytest.raises(ValueError, match="chat changed"):
             await capabilities.invoke(
@@ -565,12 +583,12 @@ def test_interactive_butler_prepares_device_chat_export_without_transcript(tmp_p
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
-    store, selected, _, foreign_chat, capabilities = _capabilities(tmp_path)
-    own = store.create(
+async def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
+    store, selected, _, foreign_chat, capabilities = await _capabilities(tmp_path)
+    own = await store.create(
         StorageSource(
             name="Fixture NAS",
             engagement_id=selected.id,
@@ -580,7 +598,7 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
             callback_credential_ref="env:STORAGE_CALLBACK_TOKEN",
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         StorageSource(
             name="Other source",
             engagement_id=foreign_chat.engagement_id,
@@ -642,7 +660,7 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
                 "expected_revision": own.revision,
                 "name": own.name,
             }
-            assert store.get(StorageSource, own.id).revision == own.revision
+            assert (await store.get(StorageSource, own.id)).revision == own.revision
             with pytest.raises(ValueError, match="changed"):
                 await capabilities.invoke(
                     {
@@ -682,7 +700,7 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
             "reporting_interval_seconds": 3600,
         }
         assert "credential" not in str(reporting).lower()
-        assert store.get(StorageSource, own.id).revision == own.revision
+        assert (await store.get(StorageSource, own.id)).revision == own.revision
         with pytest.raises(CapabilityInputError):
             await capabilities.invoke(
                 {
@@ -695,13 +713,13 @@ def test_interactive_butler_prepares_scoped_storage_token_handoffs(tmp_path):
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
-    store, selected, _, _, capabilities = _capabilities(tmp_path)
+async def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
+    store, selected, _, _, capabilities = await _capabilities(tmp_path)
     now = utc_now()
-    device = store.create(
+    device = await store.create(
         PairedDeviceSession(
             name="Fixture phone",
             token_sha256="a" * 64,
@@ -729,7 +747,10 @@ def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
             "kind": "device_pair",
             "project_id": selected.id,
         }
-        assert len(store.find_entities(PairedDeviceSession, {"revoked_at": None})) == 1
+        assert (
+            len((await store.find_entities(PairedDeviceSession, {"revoked_at": None})))
+            == 1
+        )
         created_at = listed["devices"][0]["created_at"]
         revoke = await capabilities.invoke(
             {
@@ -748,7 +769,7 @@ def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
             "name": device.name,
             "expected_created_at": created_at,
         }
-        assert store.get(PairedDeviceSession, device.id).revoked_at is None
+        assert (await store.get(PairedDeviceSession, device.id)).revoked_at is None
         with pytest.raises(ValueError, match="changed"):
             await capabilities.invoke(
                 {
@@ -761,11 +782,11 @@ def test_interactive_butler_prepares_nonsecret_device_handoffs(tmp_path):
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
-    _, selected, _, _, capabilities = _capabilities(tmp_path)
+async def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
+    _, selected, _, _, capabilities = await _capabilities(tmp_path)
     reference = "session:" + "a" * 32
 
     async def scenario():
@@ -802,17 +823,19 @@ def test_interactive_butler_prepares_write_only_credential_handoffs(tmp_path):
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_path):
-    store, selected, _, _, capabilities = _capabilities(tmp_path)
+async def test_interactive_butler_prepares_exact_provider_credential_attachment(
+    tmp_path,
+):
+    store, selected, _, _, capabilities = await _capabilities(tmp_path)
     profile = next(
         item
-        for item in store.list_entities(ProviderProfile, limit=10)
+        for item in (await store.list_entities(ProviderProfile, limit=10))
         if item.name == "Local"
     )
-    management = store.create(
+    management = await store.create(
         ProviderProfile(name="OpenRouter", provider_type="openrouter")
     )
     reference = "session:" + "a" * 32
@@ -851,7 +874,7 @@ def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_pa
             "credential_ref": reference,
             "slot": "inference",
         }
-        assert store.get(ProviderProfile, profile.id).secret_ref is None
+        assert (await store.get(ProviderProfile, profile.id)).secret_ref is None
         management_action = await capabilities.invoke(
             {
                 "operation": "nebula.providers.attach_credential",
@@ -866,9 +889,8 @@ def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_pa
         )
         assert management_action["client_action"]["slot"] == "management"
         assert (
-            store.get(ProviderProfile, management.id).openrouter_management_secret_ref
-            is None
-        )
+            await store.get(ProviderProfile, management.id)
+        ).openrouter_management_secret_ref is None
         for changes in (
             {"expected_revision": profile.revision + 1},
             {"slot": "management"},
@@ -889,15 +911,17 @@ def test_interactive_butler_prepares_exact_provider_credential_attachment(tmp_pa
                     change=True,
                 )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_exact_harness_credential_attachment(tmp_path):
-    store, selected, _, _, capabilities = _capabilities(tmp_path)
-    harness = store.create(
+async def test_interactive_butler_prepares_exact_harness_credential_attachment(
+    tmp_path,
+):
+    store, selected, _, _, capabilities = await _capabilities(tmp_path)
+    harness = await store.create(
         HarnessProfile(name="SDK", kind=HarnessKind.CLAUDE_AGENT_SDK)
     )
-    grok = store.create(
+    grok = await store.create(
         HarnessProfile(name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true")
     )
     reference = "session:" + "b" * 32
@@ -934,7 +958,7 @@ def test_interactive_butler_prepares_exact_harness_credential_attachment(tmp_pat
             "credential_ref": reference,
             "auth_mode": "secret_ref",
         }
-        assert store.get(HarnessProfile, harness.id).secret_ref is None
+        assert (await store.get(HarnessProfile, harness.id)).secret_ref is None
         for invalid in (
             {
                 "harness_id": harness.id,
@@ -961,12 +985,12 @@ def test_interactive_butler_prepares_exact_harness_credential_attachment(tmp_pat
                     change=True,
                 )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
-    store, selected, other, _, capabilities = _capabilities(tmp_path)
-    foreign = store.create(
+async def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
+    store, selected, other, _, capabilities = await _capabilities(tmp_path)
+    foreign = await store.create(
         McpServerProfile(
             name="foreign",
             transport=McpTransport.STREAMABLE_HTTP,
@@ -975,22 +999,24 @@ def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
         )
     )
     for number in range(49):
-        store.create(
-            McpServerProfile(
-                name=f"foreign-{number}",
-                transport=McpTransport.STREAMABLE_HTTP,
-                url="https://example.test/other",
-                metadata={"engagement_id": other.id},
+        (
+            await store.create(
+                McpServerProfile(
+                    name=f"foreign-{number}",
+                    transport=McpTransport.STREAMABLE_HTTP,
+                    url="https://example.test/other",
+                    metadata={"engagement_id": other.id},
+                )
             )
         )
-    http = store.create(
+    http = await store.create(
         McpServerProfile(
             name="remote",
             transport=McpTransport.STREAMABLE_HTTP,
             url="https://example.test/mcp",
         )
     )
-    stdio = store.create(
+    stdio = await store.create(
         McpServerProfile(
             name="local", transport=McpTransport.STDIO, command="/bin/true"
         )
@@ -1042,7 +1068,7 @@ def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
             "slot": "header",
             "key": "X-API-Key",
         }
-        assert store.get(McpServerProfile, http.id).header_secret_refs == {}
+        assert (await store.get(McpServerProfile, http.id)).header_secret_refs == {}
         for server, slot, key in (
             (http, "environment", "TOKEN"),
             (stdio, "header", "X-API-Key"),
@@ -1066,11 +1092,11 @@ def test_interactive_butler_prepares_exact_mcp_credential_attachment(tmp_path):
                     change=True,
                 )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interactive_butler_prepares_device_owned_diagnostics_export(tmp_path):
-    _, selected, _, _, capabilities = _capabilities(tmp_path)
+async def test_interactive_butler_prepares_device_owned_diagnostics_export(tmp_path):
+    _, selected, _, _, capabilities = await _capabilities(tmp_path)
 
     async def scenario():
         found = await capabilities.search({"query": "export diagnostics support zip"})
@@ -1094,11 +1120,11 @@ def test_interactive_butler_prepares_device_owned_diagnostics_export(tmp_path):
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
-    _, _, _, _, _, _, capabilities = _scheduled_capabilities(tmp_path)
+async def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path):
+    _, _, _, _, _, _, capabilities = await _scheduled_capabilities(tmp_path)
 
     async def scenario():
         assert not any(
@@ -1157,14 +1183,20 @@ def test_scheduled_butler_cannot_discover_interactive_project_mutations(tmp_path
                     {"operation": operation, "arguments": {}}, change=True
                 )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_path):
-    store, project, chat, foreign_chat, policy, case, scheduled = (
-        _scheduled_capabilities(tmp_path)
-    )
-    goal = store.create(
+async def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_path):
+    (
+        store,
+        project,
+        chat,
+        foreign_chat,
+        policy,
+        case,
+        scheduled,
+    ) = await _scheduled_capabilities(tmp_path)
+    goal = await store.create(
         ChatGoal(
             engagement_id=project.id,
             session_id=chat.id,
@@ -1239,11 +1271,11 @@ def test_scheduled_butler_renews_goal_budget_after_more_than_40_reads(tmp_path):
         )
         assert paused["goal"]["status"] == "paused"
 
-    asyncio.run(scenario())
-    assert len(store.get(ButlerRecoveryCase, case.id).steps) == 45
+    (await scenario())
+    assert len((await store.get(ButlerRecoveryCase, case.id)).steps) == 45
 
 
-def test_scheduled_butler_can_edit_all_assistant_settings(tmp_path):
+async def test_scheduled_butler_can_edit_all_assistant_settings(tmp_path):
     assert {
         "nebula.work.set_chat_settings",
         "nebula.work.set_assistant_defaults",
@@ -1257,7 +1289,9 @@ def test_scheduled_butler_can_edit_all_assistant_settings(tmp_path):
     assert set(
         SET_ASSISTANT_DEFAULTS_SCHEMA["properties"]["settings"]["properties"]
     ) == set(AssistantDefaults.model_fields)
-    store, project, chat, _, policy, _, scheduled = _scheduled_capabilities(tmp_path)
+    store, project, chat, _, policy, _, scheduled = await _scheduled_capabilities(
+        tmp_path
+    )
 
     async def scenario():
         defaults = await scheduled.invoke(
@@ -1320,17 +1354,22 @@ def test_scheduled_butler_can_edit_all_assistant_settings(tmp_path):
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
     assert (
-        store.get(Engagement, project.id).assistant_defaults.allow_agent_messaging
-        is False
-    )
+        await store.get(Engagement, project.id)
+    ).assistant_defaults.allow_agent_messaging is False
 
 
-def test_scheduled_butler_can_reach_every_project_assistant_work_action(tmp_path):
-    store, project, chat, foreign_chat, policy, _, scheduled = _scheduled_capabilities(
-        tmp_path
-    )
+async def test_scheduled_butler_can_reach_every_project_assistant_work_action(tmp_path):
+    (
+        store,
+        project,
+        chat,
+        foreign_chat,
+        policy,
+        _,
+        scheduled,
+    ) = await _scheduled_capabilities(tmp_path)
 
     async def scenario():
         catalog = await scheduled.invoke(
@@ -1398,7 +1437,7 @@ def test_scheduled_butler_can_reach_every_project_assistant_work_action(tmp_path
             change=True,
         )
         assert renamed["title"] == "Edited by scheduled Butler"
-        assert store.get(ChatSession, chat.id).title == renamed["title"]
+        assert (await store.get(ChatSession, chat.id)).title == renamed["title"]
         with pytest.raises(ValueError, match="Act and privacy scope"):
             await scheduled.invoke(
                 {
@@ -1417,23 +1456,23 @@ def test_scheduled_butler_can_reach_every_project_assistant_work_action(tmp_path
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path):
-    store, selected, own_chat, _, ordinary = _capabilities(tmp_path)
-    selected = store.update(
+async def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path):
+    store, selected, own_chat, _, ordinary = await _capabilities(tmp_path)
+    selected = await store.update(
         Engagement,
         selected.id,
         {"status": EngagementStatus.ACTIVE},
         expected_revision=selected.revision,
     )
-    policy = store.create(
+    policy = await store.create(
         ButlerAuthorityPolicy(
             id=policy_id(selected.id), engagement_id=selected.id, authority="act"
         )
     )
-    profile = store.create(
+    profile = await store.create(
         HarnessProfile(
             name="Recovery Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -1452,7 +1491,7 @@ def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path
             ),
         )
     )
-    source = store.create(
+    source = await store.create(
         ChatGoal(
             engagement_id=selected.id,
             session_id=own_chat.id,
@@ -1465,8 +1504,8 @@ def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path
     folder.mkdir()
     (folder / "BUTLER.md").write_text("Recover paused goals with evidence.")
     digest = read_butler_instructions(tmp_path).sha256
-    with store.transaction(immediate=True) as transaction:
-        event = _append_project_event(
+    async with store.transaction(immediate=True) as transaction:
+        event = await _append_project_event(
             transaction,
             engagement_id=selected.id,
             event_type="butler.global_periodic_check",
@@ -1481,7 +1520,7 @@ def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path
             idempotency_key="recovery-goal-case",
             now=utc_now(),
         )
-    case = store.create(
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=selected.id,
             trigger="periodic",
@@ -1512,31 +1551,31 @@ def test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue(tmp_path
         "plan": ["Inspect the paused goal", "Report evidence to Butler"],
         "start": False,
     }
-    created = asyncio.run(actions.create_recovery_goal(arguments))
+    created = await actions.create_recovery_goal(arguments)
     assert created["created"] is True
-    goal = store.get(ChatGoal, created["goal"]["id"])
+    goal = await store.get(ChatGoal, created["goal"]["id"])
     assert goal.metadata == {
         "butler_recovery_case_id": case.id,
         "butler_recovery_source_goal_id": source.id,
     }
     assert goal.plan == arguments["plan"]
-    assert store.get(ButlerRecoveryCase, case.id).recovery_goal_ids == [goal.id]
-    session = store.get(ChatSession, goal.session_id)
+    assert (await store.get(ButlerRecoveryCase, case.id)).recovery_goal_ids == [goal.id]
+    session = await store.get(ChatSession, goal.session_id)
     assert session.harness_profile_id == profile.id and session.model == "gpt-6-sol"
     assert session.metadata["butler_initiated"] is True
-    harness_session = store.get(HarnessSession, session.harness_session_id)
+    harness_session = await store.get(HarnessSession, session.harness_session_id)
     assert harness_session.metadata["runtime_options"]["reasoning_effort"] == "max"
     assert (
         harness_session.metadata["runtime_options"]["cyber_access_program"]
         == "daybreakBlue"
     )
-    again = asyncio.run(actions.create_recovery_goal(arguments))
+    again = await actions.create_recovery_goal(arguments)
     assert again["already_exists"] is True
-    assert store.get(ButlerRecoveryCase, case.id).recovery_goal_ids == [goal.id]
+    assert (await store.get(ButlerRecoveryCase, case.id)).recovery_goal_ids == [goal.id]
 
 
-def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path):
-    store, selected, _, _, ordinary = _capabilities(tmp_path)
+async def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path):
+    store, selected, _, _, ordinary = await _capabilities(tmp_path)
     options = HarnessCapabilities(
         models=["gpt-6-sol"],
         model_options=[
@@ -1547,7 +1586,7 @@ def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path
             )
         ],
     )
-    preferred = store.create(
+    preferred = await store.create(
         HarnessProfile(
             name="Butler Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -1557,7 +1596,7 @@ def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path
             capabilities=options,
         )
     )
-    alternate = store.create(
+    alternate = await store.create(
         HarnessProfile(
             name="Available Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -1567,25 +1606,27 @@ def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path
             capabilities=options,
         )
     )
-    butler_harness_session = store.create(
+    butler_harness_session = await store.create(
         HarnessSession(
             engagement_id=selected.id,
             harness_profile_id=preferred.id,
             model="gpt-6-sol",
         )
     )
-    store.create(
-        ChatSession(
-            engagement_id=selected.id,
-            title="Butler",
-            backend="harness",
-            harness_profile_id=preferred.id,
-            harness_session_id=butler_harness_session.id,
-            model="gpt-6-sol",
-            metadata={"control_assistant": True},
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=selected.id,
+                title="Butler",
+                backend="harness",
+                harness_profile_id=preferred.id,
+                harness_session_id=butler_harness_session.id,
+                model="gpt-6-sol",
+                metadata={"control_assistant": True},
+            )
         )
     )
-    case = store.create(
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=selected.id,
             trigger="periodic",
@@ -1614,7 +1655,7 @@ def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path
         }
 
     ordinary._work.harness_quota = measured_quota
-    assert asyncio.run(actions._recovery_harness(selected.id)).id == alternate.id
+    assert (await actions._recovery_harness(selected.id)).id == alternate.id
 
     async def credits_after_included_limit(_project_id, arguments):
         return {
@@ -1627,39 +1668,39 @@ def test_scheduled_recovery_selects_available_quota_over_butler_profile(tmp_path
         }
 
     ordinary._work.harness_quota = credits_after_included_limit
-    assert asyncio.run(actions._recovery_harness(selected.id)).id == preferred.id
+    assert (await actions._recovery_harness(selected.id)).id == preferred.id
 
     async def unavailable_quota(_project_id, _arguments):
         return {"state": "unavailable", "snapshots": []}
 
     ordinary._work.harness_quota = unavailable_quota
     with pytest.raises(ValueError, match="confirmed included usage or credits"):
-        asyncio.run(actions._recovery_harness(selected.id))
+        (await actions._recovery_harness(selected.id))
 
 
-def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
+async def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
     tmp_path, monkeypatch
 ):
-    store, selected, own_chat, foreign_chat, ordinary = _capabilities(tmp_path)
-    other = store.get(Engagement, foreign_chat.engagement_id)
-    selected = store.update(
+    store, selected, own_chat, foreign_chat, ordinary = await _capabilities(tmp_path)
+    other = await store.get(Engagement, foreign_chat.engagement_id)
+    selected = await store.update(
         Engagement,
         selected.id,
         {"status": EngagementStatus.ACTIVE},
         expected_revision=selected.revision,
     )
-    other = store.update(
+    other = await store.update(
         Engagement,
         other.id,
         {"status": EngagementStatus.ACTIVE},
         expected_revision=other.revision,
     )
-    selected_policy = store.create(
+    selected_policy = await store.create(
         ButlerAuthorityPolicy(
             id=policy_id(selected.id), engagement_id=selected.id, authority="act"
         )
     )
-    other_policy = store.create(
+    other_policy = await store.create(
         ButlerAuthorityPolicy(
             id=policy_id(other.id), engagement_id=other.id, authority="act"
         )
@@ -1668,8 +1709,8 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
     folder.mkdir()
     (folder / "BUTLER.md").write_text("Choose work from all Act projects.")
     digest = read_butler_instructions(tmp_path).sha256
-    with store.transaction(immediate=True) as transaction:
-        event = _append_project_event(
+    async with store.transaction(immediate=True) as transaction:
+        event = await _append_project_event(
             transaction,
             engagement_id=selected.id,
             event_type="butler.global_periodic_check",
@@ -1684,7 +1725,7 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             idempotency_key="test-global-case",
             now=utc_now(),
         )
-    case = store.create(
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=selected.id,
             trigger="periodic",
@@ -1696,7 +1737,7 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             summary="Global work check",
         )
     )
-    global_butler = ButlerCapabilities(
+    global_butler = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         selected.id,
@@ -1725,7 +1766,7 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
                     {"operation": "nebula.work.message_chat", "arguments": arguments},
                     change=True,
                 )
-        assert store.get(ButlerRecoveryCase, case.id).steps == []
+        assert (await store.get(ButlerRecoveryCase, case.id)).steps == []
 
         async def deliver(project_id, arguments, *, idempotency_key):
             assert project_id == selected.id
@@ -1751,7 +1792,7 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             change=True,
         )
         assert receipt["delivery"] == "started"
-        saved_case = store.get(ButlerRecoveryCase, case.id)
+        saved_case = await store.get(ButlerRecoveryCase, case.id)
         assert saved_case.steps[-1]["status"] == "applied"
         assert saved_case.delivered_turn_id == "turn-1"
         assert saved_case.dialogue_pending_turns == [
@@ -1763,21 +1804,23 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             }
         ]
 
-        store.update(
-            ButlerRecoveryCase,
-            case.id,
-            {
-                "dialogue_pending_turns": [],
-                "dialogue_results": [
-                    {
-                        "project_id": selected.id,
-                        "session_id": own_chat.id,
-                        "turn_id": "turn-1",
-                        "status": "complete",
-                    }
-                ],
-            },
-            expected_revision=saved_case.revision,
+        (
+            await store.update(
+                ButlerRecoveryCase,
+                case.id,
+                {
+                    "dialogue_pending_turns": [],
+                    "dialogue_results": [
+                        {
+                            "project_id": selected.id,
+                            "session_id": own_chat.id,
+                            "turn_id": "turn-1",
+                            "status": "complete",
+                        }
+                    ],
+                },
+                expected_revision=saved_case.revision,
+            )
         )
         reply = {
             "session_id": own_chat.id,
@@ -1798,7 +1841,9 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             },
             change=False,
         )
-        assert store.get(ButlerRecoveryCase, case.id).dialogue_read_turn_ids == []
+        assert (
+            await store.get(ButlerRecoveryCase, case.id)
+        ).dialogue_read_turn_ids == []
         reply["saved_reply"] = "I am blocked on the trace."
         await global_butler.invoke(
             {
@@ -1807,9 +1852,9 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             },
             change=False,
         )
-        assert store.get(ButlerRecoveryCase, case.id).dialogue_read_turn_ids == [
-            "turn-1"
-        ]
+        assert (
+            await store.get(ButlerRecoveryCase, case.id)
+        ).dialogue_read_turn_ids == ["turn-1"]
 
         listed = await global_butler.invoke(
             {"operation": "nebula.global.projects", "arguments": {}}, change=False
@@ -1869,13 +1914,13 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
         )
         assert first["created"] is True and second["created"] is False
         assert first["project"]["id"] == second["project"]["id"]
-        child = store.get(Engagement, first["project"]["id"])
+        child = await store.get(Engagement, first["project"]["id"])
         assert child.parent_engagement_id == selected.id
         assert child.workspace_path is None
         assert child.status == EngagementStatus.ACTIVE
         assert (
-            store.find_entity(ButlerAuthorityPolicy, "engagement_id", child.id) is None
-        )
+            await store.find_entity(ButlerAuthorityPolicy, "engagement_id", child.id)
+        ) is None
 
         goal_args = {
             "project_id": other.id,
@@ -1897,14 +1942,13 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             change=True,
         )
         assert created["goal"]["status"] == "draft"
-        assert (
-            store.get(ChatSession, created["session_id"]).metadata["planning_enabled"]
-            is True
-        )
+        assert (await store.get(ChatSession, created["session_id"])).metadata[
+            "planning_enabled"
+        ] is True
         assert duplicate["already_exists"] is True
-        assert store.count_entities(ChatGoal, engagement_id=other.id) == 1
+        assert (await store.count_entities(ChatGoal, engagement_id=other.id)) == 1
 
-        paused = store.update(
+        paused = await store.update(
             Engagement,
             other.id,
             {"status": EngagementStatus.PAUSED},
@@ -1923,11 +1967,11 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
         )
         assert resumed["project"]["status"] == "active"
 
-        draft = store.update(
+        draft = await store.update(
             Engagement,
             other.id,
             {"status": EngagementStatus.DRAFT},
-            expected_revision=store.get(Engagement, other.id).revision,
+            expected_revision=(await store.get(Engagement, other.id)).revision,
         )
         matches = await global_butler.search({"query": "activate draft project"})
         assert "nebula.global.resume_project" in {
@@ -1977,7 +2021,9 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
             },
             change=True,
         )
-        assert store.get(ButlerRecoveryCase, case.id).dialogue_pending_turns == [
+        assert (
+            await store.get(ButlerRecoveryCase, case.id)
+        ).dialogue_pending_turns == [
             {
                 "project_id": other.id,
                 "session_id": foreign_chat.id,
@@ -1995,16 +2041,18 @@ def test_global_butler_chooses_act_projects_and_deduplicates_new_work(
                 },
                 change=True,
             )
-        assert not any(
-            item.name == "Forbidden after edit"
-            for item in store.iter_readable_entities(Engagement)
+        assert not (
+            await async_any(
+                item.name == "Forbidden after edit"
+                async for item in store.iter_readable_entities(Engagement)
+            )
         )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path):
-    _, _, own_chat, _, capabilities = _capabilities(tmp_path)
+async def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path):
+    _, _, own_chat, _, capabilities = await _capabilities(tmp_path)
     assert {plugin.spec.name for plugin in capabilities.plugins()} == BUTLER_TOOL_NAMES
 
     async def scenario():
@@ -2044,11 +2092,11 @@ def test_butler_discovers_chat_control_without_advertising_every_schema(tmp_path
         assert chat["title"] == "Research agent"
         assert chat["kind"] == "main"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_discovers_and_uses_chat_priority(tmp_path):
-    store, _, chat, _, capabilities = _capabilities(tmp_path)
+async def test_butler_discovers_and_uses_chat_priority(tmp_path):
+    store, _, chat, _, capabilities = await _capabilities(tmp_path)
 
     async def scenario():
         for query, operation in (
@@ -2091,13 +2139,13 @@ def test_butler_discovers_and_uses_chat_priority(tmp_path):
                 change=True,
             )
 
-    asyncio.run(scenario())
-    assert store.get(ChatSession, chat.id).metadata["pinned"] is True
-    assert store.get(ChatSession, chat.id).metadata["flag_color"] == "blue"
+    (await scenario())
+    assert (await store.get(ChatSession, chat.id)).metadata["pinned"] is True
+    assert (await store.get(ChatSession, chat.id)).metadata["flag_color"] == "blue"
 
 
-def test_butler_discovers_and_uses_project_work_board(tmp_path):
-    store, project, _, _, capabilities = _capabilities(tmp_path)
+async def test_butler_discovers_and_uses_project_work_board(tmp_path):
+    store, project, _, _, capabilities = await _capabilities(tmp_path)
 
     async def scenario():
         found = await capabilities.search({"query": "create a Work board item"})
@@ -2195,13 +2243,13 @@ def test_butler_discovers_and_uses_project_work_board(tmp_path):
             )
         return item_id
 
-    item_id = asyncio.run(scenario())
-    assert store.get(WorkItem, item_id).engagement_id == project.id
-    assert store.get(WorkItem, item_id).status == "review"
+    item_id = await scenario()
+    assert (await store.get(WorkItem, item_id)).engagement_id == project.id
+    assert (await store.get(WorkItem, item_id)).status == "review"
 
 
-def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):
-    _, _, _, _, capabilities = _capabilities(tmp_path)
+async def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):
+    _, _, _, _, capabilities = await _capabilities(tmp_path)
     spec = next(
         plugin.spec
         for plugin in capabilities.plugins()
@@ -2217,7 +2265,7 @@ def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):
             await capabilities.invoke(attempted, change=False)
         return caught.value
 
-    error = asyncio.run(scenario())
+    error = await scenario()
     assert error.reason == "unlisted_operation"
     assert error._nebula_before_execution is True
     failure = tool_failure(spec, attempted, error, phase="before_execution")
@@ -2241,8 +2289,8 @@ def test_butler_unlisted_operation_receipt_gives_exact_recovery(tmp_path):
     assert failure["effective_input_schema"] == spec.input_schema
 
 
-def test_butler_pre_dispatch_errors_name_the_repair(tmp_path):
-    _, _, own_chat, _, capabilities = _capabilities(tmp_path)
+async def test_butler_pre_dispatch_errors_name_the_repair(tmp_path):
+    _, _, own_chat, _, capabilities = await _capabilities(tmp_path)
     specs = {plugin.spec.name: plugin.spec for plugin in capabilities.plugins()}
 
     async def scenario():
@@ -2287,11 +2335,11 @@ def test_butler_pre_dispatch_errors_name_the_repair(tmp_path):
             assert failure["side_effects"] == "none"
             assert guidance in failure["next_action"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_change_routes_validate_schema_revision_and_project(tmp_path):
-    store, _, own_chat, foreign_chat, capabilities = _capabilities(tmp_path)
+async def test_butler_change_routes_validate_schema_revision_and_project(tmp_path):
+    store, _, own_chat, foreign_chat, capabilities = await _capabilities(tmp_path)
 
     async def scenario():
         operation = "nebula.work.update_chat"
@@ -2322,15 +2370,15 @@ def test_butler_change_routes_validate_schema_revision_and_project(tmp_path):
         assert saved["title"] == "Sources review"
         assert saved["butler_operation"] == operation
         assert saved["butler_project_id"] == own_chat.engagement_id
-        assert store.get(ChatSession, own_chat.id).title == "Sources review"
+        assert (await store.get(ChatSession, own_chat.id)).title == "Sources review"
         with pytest.raises(ValueError, match="current revision"):
             await capabilities.invoke(payload, change=True)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_browser_action_is_not_reported_as_saved_state(tmp_path):
-    _, _, _, _, capabilities = _capabilities(tmp_path)
+async def test_butler_browser_action_is_not_reported_as_saved_state(tmp_path):
+    _, _, _, _, capabilities = await _capabilities(tmp_path)
 
     async def scenario():
         described = await capabilities.describe(
@@ -2347,17 +2395,17 @@ def test_butler_browser_action_is_not_reported_as_saved_state(tmp_path):
         assert result["state"] == "pending_browser_apply"
         assert result["butler_operation"] == "nebula.settings.set_device_theme"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
-    store, selected, parent, _, ordinary = _capabilities(tmp_path)
-    policy = store.create(
+async def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
+    store, selected, parent, _, ordinary = await _capabilities(tmp_path)
+    policy = await store.create(
         ButlerAuthorityPolicy(
             id=policy_id(selected.id), engagement_id=selected.id, authority="act"
         )
     )
-    case = store.create(
+    case = await store.create(
         ButlerRecoveryCase(
             engagement_id=selected.id,
             trigger="immediate",
@@ -2369,7 +2417,7 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
             summary="Subagent failed",
         )
     )
-    child = store.create(
+    child = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Child",
@@ -2378,7 +2426,7 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
             model=parent.model,
         )
     )
-    background = ButlerCapabilities(
+    background = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         selected.id,
@@ -2409,6 +2457,9 @@ def test_background_act_excludes_browser_and_child_chat_changes(tmp_path):
                 },
                 change=True,
             )
-        assert store.get(ButlerRecoveryCase, case.id).steps == []
+        assert (await store.get(ButlerRecoveryCase, case.id)).steps == []
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

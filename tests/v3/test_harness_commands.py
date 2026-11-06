@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 
 import pytest
@@ -82,7 +86,9 @@ def test_chat_command_uses_operator_input_not_appended_core_context(
 
 
 @pytest.mark.parametrize("grok", [True, False])
-def test_usage_calls_selected_session_without_inference_or_double_accounting(grok):
+async def test_usage_calls_selected_session_without_inference_or_double_accounting(
+    grok,
+):
     async def scenario():
         rpc = Rpc(
             {"usage": {"inputTokens": 12, "outputTokens": 3}}
@@ -117,10 +123,10 @@ def test_usage_calls_selected_session_without_inference_or_double_accounting(gro
         assert "Input tokens: 12" in events[-1].message
         assert all(event.type != "usage" for event in events)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_goal_prefix_precedes_but_preserves_core_context():
+async def test_grok_goal_prefix_precedes_but_preserves_core_context():
     async def scenario():
         rpc = Rpc({})
         connection = GrokAcpConnection(
@@ -144,10 +150,10 @@ def test_grok_goal_prefix_precedes_but_preserves_core_context():
         assert "Core capability state" in blocks[1]["text"]
         assert events[-1].message == "Goal status: active"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_goal_continues_vendor_turns_until_goal_is_complete():
+async def test_grok_goal_continues_vendor_turns_until_goal_is_complete():
     class ContinuingGoalRpc(Rpc):
         def __init__(self):
             super().__init__({})
@@ -219,13 +225,13 @@ def test_grok_goal_continues_vendor_turns_until_goal_is_complete():
         )
         assert len([event for event in events if event.type == "completed"]) == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
     "status", ["paused", "usageLimited", "budgetLimited", "failed"]
 )
-def test_grok_goal_does_not_continue_terminal_or_attention_states(status):
+async def test_grok_goal_does_not_continue_terminal_or_attention_states(status):
     class StoppedGoalRpc(Rpc):
         async def request(self, method, params):
             if method == "session/prompt":
@@ -271,10 +277,10 @@ def test_grok_goal_does_not_continue_terminal_or_attention_states(status):
         )
         assert "Objective: Clock" in events[-1].message
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_goal_final_answer_is_not_doubled_by_its_whole_replay():
+async def test_grok_goal_final_answer_is_not_doubled_by_its_whole_replay():
     # Live Grok goal mode streamed its answer, then sent it again as one chunk.
     class ReplayingGoalRpc(Rpc):
         async def request(self, method, params):
@@ -318,7 +324,7 @@ def test_grok_goal_final_answer_is_not_doubled_by_its_whole_replay():
         assert streamed == "Tests pass."
         assert events[-1].message.endswith("Grok's last message:\nTests pass.")
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_grok_goal_outcome_explains_a_bare_verdict():
@@ -350,7 +356,7 @@ def test_grok_goal_outcome_without_vendor_text_or_usage():
     )
 
 
-def test_grok_goal_status_query_keeps_grok_s_own_reply():
+async def test_grok_goal_status_query_keeps_grok_s_own_reply():
     class StatusRpc(Rpc):
         async def request(self, method, params):
             if method == "session/prompt":
@@ -385,7 +391,7 @@ def test_grok_goal_status_query_keeps_grok_s_own_reply():
         ]
         assert events[-1].message == "Status: Blocked"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -402,7 +408,7 @@ def test_grok_goal_status_query_keeps_grok_s_own_reply():
         ("resume", "thread/goal/set", {"status": "active"}),
     ],
 )
-def test_codex_goal_dispatch_and_continuation(argument, method, extra):
+async def test_codex_goal_dispatch_and_continuation(argument, method, extra):
     async def scenario():
         rpc = Rpc(
             {
@@ -439,10 +445,10 @@ def test_codex_goal_dispatch_and_continuation(argument, method, extra):
         )
         assert events[-1].type == "completed"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_unsupported_native_command_fails_without_model_fallback():
+async def test_unsupported_native_command_fails_without_model_fallback():
     async def scenario():
         rpc = Rpc(RuntimeError("Method not found"))
         connection = CodexAppServerConnection(
@@ -457,7 +463,7 @@ def test_unsupported_native_command_fails_without_model_fallback():
             ]
         assert len(rpc.calls) == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -486,7 +492,7 @@ def test_missing_usage_is_not_presented_as_zero_spend():
 @pytest.mark.parametrize(
     "method", ["_x.ai/session_notification", "_x.ai/session/update"]
 )
-def test_grok_native_goal_notifications_are_not_lost(method):
+async def test_grok_native_goal_notifications_are_not_lost(method):
     class GoalRpc(Rpc):
         async def request(self, request_method, params):
             if request_method == "session/prompt":
@@ -516,10 +522,10 @@ def test_grok_native_goal_notifications_are_not_lost(method):
         assert goal.status == "paused"
         assert goal.elapsed_ms == 1200
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_acp_catalog_survives_idle_replay_drain_and_replaces_per_session():
+async def test_acp_catalog_survives_idle_replay_drain_and_replaces_per_session():
     import json
     from nebula.v3.harnesses import (
         _AcpRpc,
@@ -581,7 +587,7 @@ def test_acp_catalog_survives_idle_replay_drain_and_replaces_per_session():
         assert len(_connection_commands(connection)) == 4
         assert rpc.events.empty()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_catalog_validation_bounds_metadata_and_preserves_bridge_semantics():
@@ -613,7 +619,7 @@ def test_catalog_validation_bounds_metadata_and_preserves_bridge_semantics():
     )
 
 
-def test_discovered_command_dispatch_and_help_share_catalog_without_new_handler():
+async def test_discovered_command_dispatch_and_help_share_catalog_without_new_handler():
     async def scenario():
         rpc = Rpc({})
         rpc.command_catalogs = {
@@ -669,11 +675,11 @@ def test_discovered_command_dispatch_and_help_share_catalog_without_new_handler(
             ]
         assert len(rpc.calls) == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("grok", [True, False])
-def test_unknown_command_is_rejected_without_inference(grok):
+async def test_unknown_command_is_rejected_without_inference(grok):
     from nebula.v3.harness_commands import parse_harness_command
     from nebula.v3.harnesses import HarnessConfigurationError
 
@@ -696,10 +702,10 @@ def test_unknown_command_is_rejected_without_inference(grok):
         assert parse_harness_command("/home/operator/project") is None
         assert parse_harness_command("Explain /unknown") is None
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_discovered_command_without_text_has_an_explicit_durable_reply():
+async def test_discovered_command_without_text_has_an_explicit_durable_reply():
     async def scenario():
         rpc = Rpc({})
         rpc.command_catalogs = {
@@ -730,10 +736,10 @@ def test_discovered_command_without_text_has_an_explicit_durable_reply():
         assert "returned no text for /quiet" in events[-1].message
         assert not rpc.calls
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_help_keeps_all_names_within_durable_message_limit():
+async def test_help_keeps_all_names_within_durable_message_limit():
     from nebula.v3.harness_commands import normalize_commands
 
     async def scenario():
@@ -764,4 +770,7 @@ def test_help_keeps_all_names_within_durable_message_limit():
             for item in rpc.command_catalogs["a"]
         )
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

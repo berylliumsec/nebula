@@ -6,6 +6,8 @@ for the before/after checkout commands. No production database is accepted.
 
 from __future__ import annotations
 
+import asyncio
+
 import argparse
 import hashlib
 import json
@@ -18,7 +20,8 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import event
+from sqlalchemy import event, create_engine
+from sqlalchemy.pool import NullPool
 
 from nebula.v3 import database as database_module
 from nebula.v3.chat import ChatService
@@ -29,18 +32,20 @@ from nebula.v3.storage import NebulaStore
 
 def seed(root, artifacts, calls):
     root.mkdir(mode=0o700, parents=True)
-    database = Database(root / "nebula.db", bootstrap=False)
+    engine = create_engine(
+        Database._normalize_sync_url(root / "nebula.db"), poolclass=NullPool
+    )
     config = Config()
     config.set_main_option(
         "script_location", str(Path(database_module.__file__).with_name("migrations"))
     )
-    with database.engine.connect() as connection:
+    with engine.begin() as connection:
         config.attributes["connection"] = connection
         command.upgrade(config, "0023_workspace_provenance_ledger")
-    database.dispose()
+    engine.dispose()
     stamp = "2026-11-02 12:00:00.000000"
     with closing(sqlite3.connect(root / "nebula.db")) as connection:
-        connection.execute("PRAGMA journal_mode=WAL")
+        (connection.execute("PRAGMA journal_mode=WAL"))
 
         def insert(rows):
             connection.executemany(
@@ -57,19 +62,21 @@ def seed(root, artifacts, calls):
             tool_name="synthetic.noop",
             risk_class=RiskClass.LOCAL_READ,
         )
-        insert(
-            [
-                (
-                    item.id,
-                    item.entity_kind,
-                    project.id if item is needle else None,
-                    1,
-                    item.model_dump_json(),
-                    stamp,
-                    stamp,
-                )
-                for item in (project, needle)
-            ]
+        (
+            insert(
+                [
+                    (
+                        item.id,
+                        item.entity_kind,
+                        project.id if item is needle else None,
+                        1,
+                        item.model_dump_json(),
+                        stamp,
+                        stamp,
+                    )
+                    for item in (project, needle)
+                ]
+            )
         )
         for kind, total in (("artifacts", artifacts), ("tool_calls", calls)):
             payload = (
@@ -107,7 +114,7 @@ def seed(root, artifacts, calls):
                     rows.append(
                         (key, kind, project.id, 1, json.dumps(payload), stamp, stamp)
                     )
-                insert(rows)
+                (insert(rows))
             print(
                 json.dumps(
                     {
@@ -118,13 +125,13 @@ def seed(root, artifacts, calls):
                 ),
                 flush=True,
             )
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        (connection.execute("PRAGMA wal_checkpoint(TRUNCATE)"))
     (root / "synthetic.json").write_text(
         json.dumps({"synthetic": True, "artifacts": artifacts, "tool_calls": calls + 1})
     )
 
 
-def measure(root, label):
+async def measure(root, label):
     path = root / ("restored.db" if label == "after" else "nebula.db")
     store = NebulaStore(Database(path, bootstrap=False))
     queries = {}
@@ -143,7 +150,7 @@ def measure(root, label):
                 ).fetchall(),
             }
 
-    event.listen(store.database.engine, "before_cursor_execute", capture)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", capture)
     report = {}
     operations = {
         "artifact_hit": lambda: store.list_tool_call_artifacts(
@@ -196,7 +203,7 @@ def measure(root, label):
             flush=True,
         )
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
 def fingerprint(connection):
@@ -209,7 +216,7 @@ def fingerprint(connection):
     return digest.hexdigest()
 
 
-def rehearse(root):
+async def rehearse(root):
     source_path, backup, restored = (
         root / name for name in ("nebula.db", "verified-backup.db", "restored.db")
     )
@@ -247,7 +254,7 @@ def rehearse(root):
     try:
         database = Database(restored)
         seconds = time.perf_counter() - started
-        database.dispose()
+        (await database.dispose())
     finally:
         stop.set()
         watcher.join()
@@ -278,7 +285,7 @@ def rehearse(root):
     print(json.dumps(report), flush=True)
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["seed", "measure", "migrate"])
     parser.add_argument("--directory", type=Path, required=True)
@@ -292,10 +299,10 @@ def main():
     else:
         assert json.loads((root / "synthetic.json").read_text())["synthetic"] is True
         if args.mode == "measure":
-            measure(root, args.label)
+            (await measure(root, args.label))
         else:
-            rehearse(root)
+            (await rehearse(root))
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

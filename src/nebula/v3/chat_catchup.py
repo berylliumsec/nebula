@@ -50,16 +50,16 @@ def source_message(database, session, turn):
     return ChatMessage.model_validate(row.payload) if row else None
 
 
-def catchup_projection(store, session, cursor):
+async def catchup_projection(store, session, cursor):
     through = utc_now()
     items = []
     truncated = False
-    with store.database.session() as database:
+    async with store.database.session() as database:
         # Turn headers carry the status fields this card reads; parsing whole
         # turn payloads (tool histories, request snapshots) on every 8 s poll
         # cost tens of milliseconds on real conversations.
         turns = sorted(
-            session_turn_headers(database, session.id),
+            (await session_turn_headers(database, session.id)),
             key=lambda item: item.updated_at,
             reverse=True,
         )[:101]
@@ -84,17 +84,19 @@ def catchup_projection(store, session, cursor):
         if cursor:
             candidates = [
                 ChatMessage.model_validate(row.payload)
-                for row in database.scalars(
-                    select(EntityRow)
-                    .where(
-                        EntityRow.kind == "chat_messages",
-                        EntityRow.chat_session_id == session.id,
-                        EntityRow.payload["role"].as_string() == "assistant",
-                        EntityRow.created_at > cursor.through_at,
-                        EntityRow.created_at <= through,
+                for row in (
+                    await database.scalars(
+                        select(EntityRow)
+                        .where(
+                            EntityRow.kind == "chat_messages",
+                            EntityRow.chat_session_id == session.id,
+                            EntityRow.payload["role"].as_string() == "assistant",
+                            EntityRow.created_at > cursor.through_at,
+                            EntityRow.created_at <= through,
+                        )
+                        .order_by(EntityRow.created_at.desc())
+                        .limit(101)
                     )
-                    .order_by(EntityRow.created_at.desc())
-                    .limit(101)
                 )
             ]
             candidates = [
@@ -102,7 +104,7 @@ def catchup_projection(store, session, cursor):
             ]
             truncated = len(candidates) > 100 or len(turns) > 100
             for message in candidates[:100]:
-                user_row = database.scalar(
+                user_row = await database.scalar(
                     select(EntityRow)
                     .where(
                         EntityRow.kind == "chat_messages",
@@ -141,7 +143,7 @@ def catchup_projection(store, session, cursor):
     # The read cursor owns what is unseen, not whether an action is pending.
     pending = [
         {**item, "kind": "pending", "message_id": None}
-        for item in session_projection(store, session)["pending"]
+        for item in (await session_projection(store, session))["pending"]
     ]
     unseen_pending = [
         entry
@@ -171,29 +173,29 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
         return getattr(request.state, "auth_device_id", None) or supplied
 
     @router.get("/chat/sessions/{session_id}/catch-up")
-    def read(
+    async def read(
         session_id: str,
         request: Request,
         device_id: str = Query(min_length=1, max_length=200),
     ):
-        session = store.get(ChatSession, session_id)
+        session = await store.get(ChatSession, session_id)
         try:
-            cursor = store.get(
+            cursor = await store.get(
                 ChatReadCursor, cursor_id(session_id, device(request, device_id))
             )
         except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
             cursor = None
-        return catchup_projection(store, session, cursor)
+        return await catchup_projection(store, session, cursor)
 
     @router.put("/chat/sessions/{session_id}/read-cursor")
-    def advance(session_id: str, request: Request, body: CursorWrite):
-        session = store.get(ChatSession, session_id)
+    async def advance(session_id: str, request: Request, body: CursorWrite):
+        session = await store.get(ChatSession, session_id)
         owner = device(request, body.device_id)
         identity = cursor_id(session_id, owner)
         if body.through_at.tzinfo is None or body.through_at > utc_now():
             raise HTTPException(422, "Read cursor must use a recorded server timestamp")
         if body.expected_revision == 0:
-            return store.create(
+            return await store.create(
                 ChatReadCursor(
                     id=identity,
                     engagement_id=session.engagement_id,
@@ -202,12 +204,12 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
                     through_at=body.through_at,
                 )
             )
-        current = store.get(ChatReadCursor, identity)
+        current = await store.get(ChatReadCursor, identity)
         if body.through_at < current.through_at:
             raise ConflictError(
                 "This device has already read newer activity. Reload its cursor"
             )
-        return store.update(
+        return await store.update(
             ChatReadCursor,
             identity,
             {"through_at": body.through_at},
@@ -215,12 +217,12 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
         )
 
     @router.get("/chat/sessions/{session_id}/turns/{turn_id}/summary")
-    def turn_summary(session_id: str, turn_id: str):
-        session = store.get(ChatSession, session_id)
-        turn = store.get(ChatTurn, turn_id)
+    async def turn_summary(session_id: str, turn_id: str):
+        session = await store.get(ChatSession, session_id)
+        turn = await store.get(ChatTurn, turn_id)
         if turn.session_id != session_id:
             raise HTTPException(404, "Response does not belong to this conversation")
-        with store.database.session() as database:
+        async with store.database.session() as database:
             message = source_message(database, session, turn)
         return {
             "id": turn.id,
@@ -233,9 +235,9 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
         }
 
     @router.get("/chat/sessions/{session_id}/messages/{message_id}/evidence")
-    def evidence(session_id: str, message_id: str):
-        session = store.get(ChatSession, session_id)
-        message = store.get(ChatMessage, message_id)
+    async def evidence(session_id: str, message_id: str):
+        session = await store.get(ChatSession, session_id)
+        message = await store.get(ChatMessage, message_id)
         if (
             message.session_id != session_id
             or message.engagement_id != session.engagement_id
@@ -249,7 +251,7 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
             if not message.source_message_id:
                 break
             try:
-                original = store.get(ChatMessage, message.source_message_id)
+                original = await store.get(ChatMessage, message.source_message_id)
             except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
                 limitations.append(
                     "The original branch source is no longer retained; only copied references remain"
@@ -263,7 +265,7 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
         turn_id = message.metadata.get("chat_turn_id")
         if turn_id:
             try:
-                turn = store.get(ChatTurn, turn_id)
+                turn = await store.get(ChatTurn, turn_id)
             except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
                 turn = None
                 limitations.append(
@@ -273,7 +275,7 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
                 raise HTTPException(
                     404, "Recorded turn does not match this conversation"
                 )
-            for entry in turn_history(store.database, turn) if turn else []:
+            for entry in (await turn_history(store.database, turn)) if turn else []:
                 value = entry.get("provider_result")
                 if not isinstance(value, (str, dict)):
                     continue
@@ -301,7 +303,7 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
             from .domain import HarnessTurn
 
             try:
-                turn = store.get(HarnessTurn, harness_turn_id)
+                turn = await store.get(HarnessTurn, harness_turn_id)
             except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
                 turn = None
                 limitations.append(
@@ -312,7 +314,7 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
                     404, "Recorded harness turn does not match this conversation"
                 )
             events = (
-                harness.activity_events(harness_turn_id, limit=10000).events
+                (await harness.activity_events(harness_turn_id, limit=10000)).events
                 if turn and harness is not None
                 else []
             )

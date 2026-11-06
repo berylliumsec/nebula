@@ -128,12 +128,12 @@ def _stable_id(*parts: str) -> str:
     return str(uuid5(NAMESPACE_URL, "nebula-storage/" + "/".join(parts)))
 
 
-def _rows(
+async def _rows(
     store: NebulaStore, model: type[EntityT], *, limit: int = 10000
 ) -> list[EntityT]:
     result: list[EntityT] = []
     while len(result) < limit:
-        page: list[EntityT] = store.list_entities(
+        page: list[EntityT] = await store.list_entities(
             model, offset=len(result), limit=min(1000, limit - len(result))
         )
         result.extend(page)
@@ -226,26 +226,33 @@ class StorageIntegrationService:
                 )
             await asyncio.sleep(10)
 
-    def _validate_runtime(
+    async def _validate_runtime(
         self, engagement_id: str, backend: ChatBackend, profile_id: str, model: str
     ) -> None:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         if backend == ChatBackend.HARNESS:
-            harness = self.store.get(HarnessProfile, profile_id)
+            harness = await self.store.get(HarnessProfile, profile_id)
             if not harness.enabled:
                 raise ValueError("selected assistant runtime is disabled")
             if harness.capabilities.models and model not in harness.capabilities.models:
                 raise ValueError("model is not advertised by selected harness")
         else:
-            provider = self.store.get(ProviderProfile, profile_id)
+            provider = await self.store.get(ProviderProfile, profile_id)
             if not provider.enabled:
                 raise ValueError("selected assistant runtime is disabled")
             if provider.model_allowlist and model not in provider.model_allowlist:
                 raise ValueError("model is not in selected provider allowlist")
 
-    def create_source(self, request: StorageSourceCreate) -> tuple[StorageSource, str]:
-        self._validate_runtime(
-            request.engagement_id, request.backend, request.profile_id, request.model
+    async def create_source(
+        self, request: StorageSourceCreate
+    ) -> tuple[StorageSource, str]:
+        (
+            await self._validate_runtime(
+                request.engagement_id,
+                request.backend,
+                request.profile_id,
+                request.model,
+            )
         )
         callback = _callback_url(request.callback_url)
         if bool(callback) != bool(request.callback_credential_ref):
@@ -266,13 +273,13 @@ class StorageIntegrationService:
             callback_credential_ref=request.callback_credential_ref,
             token_sha256=hashlib.sha256(raw.encode()).hexdigest(),
         )
-        self.store.create(source)
+        (await self.store.create(source))
         return source, f"{source.id}.{raw}"
 
-    def update_source(
+    async def update_source(
         self, source_id: str, request: StorageSourcePatch
     ) -> StorageSource:
-        source = self.store.get(StorageSource, source_id)
+        source = await self.store.get(StorageSource, source_id)
         changes = request.model_dump(exclude_unset=True, exclude={"expected_revision"})
         if "callback_url" in changes:
             changes["callback_url"] = _callback_url(changes["callback_url"])
@@ -289,25 +296,27 @@ class StorageIntegrationService:
         if {"engagement_id", "backend", "profile_id", "model"}.intersection(
             changes
         ) or changes.get("enabled") is True:
-            self._validate_runtime(
-                next_values["engagement_id"],
-                next_values["backend"],
-                next_values["profile_id"],
-                next_values["model"],
+            (
+                await self._validate_runtime(
+                    next_values["engagement_id"],
+                    next_values["backend"],
+                    next_values["profile_id"],
+                    next_values["model"],
+                )
             )
-        return self.store.update(
+        return await self.store.update(
             StorageSource,
             source_id,
             changes,
             expected_revision=request.expected_revision,
         )
 
-    def rotate(
+    async def rotate(
         self, source_id: str, *, expected_revision: int | None = None
     ) -> tuple[StorageSource, str]:
-        source = self.store.get(StorageSource, source_id)
+        source = await self.store.get(StorageSource, source_id)
         raw = secrets.token_urlsafe(36)
-        source = self.store.update(
+        source = await self.store.update(
             StorageSource,
             source_id,
             {"token_sha256": hashlib.sha256(raw.encode()).hexdigest()},
@@ -315,7 +324,7 @@ class StorageIntegrationService:
         )
         return source, f"{source.id}.{raw}"
 
-    def authenticate(
+    async def authenticate(
         self, authorization: str | None, *, allow_disabled: bool = False
     ) -> StorageSource:
         if not authorization or not authorization.startswith("Bearer "):
@@ -325,7 +334,7 @@ class StorageIntegrationService:
         if not dot or not source_id or len(raw) > 300:
             raise HTTPException(401, "invalid storage source token")
         try:
-            source = self.store.get(StorageSource, source_id)
+            source = await self.store.get(StorageSource, source_id)
         except NotFoundError as exc:
             raise HTTPException(401, "invalid storage source token") from exc
         if not hmac.compare_digest(
@@ -337,11 +346,13 @@ class StorageIntegrationService:
             raise HTTPException(403, "storage source is disabled")
         return source
 
-    def ingest(self, source: StorageSource, event: StorageEvent) -> dict[str, Any]:
+    async def ingest(
+        self, source: StorageSource, event: StorageEvent
+    ) -> dict[str, Any]:
         receipt_id = _stable_id("event", source.id, event.event_id)
         payload_hash = _digest(event.model_dump(mode="json"))
         try:
-            previous = self.store.get(StorageEventReceipt, receipt_id)
+            previous = await self.store.get(StorageEventReceipt, receipt_id)
         except NotFoundError:
             # diagnostic-expected: a new event has no receipt yet.
             previous = None
@@ -352,19 +363,21 @@ class StorageIntegrationService:
         device_key = _stable_id("device", source.id, event.device.id)
         volume_key = _stable_id("volume", source.id, event.device.id, event.volume.id)
         now = utc_now()
-        with self.store.transaction() as tx:
-            if tx.session.get(EntityRow, receipt_id):
+        async with self.store.transaction() as tx:
+            if await tx.session.get(EntityRow, receipt_id):
                 raise ConflictError("event already accepted; retry to read its receipt")
-            tx.add(
-                StorageEventReceipt(
-                    id=receipt_id,
-                    source_id=source.id,
-                    event_id=event.event_id,
-                    payload_sha256=payload_hash,
-                    observed_at=event.observed_at,
+            (
+                await tx.add(
+                    StorageEventReceipt(
+                        id=receipt_id,
+                        source_id=source.id,
+                        event_id=event.event_id,
+                        payload_sha256=payload_hash,
+                        observed_at=event.observed_at,
+                    )
                 )
             )
-            volume_row = tx.session.get(EntityRow, volume_key)
+            volume_row = await tx.session.get(EntityRow, volume_key)
             previous_volume = (
                 StorageVolume.model_validate(volume_row.payload) if volume_row else None
             )
@@ -373,27 +386,31 @@ class StorageIntegrationService:
                 or event.observed_at > previous_volume.observed_at
             )
             if current:
-                device_row = tx.session.get(EntityRow, device_key)
+                device_row = await tx.session.get(EntityRow, device_key)
                 if device_row:
-                    tx.update(
-                        StorageDevice,
-                        device_key,
-                        {"label": event.device.label, "last_report_at": now},
+                    (
+                        await tx.update(
+                            StorageDevice,
+                            device_key,
+                            {"label": event.device.label, "last_report_at": now},
+                        )
                     )
                 else:
-                    tx.add(
-                        StorageDevice(
-                            id=device_key,
-                            source_id=source.id,
-                            device_id=event.device.id,
-                            label=event.device.label,
-                            last_report_at=now,
+                    (
+                        await tx.add(
+                            StorageDevice(
+                                id=device_key,
+                                source_id=source.id,
+                                device_id=event.device.id,
+                                label=event.device.label,
+                                last_report_at=now,
+                            )
                         )
                     )
                 incident_id = previous_volume.incident_id if previous_volume else None
                 incident = None
                 if incident_id:
-                    incident_row = tx.session.get(EntityRow, incident_id)
+                    incident_row = await tx.session.get(EntityRow, incident_id)
                     incident = (
                         StorageIncident.model_validate(incident_row.payload)
                         if incident_row
@@ -414,19 +431,21 @@ class StorageIntegrationService:
                             last_observed_at=event.observed_at,
                             chat_session_id=chat_id,
                         )
-                        tx.add(incident)
+                        (await tx.add(incident))
                         dispatch_needed = True
                     else:
                         dispatch_needed = (
                             SEVERITY[event.state] > SEVERITY[incident.state]
                         )
-                        tx.update(
-                            StorageIncident,
-                            incident.id,
-                            {
-                                "state": event.state,
-                                "last_observed_at": event.observed_at,
-                            },
+                        (
+                            await tx.update(
+                                StorageIncident,
+                                incident.id,
+                                {
+                                    "state": event.state,
+                                    "last_observed_at": event.observed_at,
+                                },
+                            )
                         )
                     if dispatch_needed:
                         prompt = self._prompt(
@@ -435,24 +454,30 @@ class StorageIntegrationService:
                             update=previous_volume is not None
                             and previous_volume.incident_id == incident_id,
                         )
-                        tx.add(
-                            StorageDispatch(
-                                id=_stable_id("dispatch", source.id, event.event_id),
-                                incident_id=incident.id,
-                                source_id=source.id,
-                                event_id=event.event_id,
-                                prompt=prompt,
+                        (
+                            await tx.add(
+                                StorageDispatch(
+                                    id=_stable_id(
+                                        "dispatch", source.id, event.event_id
+                                    ),
+                                    incident_id=incident.id,
+                                    source_id=source.id,
+                                    event_id=event.event_id,
+                                    prompt=prompt,
+                                )
                             )
                         )
                 elif incident and not incident.resolved_at:
-                    tx.update(
-                        StorageIncident,
-                        incident.id,
-                        {
-                            "state": "resolved",
-                            "resolved_at": event.observed_at,
-                            "last_observed_at": event.observed_at,
-                        },
+                    (
+                        await tx.update(
+                            StorageIncident,
+                            incident.id,
+                            {
+                                "state": "resolved",
+                                "resolved_at": event.observed_at,
+                                "last_observed_at": event.observed_at,
+                            },
+                        )
                     )
                     incident_id = None
                 else:
@@ -471,12 +496,12 @@ class StorageIntegrationService:
                     incident_id=incident_id,
                 )
                 if previous_volume:
-                    tx.update(StorageVolume, volume_key, values)
+                    (await tx.update(StorageVolume, volume_key, values))
                 else:
-                    tx.add(StorageVolume(id=volume_key, **values))
-                source_row = tx.session.get(EntityRow, source.id)
+                    (await tx.add(StorageVolume(id=volume_key, **values)))
+                source_row = await tx.session.get(EntityRow, source.id)
                 if source_row:
-                    tx.update(StorageSource, source.id, {"last_report_at": now})
+                    (await tx.update(StorageSource, source.id, {"last_report_at": now}))
         return {"accepted": True, "duplicate": False, "current": current}
 
     @staticmethod
@@ -496,39 +521,43 @@ class StorageIntegrationService:
             f"Source data: {json.dumps(source_data, ensure_ascii=False)}"
         )
 
-    def inventory(
+    async def inventory(
         self, source: StorageSource, report: StorageInventory
     ) -> dict[str, Any]:
         for device in report.devices:
             key = _stable_id("device", source.id, device.id)
             try:
-                existing = self.store.get(StorageDevice, key)
+                existing = await self.store.get(StorageDevice, key)
             except NotFoundError:
                 # diagnostic-expected: inventory may introduce a device before its first event.
-                self.store.create(
-                    StorageDevice(
-                        id=key,
-                        source_id=source.id,
-                        device_id=device.id,
-                        label=device.label,
+                (
+                    await self.store.create(
+                        StorageDevice(
+                            id=key,
+                            source_id=source.id,
+                            device_id=device.id,
+                            label=device.label,
+                        )
                     )
                 )
             else:
                 if existing.label != device.label:
-                    self.store.update(
-                        StorageDevice,
-                        key,
-                        {"label": device.label},
-                        expected_revision=existing.revision,
+                    (
+                        await self.store.update(
+                            StorageDevice,
+                            key,
+                            {"label": device.label},
+                            expected_revision=existing.revision,
+                        )
                     )
         return {"accepted": True, "devices": len(report.devices)}
 
-    def dashboard(self) -> dict[str, Any]:
+    async def dashboard(self) -> dict[str, Any]:
         now = utc_now()
-        sources = _rows(self.store, StorageSource)
+        sources = await _rows(self.store, StorageSource)
         source_by_id = {source.id: source for source in sources}
         volumes = []
-        for volume in _rows(self.store, StorageVolume):
+        for volume in await _rows(self.store, StorageVolume):
             source = source_by_id.get(volume.source_id)
             row = volume.model_dump(mode="json")
             row["stale"] = bool(
@@ -538,9 +567,9 @@ class StorageIntegrationService:
             )
             volumes.append(row)
         dispatches = []
-        incidents = _rows(self.store, StorageIncident, limit=2000)
+        incidents = await _rows(self.store, StorageIncident, limit=2000)
         incident_by_id = {incident.id: incident for incident in incidents}
-        for dispatch in _rows(self.store, StorageDispatch, limit=2000):
+        for dispatch in await _rows(self.store, StorageDispatch, limit=2000):
             row = dispatch.model_dump(mode="json", exclude={"prompt"})
             row["queue_status"] = None
             row["queue_detail"] = None
@@ -580,13 +609,13 @@ class StorageIntegrationService:
             "sources": [_source_public(source) for source in sources],
             "devices": [
                 item.model_dump(mode="json")
-                for item in _rows(self.store, StorageDevice)
+                for item in (await _rows(self.store, StorageDevice))
             ],
             "volumes": volumes,
             "incidents": [item.model_dump(mode="json") for item in incidents],
             "actions": [
                 item.model_dump(mode="json")
-                for item in _rows(self.store, StorageAction, limit=2000)
+                for item in (await _rows(self.store, StorageAction, limit=2000))
             ],
             "dispatches": dispatches,
         }
@@ -633,7 +662,7 @@ class StorageIntegrationService:
             await self._dispatch_pending_unlocked()
 
     async def _dispatch_pending_unlocked(self) -> None:
-        for dispatch in _rows(self.store, StorageDispatch, limit=2000):
+        for dispatch in await _rows(self.store, StorageDispatch, limit=2000):
             if dispatch.status != "pending":
                 continue
             try:
@@ -646,26 +675,35 @@ class StorageIntegrationService:
                     exc,
                     stage="dispatch",
                 )
-                current = self.store.get(StorageDispatch, dispatch.id)
-                self.store.update(
-                    StorageDispatch,
-                    dispatch.id,
-                    {"status": "failed", "error": str(exc)[:1000]},
-                    expected_revision=current.revision,
+                current = await self.store.get(StorageDispatch, dispatch.id)
+                (
+                    await self.store.update(
+                        StorageDispatch,
+                        dispatch.id,
+                        {"status": "failed", "error": str(exc)[:1000]},
+                        expected_revision=current.revision,
+                    )
                 )
-                incident = self.store.get(StorageIncident, dispatch.incident_id)
-                self.store.update(
-                    StorageIncident,
-                    incident.id,
-                    {"dispatch_status": "failed", "dispatch_error": str(exc)[:1000]},
-                    expected_revision=incident.revision,
+                incident = await self.store.get(StorageIncident, dispatch.incident_id)
+                (
+                    await self.store.update(
+                        StorageIncident,
+                        incident.id,
+                        {
+                            "dispatch_status": "failed",
+                            "dispatch_error": str(exc)[:1000],
+                        },
+                        expected_revision=incident.revision,
+                    )
                 )
 
     async def _dispatch(self, dispatch: StorageDispatch) -> None:
-        source = self.store.get(StorageSource, dispatch.source_id)
-        incident = self.store.get(StorageIncident, dispatch.incident_id)
-        self._validate_runtime(
-            source.engagement_id, source.backend, source.profile_id, source.model
+        source = await self.store.get(StorageSource, dispatch.source_id)
+        incident = await self.store.get(StorageIncident, dispatch.incident_id)
+        (
+            await self._validate_runtime(
+                source.engagement_id, source.backend, source.profile_id, source.model
+            )
         )
         prompt = dispatch.prompt
         if source.callback_url:
@@ -675,12 +713,14 @@ class StorageIntegrationService:
                     "/v1/diagnose",
                     {"incident_id": incident.id, "event_id": dispatch.event_id},
                 )
-                latest = self.store.get(StorageIncident, incident.id)
-                self.store.update(
-                    StorageIncident,
-                    incident.id,
-                    {"callback_error": None},
-                    expected_revision=latest.revision,
+                latest = await self.store.get(StorageIncident, incident.id)
+                (
+                    await self.store.update(
+                        StorageIncident,
+                        incident.id,
+                        {"callback_error": None},
+                        expected_revision=latest.revision,
+                    )
                 )
                 notes = diagnosis.get("diagnostics")
                 if isinstance(notes, str):
@@ -702,16 +742,18 @@ class StorageIntegrationService:
                         ):
                             action_id = _stable_id("action", incident.id, offer_id)
                             try:
-                                self.store.get(StorageAction, action_id)
+                                (await self.store.get(StorageAction, action_id))
                             except NotFoundError:
                                 # diagnostic-expected: new source offers have no saved action yet.
-                                self.store.create(
-                                    StorageAction(
-                                        id=action_id,
-                                        source_id=source.id,
-                                        incident_id=incident.id,
-                                        offer_id=offer_id,
-                                        title=title,
+                                (
+                                    await self.store.create(
+                                        StorageAction(
+                                            id=action_id,
+                                            source_id=source.id,
+                                            incident_id=incident.id,
+                                            offer_id=offer_id,
+                                            title=title,
+                                        )
                                     )
                                 )
             except Exception as exc:
@@ -723,15 +765,17 @@ class StorageIntegrationService:
                     stage="diagnose",
                 )
                 prompt += "\nRead-only diagnostics are unavailable; assess the reported snapshot."
-                latest = self.store.get(StorageIncident, incident.id)
-                self.store.update(
-                    StorageIncident,
-                    incident.id,
-                    {"callback_error": str(exc)[:1000]},
-                    expected_revision=latest.revision,
+                latest = await self.store.get(StorageIncident, incident.id)
+                (
+                    await self.store.update(
+                        StorageIncident,
+                        incident.id,
+                        {"callback_error": str(exc)[:1000]},
+                        expected_revision=latest.revision,
+                    )
                 )
         try:
-            chat = self.store.get(ChatSession, incident.chat_session_id)
+            chat = await self.store.get(ChatSession, incident.chat_session_id)
         except NotFoundError:
             # diagnostic-expected: the first dispatch creates its linked chat.
             harness_session_id = None
@@ -744,7 +788,7 @@ class StorageIntegrationService:
                     tools_enabled=False,
                 )
                 harness_session_id = harness_session.id
-            chat = self.store.create(
+            chat = await self.store.create(
                 ChatSession(
                     id=incident.chat_session_id,
                     engagement_id=source.engagement_id,
@@ -793,24 +837,28 @@ class StorageIntegrationService:
                 request=request,
             ),
         )
-        self.store.update(
-            StorageDispatch,
-            dispatch.id,
-            {"status": "queued", "error": None},
-            expected_revision=dispatch.revision,
+        (
+            await self.store.update(
+                StorageDispatch,
+                dispatch.id,
+                {"status": "queued", "error": None},
+                expected_revision=dispatch.revision,
+            )
         )
-        latest = self.store.get(StorageIncident, incident.id)
-        self.store.update(
-            StorageIncident,
-            incident.id,
-            {"dispatch_status": "queued", "dispatch_error": None},
-            expected_revision=latest.revision,
+        latest = await self.store.get(StorageIncident, incident.id)
+        (
+            await self.store.update(
+                StorageIncident,
+                incident.id,
+                {"dispatch_status": "queued", "dispatch_error": None},
+                expected_revision=latest.revision,
+            )
         )
 
     async def preview_action(self, action_id: str) -> StorageAction:
-        action = self.store.get(StorageAction, action_id)
-        source = self.store.get(StorageSource, action.source_id)
-        incident = self.store.get(StorageIncident, action.incident_id)
+        action = await self.store.get(StorageAction, action_id)
+        source = await self.store.get(StorageSource, action.source_id)
+        incident = await self.store.get(StorageIncident, action.incident_id)
         if not source.enabled or incident.resolved_at:
             raise ConflictError("source is disabled or incident is resolved")
         result = await self._callback(
@@ -840,7 +888,7 @@ class StorageIntegrationService:
             or expires > utc_now() + timedelta(minutes=10)
         ):
             raise ValueError("action preview must expire within ten minutes")
-        return self.store.update(
+        return await self.store.update(
             StorageAction,
             action.id,
             {
@@ -855,7 +903,7 @@ class StorageIntegrationService:
         )
 
     async def approve_action(self, action_id: str, digest: str) -> StorageAction:
-        action = self.store.get(StorageAction, action_id)
+        action = await self.store.get(StorageAction, action_id)
         if (
             action.status != "previewed"
             or action.digest != digest
@@ -863,12 +911,12 @@ class StorageIntegrationService:
             or action.expires_at <= utc_now()
         ):
             raise ConflictError("preview expired or changed; preview again")
-        source = self.store.get(StorageSource, action.source_id)
-        incident = self.store.get(StorageIncident, action.incident_id)
+        source = await self.store.get(StorageSource, action.source_id)
+        incident = await self.store.get(StorageIncident, action.incident_id)
         if not source.enabled or incident.resolved_at:
             raise ConflictError("source is disabled or incident is resolved")
         key = _stable_id("execution", action.id, digest)
-        action = self.store.update(
+        action = await self.store.update(
             StorageAction,
             action.id,
             {
@@ -890,7 +938,7 @@ class StorageIntegrationService:
                     "idempotency_key": key,
                 },
             )
-            recorded = self._record_execution(action, result)
+            recorded = await self._record_execution(action, result)
             if recorded.status == "uncertain":
                 return await self._reconcile_after_uncertainty(
                     recorded, "source reported an unknown result"
@@ -905,7 +953,7 @@ class StorageIntegrationService:
                 stage="execute",
             )
             if exc.response.status_code == 409:
-                return self.store.update(
+                return await self.store.update(
                     StorageAction,
                     action.id,
                     {
@@ -929,7 +977,7 @@ class StorageIntegrationService:
         self, action: StorageAction, error: str
     ) -> StorageAction:
         if action.status != "uncertain":
-            action = self.store.update(
+            action = await self.store.update(
                 StorageAction,
                 action.id,
                 {"status": "uncertain", "error": error[:1000]},
@@ -945,8 +993,8 @@ class StorageIntegrationService:
                 exc,
                 stage="reconcile",
             )
-            current = self.store.get(StorageAction, action.id)
-            return self.store.update(
+            current = await self.store.get(StorageAction, action.id)
+            return await self.store.update(
                 StorageAction,
                 action.id,
                 {
@@ -957,7 +1005,7 @@ class StorageIntegrationService:
                 expected_revision=current.revision,
             )
 
-    def _record_execution(
+    async def _record_execution(
         self, action: StorageAction, result: dict[str, Any]
     ) -> StorageAction:
         status = result.get("status")
@@ -968,7 +1016,7 @@ class StorageIntegrationService:
             raise ValueError("action receipt must be an object")
         if status == "complete" and not receipt:
             raise ValueError("completed action requires a receipt")
-        return self.store.update(
+        return await self.store.update(
             StorageAction,
             action.id,
             {
@@ -982,13 +1030,13 @@ class StorageIntegrationService:
         )
 
     async def reconcile_action(self, action_id: str) -> StorageAction:
-        action = self.store.get(StorageAction, action_id)
+        action = await self.store.get(StorageAction, action_id)
         if (
             action.status not in {"uncertain", "executing"}
             or not action.idempotency_key
         ):
             raise ConflictError("action has no uncertain execution to reconcile")
-        source = self.store.get(StorageSource, action.source_id)
+        source = await self.store.get(StorageSource, action.source_id)
         result = await self._callback(
             source,
             f"/v1/actions/{quote(action.offer_id, safe='')}/status",
@@ -997,7 +1045,7 @@ class StorageIntegrationService:
                 "idempotency_key": action.idempotency_key,
             },
         )
-        return self._record_execution(action, result)
+        return await self._record_execution(action, result)
 
 
 def storage_router(service: StorageIntegrationService, require_auth: Any) -> APIRouter:
@@ -1017,7 +1065,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         request: Request, authorization: str | None = Header(default=None)
     ) -> StorageSource:
         require_sender_transport(request)
-        return service.authenticate(authorization)
+        return await service.authenticate(authorization)
 
     async def bounded_json(request: Request) -> bytes:
         data = bytearray()
@@ -1046,14 +1094,14 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
 
     @router.get("")
     async def dashboard(_: str = Depends(require_auth)) -> dict[str, Any]:
-        return service.dashboard()
+        return await service.dashboard()
 
     @router.post("/sources", status_code=201)
     async def create_source(
         body: StorageSourceCreate, request: Request, _: str = Depends(require_auth)
     ) -> dict[str, Any]:
         try:
-            source, token = service.create_source(body)
+            source, token = await service.create_source(body)
         except (ValueError, NotFoundError) as exc:
             raise HTTPException(422, str(exc)) from exc
         return {
@@ -1067,7 +1115,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         source_id: str, body: StorageSourcePatch, _: str = Depends(require_auth)
     ) -> dict[str, Any]:
         try:
-            return _source_public(service.update_source(source_id, body))
+            return _source_public((await service.update_source(source_id, body)))
         except (ValueError, NotFoundError) as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -1077,7 +1125,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         body: StorageSourceRevision | None = None,
         _: str = Depends(require_auth),
     ) -> dict[str, Any]:
-        source, token = service.rotate(
+        source, token = await service.rotate(
             source_id,
             expected_revision=body.expected_revision if body else None,
         )
@@ -1089,8 +1137,8 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         body: StorageSourceRevision | None = None,
         _: str = Depends(require_auth),
     ) -> dict[str, Any]:
-        source = service.store.get(StorageSource, source_id)
-        source = service.store.update(
+        source = await service.store.get(StorageSource, source_id)
+        source = await service.store.update(
             StorageSource,
             source.id,
             {
@@ -1106,7 +1154,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
         request: Request, authorization: str | None = Header(default=None)
     ) -> dict[str, Any]:
         require_sender_transport(request)
-        source = service.authenticate(authorization, allow_disabled=True)
+        source = await service.authenticate(authorization, allow_disabled=True)
         StorageEvent.model_validate_json(await bounded_json(request))
         return {"valid": True, "source_id": source.id}
 
@@ -1116,7 +1164,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
     ) -> dict[str, Any]:
         event = StorageEvent.model_validate_json(await bounded_json(request))
         try:
-            outcome = service.ingest(source, event)
+            outcome = await service.ingest(source, event)
         except ConflictError as exc:
             raise HTTPException(409, str(exc)) from exc
         await service.dispatch_pending()
@@ -1126,7 +1174,7 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
     async def receive_inventory(
         request: Request, source: StorageSource = Depends(source_auth)
     ) -> dict[str, Any]:
-        return service.inventory(
+        return await service.inventory(
             source, StorageInventory.model_validate_json(await bounded_json(request))
         )
 
@@ -1134,15 +1182,15 @@ def storage_router(service: StorageIntegrationService, require_auth: Any) -> API
     async def retry_dispatch(
         dispatch_id: str, _: str = Depends(require_auth)
     ) -> dict[str, Any]:
-        dispatch = service.store.get(StorageDispatch, dispatch_id)
-        dispatch = service.store.update(
+        dispatch = await service.store.get(StorageDispatch, dispatch_id)
+        dispatch = await service.store.update(
             StorageDispatch,
             dispatch.id,
             {"status": "pending", "error": None},
             expected_revision=dispatch.revision,
         )
         await service.dispatch_pending()
-        return service.store.get(StorageDispatch, dispatch.id).model_dump(
+        return (await service.store.get(StorageDispatch, dispatch.id)).model_dump(
             mode="json", exclude={"prompt"}
         )
 

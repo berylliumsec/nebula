@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 import re
 from typing import Any
 
@@ -73,7 +75,7 @@ class ButlerCredentials:
             async def run(
                 arguments: dict[str, Any], *, selected_handler: Any = handler
             ) -> dict[str, Any]:
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

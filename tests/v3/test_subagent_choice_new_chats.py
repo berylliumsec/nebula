@@ -13,12 +13,17 @@ the choice, so the box unchecked as soon as the new conversation appeared:
 """
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.api import create_app
@@ -44,23 +49,25 @@ from tests.v3.test_subagent_choice_sticks import ToolProvider
 HEADERS = {"Authorization": "Bearer test-token"}
 
 
-def _setup(tmp_path: Path):
+async def _setup(tmp_path: Path):
     store = NebulaStore(tmp_path / "new-chats.db")
-    store.create(Engagement(id="project", name="Project"))
-    store.create(
-        ProviderProfile(
-            id="provider",
-            name="Provider",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
-            metadata={"options": {"context_window": 32768}},
-            capabilities={"streaming": True, "tool_calling": True},
-            capability_verifications={
-                "model-a": ProviderCapabilityVerification(
-                    model="model-a", status=ProviderVerificationStatus.VERIFIED
-                )
-            },
+    (await store.create(Engagement(id="project", name="Project")))
+    (
+        await store.create(
+            ProviderProfile(
+                id="provider",
+                name="Provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={"options": {"context_window": 32768}},
+                capabilities={"streaming": True, "tool_calling": True},
+                capability_verifications={
+                    "model-a": ProviderCapabilityVerification(
+                        model="model-a", status=ProviderVerificationStatus.VERIFIED
+                    )
+                },
+            )
         )
     )
     provider = ToolProvider()
@@ -71,8 +78,8 @@ def _setup(tmp_path: Path):
     return store, chat, client
 
 
-def _create_goal_conversation(client: TestClient, **composer) -> dict:
-    response = client.post(
+async def _create_goal_conversation(client: TestClient, **composer) -> dict:
+    response = await client.post(
         "/api/v1/chat/goal-conversations",
         headers=HEADERS,
         json={
@@ -89,33 +96,38 @@ def _create_goal_conversation(client: TestClient, **composer) -> dict:
     return response.json()["session"]
 
 
-def _start_goal(store: NebulaStore, session_id: str) -> None:
+async def _start_goal(store: NebulaStore, session_id: str) -> None:
     goals = ChatGoalService(store)
-    goal = goals.get(session_id)
-    goals.write(session_id, GoalWrite(expected_revision=goal.revision, action="start"))
+    goal = await goals.get(session_id)
+    (
+        await goals.write(
+            session_id, GoalWrite(expected_revision=goal.revision, action="start")
+        )
+    )
 
 
 async def _settled_turn(store: NebulaStore, session_id: str) -> ChatTurn:
     for _ in range(500):
-        turns = store.list_session_entities(ChatTurn, session_id)
+        turns = await store.list_session_entities(ChatTurn, session_id)
         if (
             len(turns) == 1
             and turns[0].status == ChatTurnStatus.COMPLETE
-            and ChatGoalService(store).get(session_id).execution_claim_id is None
+            and (await ChatGoalService(store).get(session_id)).execution_claim_id
+            is None
         ):
             return turns[0]
         await asyncio.sleep(0.01)
     raise AssertionError(
-        f"expected one settled goal turn, got {store.list_session_entities(ChatTurn, session_id)}"
+        f"expected one settled goal turn, got {(await store.list_session_entities(ChatTurn, session_id))}"
     )
 
 
-def test_goal_conversation_starts_with_the_composer_subagent_choice(tmp_path):
+async def test_goal_conversation_starts_with_the_composer_subagent_choice(tmp_path):
     async def scenario() -> None:
-        store, chat, _client = _setup(tmp_path)
+        store, chat, _client = await _setup(tmp_path)
         # Subagents checked (at most 2 at once) and effort High in the
         # composer, then Add goal before any message.
-        session = _create_goal_conversation(
+        session = await _create_goal_conversation(
             _client,
             allow_subagents=True,
             max_active_subagents=2,
@@ -126,7 +138,7 @@ def test_goal_conversation_starts_with_the_composer_subagent_choice(tmp_path):
         assert session["metadata"]["max_active_subagents"] == 2
         assert session["metadata"]["reasoning_effort"] == "high"
 
-        _start_goal(store, session["id"])
+        (await _start_goal(store, session["id"]))
         await chat.dispatch_running_goal(
             session["id"], "Begin work on the active conversation goal now."
         )
@@ -136,34 +148,35 @@ def test_goal_conversation_starts_with_the_composer_subagent_choice(tmp_path):
         assert turn.request_snapshot.get("allow_subagents") is True
         assert turn.request_snapshot.get("max_active_subagents") == 2
         assert (
-            resolve_request_snapshot(
+            await resolve_request_snapshot(
                 store, turn.request_snapshot, session_id=turn.session_id
-            )["model_request"]["reasoning_effort"]
-            == "high"
-        )
+            )
+        )["model_request"]["reasoning_effort"] == "high"
         # The turn recorded its settings back without unchecking the box.
-        saved = store.get(ChatSession, session["id"]).metadata
+        saved = (await store.get(ChatSession, session["id"])).metadata
         assert saved["allow_subagents"] is True
         assert saved["max_active_subagents"] == 2
         assert saved["reasoning_effort"] == "high"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_goal_first_turn_sends_every_composer_setting(tmp_path):
+async def test_goal_first_turn_sends_every_composer_setting(tmp_path):
     async def scenario() -> None:
-        store, chat, client = _setup(tmp_path)
-        store.create(
-            McpServerProfile(
-                id="mcp-docs",
-                name="Docs",
-                transport=McpTransport.STREAMABLE_HTTP,
-                url="http://127.0.0.1:1/mcp",
-                enabled=True,
+        store, chat, client = await _setup(tmp_path)
+        (
+            await store.create(
+                McpServerProfile(
+                    id="mcp-docs",
+                    name="Docs",
+                    transport=McpTransport.STREAMABLE_HTTP,
+                    url="http://127.0.0.1:1/mcp",
+                    enabled=True,
+                )
             )
         )
-        session = _create_goal_conversation(
+        session = await _create_goal_conversation(
             client,
             tools_enabled=True,
             mcp_server_ids=["mcp-docs"],
@@ -172,7 +185,7 @@ def test_goal_first_turn_sends_every_composer_setting(tmp_path):
             max_active_subagents=3,
             reasoning_effort="medium",
         )
-        _start_goal(store, session["id"])
+        (await _start_goal(store, session["id"]))
         captured: list[ChatCompletionRequest] = []
 
         async def capture(request: ChatCompletionRequest):
@@ -196,12 +209,12 @@ def test_goal_first_turn_sends_every_composer_setting(tmp_path):
         ) == (True, ["mcp-docs"], ["pre-commit"], True, 3, "medium")
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_goal_conversation_refuses_an_out_of_range_subagent_limit(tmp_path):
-    store, _, client = _setup(tmp_path)
-    response = client.post(
+async def test_goal_conversation_refuses_an_out_of_range_subagent_limit(tmp_path):
+    store, _, client = await _setup(tmp_path)
+    response = await client.post(
         "/api/v1/chat/goal-conversations",
         headers=HEADERS,
         json={
@@ -215,7 +228,7 @@ def test_goal_conversation_refuses_an_out_of_range_subagent_limit(tmp_path):
         },
     )
     assert response.status_code == 422, response.text
-    assert store.list_entities(ChatSession) == []
+    assert (await store.list_entities(ChatSession)) == []
 
 
 def _sse_frames(text: str) -> list[dict]:
@@ -226,10 +239,10 @@ def _sse_frames(text: str) -> list[dict]:
     ]
 
 
-def test_new_harness_chat_remembers_a_subagent_model_still_being_verified(
+async def test_new_harness_chat_remembers_a_subagent_model_still_being_verified(
     tmp_path,
 ):
-    store, project, harness, _, _, runtime = _setup_harness(tmp_path)
+    store, project, harness, _, _, runtime = await _setup_harness(tmp_path)
     client = TestClient(
         create_app(store, auth_token="test-token", harness_runtime_service=runtime)
     )
@@ -241,7 +254,7 @@ def test_new_harness_chat_remembers_a_subagent_model_still_being_verified(
 
     # Subagents is checked on a model that has not passed the tool check yet:
     # this first message cannot use it, but carries the choice to remember.
-    response = client.post(
+    response = await client.post(
         "/api/v1/chat/completions",
         headers=HEADERS,
         json={
@@ -259,10 +272,10 @@ def test_new_harness_chat_remembers_a_subagent_model_still_being_verified(
     frames = _sse_frames(response.text)
     assert frames[0]["type"] == "started"
     assert frames[-1]["type"] == "done", frames[-1]
-    chat_session = store.get(ChatSession, frames[0]["session_id"])
+    chat_session = await store.get(ChatSession, frames[0]["session_id"])
     # The new conversation holds the choice, so the box stays checked ...
     assert chat_session.metadata["provider_subagent"] == choice
-    listed = client.get(
+    listed = await client.get(
         "/api/v1/chat-sessions",
         headers=HEADERS,
         params={"engagement_id": project.id},
@@ -271,7 +284,10 @@ def test_new_harness_chat_remembers_a_subagent_model_still_being_verified(
     (summary,) = listed.json()
     assert summary["metadata"]["provider_subagent"] == choice
     # ... while this turn ran without subagent tools, exactly as before.
-    (turn,) = store.list_session_entities(ChatTurn, chat_session.id)
+    (turn,) = await store.list_session_entities(ChatTurn, chat_session.id)
     assert turn.request_snapshot["provider_subagent"] is None
-    vendor = store.get(HarnessSession, chat_session.harness_session_id or "")
+    vendor = await store.get(HarnessSession, chat_session.harness_session_id or "")
     assert "provider_subagent" not in vendor.metadata
+
+
+pytestmark = pytest.mark.anyio

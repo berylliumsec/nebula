@@ -5,7 +5,11 @@ models (token ceiling name, sampling, strict tools), for OpenRouter routes
 under ``require_parameters``, and for Mistral's tool-call id format.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 import re
 
@@ -185,7 +189,7 @@ def test_openrouter_openai_reasoning_model_drops_temperature_keeps_max_tokens():
     assert "temperature" not in payload
 
 
-def test_foundry_reasoning_request_on_the_wire():
+async def test_foundry_reasoning_request_on_the_wire():
     observed = {}
 
     def handler(http_request: httpx.Request) -> httpx.Response:
@@ -211,14 +215,12 @@ def test_foundry_reasoning_request_on_the_wire():
         transport=httpx.MockTransport(handler),
     )
     # Session naming sends exactly this: a small ceiling at temperature 0.
-    response = asyncio.run(
-        provider.complete(
-            ModelRequest(
-                messages=[ModelMessage(role="user", content="Name this chat")],
-                tools=[LOOSE_TOOL],
-                max_output_tokens=256,
-                temperature=0,
-            )
+    response = await provider.complete(
+        ModelRequest(
+            messages=[ModelMessage(role="user", content="Name this chat")],
+            tools=[LOOSE_TOOL],
+            max_output_tokens=256,
+            temperature=0,
         )
     )
 
@@ -446,3 +448,6 @@ def test_non_mistral_routes_replay_tool_ids_verbatim():
     assert _replayed_ids(payload) == [
         (result.call_id, result.call_id) for result in _FOREIGN_HISTORY
     ]
+
+
+pytestmark = pytest.mark.anyio

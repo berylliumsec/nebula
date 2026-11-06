@@ -14,7 +14,11 @@ for the exact model (OpenRouter), through one shared cost function. An
 unpublished cache price never lowers an estimate below the bill.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from decimal import Decimal
 
 import httpx
@@ -344,7 +348,7 @@ def test_openrouter_reports_what_each_generation_was_billed():
         assert _openai_usage({**usage, "cost": unusable}, billed=True).cost_usd is None
 
 
-def test_openrouter_adapter_carries_the_billed_cost(monkeypatch):
+async def test_openrouter_adapter_carries_the_billed_cost(monkeypatch):
     monkeypatch.setenv("NEBULA_COST_TEST_KEY", "not-a-real-key")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -388,8 +392,8 @@ def test_openrouter_adapter_carries_the_billed_cost(monkeypatch):
 
     request = ModelRequest(messages=[ModelMessage(role="user", content="ok?")])
     openrouter = adapter(ProviderFlavor.OPENROUTER)
-    routed = asyncio.run(openrouter.complete(request))
-    generic = asyncio.run(adapter(ProviderFlavor.CUSTOM).complete(request))
+    routed = await openrouter.complete(request)
+    generic = await adapter(ProviderFlavor.CUSTOM).complete(request)
 
     # The bill, not the cheapest endpoint's price (7,795 x $0.035/M).
     assert usage_cost_usd(openrouter.config, None, routed.usage) == pytest.approx(
@@ -440,31 +444,29 @@ class _PricedProvider(ModelProvider):
         return ProviderHealth(provider_id=self.config.id, healthy=True)
 
 
-def test_mission_analysis_specialist_prices_cache_reads(tmp_path):
+async def test_mission_analysis_specialist_prices_cache_reads(tmp_path):
     specialist = ModelSpecialist(_PricedProvider(CACHED), model="model-a")
 
-    result = asyncio.run(
-        specialist.run(
-            SpecialistContext(
-                engagement_id="engagement-1",
-                run_id="run-1",
-                task=PlannedTask(
-                    id="scope",
-                    role=SpecialistRole.SCOPE_PLANNING,
-                    title="Review scope",
-                    instructions="Review the scope",
-                ),
-                objective="Review the scope",
-                prior_results={},
-                allowed_tools=frozenset(),
-            )
+    result = await specialist.run(
+        SpecialistContext(
+            engagement_id="engagement-1",
+            run_id="run-1",
+            task=PlannedTask(
+                id="scope",
+                role=SpecialistRole.SCOPE_PLANNING,
+                title="Review scope",
+                instructions="Review the scope",
+            ),
+            objective="Review the scope",
+            prior_results={},
+            allowed_tools=frozenset(),
         )
     )
 
     assert result.cost_usd == pytest.approx(CACHED_HAIKU_COST)
 
 
-def test_mission_tool_specialist_prices_its_routing_call(tmp_path):
+async def test_mission_tool_specialist_prices_its_routing_call(tmp_path):
     finish = ToolCall(
         id="call-1",
         name=FINISH,
@@ -477,7 +479,7 @@ def test_mission_tool_specialist_prices_its_routing_call(tmp_path):
     provider = _PricedProvider(CACHED, tool_calls=[[finish]])
     specialist = _specialist(tmp_path, provider, RecordingBroker())
 
-    result = asyncio.run(specialist.run(_context()))
+    result = await specialist.run(_context())
 
     assert (result.input_tokens, result.output_tokens) == (10_000, 200)
     assert result.cost_usd == pytest.approx(CACHED_HAIKU_COST)
@@ -498,7 +500,7 @@ def test_mission_context_spend_keeps_its_cache_counts_and_prices_them():
     )
 
 
-def test_compaction_snapshots_price_cache_reads(tmp_path):
+async def test_compaction_snapshots_price_cache_reads(tmp_path):
     class CachingProvider(MemoryProvider):
         async def complete(self, request: ModelRequest) -> ModelResponse:
             response = await super().complete(request)
@@ -507,8 +509,10 @@ def test_compaction_snapshots_price_cache_reads(tmp_path):
 
     store = NebulaStore(tmp_path / "priced-context.db")
     profile = _profile()
-    session = _owner(store, profile)
-    sources = _chat_history(store, session, {1: (ChatRole.USER, "Keep port 8443.")})
+    session = await _owner(store, profile)
+    sources = await _chat_history(
+        store, session, {1: (ChatRole.USER, "Keep port 8443.")}
+    )
     provider = CachingProvider(profile.id)
     provider.config = provider.config.model_copy(
         update={"model_prices": {"model-a": HAIKU_PRICES}}
@@ -551,3 +555,6 @@ def test_compaction_budget_counts_what_was_spent_at_cache_rates():
             attempt_usage=ChatTokenUsage(),
             budget=budget,
         )
+
+
+pytestmark = pytest.mark.anyio

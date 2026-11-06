@@ -6,6 +6,12 @@ records contain only normalized, bounded events and credential-free snapshots.
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import async_done_callback, call_async
+
+from .async_utils import resolve_workspace
+
 from .host_load import HostLoadGate
 from .host_admission import save_host_wait
 
@@ -75,7 +81,7 @@ from jsonschema.exceptions import ValidationError
 from packaging.version import InvalidVersion, Version
 from pydantic import Field, StringConstraints, field_validator
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .chat import (
     ChatError,
@@ -171,7 +177,7 @@ from .domain import (
     message_is_replaced,
     utc_now,
 )
-from .database import EntityRow
+from .database import DatabaseBusyError, EntityRow
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
@@ -5767,7 +5773,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             self.client, "close", None
         )
         if close is not None:
-            result = close()
+            result = await close()
             if inspect.isawaitable(result):
                 await result
 
@@ -7216,7 +7222,7 @@ class GrokAcpConnection(HarnessConnection):
                     continue
                 if pending_messages and kind == "tool_call":
                     # Only a subsequent tool start proves this text was progress
-                    # narration. Session metadata can arrive after the final answer.
+                    # narration. AsyncSession metadata can arrive after the final answer.
                     for narration in pending_messages:
                         commentary_sequence += 1
                         for chunk in _display_delta_chunks(narration.text):
@@ -8744,8 +8750,8 @@ def _find_tool_receipt(value: Any, *, depth: int = 0) -> ToolResultReceipt | Non
 
 
 AdapterFactory = Callable[[HarnessKind], HarnessAdapter]
-WorkspaceResolver = Callable[[str], Path]
-KnowledgeRetriever = Callable[
+WorkspaceResolver = MaybeAsync[[str], Path]
+KnowledgeRetriever = MaybeAsync[
     [str, str, bool, int],
     HarnessKnowledgeSearchResult,
 ]
@@ -8881,19 +8887,20 @@ class HarnessRuntimeService:
         self._superseded_session_closers: dict[str, asyncio.Task[None]] = {}
         self._closed = False
         self._quota_snapshot_observer: (
-            Callable[[str, HarnessQuotaSnapshot], None] | None
+            MaybeAsync[[str, HarnessQuotaSnapshot], None] | None
         ) = None
-        self._quota_read_observer: Callable[[str], None] | None = None
+        self._quota_read_observer: MaybeAsync[[str], None] | None = None
         self._rate_limit_observer: (
-            Callable[[str, str, str, datetime, bool], None] | None
+            MaybeAsync[[str, str, str, datetime, bool], None] | None
         ) = None
 
     def bind_quota_observers(
         self,
-        snapshot_observer: Callable[[str, HarnessQuotaSnapshot], None],
-        read_observer: Callable[[str], None],
-        rate_limit_observer: Callable[[str, str, str, datetime, bool], None]
-        | None = None,
+        snapshot_observer: (MaybeAsync[[str, HarnessQuotaSnapshot], None]),
+        read_observer: (MaybeAsync[[str], None]),
+        rate_limit_observer: (
+            MaybeAsync[[str, str, str, datetime, bool], None] | None
+        ) = None,
     ) -> None:
         """Observe saved numeric notices and request post-use account checks."""
 
@@ -8958,7 +8965,7 @@ class HarnessRuntimeService:
 
         for active in list(self._active.values()):
             try:
-                turn = self.store.get(HarnessTurn, active.turn_id)
+                turn = await self.store.get(HarnessTurn, active.turn_id)
             except NotFoundError:  # diagnostic-expected: active turn was deleted
                 continue
             if turn.chat_session_id != chat_session_id:
@@ -8988,7 +8995,7 @@ class HarnessRuntimeService:
 
         for active in list(self._active.values()):
             try:
-                turn = self.store.get(HarnessTurn, active.turn_id)
+                turn = await self.store.get(HarnessTurn, active.turn_id)
             except (
                 NotFoundError
             ):  # diagnostic-expected: turn deleted while active; another chat's entry
@@ -9029,15 +9036,19 @@ class HarnessRuntimeService:
             )
         self.automation_tool_platform = platform
 
-    def _project_execution_mode(self, engagement_id: str) -> Literal["docker", "host"]:
+    async def _project_execution_mode(
+        self, engagement_id: str, *, transaction: StoreTransaction | None = None
+    ) -> Literal["docker", "host"]:
         if self.automation_tool_platform is None:
             return "docker"
-        return self.automation_tool_platform.project_execution_mode(engagement_id)
+        return await self.automation_tool_platform.project_execution_mode(
+            engagement_id, transaction=transaction
+        )
 
-    def _project_approval_policy(self, engagement_id: str) -> str:
+    async def _project_approval_policy(self, engagement_id: str) -> str:
         # Bounded: a project has one policy (its id derives from the project),
         # so the project-scoped page holds it whatever the kind's size.
-        policies = self.store.list_entities(
+        policies = await self.store.list_entities(
             AutomationProjectPolicy, engagement_id=engagement_id, limit=1
         )
         return (
@@ -9074,25 +9085,25 @@ class HarnessRuntimeService:
     async def startup(self) -> None:
         """Mark uncertain in-flight work interrupted; never replay objectives."""
 
-        for approval in pending_deliveries(self.store):
+        for approval in await pending_deliveries(self.store):
             try:
-                turn = approval_harness_turn(self.store, approval)
+                turn = await approval_harness_turn(self.store, approval)
             except (NotFoundError, ConflictError, CorruptRecordError):
                 # diagnostic-expected: retained decisions may outlive deleted
                 # or unreadable request records. Retire only this delivery,
                 # never infer a new owner or prevent unrelated sessions from
                 # starting.
-                self._fail_unbound_approval(approval)
+                (await self._fail_unbound_approval(approval))
                 continue
             if turn is not None:
-                self._fail_approval_delivery(approval, turn)
+                (await self._fail_approval_delivery(approval, turn))
             else:
-                self._fail_unbound_approval(approval)
+                (await self._fail_unbound_approval(approval))
         # Filtered in SQL rather than read from the oldest 1,000 turns: a Core
         # with more harness turns than that must still settle its newest ones.
         # Unreadable records are skipped and each turn settles alone, so one
         # bad row never keeps Core from starting.
-        for turn in self.store.iter_readable_entities(
+        async for turn in self.store.iter_readable_entities(
             HarnessTurn,
             {
                 "status": [
@@ -9103,7 +9114,7 @@ class HarnessRuntimeService:
             },
         ):
             try:
-                self._settle_turn_after_restart(turn)
+                (await self._settle_turn_after_restart(turn))
             except Exception as exc:
                 record_caught_exception(
                     "harnesses",
@@ -9112,7 +9123,7 @@ class HarnessRuntimeService:
                     exc,
                     stage="startup-recovery",
                 )
-        for run in self.store.iter_readable_entities(
+        async for run in self.store.iter_readable_entities(
             AgentRun,
             {"backend": RunBackend.HARNESS.value, "status": RunStatus.QUEUED.value},
         ):
@@ -9120,16 +9131,19 @@ class HarnessRuntimeService:
             if not isinstance(scheduled_for, str):
                 continue
             turns = sorted(
-                self.store.iter_readable_entities(
-                    HarnessTurn,
-                    {"run_id": run.id, "status": HarnessTurnStatus.QUEUED.value},
-                    engagement_id=run.engagement_id,
-                ),
+                [
+                    item
+                    async for item in self.store.iter_readable_entities(
+                        HarnessTurn,
+                        {"run_id": run.id, "status": HarnessTurnStatus.QUEUED.value},
+                        engagement_id=run.engagement_id,
+                    )
+                ],
                 key=lambda item: int(item.metadata.get("mission_stage_index", 0)),
             )
             if not turns:
                 try:
-                    self._interrupt_owner_for_missing_schedule(run)
+                    (await self._interrupt_owner_for_missing_schedule(run))
                 except Exception as exc:
                     record_caught_exception(
                         "harnesses",
@@ -9151,24 +9165,26 @@ class HarnessRuntimeService:
                 name=f"scheduled-harness-mission-{run.id}",
             )
             self._scheduled_mission_tasks[run.id] = task
-        for interaction in self.store.iter_readable_entities(
+        async for interaction in self.store.iter_readable_entities(
             HarnessInteraction, {"status": HarnessInteractionStatus.PENDING.value}
         ):
-            self.store.update(
-                HarnessInteraction,
-                interaction.id,
-                {
-                    "status": HarnessInteractionStatus.CANCELLED,
-                    "resolved_at": utc_now(),
-                    "metadata": {
-                        **interaction.metadata,
-                        "reason": "Nebula Core restarted while input was pending",
+            (
+                await self.store.update(
+                    HarnessInteraction,
+                    interaction.id,
+                    {
+                        "status": HarnessInteractionStatus.CANCELLED,
+                        "resolved_at": utc_now(),
+                        "metadata": {
+                            **interaction.metadata,
+                            "reason": "Nebula Core restarted while input was pending",
+                        },
                     },
-                },
-                expected_revision=interaction.revision,
+                    expected_revision=interaction.revision,
+                )
             )
 
-    def _settle_turn_after_restart(self, turn: HarnessTurn) -> None:
+    async def _settle_turn_after_restart(self, turn: HarnessTurn) -> None:
         """Settle one harness turn whose producer died with the previous Core."""
 
         if turn.status == HarnessTurnStatus.QUEUED:
@@ -9177,13 +9193,15 @@ class HarnessRuntimeService:
             # ever start it. Queued mission stages belong to their run's
             # recovery below.
             if turn.origin != HarnessTurnOrigin.MISSION:
-                self._settle_orphaned_queued_turn(
-                    turn,
-                    "Nebula Core restarted before the harness turn started.",
-                    reason="core_restart",
+                (
+                    await self._settle_orphaned_queued_turn(
+                        turn,
+                        "Nebula Core restarted before the harness turn started.",
+                        reason="core_restart",
+                    )
                 )
             return
-        interrupted_turn = self.store.update(
+        interrupted_turn = await self.store.update(
             HarnessTurn,
             turn.id,
             {
@@ -9193,20 +9211,22 @@ class HarnessRuntimeService:
             },
             expected_revision=turn.revision,
         )
-        self._interrupt_owner(turn)
+        (await self._interrupt_owner(turn))
         if turn.chat_session_id and turn.chat_turn_id:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.goal_id:
-                self._pause_goal(
-                    turn.chat_session_id,
-                    "Core restarted during a harness goal turn. Review the saved reply before resuming.",
+                (
+                    await self._pause_goal(
+                        turn.chat_session_id,
+                        "Core restarted during a harness goal turn. Review the saved reply before resuming.",
+                    )
                 )
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.status not in {
             HarnessSessionStatus.CLOSED,
             HarnessSessionStatus.FAILED,
         }:
-            session = self.store.update(
+            session = await self.store.update(
                 HarnessSession,
                 session.id,
                 {
@@ -9215,23 +9235,25 @@ class HarnessRuntimeService:
                 },
                 expected_revision=session.revision,
             )
-        self._persist_activity(
-            interrupted_turn,
-            session,
-            HarnessEvent(
-                type="turn_status",
-                origin=turn.origin,
-                harness_profile_id=session.harness_profile_id,
-                harness_session_id=session.id,
-                harness_turn_id=turn.id,
-                model=session.model,
-                item_status="interrupted",
-                summary="Nebula Core restarted while the harness outcome was uncertain.",
-                payload={"phase": "interrupted", "reason": "core_restart"},
-            ),
+        (
+            await self._persist_activity(
+                interrupted_turn,
+                session,
+                HarnessEvent(
+                    type="turn_status",
+                    origin=turn.origin,
+                    harness_profile_id=session.harness_profile_id,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    model=session.model,
+                    item_status="interrupted",
+                    summary="Nebula Core restarted while the harness outcome was uncertain.",
+                    payload={"phase": "interrupted", "reason": "core_restart"},
+                ),
+            )
         )
 
-    def _settle_orphaned_queued_turn(
+    async def _settle_orphaned_queued_turn(
         self, turn: HarnessTurn, error: str, *, reason: str
     ) -> None:
         """Interrupt a turn whose producer ended before the harness started it.
@@ -9241,10 +9263,10 @@ class HarnessRuntimeService:
         free for the operator's retry or next message instead of reserved.
         """
 
-        turn = self.store.get(HarnessTurn, turn.id)
+        turn = await self.store.get(HarnessTurn, turn.id)
         if turn.status != HarnessTurnStatus.QUEUED:
             return
-        turn = self.store.update(
+        turn = await self.store.update(
             HarnessTurn,
             turn.id,
             {
@@ -9255,46 +9277,52 @@ class HarnessRuntimeService:
             },
             expected_revision=turn.revision,
         )
-        self._interrupt_owner(turn)
+        (await self._interrupt_owner(turn))
         if turn.chat_session_id and turn.chat_turn_id:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.goal_id:
-                self._pause_goal(
-                    turn.chat_session_id,
-                    "Core restarted before the harness goal turn started. Review it before resuming.",
+                (
+                    await self._pause_goal(
+                        turn.chat_session_id,
+                        "Core restarted before the harness goal turn started. Review it before resuming.",
+                    )
                 )
         # The session only turns running once connected, so its status
         # belongs to other turns and stays as it is.
-        session = self.store.get(HarnessSession, turn.harness_session_id)
-        self._persist_activity(
-            turn,
-            session,
-            HarnessEvent(
-                type="turn_status",
-                origin=turn.origin,
-                harness_profile_id=session.harness_profile_id,
-                harness_session_id=session.id,
-                harness_turn_id=turn.id,
-                model=session.model,
-                item_status="interrupted",
-                summary=error,
-                payload={"phase": "interrupted", "reason": reason},
-            ),
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        (
+            await self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="turn_status",
+                    origin=turn.origin,
+                    harness_profile_id=session.harness_profile_id,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    model=session.model,
+                    item_status="interrupted",
+                    summary=error,
+                    payload={"phase": "interrupted", "reason": reason},
+                ),
+            )
         )
 
-    def _interrupt_owner_for_missing_schedule(self, run: AgentRun) -> None:
-        self.store.update(
-            AgentRun,
-            run.id,
-            {
-                "status": RunStatus.INTERRUPTED,
-                "completed_at": utc_now(),
-                "metadata": {
-                    **run.metadata,
-                    "recovery_detail": "Scheduled harness turns were unavailable after restart.",
+    async def _interrupt_owner_for_missing_schedule(self, run: AgentRun) -> None:
+        (
+            await self.store.update(
+                AgentRun,
+                run.id,
+                {
+                    "status": RunStatus.INTERRUPTED,
+                    "completed_at": utc_now(),
+                    "metadata": {
+                        **run.metadata,
+                        "recovery_detail": "Scheduled harness turns were unavailable after restart.",
+                    },
                 },
-            },
-            expected_revision=run.revision,
+                expected_revision=run.revision,
+            )
         )
 
     async def shutdown(self) -> None:
@@ -9314,22 +9342,24 @@ class HarnessRuntimeService:
                     stage="harnesses",
                 )
                 pass
-            turn = self.store.get(HarnessTurn, item.turn_id)
+            turn = await self.store.get(HarnessTurn, item.turn_id)
             if turn.status in {
                 HarnessTurnStatus.RUNNING,
                 HarnessTurnStatus.WAITING_APPROVAL,
             }:
-                self.store.update(
-                    HarnessTurn,
-                    turn.id,
-                    {
-                        "status": HarnessTurnStatus.INTERRUPTED,
-                        "completed_at": utc_now(),
-                        "error": "Nebula Core shut down during the turn",
-                    },
-                    expected_revision=turn.revision,
+                (
+                    await self.store.update(
+                        HarnessTurn,
+                        turn.id,
+                        {
+                            "status": HarnessTurnStatus.INTERRUPTED,
+                            "completed_at": utc_now(),
+                            "error": "Nebula Core shut down during the turn",
+                        },
+                        expected_revision=turn.revision,
+                    )
                 )
-                self._interrupt_owner(turn)
+                (await self._interrupt_owner(turn))
         # Chat turns whose producer had not connected yet have no ``_active``
         # entry; they are settled below once their tasks stop.
         unstarted_chat_turn_ids = [
@@ -9381,10 +9411,12 @@ class HarnessRuntimeService:
         self._chat_turn_tasks.clear()
         for turn_id in unstarted_chat_turn_ids:
             try:
-                self._settle_orphaned_queued_turn(
-                    self.store.get(HarnessTurn, turn_id),
-                    "Nebula Core shut down before the harness turn started.",
-                    reason="core_shutdown",
+                (
+                    await self._settle_orphaned_queued_turn(
+                        (await self.store.get(HarnessTurn, turn_id)),
+                        "Nebula Core shut down before the harness turn started.",
+                        reason="core_shutdown",
+                    )
                 )
             except Exception as caught_error:
                 record_caught_exception(
@@ -9421,7 +9453,7 @@ class HarnessRuntimeService:
         self._broker_approval_ids.clear()
 
     async def health(self, profile_id: str) -> HarnessHealth:
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         result = await self.adapter_factory(profile.kind).probe(
             profile, self.credential_store
         )
@@ -9451,11 +9483,13 @@ class HarnessRuntimeService:
         changes: dict[str, Any] = {"capabilities": capabilities}
         if capabilities.models and profile.default_model not in capabilities.models:
             changes["default_model"] = capabilities.models[0]
-        self.store.update(
-            HarnessProfile,
-            profile.id,
-            changes,
-            expected_revision=profile.revision,
+        (
+            await self.store.update(
+                HarnessProfile,
+                profile.id,
+                changes,
+                expected_revision=profile.revision,
+            )
         )
         return result.model_copy(
             update={
@@ -9468,7 +9502,7 @@ class HarnessRuntimeService:
 
     async def test_turn(self, profile_id: str) -> HarnessHealth:
         """Spend one bounded provider turn outside every durable project session."""
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         if not profile.enabled:
             raise HarnessConfigurationError("Enable this harness before testing a turn")
         model = profile.default_model or next(iter(profile.capabilities.models), None)
@@ -9578,7 +9612,7 @@ class HarnessRuntimeService:
             if connection is not None:
                 with suppress(Exception):
                     await connection.close()
-        current = self.store.get(HarnessProfile, profile_id)
+        current = await self.store.get(HarnessProfile, profile_id)
         capabilities = current.capabilities.model_copy(
             update={
                 "authentication_state": "failed"
@@ -9604,11 +9638,13 @@ class HarnessRuntimeService:
                 ),
             }
         )
-        self.store.update(
-            HarnessProfile,
-            profile_id,
-            {"capabilities": capabilities},
-            expected_revision=current.revision,
+        (
+            await self.store.update(
+                HarnessProfile,
+                profile_id,
+                {"capabilities": capabilities},
+                expected_revision=current.revision,
+            )
         )
         return HarnessHealth(
             profile_id=profile_id,
@@ -9622,13 +9658,13 @@ class HarnessRuntimeService:
             last_successful_turn_at=capabilities.last_successful_turn_at,
         )
 
-    def available_skills(
+    async def available_skills(
         self, *, engagement_id: str, profile_id: str
     ) -> list[HarnessSkillSummary]:
         """Enumerate bounded skill entry points without reading skill contents."""
 
-        profile = self.store.get(HarnessProfile, profile_id)
-        self.store.get(Engagement, engagement_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
+        (await self.store.get(Engagement, engagement_id))
         if (
             not profile.enabled
             or not profile.native_capabilities.skills
@@ -9637,7 +9673,7 @@ class HarnessRuntimeService:
             return []
         from .skill_catalog import discover_skills, harness_project_skill_roots
 
-        workspace = self.workspace_resolver(engagement_id)
+        workspace = await resolve_workspace(self.workspace_resolver, engagement_id)
         if profile.kind == HarnessKind.CODEX_APP_SERVER:
             cached = self._codex_skill_cache.get(
                 (profile.id, str(workspace), profile.revision)
@@ -9690,24 +9726,24 @@ class HarnessRuntimeService:
         profile_id: str,
         force_reload: bool = True,
     ) -> list[HarnessSkillSummary]:
-        profile = self.store.get(HarnessProfile, profile_id)
-        self.store.get(Engagement, engagement_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
+        (await self.store.get(Engagement, engagement_id))
         if (
             profile.kind != HarnessKind.CODEX_APP_SERVER
             or not profile.enabled
             or not profile.native_capabilities.skills
             or not profile.capabilities.skill_invocation
         ):
-            return self.available_skills(
+            return await self.available_skills(
                 engagement_id=engagement_id, profile_id=profile_id
             )
-        workspace = self.workspace_resolver(engagement_id)
+        workspace = await resolve_workspace(self.workspace_resolver, engagement_id)
         cache_key = (profile.id, str(workspace), profile.revision)
         if not force_reload and cache_key in self._codex_skill_cache:
             return list(self._codex_skill_cache[cache_key])
         adapter = self.adapter_factory(profile.kind)
         if not isinstance(adapter, CodexAppServerAdapter):
-            return self.available_skills(
+            return await self.available_skills(
                 engagement_id=engagement_id, profile_id=profile_id
             )
         try:
@@ -9718,7 +9754,7 @@ class HarnessRuntimeService:
             if exc.code != -32601:
                 raise
             # Older app-server releases lack skills/list.
-            return self.available_skills(
+            return await self.available_skills(
                 engagement_id=engagement_id, profile_id=profile_id
             )
         self._codex_skill_cache[cache_key] = skills
@@ -9740,7 +9776,7 @@ class HarnessRuntimeService:
             "specs": action_specs,
         }
 
-    def _build_oci_components(
+    async def _build_oci_components(
         self,
         *,
         engagement_id: str,
@@ -9773,7 +9809,7 @@ class HarnessRuntimeService:
             components: RuntimeToolComponents | AutomationToolComponents | None = None
             if self.automation_tool_platform is not None:
                 try:
-                    components = self.automation_tool_platform.chat_components(
+                    components = await self.automation_tool_platform.chat_components(
                         engagement_id=engagement_id
                     )
                 except AutomationRuntimeUnavailable:
@@ -9785,14 +9821,14 @@ class HarnessRuntimeService:
                     raise HarnessConfigurationError(
                         "browser automation runtime is unavailable"
                     )
-                browser_components = (
+                browser_components = await (
                     self.browser_automation_platform.runtime_components(engagement_id)
                 )
                 if components is None:
                     components = browser_components
                 else:
                     components = combine_tool_components(components, browser_components)
-            model_components = standalone_components(self.store, engagement_id)
+            model_components = await standalone_components(self.store, engagement_id)
             if components is None:
                 components = model_components
             else:
@@ -9824,7 +9860,7 @@ class HarnessRuntimeService:
             )
         return components, resolved
 
-    def _ensure_oci_components(
+    async def _ensure_oci_components(
         self, session: HarnessSession, *, validate_current: bool = False
     ) -> RuntimeToolComponents | AutomationToolComponents | None:
         if session.metadata.get("command_runtime_enabled") is False:
@@ -9834,7 +9870,7 @@ class HarnessRuntimeService:
             return cached
         raw_snapshot = session.metadata.get("command_runtime_snapshot")
         snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else None
-        components, resolved = self._build_oci_components(
+        components, resolved = await self._build_oci_components(
             engagement_id=session.engagement_id,
             model=session.model,
             snapshot=snapshot,
@@ -9843,17 +9879,19 @@ class HarnessRuntimeService:
         if components is None:
             return None
         if snapshot is None and resolved is not None:
-            latest = self.store.get(HarnessSession, session.id)
-            self.store.update(
-                HarnessSession,
-                latest.id,
-                {
-                    "metadata": {
-                        **latest.metadata,
-                        "command_runtime_snapshot": resolved,
-                    }
-                },
-                expected_revision=latest.revision,
+            latest = await self.store.get(HarnessSession, session.id)
+            (
+                await self.store.update(
+                    HarnessSession,
+                    latest.id,
+                    {
+                        "metadata": {
+                            **latest.metadata,
+                            "command_runtime_snapshot": resolved,
+                        }
+                    },
+                    expected_revision=latest.revision,
+                )
             )
         self._gateway_oci_components[session.id] = components
         return components
@@ -9861,20 +9899,22 @@ class HarnessRuntimeService:
     async def external_sessions(
         self, *, engagement_id: str, profile_id: str
     ) -> list[ExternalHarnessSession]:
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         if not profile.enabled:
             raise HarnessConfigurationError(f"harness {profile.id!r} is disabled")
-        self.store.get(Engagement, engagement_id)
-        workspace = self.workspace_resolver(engagement_id)
+        (await self.store.get(Engagement, engagement_id))
+        workspace = await resolve_workspace(self.workspace_resolver, engagement_id)
         discovered = await self.adapter_factory(profile.kind).list_external_sessions(
             profile, self.credential_store, workspace
         )
         imported = {
             item.external_session_id: item
-            for item in self.store.find_entities(
-                HarnessSession,
-                {"harness_profile_id": profile_id},
-                engagement_id=engagement_id,
+            for item in (
+                await self.store.find_entities(
+                    HarnessSession,
+                    {"harness_profile_id": profile_id},
+                    engagement_id=engagement_id,
+                )
             )
             if item.external_session_id
         }
@@ -9882,7 +9922,7 @@ class HarnessRuntimeService:
         for item in discovered:
             internal = imported.get(item.external_session_id)
             if internal is not None and internal.display_name != item.display_name:
-                internal = self.store.update(
+                internal = await self.store.update(
                     HarnessSession,
                     internal.id,
                     {"display_name": item.display_name},
@@ -9899,7 +9939,7 @@ class HarnessRuntimeService:
             )
         return reconciled
 
-    def import_external_session(
+    async def import_external_session(
         self,
         *,
         engagement_id: str,
@@ -9908,7 +9948,7 @@ class HarnessRuntimeService:
         display_name: str,
         model: str | None,
     ) -> HarnessSession:
-        for existing in self.store.find_entities(
+        for existing in await self.store.find_entities(
             HarnessSession,
             {
                 "harness_profile_id": profile_id,
@@ -9918,12 +9958,12 @@ class HarnessRuntimeService:
             limit=1,
         ):
             return existing
-        created = self.create_session(
+        created = await self.create_session(
             engagement_id=engagement_id,
             profile_id=profile_id,
             model=model,
         )
-        return self.store.update(
+        return await self.store.update(
             HarnessSession,
             created.id,
             {
@@ -9936,7 +9976,7 @@ class HarnessRuntimeService:
             expected_revision=created.revision,
         )
 
-    def create_session(
+    async def create_session(
         self,
         *,
         engagement_id: str,
@@ -9953,14 +9993,14 @@ class HarnessRuntimeService:
     ) -> HarnessSession:
         if self._closed:
             raise HarnessUnavailableError("harness runtime is shut down")
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         if not profile.enabled:
             raise HarnessConfigurationError(f"harness {profile.id!r} is disabled")
         if core_plan_isolated and profile.kind != HarnessKind.GROK_ACP:
             raise HarnessConfigurationError(
                 "Core plan isolation is available only for Grok chat sessions"
             )
-        self.store.get_by_kind("engagements", engagement_id)
+        (await self.store.get_by_kind("engagements", engagement_id))
         selected_model = (model or profile.default_model or "").strip()
         if not selected_model:
             raise HarnessConfigurationError(
@@ -10020,14 +10060,14 @@ class HarnessRuntimeService:
                 f"service tier {resolved_service_tier!r} is not advertised for {selected_model!r}"
             )
         ids = list(dict.fromkeys(mcp_server_ids or []))
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement_id}", engagement_id=engagement_id)
         )
         try:
-            profiles = resolve_mcp_profiles(
+            profiles = await resolve_mcp_profiles(
                 self.store,
                 ids,
                 bypass_permissions=scope.bypass_permissions,
@@ -10037,15 +10077,19 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(_safe_error(exc)) from exc
         snapshot = [item.model_dump(mode="json") for item in profiles]
         session_id = str(uuid4())
+        execution_mode = await self._project_execution_mode(
+            engagement_id, transaction=transaction
+        )
         components, oci_snapshot = (
-            self._build_oci_components(
-                engagement_id=engagement_id,
-                model=selected_model,
+            (
+                await self._build_oci_components(
+                    engagement_id=engagement_id,
+                    model=selected_model,
+                )
             )
             if tools_enabled
             else (None, None)
         )
-        execution_mode = self._project_execution_mode(engagement_id)
         if (
             tools_enabled
             and profile.permission_mode == "unrestricted"
@@ -10068,7 +10112,7 @@ class HarnessRuntimeService:
             **({"core_plan_isolated": True} if core_plan_isolated else {}),
             "execution_mode": execution_mode,
             "harness_permission_mode": profile.permission_mode,
-            "approval_policy": self._project_approval_policy(engagement_id),
+            "approval_policy": (await self._project_approval_policy(engagement_id)),
             "native_capabilities": native_capabilities.model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
             **({"control_assistant": True} if control_assistant else {}),
@@ -10101,17 +10145,21 @@ class HarnessRuntimeService:
             metadata=metadata,
         )
         if transaction is not None:
-            transaction.assert_project_workspace(
-                engagement_id, engagement.workspace_path
-            )
-            transaction.add(session)
-            created = session
-        else:
-            with self.store.transaction(immediate=True) as admission:
-                admission.assert_project_workspace(
+            (
+                await transaction.assert_project_workspace(
                     engagement_id, engagement.workspace_path
                 )
-                admission.add(session)
+            )
+            (await transaction.add(session))
+            created = session
+        else:
+            async with self.store.transaction(immediate=True) as admission:
+                (
+                    await admission.assert_project_workspace(
+                        engagement_id, engagement.workspace_path
+                    )
+                )
+                (await admission.add(session))
             created = session
         if components is not None:
             self._gateway_oci_components[created.id] = components
@@ -10128,7 +10176,7 @@ class HarnessRuntimeService:
         files: dict[str, str] | None = None,
         nebula_tools: bool = True,
         butler_recovery_case_id: str | None = None,
-        on_turn_created: Callable[[HarnessTurn], None] | None = None,
+        on_turn_created: (MaybeAsync[[HarnessTurn], None] | None) = None,
         planning_target_turn_id: str | None = None,
         planning_tool_names: list[str] | None = None,
         planning_native_categories: list[str] | None = None,
@@ -10140,16 +10188,18 @@ class HarnessRuntimeService:
         Nebula gateway, so it starts only the vendor process.
         """
 
-        profile = self.store.get(HarnessProfile, profile_id)
-        self._validate_harness_privacy(
-            engagement_id, profile, [], allow_remote_mcp=False
+        profile = await self.store.get(HarnessProfile, profile_id)
+        (
+            await self._validate_harness_privacy(
+                engagement_id, profile, [], allow_remote_mcp=False
+            )
         )
         selected_model = (model or profile.default_model or "").strip()
         if not selected_model:
             raise HarnessConfigurationError(
                 "harness analysis requires an explicit model or profile default"
             )
-        session = self.create_session(
+        session = await self.create_session(
             engagement_id=engagement_id,
             profile_id=profile.id,
             model=selected_model,
@@ -10163,7 +10213,7 @@ class HarnessRuntimeService:
             if butler_recovery_case_id is not None or not nebula_tools
             else _container_only_native_capabilities(profile.native_capabilities)
         )
-        session = self.store.update(
+        session = await self.store.update(
             HarnessSession,
             session.id,
             {
@@ -10207,7 +10257,7 @@ class HarnessRuntimeService:
             },
             expected_revision=session.revision,
         )
-        turn = self.store.create(
+        turn = await self.store.create(
             HarnessTurn(
                 id=str(uuid4()),
                 engagement_id=engagement_id,
@@ -10226,10 +10276,10 @@ class HarnessRuntimeService:
         )
         try:
             if on_turn_created is not None:
-                on_turn_created(turn)
+                (await call_async(on_turn_created, turn))
             async for _event in self.stream_turn(turn.id):
                 pass
-            completed = self.store.get(HarnessTurn, turn.id)
+            completed = await self.store.get(HarnessTurn, turn.id)
             if completed.status != HarnessTurnStatus.COMPLETE:
                 raise HarnessUnavailableError(
                     completed.error or "harness analysis did not complete"
@@ -10238,7 +10288,7 @@ class HarnessRuntimeService:
         finally:
             await self.close_session(session.id)
 
-    def _fork_session(
+    async def _fork_session(
         self,
         session: HarnessSession,
         *,
@@ -10266,11 +10316,11 @@ class HarnessRuntimeService:
             metadata=metadata,
         )
         if transaction is not None:
-            transaction.add(fork)
+            (await transaction.add(fork))
             return fork
-        return self.store.create(fork)
+        return await self.store.create(fork)
 
-    def _fork_session_for_execution_mode(
+    async def _fork_session_for_execution_mode(
         self,
         session: HarnessSession,
         profile: HarnessProfile,
@@ -10295,7 +10345,7 @@ class HarnessRuntimeService:
                 "after enabling Allow all, or choose Managed approvals."
             )
 
-        replacement = self._fork_session(session, reason=reason)
+        replacement = await self._fork_session(session, reason=reason)
         metadata = deepcopy(replacement.metadata)
         metadata.pop("workspace_binding_version", None)
         metadata.pop("command_runtime_snapshot", None)
@@ -10311,14 +10361,14 @@ class HarnessRuntimeService:
                 ).model_dump(mode="json"),
             }
         )
-        return self.store.update(
+        return await self.store.update(
             HarnessSession,
             replacement.id,
             {"metadata": metadata},
             expected_revision=replacement.revision,
         )
 
-    def fork_session(
+    async def fork_session(
         self, session_id: str, *, reason: str, allow_active: bool = False
     ) -> HarnessSession:
         """Create a vendor branch; side chats may snapshot an active source.
@@ -10327,7 +10377,7 @@ class HarnessRuntimeService:
         copied chat messages are handed off when its first turn begins.
         """
 
-        session = self.store.get(HarnessSession, session_id)
+        session = await self.store.get(HarnessSession, session_id)
         if (
             session.status
             in {
@@ -10339,7 +10389,7 @@ class HarnessRuntimeService:
             raise HarnessStateError(
                 "harness session cannot be forked while a turn is active"
             )
-        return self._fork_session(session, reason=reason)
+        return await self._fork_session(session, reason=reason)
 
     async def maybe_fork_native_codex_chat(
         self,
@@ -10361,11 +10411,11 @@ class HarnessRuntimeService:
             or source.metadata.get("harness_context_handoff_pending") is True
         ):
             return fork
-        profile = self.store.get(HarnessProfile, source.harness_profile_id)
+        profile = await self.store.get(HarnessProfile, source.harness_profile_id)
         if profile.kind != HarnessKind.CODEX_APP_SERVER:
             return fork
-        source_session = self.store.get(HarnessSession, source.harness_session_id)
-        fork_session = self.store.get(HarnessSession, fork.harness_session_id)
+        source_session = await self.store.get(HarnessSession, source.harness_session_id)
+        fork_session = await self.store.get(HarnessSession, fork.harness_session_id)
         if (
             not source_session.external_session_id
             or source_session.metadata.get("external_import") is True
@@ -10376,7 +10426,7 @@ class HarnessRuntimeService:
             or fork_session.external_session_id
         ):
             return fork
-        boundary = self.store.get(ChatMessage, through_message_id)
+        boundary = await self.store.get(ChatMessage, through_message_id)
         harness_turn_id = boundary.metadata.get("harness_turn_id")
         if (
             boundary.session_id != source.id
@@ -10384,7 +10434,7 @@ class HarnessRuntimeService:
             or not isinstance(harness_turn_id, str)
         ):
             return fork
-        source_turn = self.store.get(HarnessTurn, harness_turn_id)
+        source_turn = await self.store.get(HarnessTurn, harness_turn_id)
         if (
             source_turn.harness_session_id != source_session.id
             or source_turn.status != HarnessTurnStatus.COMPLETE
@@ -10398,7 +10448,11 @@ class HarnessRuntimeService:
             native_thread_id = await adapter.fork_thread(
                 profile,
                 self.credential_store,
-                self.workspace_resolver(source.engagement_id),
+                (
+                    await resolve_workspace(
+                        self.workspace_resolver, source.engagement_id
+                    )
+                ),
                 source_thread_id=source_session.external_session_id,
                 last_turn_id=source_turn.external_turn_id,
             )
@@ -10408,35 +10462,39 @@ class HarnessRuntimeService:
             TimeoutError,
         ):  # diagnostic-expected: native fork failure uses the persisted bounded handoff
             return fork
-        with self.store.transaction() as transaction:
-            transaction.update(
-                HarnessSession,
-                fork_session.id,
-                {
-                    "external_session_id": native_thread_id,
-                    "metadata": {
-                        **fork_session.metadata,
-                        "native_codex_fork": True,
-                        "native_codex_fork_turn_id": source_turn.external_turn_id,
+        async with self.store.transaction() as transaction:
+            (
+                await transaction.update(
+                    HarnessSession,
+                    fork_session.id,
+                    {
+                        "external_session_id": native_thread_id,
+                        "metadata": {
+                            **fork_session.metadata,
+                            "native_codex_fork": True,
+                            "native_codex_fork_turn_id": source_turn.external_turn_id,
+                        },
                     },
-                },
-                expected_revision=fork_session.revision,
+                    expected_revision=fork_session.revision,
+                )
             )
-            transaction.update(
-                ChatSession,
-                fork.id,
-                {
-                    "metadata": {
-                        **fork.metadata,
-                        "harness_context_handoff_pending": False,
-                        "harness_native_fork": True,
-                    }
-                },
-                expected_revision=fork.revision,
+            (
+                await transaction.update(
+                    ChatSession,
+                    fork.id,
+                    {
+                        "metadata": {
+                            **fork.metadata,
+                            "harness_context_handoff_pending": False,
+                            "harness_native_fork": True,
+                        }
+                    },
+                    expected_revision=fork.revision,
+                )
             )
-        return self.store.get(ChatSession, fork.id)
+        return await self.store.get(ChatSession, fork.id)
 
-    def rewind_chat_session(
+    async def rewind_chat_session(
         self, chat: ChatSession, *, reason: str = "operator_edit"
     ) -> ChatSession:
         """Continue a harness conversation on a fresh vendor session after an edit.
@@ -10451,14 +10509,14 @@ class HarnessRuntimeService:
                 "harness conversation has no vendor session to rewind"
             )
         previous_session_id = chat.harness_session_id
-        replacement = self.fork_session(previous_session_id, reason=reason)
-        chat = self._rebind_chat_session(
+        replacement = await self.fork_session(previous_session_id, reason=reason)
+        chat = await self._rebind_chat_session(
             chat,
             replacement,
             previous_session_id=previous_session_id,
             reason=reason,
         )
-        return self.store.update(
+        return await self.store.update(
             ChatSession,
             chat.id,
             {
@@ -10470,7 +10528,7 @@ class HarnessRuntimeService:
             expected_revision=chat.revision,
         )
 
-    def _rebind_chat_session(
+    async def _rebind_chat_session(
         self,
         chat: ChatSession,
         session: HarnessSession,
@@ -10493,7 +10551,7 @@ class HarnessRuntimeService:
             }
         )
         metadata["harness_session_rollovers"] = rollovers
-        rebound = self.store.update(
+        rebound = await self.store.update(
             ChatSession,
             chat.id,
             {
@@ -10544,10 +10602,10 @@ class HarnessRuntimeService:
             name=f"harness-superseded-{session_id}",
         )
 
-    def _session_still_used(self, session_id: str) -> bool:
+    async def _session_still_used(self, session_id: str) -> bool:
         """Whether a conversation or an unfinished run still uses the session."""
 
-        if self.store.find_entities(
+        if await self.store.find_entities(
             ChatSession, {"harness_session_id": session_id}, limit=1
         ):
             return True
@@ -10559,41 +10617,45 @@ class HarnessRuntimeService:
                 RunStatus.CANCELLED,
                 RunStatus.INTERRUPTED,
             }
-            for run in self.store.find_entities(
-                AgentRun, {"harness_session_id": session_id}
+            for run in (
+                await self.store.find_entities(
+                    AgentRun, {"harness_session_id": session_id}
+                )
             )
         )
 
-    def _session_has_reserved_turns(self, session_id: str) -> bool:
+    async def _session_has_reserved_turns(self, session_id: str) -> bool:
         return bool(
-            self.store.find_entities(
-                HarnessTurn,
-                {
-                    "harness_session_id": session_id,
-                    "status": [
-                        HarnessTurnStatus.QUEUED.value,
-                        HarnessTurnStatus.RUNNING.value,
-                        HarnessTurnStatus.WAITING_APPROVAL.value,
-                    ],
-                },
-                limit=1,
+            (
+                await self.store.find_entities(
+                    HarnessTurn,
+                    {
+                        "harness_session_id": session_id,
+                        "status": [
+                            HarnessTurnStatus.QUEUED.value,
+                            HarnessTurnStatus.RUNNING.value,
+                            HarnessTurnStatus.WAITING_APPROVAL.value,
+                        ],
+                    },
+                    limit=1,
+                )
             )
         )
 
     async def _close_when_idle(self, session_id: str) -> None:
         try:
             while not self._closed:
-                if self._session_still_used(session_id):
+                if await self._session_still_used(session_id):
                     return
                 lock = self._locks.setdefault(session_id, asyncio.Lock())
                 if (
                     session_id not in self._active
                     and not lock.locked()
-                    and not self._session_has_reserved_turns(session_id)
+                    and not (await self._session_has_reserved_turns(session_id))
                 ):
                     async with lock:
-                        if session_id in self._active or self._session_still_used(
-                            session_id
+                        if session_id in self._active or (
+                            await self._session_still_used(session_id)
                         ):
                             return
                         await self.close_session(session_id)
@@ -10622,7 +10684,7 @@ class HarnessRuntimeService:
             ):
                 self._superseded_session_closers.pop(session_id, None)
 
-    def _chat_messages(
+    async def _chat_messages(
         self, engagement_id: str, session_id: str, *, include_replaced: bool = False
     ) -> list[ChatMessage]:
         """Read the complete conversation through its indexed session rows.
@@ -10632,20 +10694,22 @@ class HarnessRuntimeService:
         """
         messages = [
             item
-            for item in self.store.list_session_entities(ChatMessage, session_id)
+            for item in (
+                await self.store.list_session_entities(ChatMessage, session_id)
+            )
             if item.engagement_id == engagement_id
             and (include_replaced or not message_is_replaced(item))
         ]
         return sorted(messages, key=lambda item: item.sequence)
 
-    def _chat_handoff_context(
+    async def _chat_handoff_context(
         self,
         chat: ChatSession,
         *,
         reason: str = "parallel harness session",
         before_turn_id: str | None = None,
     ) -> str:
-        messages = self._chat_messages(chat.engagement_id, chat.id)
+        messages = await self._chat_messages(chat.engagement_id, chat.id)
         if before_turn_id is not None:
             # A turn that is already prepared sends its own prompt; hand over
             # only the conversation before it.
@@ -10671,7 +10735,7 @@ class HarnessRuntimeService:
             history = history[-limit:]
         return f"\n\nNebula conversation handoff after {reason}:\n" + history
 
-    def _replace_missing_vendor_session(
+    async def _replace_missing_vendor_session(
         self,
         turn: HarnessTurn,
         session: HarnessSession,
@@ -10686,8 +10750,8 @@ class HarnessRuntimeService:
         over, so they keep failing visibly.
         """
 
-        session = self.store.get(HarnessSession, session.id)
-        turn = self.store.get(HarnessTurn, turn.id)
+        session = await self.store.get(HarnessSession, session.id)
+        turn = await self.store.get(HarnessTurn, turn.id)
         if turn.chat_session_id is None or not session.external_session_id:
             return None
         record_caught_exception(
@@ -10698,18 +10762,22 @@ class HarnessRuntimeService:
             stage="connection",
             metadata={"entity_type": "harness_turn", "entity_id": turn.id},
         )
-        chat = self.store.get(ChatSession, turn.chat_session_id)
-        handoff = self._chat_handoff_context(
+        chat = await self.store.get(ChatSession, turn.chat_session_id)
+        handoff = await self._chat_handoff_context(
             chat,
             reason="the saved harness session could not be resumed",
             before_turn_id=turn.id,
         )
-        replacement = self._fork_session(session, reason="vendor_session_unavailable")
-        self._rebind_chat_session(
-            chat,
-            replacement,
-            previous_session_id=session.id,
-            reason="vendor_session_unavailable",
+        replacement = await self._fork_session(
+            session, reason="vendor_session_unavailable"
+        )
+        (
+            await self._rebind_chat_session(
+                chat,
+                replacement,
+                previous_session_id=session.id,
+                reason="vendor_session_unavailable",
+            )
         )
         user_prompt = turn.metadata.get("user_prompt")
         prompt = (
@@ -10717,7 +10785,7 @@ class HarnessRuntimeService:
             if isinstance(user_prompt, str) and turn.prompt.startswith(user_prompt)
             else turn.prompt + handoff
         )
-        turn = self.store.update(
+        turn = await self.store.update(
             HarnessTurn,
             turn.id,
             {
@@ -10731,7 +10799,7 @@ class HarnessRuntimeService:
             },
             expected_revision=turn.revision,
         )
-        notice = self._persist_activity(
+        notice = await self._persist_activity(
             turn,
             replacement,
             HarnessEvent(
@@ -10752,12 +10820,12 @@ class HarnessRuntimeService:
         )
         return turn, replacement, notice
 
-    def _replace_session_for_current_command_runtime(
+    async def _replace_session_for_current_command_runtime(
         self, session: HarnessSession
     ) -> HarnessSession:
         """Preserve frozen capabilities while replacing only the command runtime."""
 
-        components, snapshot = self._build_oci_components(
+        components, snapshot = await self._build_oci_components(
             engagement_id=session.engagement_id,
             model=session.model,
             include_browser=session.metadata.get("browser_runtime_enabled") is True,
@@ -10776,7 +10844,7 @@ class HarnessRuntimeService:
                 "context_management": "runtime_managed",
             }
         )
-        replacement = self.store.create(
+        replacement = await self.store.create(
             HarnessSession(
                 id=str(uuid4()),
                 engagement_id=session.engagement_id,
@@ -10792,7 +10860,7 @@ class HarnessRuntimeService:
         return replacement
 
     async def close_session(self, session_id: str) -> HarnessSession:
-        session = self.store.get(HarnessSession, session_id)
+        session = await self.store.get(HarnessSession, session_id)
         if session_id in self._active:
             raise HarnessStateError(
                 "cannot close a harness session with an active turn"
@@ -10811,29 +10879,33 @@ class HarnessRuntimeService:
         self._gateway_oci_components.pop(session_id, None)
         if session.status == HarnessSessionStatus.CLOSED:
             return session
-        return self.store.update(
+        return await self.store.update(
             HarnessSession,
             session.id,
             {"status": HarnessSessionStatus.CLOSED, "last_activity_at": utc_now()},
             expected_revision=session.revision,
         )
 
-    def _assert_chat_turn_available(
-        self, chat_session_id: str, *, database: Session | None = None
+    async def _assert_chat_turn_available(
+        self, chat_session_id: str, *, database: AsyncSession | None = None
     ) -> None:
         if database is None:
-            with self.store.database.session() as opened:
-                self._assert_chat_turn_available(chat_session_id, database=opened)
+            async with self.store.database.session() as opened:
+                (
+                    await self._assert_chat_turn_available(
+                        chat_session_id, database=opened
+                    )
+                )
             return
         if any(
             ChatService._header_is_pending(turn)
-            for turn in session_turn_headers(database, chat_session_id)
+            for turn in (await session_turn_headers(database, chat_session_id))
         ):
             raise ChatHistoryConflict(
                 "This conversation already has an active response. Wait for it to finish or stop it before sending another message."
             )
 
-    def prepare_chat(
+    async def prepare_chat(
         self,
         *,
         engagement_id: str,
@@ -10874,14 +10946,16 @@ class HarnessRuntimeService:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
-        project_workspace_path = self.store.get(
-            Engagement, engagement_id
+        project_workspace_path = (
+            await self.store.get(Engagement, engagement_id)
         ).workspace_path
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         from .chat_agent_messages import resolve_agent_messaging_choice
 
         saved_chat = (
-            self.store.get(ChatSession, chat_session_id) if chat_session_id else None
+            (await self.store.get(ChatSession, chat_session_id))
+            if chat_session_id
+            else None
         )
         saved_tools = (
             saved_chat.metadata.get("core_tool_selection", {}) if saved_chat else {}
@@ -10905,7 +10979,7 @@ class HarnessRuntimeService:
         from .tool_catalog import on_demand_enabled
         from .environments import resolve_ssh_environments
 
-        workspace = self.workspace_resolver(engagement_id)
+        workspace = await resolve_workspace(self.workspace_resolver, engagement_id)
         browser_ids = {
             item.get("source_id")
             for item in context_attachments or []
@@ -10918,7 +10992,7 @@ class HarnessRuntimeService:
         browser_session_id = next(iter(browser_ids), None)
         if (
             browser_session_id
-            and self.store.get(BrowserSession, browser_session_id).engagement_id
+            and (await self.store.get(BrowserSession, browser_session_id)).engagement_id
             != engagement_id
         ):
             raise HarnessConfigurationError(
@@ -10936,8 +11010,10 @@ class HarnessRuntimeService:
 
             unresolved = [
                 item
-                for item in self.store.list_session_entities(
-                    NativeHookExecution, saved_chat.id
+                for item in (
+                    await self.store.list_session_entities(
+                        NativeHookExecution, saved_chat.id
+                    )
                 )
                 if item.hook_id in selected_hooks
                 and item.side_effects != "none"
@@ -10977,18 +11053,20 @@ class HarnessRuntimeService:
                 "Core skill instructions require permission to share project data and explicit operator confirmation for a remote harness"
             )
         runtime_context = (runtime_context or "") + skill_instructions(core_skills)
-        project = self.store.get(Engagement, engagement_id)
+        project = await self.store.get(Engagement, engagement_id)
         scope = (
-            self.store.get(ScopePolicy, project.scope_policy_id)
+            (await self.store.get(ScopePolicy, project.scope_policy_id))
             if project.scope_policy_id
             else ScopePolicy(engagement_id=engagement_id)
         )
         catalog_profiles = (
-            catalog_mcp_profiles(
-                self.store,
-                exclude=mcp_server_ids or [],
-                engagement_id=engagement_id,
-                bypass_permissions=scope.bypass_permissions,
+            (
+                await catalog_mcp_profiles(
+                    self.store,
+                    exclude=mcp_server_ids or [],
+                    engagement_id=engagement_id,
+                    bypass_permissions=scope.bypass_permissions,
+                )
             )
             if allow_mcp_catalog and on_demand_enabled(scope) and not control_assistant
             else ()
@@ -10999,7 +11077,7 @@ class HarnessRuntimeService:
         ):
             catalog_profiles = ()
         ssh_hosts = (
-            resolve_ssh_environments(self.store, ssh_environment_ids)
+            (await resolve_ssh_environments(self.store, ssh_environment_ids))
             if ssh_environment_ids is not None
             else ()
         )
@@ -11008,7 +11086,7 @@ class HarnessRuntimeService:
             if planning_enabled is not None
             else saved_chat and saved_chat.metadata.get("planning_enabled", False)
         )
-        messaging_choice = resolve_agent_messaging_choice(
+        messaging_choice = await resolve_agent_messaging_choice(
             self.store,
             engagement_id,
             saved_chat,
@@ -11022,7 +11100,7 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "subagents are unavailable in this Core"
                 )
-            subagent_setting = self.provider_subagents.validate_harness_setting(
+            subagent_setting = await self.provider_subagents.validate_harness_setting(
                 engagement_id,
                 str(provider_subagent.get("provider_profile_id") or ""),
                 str(provider_subagent.get("model") or ""),
@@ -11040,12 +11118,16 @@ class HarnessRuntimeService:
         if image_blocks:
             image_model = (model or profile.default_model or "").strip()
             if chat_session_id and not model:
-                image_chat = self.store.get(ChatSession, chat_session_id)
-                image_model = self.store.get(
-                    HarnessSession, image_chat.harness_session_id or ""
+                image_chat = await self.store.get(ChatSession, chat_session_id)
+                image_model = (
+                    await self.store.get(
+                        HarnessSession, image_chat.harness_session_id or ""
+                    )
                 ).model
             elif harness_session_id:
-                image_model = self.store.get(HarnessSession, harness_session_id).model
+                image_model = (
+                    await self.store.get(HarnessSession, harness_session_id)
+                ).model
             if profile.kind != HarnessKind.CODEX_APP_SERVER or not any(
                 option.model == image_model and option.image_input
                 for option in profile.capabilities.model_options
@@ -11053,15 +11135,17 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "The selected runtime does not advertise image input."
                 )
-            resolve_chat_model_content(
-                self.store,
-                self.artifact_store,
-                ChatRequestMessage(
-                    role=ChatRole.USER,
-                    content=clean_prompt,
-                    content_blocks=image_blocks,
-                ),
-                engagement_id,
+            (
+                await resolve_chat_model_content(
+                    self.store,
+                    self.artifact_store,
+                    ChatRequestMessage(
+                        role=ChatRole.USER,
+                        content=clean_prompt,
+                        content_blocks=image_blocks,
+                    ),
+                    engagement_id,
+                )
             )
         negotiated = profile.capabilities
         if harness_mode:
@@ -11084,16 +11168,18 @@ class HarnessRuntimeService:
                 )
             available = {
                 (skill.name, skill.path)
-                for skill in self.available_skills(
-                    engagement_id=engagement_id,
-                    profile_id=profile_id,
+                for skill in (
+                    await self.available_skills(
+                        engagement_id=engagement_id,
+                        profile_id=profile_id,
+                    )
                 )
             }
             if (harness_skill.name, harness_skill.path) not in available:
                 raise HarnessConfigurationError(
                     "selected harness skill is not available in this project or the installed skill catalog"
                 )
-        knowledge_access = self._resolve_knowledge_access(
+        knowledge_access = await self._resolve_knowledge_access(
             engagement_id,
             profile,
             requested=include_knowledge,
@@ -11102,7 +11188,7 @@ class HarnessRuntimeService:
         settings_previous_session_id: str | None = None
         settings_handoff = ""
         if chat_session_id:
-            chat = self.store.get(ChatSession, chat_session_id)
+            chat = await self.store.get(ChatSession, chat_session_id)
             if chat.engagement_id != engagement_id:
                 raise HarnessStateError("chat belongs to a different project")
             if (chat.metadata.get("control_assistant") is True) != control_assistant:
@@ -11112,9 +11198,9 @@ class HarnessRuntimeService:
             # A busy vendor session may be forked for independent work, but a
             # conversation has only one active response owner. Reject a stale
             # send before changing its harness binding or saving its message.
-            self._assert_chat_turn_available(chat.id)
+            (await self._assert_chat_turn_available(chat.id))
             session = (
-                self.store.get(HarnessSession, chat.harness_session_id)
+                (await self.store.get(HarnessSession, chat.harness_session_id))
                 if chat.backend == ChatBackend.HARNESS and chat.harness_session_id
                 else None
             )
@@ -11195,19 +11281,21 @@ class HarnessRuntimeService:
                 or tier != frozen_options.get("service_tier")
                 or cyber_program != frozen_options.get("cyber_access_program")
             )
-            self._validate_harness_privacy(
-                engagement_id,
-                profile,
-                selected_mcp,
-                allow_remote_mcp=allow_remote_mcp,
-                uses_gateway_tools=allow_agent_messaging,
+            (
+                await self._validate_harness_privacy(
+                    engagement_id,
+                    profile,
+                    selected_mcp,
+                    allow_remote_mcp=allow_remote_mcp,
+                    uses_gateway_tools=allow_agent_messaging,
+                )
             )
             if changed:
                 settings_previous_session_id = session.id if session else None
-                settings_handoff = self._chat_handoff_context(
+                settings_handoff = await self._chat_handoff_context(
                     chat, reason="an assistant settings update"
                 )
-                session = self.create_session(
+                session = await self.create_session(
                     engagement_id=engagement_id,
                     profile_id=profile_id,
                     model=selected_model,
@@ -11219,7 +11307,7 @@ class HarnessRuntimeService:
                     control_assistant=control_assistant,
                     core_plan_isolated=False,
                 )
-                chat = self._rebind_chat_session(
+                chat = await self._rebind_chat_session(
                     chat,
                     session,
                     previous_session_id=settings_previous_session_id or "",
@@ -11228,7 +11316,7 @@ class HarnessRuntimeService:
             assert session is not None
             pending_context_message_id = chat.metadata.get("pending_context_message_id")
             if isinstance(pending_context_message_id, str):
-                pending_context_message = self.store.get(
+                pending_context_message = await self.store.get(
                     ChatMessage, pending_context_message_id
                 )
                 if pending_context_message.session_id != chat.id:
@@ -11240,7 +11328,7 @@ class HarnessRuntimeService:
                     + "\n\nNebula-attached conversation context:\n"
                     + pending_context_message.content
                 )
-                chat = self.store.update(
+                chat = await self.store.update(
                     ChatSession,
                     chat.id,
                     {
@@ -11254,7 +11342,7 @@ class HarnessRuntimeService:
                 )
         else:
             if harness_session_id:
-                session = self._compatible_session(
+                session = await self._compatible_session(
                     harness_session_id, engagement_id, profile_id, model
                 )
                 if bool(session.metadata.get("control_assistant")) != control_assistant:
@@ -11287,26 +11375,30 @@ class HarnessRuntimeService:
                     raise HarnessStateError(
                         "selected Daybreak choice does not match the existing harness session"
                     )
-                self._validate_harness_privacy(
-                    engagement_id,
-                    profile,
-                    session.mcp_server_ids,
-                    allow_remote_mcp=allow_remote_mcp,
-                    uses_gateway_tools=allow_agent_messaging,
+                (
+                    await self._validate_harness_privacy(
+                        engagement_id,
+                        profile,
+                        session.mcp_server_ids,
+                        allow_remote_mcp=allow_remote_mcp,
+                        uses_gateway_tools=allow_agent_messaging,
+                    )
                 )
                 if mcp_server_ids:
                     raise HarnessConfigurationError(
                         "MCP selection cannot change when attaching an existing session"
                     )
             else:
-                self._validate_harness_privacy(
-                    engagement_id,
-                    profile,
-                    mcp_server_ids or [],
-                    allow_remote_mcp=allow_remote_mcp,
-                    uses_gateway_tools=allow_agent_messaging,
+                (
+                    await self._validate_harness_privacy(
+                        engagement_id,
+                        profile,
+                        mcp_server_ids or [],
+                        allow_remote_mcp=allow_remote_mcp,
+                        uses_gateway_tools=allow_agent_messaging,
+                    )
                 )
-                session = self.create_session(
+                session = await self.create_session(
                     engagement_id=engagement_id,
                     profile_id=profile_id,
                     model=model,
@@ -11322,7 +11414,7 @@ class HarnessRuntimeService:
                     control_assistant=control_assistant,
                     core_plan_isolated=False,
                 )
-            chat = self.store.create(
+            chat = await self.store.create(
                 ChatSession(
                     id=str(uuid4()),
                     engagement_id=engagement_id,
@@ -11361,7 +11453,7 @@ class HarnessRuntimeService:
             ):
                 pending_provider_subagent = saved_subagent
         if chat.metadata.get("planning_enabled", False) != planning_enabled:
-            chat = self.store.update(
+            chat = await self.store.update(
                 ChatSession,
                 chat.id,
                 {"metadata": {**chat.metadata, "planning_enabled": planning_enabled}},
@@ -11370,7 +11462,7 @@ class HarnessRuntimeService:
         # Core checks the subagent model itself: the composer may still be
         # loading the verification a saved or newly chosen model already has.
         if subagent_setting is None and pending_provider_subagent is not None:
-            subagent_setting = self._verified_provider_subagent(
+            subagent_setting = await self._verified_provider_subagent(
                 engagement_id, pending_provider_subagent
             )
         forked_from_session_id = settings_previous_session_id
@@ -11379,8 +11471,8 @@ class HarnessRuntimeService:
         )
         handoff_context = settings_handoff
         if chat.metadata.get("harness_context_handoff_pending") is True:
-            handoff_context = self._chat_handoff_context(chat)
-            chat = self.store.update(
+            handoff_context = await self._chat_handoff_context(chat)
+            chat = await self.store.update(
                 ChatSession,
                 chat.id,
                 {
@@ -11396,19 +11488,21 @@ class HarnessRuntimeService:
                 },
                 expected_revision=chat.revision,
             )
-        current_execution_mode = self._project_execution_mode(session.engagement_id)
+        current_execution_mode = await self._project_execution_mode(
+            session.engagement_id
+        )
         if session.metadata.get("execution_mode") != current_execution_mode:
             previous_session_id = session.id
-            handoff_context = self._chat_handoff_context(
+            handoff_context = await self._chat_handoff_context(
                 chat, reason="an execution mode update"
             )
-            session = self._fork_session_for_execution_mode(
+            session = await self._fork_session_for_execution_mode(
                 session,
                 profile,
                 execution_mode=current_execution_mode,
                 reason="execution_mode_changed",
             )
-            chat = self._rebind_chat_session(
+            chat = await self._rebind_chat_session(
                 chat,
                 session,
                 previous_session_id=previous_session_id,
@@ -11416,11 +11510,13 @@ class HarnessRuntimeService:
             )
             forked_from_session_id = previous_session_id
             session_rollover_reason = "execution_mode_changed"
-        if self.session_activity(session.id).busy:
+        if (await self.session_activity(session.id)).busy:
             forked_from_session_id = session.id
-            handoff_context = self._chat_handoff_context(chat)
-            session = self._fork_session(session, reason="parallel chat turn requested")
-            chat = self._rebind_chat_session(
+            handoff_context = await self._chat_handoff_context(chat)
+            session = await self._fork_session(
+                session, reason="parallel chat turn requested"
+            )
+            chat = await self._rebind_chat_session(
                 chat,
                 session,
                 previous_session_id=forked_from_session_id,
@@ -11431,16 +11527,16 @@ class HarnessRuntimeService:
             and session.metadata.get("workspace_binding_version") != 1
         ):
             previous_session_id = session.id
-            handoff_context = self._chat_handoff_context(
+            handoff_context = await self._chat_handoff_context(
                 chat, reason="a workspace connection update"
             )
-            session = self._fork_session_for_execution_mode(
+            session = await self._fork_session_for_execution_mode(
                 session,
                 profile,
                 execution_mode=current_execution_mode,
                 reason="workspace_connection_changed",
             )
-            chat = self._rebind_chat_session(
+            chat = await self._rebind_chat_session(
                 chat,
                 session,
                 previous_session_id=previous_session_id,
@@ -11451,17 +11547,19 @@ class HarnessRuntimeService:
         try:
             # The cached broker still has its frozen mode. Validate at the next
             # turn boundary so an explicit project change gets a fresh session.
-            oci_components = self._ensure_oci_components(session, validate_current=True)
+            oci_components = await self._ensure_oci_components(
+                session, validate_current=True
+            )
         except HarnessCommandRuntimeSnapshotMismatch:
             if not chat_session_id:
                 raise
             previous_session_id = session.id
             if not handoff_context:
-                handoff_context = self._chat_handoff_context(
+                handoff_context = await self._chat_handoff_context(
                     chat, reason="a command runtime update"
                 )
-            session = self._replace_session_for_current_command_runtime(session)
-            chat = self._rebind_chat_session(
+            session = await self._replace_session_for_current_command_runtime(session)
+            chat = await self._rebind_chat_session(
                 chat,
                 session,
                 previous_session_id=previous_session_id,
@@ -11469,17 +11567,19 @@ class HarnessRuntimeService:
             )
             forked_from_session_id = previous_session_id
             session_rollover_reason = "command_runtime_changed"
-            oci_components = self._ensure_oci_components(session)
-        session = self._bind_session_provider_subagent(session, subagent_setting)
-        session = self._bind_session_agent_messaging(session, allow_agent_messaging)
+            oci_components = await self._ensure_oci_components(session)
+        session = await self._bind_session_provider_subagent(session, subagent_setting)
+        session = await self._bind_session_agent_messaging(
+            session, allow_agent_messaging
+        )
         # A choice this turn cannot use yet is remembered, never bound: the
         # vendor session only offers subagent tools on a validated setting.
-        chat = self._remember_chat_provider_subagent(
+        chat = await self._remember_chat_provider_subagent(
             chat, subagent_setting or pending_provider_subagent
         )
-        chat = self._remember_chat_agent_messaging(chat, messaging_choice)
+        chat = await self._remember_chat_agent_messaging(chat, messaging_choice)
         subagent_update = (
-            self.provider_subagents.harness_update(chat.id)
+            (await self.provider_subagents.harness_update(chat.id))
             if self.provider_subagents is not None
             else None
         )
@@ -11491,7 +11591,11 @@ class HarnessRuntimeService:
         # carrying them (_mark_prompt_context_delivered); a turn that fails to
         # start leaves them for the retry or the next prompt.
         agent_update = (
-            self.agent_messages.inbox(chat.id, mark=False, harness=True, text=True)
+            (
+                await self.agent_messages.inbox(
+                    chat.id, mark=False, harness=True, text=True
+                )
+            )
             if allow_agent_messaging and self.agent_messages is not None
             else {"messages": []}
         )
@@ -11519,7 +11623,7 @@ class HarnessRuntimeService:
             and "run_command" in oci_tool_names
             and not control_assistant
         ):
-            ssh_hosts = resolve_ssh_environments(self.store, None)
+            ssh_hosts = await resolve_ssh_environments(self.store, None)
         native_capabilities = HarnessNativeCapabilities.model_validate(
             session.metadata.get("native_capabilities", {})
         )
@@ -11528,7 +11632,7 @@ class HarnessRuntimeService:
         operator_decisions = (
             []
             if control_assistant
-            else decision_snapshot(self.store, chat.id, engagement_id)
+            else (await decision_snapshot(self.store, chat.id, engagement_id))
         )
         runtime_context = (runtime_context or "") + decision_instructions(
             operator_decisions
@@ -11537,7 +11641,7 @@ class HarnessRuntimeService:
 
         goals = ChatGoalService(self.store)
         try:
-            saved_goal = goals.get(chat.id)
+            saved_goal = await goals.get(chat.id)
         except NotFoundError:  # diagnostic-expected: this chat has no Core goal yet
             saved_goal = None
         if goal_id is not None and (saved_goal is None or saved_goal.id != goal_id):
@@ -11588,8 +11692,10 @@ class HarnessRuntimeService:
                 + _goal_time_instruction(goal, utc_now())
                 + skill_instructions(
                     SkillSnapshot.model_validate(snapshot)
-                    for snapshot in resolve_skill_snapshots(
-                        self.store, goal.skill_snapshots, session_id=goal.session_id
+                    for snapshot in (
+                        await resolve_skill_snapshots(
+                            self.store, goal.skill_snapshots, session_id=goal.session_id
+                        )
                     )
                 )
             )
@@ -11597,7 +11703,7 @@ class HarnessRuntimeService:
 
         if core_data_allowed:
             runtime_context += "\n\n" + working_notes_block(
-                read_working_notes(self.store, chat.id)
+                (await read_working_notes(self.store, chat.id))
             )
         assistant_scope = (
             "\n\nYou are Butler, the second-in-command for the selected Nebula project. "
@@ -11626,7 +11732,7 @@ class HarnessRuntimeService:
             )
         if control_assistant and self.butler_memory is not None:
             assistant_scope += "\n\n" + BUTLER_MEMORY_INSTRUCTION
-            assistant_scope += self.butler_memory.turn_context(
+            assistant_scope += await self.butler_memory.turn_context(
                 engagement_id, clean_prompt
             )
         chat_turn = ChatTurn(
@@ -11770,16 +11876,22 @@ class HarnessRuntimeService:
                 ),
             }
         )
-        prior_messages = self._chat_messages(
+        prior_messages = await self._chat_messages(
             engagement_id, chat.id, include_replaced=True
         )
-        with self.store.transaction(immediate=True) as transaction:
-            transaction.assert_project_workspace(engagement_id, project_workspace_path)
+        async with self.store.transaction(immediate=True) as transaction:
+            (
+                await transaction.assert_project_workspace(
+                    engagement_id, project_workspace_path
+                )
+            )
             # Serialize competing sends on PostgreSQL and recheck in the same
             # transaction that saves the turn. SQLite writes are serialized by
             # its single-writer transaction boundary.
-            current_chat_row = transaction.session.execute(
-                select(EntityRow).where(EntityRow.id == chat.id).with_for_update()
+            current_chat_row = (
+                await transaction.session.execute(
+                    select(EntityRow).where(EntityRow.id == chat.id).with_for_update()
+                )
             ).scalar_one()
             if (
                 current_chat_row.payload.get("backend") != ChatBackend.HARNESS.value
@@ -11788,9 +11900,13 @@ class HarnessRuntimeService:
                 raise ChatHistoryConflict(
                     "This conversation changed runtime while the response was starting. Reload it before retrying."
                 )
-            self._assert_chat_turn_available(chat.id, database=transaction.session)
+            (
+                await self._assert_chat_turn_available(
+                    chat.id, database=transaction.session
+                )
+            )
             if goal is not None:
-                current_goal = self.store.get(ChatGoal, goal.id)
+                current_goal = await self.store.get(ChatGoal, goal.id)
                 if (
                     current_goal.revision != goal.revision
                     or current_goal.status != ChatGoalStatus.RUNNING
@@ -11799,44 +11915,52 @@ class HarnessRuntimeService:
                     raise ConflictError(
                         "goal changed while the harness turn was starting"
                     )
-                transaction.update(
-                    ChatGoal,
-                    goal.id,
-                    {
-                        "current_step": goal.current_step + 1,
-                        "linked_turn_ids": [*goal.linked_turn_ids, chat_turn.id],
-                        "execution_owner_id": "harness-runtime",
-                        "execution_claim_id": chat_turn.id,
-                        "execution_claimed_at": utc_now(),
-                        "active_since": goal.active_since or utc_now(),
-                    },
-                    expected_revision=goal.revision,
+                (
+                    await transaction.update(
+                        ChatGoal,
+                        goal.id,
+                        {
+                            "current_step": goal.current_step + 1,
+                            "linked_turn_ids": [*goal.linked_turn_ids, chat_turn.id],
+                            "execution_owner_id": "harness-runtime",
+                            "execution_claim_id": chat_turn.id,
+                            "execution_claimed_at": utc_now(),
+                            "active_since": goal.active_since or utc_now(),
+                        },
+                        expected_revision=goal.revision,
+                    )
                 )
-            transaction.add(chat_turn)
-            transaction.add(harness_turn)
+            (await transaction.add(chat_turn))
+            (await transaction.add(harness_turn))
             from .chat_queue import link_queue_turn
 
-            link_queue_turn(transaction, queue_claim, chat_turn.id, harness_turn.id)
-            sequence = max((item.sequence for item in prior_messages), default=0) + 1
-            transaction.add(
-                ChatMessage(
-                    id=str(uuid4()),
-                    engagement_id=engagement_id,
-                    session_id=chat.id,
-                    sequence=sequence,
-                    role=ChatRole.USER,
-                    content=clean_prompt,
-                    content_blocks=content_blocks or [],
-                    model=session.model,
-                    metadata={
-                        "harness_turn_id": harness_turn.id,
-                        "context_attachments": context_attachments or [],
-                        "operator_decisions": operator_decisions,
-                    },
+            (
+                await link_queue_turn(
+                    transaction, queue_claim, chat_turn.id, harness_turn.id
                 )
             )
-        latest_chat = self.store.get(ChatSession, chat.id)
-        chat = self.store.update(
+            sequence = max((item.sequence for item in prior_messages), default=0) + 1
+            (
+                await transaction.add(
+                    ChatMessage(
+                        id=str(uuid4()),
+                        engagement_id=engagement_id,
+                        session_id=chat.id,
+                        sequence=sequence,
+                        role=ChatRole.USER,
+                        content=clean_prompt,
+                        content_blocks=content_blocks or [],
+                        model=session.model,
+                        metadata={
+                            "harness_turn_id": harness_turn.id,
+                            "context_attachments": context_attachments or [],
+                            "operator_decisions": operator_decisions,
+                        },
+                    )
+                )
+            )
+        latest_chat = await self.store.get(ChatSession, chat.id)
+        chat = await self.store.update(
             ChatSession,
             chat.id,
             {
@@ -11857,21 +11981,23 @@ class HarnessRuntimeService:
             {"tool.before", "tool.after"}.intersection(item.manifest.events)
             for item in hook_snapshots
         )
-        latest_session = self.store.get(HarnessSession, session.id)
-        self.store.update(
-            HarnessSession,
-            session.id,
-            {
-                "metadata": {
-                    **latest_session.metadata,
-                    "core_guarded_tools": guarded_commands,
-                }
-            },
-            expected_revision=latest_session.revision,
+        latest_session = await self.store.get(HarnessSession, session.id)
+        (
+            await self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **latest_session.metadata,
+                        "core_guarded_tools": guarded_commands,
+                    }
+                },
+                expected_revision=latest_session.revision,
+            )
         )
         return chat, chat_turn, harness_turn
 
-    def _verified_provider_subagent(
+    async def _verified_provider_subagent(
         self, engagement_id: str, choice: Mapping[str, Any]
     ) -> dict[str, Any] | None:
         """The saved or pending subagent choice, if Core can use it this turn.
@@ -11884,7 +12010,7 @@ class HarnessRuntimeService:
         if self.provider_subagents is None:
             return None
         try:
-            return self.provider_subagents.validate_harness_setting(
+            return await self.provider_subagents.validate_harness_setting(
                 engagement_id,
                 str(choice.get("provider_profile_id") or ""),
                 str(choice.get("model") or ""),
@@ -11897,7 +12023,7 @@ class HarnessRuntimeService:
         ):  # diagnostic-expected: an unverified choice waits for a later turn
             return None
 
-    def _mark_prompt_context_delivered(self, turn: HarnessTurn) -> None:
+    async def _mark_prompt_context_delivered(self, turn: HarnessTurn) -> None:
         """The vendor accepted this turn's prompt: record the subagent reports
         and messages and peer messages it carried as received. Idempotent."""
 
@@ -11905,16 +12031,20 @@ class HarnessRuntimeService:
         message_ids = turn.metadata.get("subagent_messages_delivered") or []
         agent_ids = turn.metadata.get("agent_messages_delivered") or []
         if (report_ids or message_ids) and self.provider_subagents is not None:
-            self.provider_subagents.mark_ids_delivered(
-                report_ids=[str(item) for item in report_ids],
-                message_ids=[str(item) for item in message_ids],
+            (
+                await self.provider_subagents.mark_ids_delivered(
+                    report_ids=[str(item) for item in report_ids],
+                    message_ids=[str(item) for item in message_ids],
+                )
             )
         if agent_ids and self.agent_messages is not None:
-            self.agent_messages.mark_message_ids_delivered(
-                [str(item) for item in agent_ids]
+            (
+                await self.agent_messages.mark_message_ids_delivered(
+                    [str(item) for item in agent_ids]
+                )
             )
 
-    def _bind_session_provider_subagent(
+    async def _bind_session_provider_subagent(
         self, session: HarnessSession, setting: dict[str, Any] | None
     ) -> HarnessSession:
         """Record the provider subagent model the session's catalog offers.
@@ -11924,7 +12054,7 @@ class HarnessRuntimeService:
         external thread and its transcript carry on.
         """
 
-        session = self.store.get(HarnessSession, session.id)
+        session = await self.store.get(HarnessSession, session.id)
         if _session_provider_subagent(session) == setting:
             return session
         metadata = {
@@ -11934,14 +12064,14 @@ class HarnessRuntimeService:
         }
         if setting is not None:
             metadata["provider_subagent"] = dict(setting)
-        return self.store.update(
+        return await self.store.update(
             HarnessSession,
             session.id,
             {"metadata": metadata},
             expected_revision=session.revision,
         )
 
-    def _remember_chat_provider_subagent(
+    async def _remember_chat_provider_subagent(
         self, chat: ChatSession, setting: dict[str, Any] | None
     ) -> ChatSession:
         """Keep the operator's choice with the conversation for the composer.
@@ -11955,25 +12085,25 @@ class HarnessRuntimeService:
         chat keeps it too.
         """
 
-        chat = self.store.get(ChatSession, chat.id)
+        chat = await self.store.get(ChatSession, chat.id)
         if setting is None or chat.metadata.get("provider_subagent") == setting:
             return chat
-        return self.store.update(
+        return await self.store.update(
             ChatSession,
             chat.id,
             {"metadata": {**chat.metadata, "provider_subagent": setting}},
             expected_revision=chat.revision,
         )
 
-    def _bind_session_agent_messaging(
+    async def _bind_session_agent_messaging(
         self, session: HarnessSession, enabled: bool
     ) -> HarnessSession:
         """Bind the peer-tool catalog choice to this vendor session."""
 
-        session = self.store.get(HarnessSession, session.id)
+        session = await self.store.get(HarnessSession, session.id)
         if (session.metadata.get("allow_agent_messaging") is True) == enabled:
             return session
-        return self.store.update(
+        return await self.store.update(
             HarnessSession,
             session.id,
             {
@@ -11985,15 +12115,15 @@ class HarnessRuntimeService:
             expected_revision=session.revision,
         )
 
-    def _remember_chat_agent_messaging(
+    async def _remember_chat_agent_messaging(
         self, chat: ChatSession, enabled: bool
     ) -> ChatSession:
         """Persist peer messaging with the main conversation."""
 
-        chat = self.store.get(ChatSession, chat.id)
+        chat = await self.store.get(ChatSession, chat.id)
         if (chat.metadata.get("allow_agent_messaging") is True) == enabled:
             return chat
-        return self.store.update(
+        return await self.store.update(
             ChatSession,
             chat.id,
             {
@@ -12005,10 +12135,10 @@ class HarnessRuntimeService:
             expected_revision=chat.revision,
         )
 
-    def start_chat_turn(self, turn_id: str) -> asyncio.Task[None]:
+    async def start_chat_turn(self, turn_id: str) -> asyncio.Task[None]:
         """Start a chat harness producer that survives viewer disconnections."""
 
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         if turn.origin != HarnessTurnOrigin.CHAT:
             raise HarnessStateError("only chat harness turns use detached producers")
         existing = self._chat_turn_tasks.get(turn.id)
@@ -12020,24 +12150,26 @@ class HarnessRuntimeService:
         # turn's attachment may have been removed or replaced since it ran.
         from .browser_companion_tools import attached_session
 
-        companion_id = attached_session(
+        companion_id = await attached_session(
             self.store, turn.engagement_id, turn.chat_session_id
         )
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.metadata.get("browser_companion_session_id") != companion_id:
-            self.store.update(
-                HarnessSession,
-                session.id,
-                {
-                    "metadata": {
-                        **session.metadata,
-                        "browser_companion_session_id": companion_id,
-                    }
-                },
-                expected_revision=session.revision,
+            (
+                await self.store.update(
+                    HarnessSession,
+                    session.id,
+                    {
+                        "metadata": {
+                            **session.metadata,
+                            "browser_companion_session_id": companion_id,
+                        }
+                    },
+                    expected_revision=session.revision,
+                )
             )
         if turn.metadata.get("browser_companion_session_id") != companion_id:
-            turn = self.store.update(
+            turn = await self.store.update(
                 HarnessTurn,
                 turn.id,
                 {
@@ -12060,7 +12192,7 @@ class HarnessRuntimeService:
 
     async def _drive_chat_turn(self, turn_id: str) -> None:
         try:
-            turn = self.store.get(HarnessTurn, turn_id)
+            turn = await self.store.get(HarnessTurn, turn_id)
             raw_context = turn.metadata.get("diagnostic_context")
             context = raw_context if isinstance(raw_context, dict) else {}
             with diagnostic_context(
@@ -12098,7 +12230,9 @@ class HarnessRuntimeService:
                         metadata={"entity_type": "harness_turn", "entity_id": turn_id},
                     )
 
-    def _capacity_effects_settled(self, turn: HarnessTurn, owner: ChatTurn) -> bool:
+    async def _capacity_effects_settled(
+        self, turn: HarnessTurn, owner: ChatTurn
+    ) -> bool:
         """Require durable receipts before continuing an interrupted goal.
 
         The continuation is a new instruction, never a replay of the failed
@@ -12117,7 +12251,7 @@ class HarnessRuntimeService:
             return False
         for call_id in set(turn.tool_call_ids) | set(owner.tool_call_ids):
             try:
-                call = self.store.get(ToolCall, call_id)
+                call = await self.store.get(ToolCall, call_id)
             except (
                 NotFoundError
             ):  # diagnostic-expected: a missing receipt cannot prove settled effects
@@ -12127,7 +12261,7 @@ class HarnessRuntimeService:
                 RiskClass.PASSIVE,
             }:
                 return False
-        events = self.store.replay_operation_events(turn.id, limit=1_001)
+        events = await self.store.replay_operation_events(turn.id, limit=1_001)
         if len(events) > 1_000:
             return False
         started: set[str] = set()
@@ -12164,14 +12298,14 @@ class HarnessRuntimeService:
 
         if self._closed:
             return False
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         if (
             turn.origin != HarnessTurnOrigin.CHAT
             or turn.status != HarnessTurnStatus.INTERRUPTED
             or not turn.chat_turn_id
         ):
             return False
-        owner = self.store.get(ChatTurn, turn.chat_turn_id)
+        owner = await self.store.get(ChatTurn, turn.chat_turn_id)
         if owner.status != ChatTurnStatus.INTERRUPTED or not owner.goal_id:
             return False
         attempt = turn.metadata.get("automatic_capacity_retry_attempt", 0)
@@ -12190,12 +12324,12 @@ class HarnessRuntimeService:
             "Selected model is at capacity."
         ):
             return False
-        if not self._capacity_effects_settled(turn, owner):
+        if not (await self._capacity_effects_settled(turn, owner)):
             return False
         from .chat_goals import ChatGoalService, GoalWrite
 
         goals = ChatGoalService(self.store)
-        goal = goals.get(owner.session_id)
+        goal = await goals.get(owner.session_id)
         if (
             goal.id != owner.goal_id
             or goal.status != ChatGoalStatus.PAUSED
@@ -12208,9 +12342,11 @@ class HarnessRuntimeService:
         if self._closed:
             return False
         try:
-            goals.write(
-                owner.session_id,
-                GoalWrite(expected_revision=goal.revision, action="resume"),
+            (
+                await goals.write(
+                    owner.session_id,
+                    GoalWrite(expected_revision=goal.revision, action="resume"),
+                )
             )
         except (
             ConflictError,
@@ -12226,25 +12362,27 @@ class HarnessRuntimeService:
         # one, leave the goal running for that queue rather than pausing it.
         return (
             next_turn_id is not None
-            or goals.get(owner.session_id).status == ChatGoalStatus.RUNNING
+            or (await goals.get(owner.session_id)).status == ChatGoalStatus.RUNNING
         )
 
-    def _pause_goal(self, session_id: str, reason: str) -> None:
+    async def _pause_goal(self, session_id: str, reason: str) -> None:
         from .chat_goals import ChatGoalService, GoalWrite
 
         goals = ChatGoalService(self.store)
         for _ in range(3):
             try:
-                goal = goals.get(session_id)
+                goal = await goals.get(session_id)
                 if goal.status != ChatGoalStatus.RUNNING:
                     return
-                goals.write(
-                    session_id,
-                    GoalWrite(
-                        expected_revision=goal.revision,
-                        action="pause",
-                        reason=reason[:2_000],
-                    ),
+                (
+                    await goals.write(
+                        session_id,
+                        GoalWrite(
+                            expected_revision=goal.revision,
+                            action="pause",
+                            reason=reason[:2_000],
+                        ),
+                    )
                 )
                 return
             except (
@@ -12256,7 +12394,7 @@ class HarnessRuntimeService:
             ):  # diagnostic-expected: retry a concurrent goal revision
                 continue
 
-    def _goal_has_repeated_tool_free_continuations(self, goal: ChatGoal) -> bool:
+    async def _goal_has_repeated_tool_free_continuations(self, goal: ChatGoal) -> bool:
         """Bound repeated automatic replies without mistaking a native tool for prose."""
 
         if len(goal.linked_turn_ids) < _GOAL_NO_TOOL_TURN_LIMIT:
@@ -12273,7 +12411,7 @@ class HarnessRuntimeService:
         )
         for turn_id in goal.linked_turn_ids[-_GOAL_NO_TOOL_TURN_LIMIT:]:
             try:
-                chat_turn = self.store.get(ChatTurn, turn_id)
+                chat_turn = await self.store.get(ChatTurn, turn_id)
                 if (
                     chat_turn.goal_id != goal.id
                     or chat_turn.status != ChatTurnStatus.COMPLETE
@@ -12281,15 +12419,19 @@ class HarnessRuntimeService:
                     or chat_turn.tool_call_ids
                 ):
                     return False
-                harness_turn = self.store.get(HarnessTurn, chat_turn.harness_turn_id)
+                harness_turn = await self.store.get(
+                    HarnessTurn, chat_turn.harness_turn_id
+                )
                 if (
                     harness_turn.metadata.get("user_prompt")
                     != _HARNESS_GOAL_CONTINUE_INSTRUCTION
                     or harness_turn.tool_call_ids
-                    or self.store.replay_operation_events(
-                        harness_turn.id,
-                        limit=1,
-                        payload_values={"item_kind": activity_kinds},
+                    or (
+                        await self.store.replay_operation_events(
+                            harness_turn.id,
+                            limit=1,
+                            payload_values={"item_kind": activity_kinds},
+                        )
                     )
                 ):
                     return False
@@ -12300,33 +12442,39 @@ class HarnessRuntimeService:
     async def _settle_goal_turn(self, harness_turn_id: str) -> None:
         from .chat_goals import ChatGoalService
 
-        harness_turn = self.store.get(HarnessTurn, harness_turn_id)
+        harness_turn = await self.store.get(HarnessTurn, harness_turn_id)
         if not harness_turn.chat_turn_id or not harness_turn.chat_session_id:
             return
-        turn = self.store.get(ChatTurn, harness_turn.chat_turn_id)
+        turn = await self.store.get(ChatTurn, harness_turn.chat_turn_id)
         if not turn.goal_id:
             return
         if turn.status != ChatTurnStatus.COMPLETE:
-            self._pause_goal(
-                turn.session_id,
-                "The harness response stopped or failed. Review its saved state, then resume the goal.",
+            (
+                await self._pause_goal(
+                    turn.session_id,
+                    "The harness response stopped or failed. Review its saved state, then resume the goal.",
+                )
             )
             return
         goals = ChatGoalService(self.store)
-        goal = goals.get(turn.session_id)
+        goal = await goals.get(turn.session_id)
         if goal.status != ChatGoalStatus.RUNNING:
             return
-        if goals.has_working_subagents(turn.session_id):
-            goals.settle_active_time(turn.session_id)
+        if await goals.has_working_subagents(turn.session_id):
+            (await goals.settle_active_time(turn.session_id))
             return
         if goal.step_budget is not None and goal.current_step >= goal.step_budget:
-            self._pause_goal(turn.session_id, "Goal step budget is exhausted.")
+            (await self._pause_goal(turn.session_id, "Goal step budget is exhausted."))
             return
         if (
             goal.time_budget_seconds is not None
             and goal.active_elapsed_seconds() >= goal.time_budget_seconds
         ):
-            self._pause_goal(turn.session_id, "Goal active-time budget is exhausted.")
+            (
+                await self._pause_goal(
+                    turn.session_id, "Goal active-time budget is exhausted."
+                )
+            )
             return
         await self.dispatch_running_goal(
             turn.session_id,
@@ -12342,7 +12490,7 @@ class HarnessRuntimeService:
         state after Core restarts.
         """
 
-        candidates = await asyncio.to_thread(self._idle_running_goal_candidates)
+        candidates = await self._idle_running_goal_candidates()
         observed: dict[str, tuple[int, str | None, int | None]] = {}
         acted: list[str] = []
         for goal, latest in candidates:
@@ -12360,39 +12508,45 @@ class HarnessRuntimeService:
                 ):
                     acted.append(goal.id)
                 continue
-            self._pause_goal(
-                goal.session_id,
-                f"The goal's latest response ended {latest.status.value} and "
-                "nothing is running for it. Review that response, then resume the goal.",
+            (
+                await self._pause_goal(
+                    goal.session_id,
+                    f"The goal's latest response ended {latest.status.value} and "
+                    "nothing is running for it. Review that response, then resume the goal.",
+                )
             )
             acted.append(goal.id)
         self._idle_goal_observations = observed
         return acted
 
-    def _idle_running_goal_candidates(self) -> list[tuple[ChatGoal, ChatTurn | None]]:
+    async def _idle_running_goal_candidates(
+        self,
+    ) -> list[tuple[ChatGoal, ChatTurn | None]]:
         """Find harness goals with no turn, child, or queued follow-up to await."""
 
         from .chat_goals import ChatGoalService
 
         goals = ChatGoalService(self.store)
         found: list[tuple[ChatGoal, ChatTurn | None]] = []
-        for goal in self.store.iter_readable_entities(
+        async for goal in self.store.iter_readable_entities(
             ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
         ):
             if goal.execution_claim_id is not None:
                 continue
             try:
-                session = self.store.get(ChatSession, goal.session_id)
+                session = await self.store.get(ChatSession, goal.session_id)
                 if (
                     session.backend != ChatBackend.HARNESS
                     or "archived_at" in session.metadata
                 ):
                     continue
-                self._assert_chat_turn_available(goal.session_id)
-                if goals.has_working_subagents(goal.session_id):
+                (await self._assert_chat_turn_available(goal.session_id))
+                if await goals.has_working_subagents(goal.session_id):
                     continue
                 try:
-                    queue = self.store.get(ChatQueue, "chat-queue-" + goal.session_id)
+                    queue = await self.store.get(
+                        ChatQueue, "chat-queue-" + goal.session_id
+                    )
                 except (
                     NotFoundError
                 ):  # diagnostic-expected: most chats have no follow-up queue
@@ -12403,7 +12557,7 @@ class HarnessRuntimeService:
                     for item in queue.items
                 ):
                     continue
-                latest = self.store.list_session_entities(
+                latest = await self.store.list_session_entities(
                     ChatTurn, goal.session_id, newest_first=True, limit=1
                 )
                 if latest and latest[0].harness_turn_id:
@@ -12411,7 +12565,7 @@ class HarnessRuntimeService:
                     task = self._chat_turn_tasks.get(harness_turn_id)
                     if task is not None and not task.done():
                         continue
-                    harness_turn = self.store.get(HarnessTurn, harness_turn_id)
+                    harness_turn = await self.store.get(HarnessTurn, harness_turn_id)
                     if harness_turn.status in {
                         HarnessTurnStatus.QUEUED,
                         HarnessTurnStatus.RUNNING,
@@ -12437,10 +12591,19 @@ class HarnessRuntimeService:
         from .chat_assistant_config import chat_assistant_config
         from .chat_goals import ChatGoalService
 
+        switcher = self.store.runtime_switch_service
+        if switcher is not None:
+            selected = await switcher.settle(session_id)
+            if selected is None:
+                return None
+            if selected.backend != ChatBackend.HARNESS:
+                return await switcher.chat.dispatch_running_goal(
+                    session_id, instruction
+                )
         goals = ChatGoalService(self.store)
         try:
-            goal = goals.get(session_id)
-            chat = self.store.get(ChatSession, session_id)
+            goal = await goals.get(session_id)
+            chat = await self.store.get(ChatSession, session_id)
             if (
                 chat.backend != ChatBackend.HARNESS
                 or goal.status != ChatGoalStatus.RUNNING
@@ -12448,22 +12611,26 @@ class HarnessRuntimeService:
             ):
                 return None
             if goal.step_budget is not None and goal.current_step >= goal.step_budget:
-                self._pause_goal(session_id, "Goal step budget is exhausted.")
+                (await self._pause_goal(session_id, "Goal step budget is exhausted."))
                 return None
             if (
                 goal.time_budget_seconds is not None
                 and goal.active_elapsed_seconds() >= goal.time_budget_seconds
             ):
-                self._pause_goal(session_id, "Goal active-time budget is exhausted.")
+                (
+                    await self._pause_goal(
+                        session_id, "Goal active-time budget is exhausted."
+                    )
+                )
                 return None
             if (
                 goal.token_budget is not None
                 and goal.usage.total_tokens >= goal.token_budget
             ):
-                self._pause_goal(session_id, "Goal token budget is exhausted.")
+                (await self._pause_goal(session_id, "Goal token budget is exhausted."))
                 return None
             try:
-                queue = self.store.get(ChatQueue, "chat-queue-" + session_id)
+                queue = await self.store.get(ChatQueue, "chat-queue-" + session_id)
             except NotFoundError:  # diagnostic-expected: no follow-up queue exists yet
                 queue = None
             if (
@@ -12477,25 +12644,25 @@ class HarnessRuntimeService:
                 # A saved operator follow-up owns the next available turn.
                 # Its turn will carry this running goal and settle it normally.
                 return None
-            self._assert_chat_turn_available(session_id)
-            if (
-                instruction == _HARNESS_GOAL_CONTINUE_INSTRUCTION
-                and self._goal_has_repeated_tool_free_continuations(goal)
+            (await self._assert_chat_turn_available(session_id))
+            if instruction == _HARNESS_GOAL_CONTINUE_INSTRUCTION and (
+                await self._goal_has_repeated_tool_free_continuations(goal)
             ):
-                self._pause_goal(
-                    session_id,
-                    "Three automatic goal responses had no recorded tool activity. "
-                    "Review their saved replies, then resume when concrete work can continue.",
+                (
+                    await self._pause_goal(
+                        session_id,
+                        "Three automatic goal responses had no recorded tool activity. "
+                        "Review their saved replies, then resume when concrete work can continue.",
+                    )
                 )
                 return None
-            next_settings = chat_assistant_config(self.store, chat)
+            next_settings = await chat_assistant_config(self.store, chat)
             if next_settings["backend"] != ChatBackend.HARNESS.value:
                 raise HarnessConfigurationError(
-                    "This goal is bound to an agent harness, but its saved next-turn "
-                    "runtime is a provider. Choose a harness or send a new message "
-                    "in this chat before resuming the goal."
+                    "The saved runtime selection needs review. Resume the goal "
+                    "to validate and apply it in this conversation."
                 )
-            _, turn, harness_turn = self.prepare_chat(
+            _, turn, harness_turn = await self.prepare_chat(
                 engagement_id=chat.engagement_id,
                 profile_id=next_settings["profile_id"],
                 model=next_settings["model"],
@@ -12516,7 +12683,7 @@ class HarnessRuntimeService:
                 ],
             )
             if automatic_capacity_retry_of is not None:
-                harness_turn = self.store.update(
+                harness_turn = await self.store.update(
                     HarnessTurn,
                     harness_turn.id,
                     {
@@ -12529,12 +12696,14 @@ class HarnessRuntimeService:
                     expected_revision=harness_turn.revision,
                 )
             try:
-                self.start_chat_turn(harness_turn.id)
+                (await self.start_chat_turn(harness_turn.id))
             except Exception:
-                self._fail_turn(
-                    harness_turn.id,
-                    HarnessTurnStatus.INTERRUPTED,
-                    "The harness goal turn could not start.",
+                (
+                    await self._fail_turn(
+                        harness_turn.id,
+                        HarnessTurnStatus.INTERRUPTED,
+                        "The harness goal turn could not start.",
+                    )
                 )
                 raise
             return turn.id
@@ -12543,6 +12712,8 @@ class HarnessRuntimeService:
             ConflictError,
         ):  # diagnostic-expected: another sender won the durable claim
             # Another sender or a report callback won the durable turn claim.
+            return None
+        except DatabaseBusyError:  # diagnostic-expected: bounded acquisition is retried without pausing a healthy goal.
             return None
         except Exception as exc:
             record_caught_exception(
@@ -12553,9 +12724,11 @@ class HarnessRuntimeService:
                 stage="goal-dispatch",
                 metadata={"session_id": session_id},
             )
-            self._pause_goal(
-                session_id,
-                f"Automatic goal continuation could not start: {exc}. Review and resume.",
+            (
+                await self._pause_goal(
+                    session_id,
+                    f"Automatic goal continuation could not start: {exc}. Review and resume.",
+                )
             )
             return None
 
@@ -12569,7 +12742,7 @@ class HarnessRuntimeService:
         if self.provider_subagents is None:
             return
         try:
-            turn = self.store.get(HarnessTurn, turn_id)
+            turn = await self.store.get(HarnessTurn, turn_id)
             if not turn.chat_session_id or not turn.chat_turn_id:
                 return
             await self.provider_subagents.harness_turn_settled(
@@ -12615,13 +12788,15 @@ class HarnessRuntimeService:
             # Hold the signal before reading, so an event appended between
             # this read and the wait below still wakes this follower.
             signal = self._activity_signal(turn_id)
-            page = self.activity_events(turn_id, after_sequence=cursor, limit=1_000)
+            page = await self.activity_events(
+                turn_id, after_sequence=cursor, limit=1_000
+            )
             cursor = max(cursor, page.next_sequence)
             for event in page.events:
                 yield event
             if page.events:
                 continue
-            turn = self.store.get(HarnessTurn, turn_id)
+            turn = await self.store.get(HarnessTurn, turn_id)
             if turn.status in {
                 HarnessTurnStatus.COMPLETE,
                 HarnessTurnStatus.FAILED,
@@ -12642,19 +12817,19 @@ class HarnessRuntimeService:
     ) -> HarnessTurn:
         if turn.chat_turn_id is None or turn.chat_session_id is None:
             return turn
-        chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
-        chat = self.store.get(ChatSession, turn.chat_session_id)
-        if chat_turn.request_snapshot.get(
-            "plan_behavior"
-        ) == "advisory" and self.plans.requested(chat_turn, chat):
-            advisory_plan = self.plans.ensure(chat_turn, chat)
+        chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
+        chat = await self.store.get(ChatSession, turn.chat_session_id)
+        if chat_turn.request_snapshot.get("plan_behavior") == "advisory" and (
+            await self.plans.requested(chat_turn, chat)
+        ):
+            advisory_plan = await self.plans.ensure(chat_turn, chat)
             if (
                 advisory_plan is not None
                 and advisory_plan.directive_id
                 and not chat_turn.request_snapshot.get("planning_enabled")
                 and "\n\nPlanning preference (advisory):" not in turn.prompt
             ):
-                turn = self.store.update(
+                turn = await self.store.update(
                     HarnessTurn,
                     turn.id,
                     {
@@ -12666,19 +12841,23 @@ class HarnessRuntimeService:
                     },
                     expected_revision=turn.revision,
                 )
-        if not chat_turn.tools_enabled or not self.plans.required(chat_turn, chat):
-            current_session = self.store.get(HarnessSession, session.id)
+        if not chat_turn.tools_enabled or not (
+            await self.plans.required(chat_turn, chat)
+        ):
+            current_session = await self.store.get(HarnessSession, session.id)
             if current_session.metadata.get("planning_enforced") is True:
-                self.store.update(
-                    HarnessSession,
-                    current_session.id,
-                    {
-                        "metadata": {
-                            **current_session.metadata,
-                            "planning_enforced": False,
-                        }
-                    },
-                    expected_revision=current_session.revision,
+                (
+                    await self.store.update(
+                        HarnessSession,
+                        current_session.id,
+                        {
+                            "metadata": {
+                                **current_session.metadata,
+                                "planning_enforced": False,
+                            }
+                        },
+                        expected_revision=current_session.revision,
+                    )
                 )
                 existing_connection = self._connections.get(session.id)
                 if existing_connection is not None:
@@ -12688,13 +12867,13 @@ class HarnessRuntimeService:
                         reason="planning_requirement_changed",
                     )
             return turn
-        plan = self.plans.ensure(chat_turn, chat)
+        plan = await self.plans.ensure(chat_turn, chat)
         if plan is None:
             return turn
         if plan.phase == "blocked":
             raise PlanningBlocked(plan.reason or "task planning is blocked")
         if plan.phase != "execution":
-            profile = self.store.get(HarnessProfile, session.harness_profile_id)
+            profile = await self.store.get(HarnessProfile, session.harness_profile_id)
             managed_claude = (
                 profile.kind == HarnessKind.CLAUDE_AGENT_SDK
                 and profile.permission_mode == "managed"
@@ -12716,12 +12895,12 @@ class HarnessRuntimeService:
                     "MCP-capable Codex App Server, or contained Grok ACP profile "
                     "and retry this task as a linked turn."
                 )
-                self.plans.block(chat_turn.id, reason)
+                (await self.plans.block(chat_turn.id, reason))
                 raise PlanningBlocked(reason)
             names: list[str] = []
             cursor: str | None = None
             for _ in range(64):
-                catalog = self._gateway_catalog(
+                catalog = await self._gateway_catalog(
                     session, {"cursor": cursor} if cursor else None, turn=turn
                 )
                 names.extend(str(item["name"]) for item in catalog["tools"])
@@ -12764,12 +12943,12 @@ class HarnessRuntimeService:
                 )
             except Exception as exc:
                 reason = f"Restricted planner failed: {_safe_error(exc)}"
-                self.plans.block(chat_turn.id, reason)
+                (await self.plans.block(chat_turn.id, reason))
                 raise PlanningBlocked(reason) from exc
-            plan = self.plans.for_turn(chat_turn.id)
+            plan = await self.plans.for_turn(chat_turn.id)
             if plan is None or plan.phase != "execution":
                 reason = "Restricted planner ended without a validated plan."
-                self.plans.block(chat_turn.id, reason)
+                (await self.plans.block(chat_turn.id, reason))
                 raise PlanningBlocked(reason)
         plan_block = json.dumps(
             {
@@ -12787,19 +12966,26 @@ class HarnessRuntimeService:
         if marker not in turn.prompt:
             if len(turn.prompt) + len(marker) + len(plan_block) > 250_000:
                 raise PlanningBlocked("validated plan does not fit the harness prompt")
-            turn = self.store.update(
+            turn = await self.store.update(
                 HarnessTurn,
                 turn.id,
                 {"prompt": turn.prompt + marker + plan_block},
                 expected_revision=turn.revision,
             )
-        current_session = self.store.get(HarnessSession, session.id)
+        current_session = await self.store.get(HarnessSession, session.id)
         if current_session.metadata.get("planning_enforced") is not True:
-            self.store.update(
-                HarnessSession,
-                current_session.id,
-                {"metadata": {**current_session.metadata, "planning_enforced": True}},
-                expected_revision=current_session.revision,
+            (
+                await self.store.update(
+                    HarnessSession,
+                    current_session.id,
+                    {
+                        "metadata": {
+                            **current_session.metadata,
+                            "planning_enforced": True,
+                        }
+                    },
+                    expected_revision=current_session.revision,
+                )
             )
         existing_connection = self._connections.get(session.id)
         if existing_connection is not None:
@@ -12809,42 +12995,46 @@ class HarnessRuntimeService:
         return turn
 
     async def stream_turn(self, turn_id: str) -> AsyncIterator[HarnessEvent]:
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         if turn.status != HarnessTurnStatus.QUEUED:
             raise HarnessStateError(f"harness turn is not queued ({turn.status.value})")
         if self.host_load is not None:
 
             async def deferred(reason: str | None) -> None:
-                await asyncio.to_thread(
-                    save_host_wait, self.store, HarnessTurn, turn_id, reason
-                )
+                await save_host_wait(self.store, HarnessTurn, turn_id, reason)
                 if reason is not None:
-                    waiting = self.store.get(HarnessTurn, turn_id)
-                    owner = self.store.get(HarnessSession, waiting.harness_session_id)
-                    self._persist_activity(
-                        waiting,
-                        owner,
-                        HarnessEvent(
-                            type="status",
-                            origin=waiting.origin,
-                            harness_profile_id=owner.harness_profile_id,
-                            harness_session_id=owner.id,
-                            harness_turn_id=turn_id,
-                            model=owner.model,
-                            payload={"phase": "queued", "detail": reason},
-                        ),
+                    waiting = await self.store.get(HarnessTurn, turn_id)
+                    owner = await self.store.get(
+                        HarnessSession, waiting.harness_session_id
+                    )
+                    (
+                        await self._persist_activity(
+                            waiting,
+                            owner,
+                            HarnessEvent(
+                                type="status",
+                                origin=waiting.origin,
+                                harness_profile_id=owner.harness_profile_id,
+                                harness_session_id=owner.id,
+                                harness_turn_id=turn_id,
+                                model=owner.model,
+                                payload={"phase": "queued", "detail": reason},
+                            ),
+                        )
                     )
 
             await self.host_load.wait(deferred)
-            turn = self.store.get(HarnessTurn, turn_id)
+            turn = await self.store.get(HarnessTurn, turn_id)
             if turn.status != HarnessTurnStatus.QUEUED:
                 return
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         lock = self._locks.setdefault(session.id, asyncio.Lock())
         if lock.locked() or session.id in self._active:
             previous_session_id = session.id
-            session = self._fork_session(session, reason="parallel stream requested")
-            turn = self.store.update(
+            session = await self._fork_session(
+                session, reason="parallel stream requested"
+            )
+            turn = await self.store.update(
                 HarnessTurn,
                 turn.id,
                 {
@@ -12857,44 +13047,50 @@ class HarnessRuntimeService:
                 expected_revision=turn.revision,
             )
             if turn.chat_session_id:
-                chat = self.store.get(ChatSession, turn.chat_session_id)
-                self._rebind_chat_session(
-                    chat,
-                    session,
-                    previous_session_id=previous_session_id,
+                chat = await self.store.get(ChatSession, turn.chat_session_id)
+                (
+                    await self._rebind_chat_session(
+                        chat,
+                        session,
+                        previous_session_id=previous_session_id,
+                    )
                 )
             elif turn.run_id:
-                run = self.store.get(AgentRun, turn.run_id)
-                self.store.update(
-                    AgentRun,
-                    run.id,
-                    {
-                        "harness_session_id": session.id,
-                        "runtime_snapshot": {
-                            **run.runtime_snapshot,
+                run = await self.store.get(AgentRun, turn.run_id)
+                (
+                    await self.store.update(
+                        AgentRun,
+                        run.id,
+                        {
                             "harness_session_id": session.id,
-                            "forked_from_harness_session_id": previous_session_id,
+                            "runtime_snapshot": {
+                                **run.runtime_snapshot,
+                                "harness_session_id": session.id,
+                                "forked_from_harness_session_id": previous_session_id,
+                            },
                         },
-                    },
-                    expected_revision=run.revision,
+                        expected_revision=run.revision,
+                    )
                 )
             lock = self._locks.setdefault(session.id, asyncio.Lock())
-            yield self._persist_activity(
-                turn,
-                session,
-                HarnessEvent(
-                    type="status",
-                    origin=turn.origin,
-                    harness_profile_id=session.harness_profile_id,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    model=session.model,
-                    payload={
-                        "phase": "parallel_session_created",
-                        "detail": "Started an independent harness session for parallel work.",
-                        "previous_session_id": previous_session_id,
-                    },
-                ),
+            yield (
+                await self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="status",
+                        origin=turn.origin,
+                        harness_profile_id=session.harness_profile_id,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        model=session.model,
+                        payload={
+                            "phase": "parallel_session_created",
+                            "detail": "Started an independent harness session for parallel work.",
+                            "previous_session_id": previous_session_id,
+                        },
+                    ),
+                )
             )
         elif isinstance(turn.metadata.get("forked_from_session_id"), str):
             previous_session_id = str(turn.metadata["forked_from_session_id"])
@@ -12910,40 +13106,42 @@ class HarnessRuntimeService:
                 turn.metadata.get("session_rollover_reason")
                 == "command_runtime_changed"
             )
-            yield self._persist_activity(
-                turn,
-                session,
-                HarnessEvent(
-                    type="status",
-                    origin=turn.origin,
-                    harness_profile_id=session.harness_profile_id,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    model=session.model,
-                    payload={
-                        "phase": (
-                            "settings_session_created"
-                            if settings_changed
-                            else "workspace_session_created"
-                            if workspace_changed
-                            else "command_runtime_session_created"
-                            if runtime_changed
-                            else "parallel_session_created"
-                        ),
-                        "detail": (
-                            "Assistant settings updated. Continuing with the saved conversation context."
-                            if settings_changed
-                            else "The workspace connection was updated. Nebula preserved this chat "
-                            "and continued in a new runtime session with conversation context."
-                            if workspace_changed
-                            else "The command runtime changed, so Nebula preserved the prior session "
-                            "and continued in a new session with the current runtime."
-                            if runtime_changed
-                            else "Started an independent harness session for parallel work."
-                        ),
-                        "previous_session_id": previous_session_id,
-                    },
-                ),
+            yield (
+                await self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="status",
+                        origin=turn.origin,
+                        harness_profile_id=session.harness_profile_id,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        model=session.model,
+                        payload={
+                            "phase": (
+                                "settings_session_created"
+                                if settings_changed
+                                else "workspace_session_created"
+                                if workspace_changed
+                                else "command_runtime_session_created"
+                                if runtime_changed
+                                else "parallel_session_created"
+                            ),
+                            "detail": (
+                                "Assistant settings updated. Continuing with the saved conversation context."
+                                if settings_changed
+                                else "The workspace connection was updated. Nebula preserved this chat "
+                                "and continued in a new runtime session with conversation context."
+                                if workspace_changed
+                                else "The command runtime changed, so Nebula preserved the prior session "
+                                "and continued in a new session with the current runtime."
+                                if runtime_changed
+                                else "Started an independent harness session for parallel work."
+                            ),
+                            "previous_session_id": previous_session_id,
+                        },
+                    ),
+                )
             )
         async with AsyncExitStack() as held_locks:
             await held_locks.enter_async_context(lock)
@@ -12964,10 +13162,14 @@ class HarnessRuntimeService:
                 await run_turn_hooks(self, turn, "chat.turn.started")
                 turn = await self._ensure_harness_plan(turn, session)
             except asyncio.CancelledError:
-                self._settle_orphaned_queued_turn(
-                    turn,
-                    "The harness turn stopped before its start guards completed.",
-                    reason="core_shutdown" if self._closed else "producer_cancelled",
+                (
+                    await self._settle_orphaned_queued_turn(
+                        turn,
+                        "The harness turn stopped before its start guards completed.",
+                        reason="core_shutdown"
+                        if self._closed
+                        else "producer_cancelled",
+                    )
                 )
                 raise
             except (
@@ -12978,8 +13180,29 @@ class HarnessRuntimeService:
                 ValueError,
             ) as exc:
                 # diagnostic-expected: the interrupted turn and blocked event are persisted.
-                self._fail_turn(turn.id, HarnessTurnStatus.INTERRUPTED, str(exc))
-                yield self._persist_activity(
+                (
+                    await self._fail_turn(
+                        turn.id, HarnessTurnStatus.INTERRUPTED, str(exc)
+                    )
+                )
+                yield (
+                    await self._persist_activity(
+                        turn,
+                        session,
+                        HarnessEvent(
+                            type="status",
+                            origin=turn.origin,
+                            harness_profile_id=session.harness_profile_id,
+                            harness_session_id=session.id,
+                            harness_turn_id=turn.id,
+                            model=session.model,
+                            payload={"phase": "blocked", "detail": str(exc)},
+                        ),
+                    )
+                )
+                return
+            yield (
+                await self._persist_activity(
                     turn,
                     session,
                     HarnessEvent(
@@ -12989,31 +13212,18 @@ class HarnessRuntimeService:
                         harness_session_id=session.id,
                         harness_turn_id=turn.id,
                         model=session.model,
-                        payload={"phase": "blocked", "detail": str(exc)},
+                        payload={
+                            "phase": "connecting",
+                            "detail": "Connecting to the harness runtime.",
+                        },
                     ),
                 )
-                return
-            yield self._persist_activity(
-                turn,
-                session,
-                HarnessEvent(
-                    type="status",
-                    origin=turn.origin,
-                    harness_profile_id=session.harness_profile_id,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    model=session.model,
-                    payload={
-                        "phase": "connecting",
-                        "detail": "Connecting to the harness runtime.",
-                    },
-                ),
             )
             try:
                 try:
                     connection = await self._connection(session, turn)
                 except HarnessVendorSessionNotFoundError as missing:
-                    replacement = self._replace_missing_vendor_session(
+                    replacement = await self._replace_missing_vendor_session(
                         turn, session, missing
                     )
                     if replacement is None:
@@ -13030,12 +13240,16 @@ class HarnessRuntimeService:
                 # is still queued and nothing reached the vendor; left queued it
                 # would reserve the chat forever. Stop has already written its
                 # own terminal state.
-                self._settle_orphaned_queued_turn(
-                    turn,
-                    "Nebula Core shut down before the harness turn started."
-                    if self._closed
-                    else "The harness turn stopped before it started.",
-                    reason="core_shutdown" if self._closed else "producer_cancelled",
+                (
+                    await self._settle_orphaned_queued_turn(
+                        turn,
+                        "Nebula Core shut down before the harness turn started."
+                        if self._closed
+                        else "The harness turn stopped before it started.",
+                        reason="core_shutdown"
+                        if self._closed
+                        else "producer_cancelled",
+                    )
                 )
                 raise
             except Exception as exc:
@@ -13066,37 +13280,41 @@ class HarnessRuntimeService:
                     "rate_limited",
                     "stale_state",
                 }
-                self._fail_turn(
-                    turn.id,
-                    HarnessTurnStatus.INTERRUPTED,
-                    error,
-                    diagnostic={
-                        "error_id": error_id,
-                        "reason_code": reason,
-                        "remediation_id": guidance.remediation_id,
-                    },
+                (
+                    await self._fail_turn(
+                        turn.id,
+                        HarnessTurnStatus.INTERRUPTED,
+                        error,
+                        diagnostic={
+                            "error_id": error_id,
+                            "reason_code": reason,
+                            "remediation_id": guidance.remediation_id,
+                        },
+                    )
                 )
-                yield self._persist_activity(
-                    turn,
-                    session,
-                    HarnessEvent(
-                        type="error",
-                        origin=turn.origin,
-                        harness_profile_id=session.harness_profile_id,
-                        harness_session_id=session.id,
-                        harness_turn_id=turn.id,
-                        model=session.model,
-                        message=error,
-                        request_id=current_request_id(),
-                        operation_id=current_operation_id(),
-                        error_id=error_id,
-                        reason_code=reason,
-                        retryable=retryable,
-                        operator_detail=guidance.cause,
-                        impact=guidance.impact,
-                        remediation_id=guidance.remediation_id,
-                        help_article=guidance.help_article,
-                    ),
+                yield (
+                    await self._persist_activity(
+                        turn,
+                        session,
+                        HarnessEvent(
+                            type="error",
+                            origin=turn.origin,
+                            harness_profile_id=session.harness_profile_id,
+                            harness_session_id=session.id,
+                            harness_turn_id=turn.id,
+                            model=session.model,
+                            message=error,
+                            request_id=current_request_id(),
+                            operation_id=current_operation_id(),
+                            error_id=error_id,
+                            reason_code=reason,
+                            retryable=retryable,
+                            operator_detail=guidance.cause,
+                            impact=guidance.impact,
+                            remediation_id=guidance.remediation_id,
+                            help_article=guidance.help_article,
+                        ),
+                    )
                 )
                 return
             active = _ActiveTurn(
@@ -13105,14 +13323,14 @@ class HarnessRuntimeService:
                 task=asyncio.current_task(),
             )
             self._active[session.id] = active
-            turn = self.store.update(
+            turn = await self.store.update(
                 HarnessTurn,
                 turn.id,
                 {"status": HarnessTurnStatus.RUNNING, "started_at": utc_now()},
                 expected_revision=turn.revision,
             )
-            session = self.store.get(HarnessSession, session.id)
-            session = self.store.update(
+            session = await self.store.get(HarnessSession, session.id)
+            session = await self.store.update(
                 HarnessSession,
                 session.id,
                 {
@@ -13124,30 +13342,32 @@ class HarnessRuntimeService:
                 },
                 expected_revision=session.revision,
             )
-            self._start_owner(turn)
-            yield self._persist_activity(
-                turn,
-                session,
-                HarnessEvent(
-                    type="status",
-                    origin=turn.origin,
-                    harness_profile_id=session.harness_profile_id,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    model=session.model,
-                    payload={
-                        "phase": "running",
-                        "detail": "Harness connected and processing the request.",
-                    },
-                ),
+            (await self._start_owner(turn))
+            yield (
+                await self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="status",
+                        origin=turn.origin,
+                        harness_profile_id=session.harness_profile_id,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        model=session.model,
+                        payload={
+                            "phase": "running",
+                            "detail": "Harness connected and processing the request.",
+                        },
+                    ),
+                )
             )
             final_message = ""
             guarded_answer = bool(
                 turn.chat_turn_id
                 and any(
                     "chat.turn.completed" in item.get("manifest", {}).get("events", [])
-                    for item in self.store.get(
-                        ChatTurn, turn.chat_turn_id
+                    for item in (
+                        await self.store.get(ChatTurn, turn.chat_turn_id)
                     ).request_snapshot.get("hook_snapshots", [])
                 )
             )
@@ -13174,11 +13394,11 @@ class HarnessRuntimeService:
                         ChatContentBlock.model_validate(block)
                         for block in turn.metadata["image_blocks"]
                     ]
-                    if not self._model_image_supported(session):
+                    if not (await self._model_image_supported(session)):
                         raise HarnessConfigurationError(
                             "Image input is no longer advertised by this runtime. Start a text-only turn or select an image-capable runtime."
                         )
-                    resolved_content = resolve_chat_model_content(
+                    resolved_content = await resolve_chat_model_content(
                         self.store,
                         self.artifact_store,
                         ChatRequestMessage(
@@ -13241,7 +13461,7 @@ class HarnessRuntimeService:
                     if not prompt_accepted and event.type in {"started", "completed"}:
                         prompt_accepted = True
                         try:
-                            self._mark_prompt_context_delivered(turn)
+                            (await self._mark_prompt_context_delivered(turn))
                         except Exception as exc:
                             # Unmarked, they are offered again next turn: a
                             # repeat, never a loss.
@@ -13337,7 +13557,7 @@ class HarnessRuntimeService:
                         usage = event.usage
                         usage_reported = usage.total_tokens > 0
                     elif event.type in {"tool_started", "tool_completed"}:
-                        event = self._record_tool_event(turn, session, event)
+                        event = await self._record_tool_event(turn, session, event)
                     elif (
                         event.type in {"approval", "interaction"}
                         and event.payload.get("withdrawn") is True
@@ -13346,45 +13566,51 @@ class HarnessRuntimeService:
                     if not (
                         guarded_answer and event.type in {"message_delta", "completed"}
                     ):
-                        yield self._persist_activity(turn, session, event)
+                        yield (await self._persist_activity(turn, session, event))
                     if interrupted_reason or terminal_error:
                         break
                 if interrupted_reason or terminal_error:
                     if interrupted_reason and not guarded_answer:
-                        self._keep_stopped_answer(
-                            turn.id, final_message, usage, stopped_by_harness=True
+                        (
+                            await self._keep_stopped_answer(
+                                turn.id, final_message, usage, stopped_by_harness=True
+                            )
                         )
                     await self._interrupt_connection(
                         session.id, connection, stage="turn-runtime"
                     )
-                    self._fail_turn(
-                        turn.id,
-                        HarnessTurnStatus.INTERRUPTED,
-                        interrupted_reason
-                        or terminal_error
-                        or "Harness turn interrupted",
-                        diagnostic=terminal_diagnostic,
+                    (
+                        await self._fail_turn(
+                            turn.id,
+                            HarnessTurnStatus.INTERRUPTED,
+                            interrupted_reason
+                            or terminal_error
+                            or "Harness turn interrupted",
+                            diagnostic=terminal_diagnostic,
+                        )
                     )
                     return
-                yield self._persist_activity(
-                    turn,
-                    session,
-                    HarnessEvent(
-                        type="status",
-                        origin=turn.origin,
-                        harness_profile_id=session.harness_profile_id,
-                        harness_session_id=session.id,
-                        harness_turn_id=turn.id,
-                        model=session.model,
-                        payload={
-                            "phase": "finalizing",
-                            "detail": "Harness finished; Nebula is saving the response.",
-                        },
-                    ),
+                yield (
+                    await self._persist_activity(
+                        turn,
+                        session,
+                        HarnessEvent(
+                            type="status",
+                            origin=turn.origin,
+                            harness_profile_id=session.harness_profile_id,
+                            harness_session_id=session.id,
+                            harness_turn_id=turn.id,
+                            model=session.model,
+                            payload={
+                                "phase": "finalizing",
+                                "detail": "Harness finished; Nebula is saving the response.",
+                            },
+                        ),
+                    )
                 )
-                session = self.store.get(HarnessSession, session.id)
+                session = await self.store.get(HarnessSession, session.id)
                 if connection.external_session_id != session.external_session_id:
-                    session = self.store.update(
+                    session = await self.store.update(
                         HarnessSession,
                         session.id,
                         {
@@ -13393,7 +13619,7 @@ class HarnessRuntimeService:
                         },
                         expected_revision=session.revision,
                     )
-                turn = self.store.get(HarnessTurn, turn.id)
+                turn = await self.store.get(HarnessTurn, turn.id)
                 # Followers use the harness turn's terminal status as the signal
                 # that all durable chat state is ready to reload. Complete the
                 # owning chat/run first so a reconnect can never observe a
@@ -13404,25 +13630,29 @@ class HarnessRuntimeService:
                     "chat.turn.completed",
                     _turn_end_hook_payload("stop", None, final_message),
                 )
-                self._complete_owner(
-                    turn, final_message, usage, usage_reported=usage_reported
+                (
+                    await self._complete_owner(
+                        turn, final_message, usage, usage_reported=usage_reported
+                    )
                 )
                 if guarded_answer:
-                    yield self._persist_activity(
-                        turn,
-                        session,
-                        HarnessEvent(
-                            type="completed",
-                            origin=turn.origin,
-                            harness_profile_id=session.harness_profile_id,
-                            harness_session_id=session.id,
-                            harness_turn_id=turn.id,
-                            model=session.model,
-                            message=final_message,
-                        ),
+                    yield (
+                        await self._persist_activity(
+                            turn,
+                            session,
+                            HarnessEvent(
+                                type="completed",
+                                origin=turn.origin,
+                                harness_profile_id=session.harness_profile_id,
+                                harness_session_id=session.id,
+                                harness_turn_id=turn.id,
+                                model=session.model,
+                                message=final_message,
+                            ),
+                        )
                     )
-                turn = self.store.get(HarnessTurn, turn.id)
-                turn = self.store.update(
+                turn = await self.store.get(HarnessTurn, turn.id)
+                turn = await self.store.update(
                     HarnessTurn,
                     turn.id,
                     {
@@ -13434,41 +13664,47 @@ class HarnessRuntimeService:
                     },
                     expected_revision=turn.revision,
                 )
-                session = self.store.get(HarnessSession, session.id)
-                self.store.update(
-                    HarnessSession,
-                    session.id,
-                    {
-                        "status": HarnessSessionStatus.IDLE,
-                        "last_activity_at": utc_now(),
-                    },
-                    expected_revision=session.revision,
+                session = await self.store.get(HarnessSession, session.id)
+                (
+                    await self.store.update(
+                        HarnessSession,
+                        session.id,
+                        {
+                            "status": HarnessSessionStatus.IDLE,
+                            "last_activity_at": utc_now(),
+                        },
+                        expected_revision=session.revision,
+                    )
                 )
                 try:
-                    profile = self.store.get(HarnessProfile, session.harness_profile_id)
-                    self.store.update(
-                        HarnessProfile,
-                        profile.id,
-                        {
-                            "capabilities": profile.capabilities.model_copy(
-                                update={
-                                    "session_state": "verified",
-                                    "turn_state": "verified",
-                                    "last_successful_turn_at": utc_now(),
-                                    "last_turn_failure_reason": None,
-                                    "exercised_capabilities": list(
-                                        dict.fromkeys(
-                                            [
-                                                *profile.capabilities.exercised_capabilities,
-                                                "session_create",
-                                                "model_turn",
-                                            ]
-                                        )
-                                    ),
-                                }
-                            )
-                        },
-                        expected_revision=profile.revision,
+                    profile = await self.store.get(
+                        HarnessProfile, session.harness_profile_id
+                    )
+                    (
+                        await self.store.update(
+                            HarnessProfile,
+                            profile.id,
+                            {
+                                "capabilities": profile.capabilities.model_copy(
+                                    update={
+                                        "session_state": "verified",
+                                        "turn_state": "verified",
+                                        "last_successful_turn_at": utc_now(),
+                                        "last_turn_failure_reason": None,
+                                        "exercised_capabilities": list(
+                                            dict.fromkeys(
+                                                [
+                                                    *profile.capabilities.exercised_capabilities,
+                                                    "session_create",
+                                                    "model_turn",
+                                                ]
+                                            )
+                                        ),
+                                    }
+                                )
+                            },
+                            expected_revision=profile.revision,
+                        )
                     )
                 except Exception as evidence_error:
                     record_caught_exception(
@@ -13494,14 +13730,16 @@ class HarnessRuntimeService:
                     if remaining > 0:
                         final_message += tail.delta[:remaining]
                 if not guarded_answer:
-                    self._keep_stopped_answer(turn.id, final_message, usage)
+                    (await self._keep_stopped_answer(turn.id, final_message, usage))
                 await self._interrupt_connection(
                     session.id, connection, stage="turn-cancel"
                 )
-                latest_cancelled = self.store.get(HarnessTurn, turn.id)
+                latest_cancelled = await self.store.get(HarnessTurn, turn.id)
                 if latest_cancelled.status != HarnessTurnStatus.CANCELLED:
-                    self._fail_turn(
-                        turn.id, HarnessTurnStatus.CANCELLED, "Turn cancelled"
+                    (
+                        await self._fail_turn(
+                            turn.id, HarnessTurnStatus.CANCELLED, "Turn cancelled"
+                        )
                     )
                 raise
             except Exception as exc:
@@ -13552,51 +13790,59 @@ class HarnessRuntimeService:
                     ),
                 )
                 guidance = guidance_for("harnesses", reason, operator_detail=error)
-                self._fail_turn(
-                    turn.id,
-                    HarnessTurnStatus.INTERRUPTED,
-                    error,
-                    diagnostic={
-                        "error_id": error_id,
-                        "reason_code": reason,
-                        "remediation_id": guidance.remediation_id,
-                        **(
-                            {"vendor_error_info": exc.vendor_error_info}
-                            if isinstance(exc, HarnessTurnFailedError)
-                            and exc.vendor_error_info is not None
-                            else {}
-                        ),
-                    },
-                )
-                yield self._persist_activity(
-                    turn,
-                    session,
-                    HarnessEvent(
-                        type="error",
-                        harness_session_id=session.id,
-                        harness_turn_id=turn.id,
-                        message=error,
-                        request_id=current_request_id(),
-                        operation_id=current_operation_id(),
-                        error_id=error_id,
-                        reason_code=reason,
-                        retryable=reason
-                        in {
-                            "transport_closed",
-                            "dependency_unavailable",
-                            "timeout",
-                            "rate_limited",
-                            "stale_state",
+                (
+                    await self._fail_turn(
+                        turn.id,
+                        HarnessTurnStatus.INTERRUPTED,
+                        error,
+                        diagnostic={
+                            "error_id": error_id,
+                            "reason_code": reason,
+                            "remediation_id": guidance.remediation_id,
+                            **(
+                                {"vendor_error_info": exc.vendor_error_info}
+                                if isinstance(exc, HarnessTurnFailedError)
+                                and exc.vendor_error_info is not None
+                                else {}
+                            ),
                         },
-                        operator_detail=guidance.cause,
-                        impact=guidance.impact,
-                        remediation_id=guidance.remediation_id,
-                        help_article=guidance.help_article,
-                    ),
+                    )
+                )
+                yield (
+                    await self._persist_activity(
+                        turn,
+                        session,
+                        HarnessEvent(
+                            type="error",
+                            harness_session_id=session.id,
+                            harness_turn_id=turn.id,
+                            message=error,
+                            request_id=current_request_id(),
+                            operation_id=current_operation_id(),
+                            error_id=error_id,
+                            reason_code=reason,
+                            retryable=reason
+                            in {
+                                "transport_closed",
+                                "dependency_unavailable",
+                                "timeout",
+                                "rate_limited",
+                                "stale_state",
+                            },
+                            operator_detail=guidance.cause,
+                            impact=guidance.impact,
+                            remediation_id=guidance.remediation_id,
+                            help_article=guidance.help_article,
+                        ),
+                    )
                 )
             finally:
-                self._account_terminal_chat_usage(
-                    turn, usage, usage_reported=usage_reported or not prompt_accepted
+                (
+                    await self._account_terminal_chat_usage(
+                        turn,
+                        usage,
+                        usage_reported=usage_reported or not prompt_accepted,
+                    )
                 )
                 self._active.pop(session.id, None)
                 self._gateway_core_components.pop(turn.id, None)
@@ -13607,7 +13853,7 @@ class HarnessRuntimeService:
                     if key[0] != turn.id
                 }
                 try:
-                    settled = self.store.get(HarnessTurn, turn.id)
+                    settled = await self.store.get(HarnessTurn, turn.id)
                     if settled.status in {
                         HarnessTurnStatus.COMPLETE,
                         HarnessTurnStatus.FAILED,
@@ -13615,13 +13861,15 @@ class HarnessRuntimeService:
                         HarnessTurnStatus.INTERRUPTED,
                     }:
                         stopped = settled.status == HarnessTurnStatus.CANCELLED
-                        self._retire_turn_requests(
-                            settled,
-                            reason=(settled.error or "Turn stopped")
-                            if stopped
-                            else "The harness finished this turn before a "
-                            "decision arrived.",
-                            stopped=stopped,
+                        (
+                            await self._retire_turn_requests(
+                                settled,
+                                reason=(settled.error or "Turn stopped")
+                                if stopped
+                                else "The harness finished this turn before a "
+                                "decision arrived.",
+                                stopped=stopped,
+                            )
                         )
                 except Exception as retire_error:
                     record_caught_exception(
@@ -13671,14 +13919,14 @@ class HarnessRuntimeService:
         allow_remote_mcp: bool = False,
         browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
-        project_workspace_path = self.store.get(
-            Engagement, engagement_id
+        project_workspace_path = (
+            await self.store.get(Engagement, engagement_id)
         ).workspace_path
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         # Standing profile consent stands in for the per-turn confirmation.
         allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
         if harness_session_id:
-            session = self._compatible_session(
+            session = await self._compatible_session(
                 harness_session_id, engagement_id, profile.id, model
             )
             frozen_options = session.metadata.get("runtime_options")
@@ -13693,11 +13941,13 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "speed cannot change within an existing harness session"
                 )
-            self._validate_harness_privacy(
-                engagement_id,
-                profile,
-                session.mcp_server_ids,
-                allow_remote_mcp=allow_remote_mcp,
+            (
+                await self._validate_harness_privacy(
+                    engagement_id,
+                    profile,
+                    session.mcp_server_ids,
+                    allow_remote_mcp=allow_remote_mcp,
+                )
             )
             if mcp_server_ids:
                 raise HarnessConfigurationError(
@@ -13711,13 +13961,15 @@ class HarnessRuntimeService:
                     "browser investigations require a new dedicated harness session"
                 )
         else:
-            self._validate_harness_privacy(
-                engagement_id,
-                profile,
-                mcp_server_ids or [],
-                allow_remote_mcp=allow_remote_mcp,
+            (
+                await self._validate_harness_privacy(
+                    engagement_id,
+                    profile,
+                    mcp_server_ids or [],
+                    allow_remote_mcp=allow_remote_mcp,
+                )
             )
-            session = self.create_session(
+            session = await self.create_session(
                 engagement_id=engagement_id,
                 profile_id=profile.id,
                 model=model,
@@ -13726,7 +13978,7 @@ class HarnessRuntimeService:
                 service_tier=service_tier,
             )
             if browser_autonomy is not None:
-                session = self.store.update(
+                session = await self.store.update(
                     HarnessSession,
                     session.id,
                     {
@@ -13744,23 +13996,27 @@ class HarnessRuntimeService:
                 )
                 self._gateway_oci_components.pop(session.id, None)
         forked_from_session_id: str | None = None
-        current_execution_mode = self._project_execution_mode(session.engagement_id)
+        current_execution_mode = await self._project_execution_mode(
+            session.engagement_id
+        )
         if session.metadata.get("execution_mode") != current_execution_mode:
             forked_from_session_id = session.id
-            session = self._fork_session_for_execution_mode(
+            session = await self._fork_session_for_execution_mode(
                 session,
                 profile,
                 execution_mode=current_execution_mode,
                 reason="execution_mode_changed",
             )
-        if self.session_activity(session.id).busy:
+        if (await self.session_activity(session.id)).busy:
             forked_from_session_id = session.id
-            session = self._fork_session(session, reason="parallel mission requested")
-        oci_components = self._ensure_oci_components(session)
+            session = await self._fork_session(
+                session, reason="parallel mission requested"
+            )
+        oci_components = await self._ensure_oci_components(session)
         # _ensure_oci_components persists the first immutable browser gateway
         # snapshot. Reload so this run freezes that authoritative value rather
         # than the pre-gateway session metadata held by the caller.
-        session = self.store.get(HarnessSession, session.id)
+        session = await self.store.get(HarnessSession, session.id)
         oci_snapshot = session.metadata.get("command_runtime_snapshot")
         if not isinstance(oci_snapshot, dict) and oci_components is not None:
             oci_snapshot = self._oci_snapshot(oci_components)
@@ -13874,63 +14130,77 @@ class HarnessRuntimeService:
             )
             for index, stage in enumerate(stage_prompts)
         ]
-        with self.store.transaction(immediate=True) as transaction:
-            transaction.assert_project_workspace(engagement_id, project_workspace_path)
-            transaction.add(run)
+        async with self.store.transaction(immediate=True) as transaction:
+            (
+                await transaction.assert_project_workspace(
+                    engagement_id, project_workspace_path
+                )
+            )
+            (await transaction.add(run))
             for turn in turns:
-                transaction.add(turn)
+                (await transaction.add(turn))
         if browser_autonomy is not None:
             if self.browser_automation_platform is None:
-                latest = self.store.get(AgentRun, run.id)
-                self.store.update(
-                    AgentRun,
-                    latest.id,
-                    {"status": RunStatus.FAILED, "completed_at": utc_now()},
-                    expected_revision=latest.revision,
+                latest = await self.store.get(AgentRun, run.id)
+                (
+                    await self.store.update(
+                        AgentRun,
+                        latest.id,
+                        {"status": RunStatus.FAILED, "completed_at": utc_now()},
+                        expected_revision=latest.revision,
+                    )
                 )
                 raise HarnessConfigurationError(
                     "browser automation runtime is unavailable"
                 )
             try:
-                self.browser_automation_platform.automation.create_lease(
-                    run.id,
-                    engagement_id,
-                    browser_autonomy,
-                    actor_id,
+                (
+                    await self.browser_automation_platform.automation.create_lease(
+                        run.id,
+                        engagement_id,
+                        browser_autonomy,
+                        actor_id,
+                    )
                 )
             except Exception as exc:
-                latest = self.store.get(AgentRun, run.id)
-                self.store.update(
-                    AgentRun,
-                    latest.id,
-                    {"status": RunStatus.FAILED, "completed_at": utc_now()},
-                    expected_revision=latest.revision,
+                latest = await self.store.get(AgentRun, run.id)
+                (
+                    await self.store.update(
+                        AgentRun,
+                        latest.id,
+                        {"status": RunStatus.FAILED, "completed_at": utc_now()},
+                        expected_revision=latest.revision,
+                    )
                 )
                 raise HarnessConfigurationError(
                     f"browser automation lease could not be created: {_safe_error(exc)}"
                 ) from exc
-        for chat in self._attached_chats(session.id):
-            self._append_chat_handoff(
-                chat,
-                role=ChatRole.USER,
-                content=run.objective,
-                run_id=run.id,
-                usage=None,
+        for chat in await self._attached_chats(session.id):
+            (
+                await self._append_chat_handoff(
+                    chat,
+                    role=ChatRole.USER,
+                    content=run.objective,
+                    run_id=run.id,
+                    usage=None,
+                )
             )
-        self.store.append_event(
-            run.id,
-            "run.queued",
-            {
-                "backend": "harness",
-                "harness_profile_id": profile.id,
-                "harness_session_id": session.id,
-                "harness_turn_id": turns[0].id,
-                "harness_turn_ids": [turn.id for turn in turns],
-                "stage_count": len(turns),
-                "model": session.model,
-            },
-            actor_id=actor_id,
-            idempotency_key="run:queued",
+        (
+            await self.store.append_event(
+                run.id,
+                "run.queued",
+                {
+                    "backend": "harness",
+                    "harness_profile_id": profile.id,
+                    "harness_session_id": session.id,
+                    "harness_turn_id": turns[0].id,
+                    "harness_turn_ids": [turn.id for turn in turns],
+                    "stage_count": len(turns),
+                    "model": session.model,
+                },
+                actor_id=actor_id,
+                idempotency_key="run:queued",
+            )
         )
         if scheduled_for is not None and scheduled_for > utc_now():
             task = create_diagnostic_task(
@@ -13963,7 +14233,7 @@ class HarnessRuntimeService:
                 await asyncio.sleep(delay)
             if (
                 self._closed
-                or self.store.get(AgentRun, run_id).status != RunStatus.QUEUED
+                or (await self.store.get(AgentRun, run_id)).status != RunStatus.QUEUED
             ):
                 return
             self._scheduled_mission_tasks.pop(run_id, None)
@@ -13977,8 +14247,8 @@ class HarnessRuntimeService:
 
     async def _execute_mission(self, run_id: str, turn_ids: list[str]) -> None:
         try:
-            run = self.store.get(AgentRun, run_id)
-            first_turn = self.store.get(HarnessTurn, turn_ids[0])
+            run = await self.store.get(AgentRun, run_id)
+            first_turn = await self.store.get(HarnessTurn, turn_ids[0])
             raw_context = first_turn.metadata.get("diagnostic_context")
             context = raw_context if isinstance(raw_context, dict) else {}
             try:
@@ -13989,7 +14259,7 @@ class HarnessRuntimeService:
                 ):
                     async with asyncio.timeout(run.budget.max_duration_seconds):
                         for turn_id in turn_ids:
-                            latest_run = self.store.get(AgentRun, run_id)
+                            latest_run = await self.store.get(AgentRun, run_id)
                             if latest_run.status in {
                                 RunStatus.CANCELLED,
                                 RunStatus.FAILED,
@@ -14009,27 +14279,31 @@ class HarnessRuntimeService:
                 await self.cancel_turn(
                     turn_id, reason="Harness mission exceeded its duration limit"
                 )
-                latest = self.store.get(AgentRun, run_id)
+                latest = await self.store.get(AgentRun, run_id)
                 if latest.status not in {
                     RunStatus.COMPLETE,
                     RunStatus.CANCELLED,
                     RunStatus.FAILED,
                     RunStatus.INTERRUPTED,
                 }:
-                    self.store.update(
-                        AgentRun,
-                        latest.id,
-                        {"status": RunStatus.FAILED, "completed_at": utc_now()},
-                        expected_revision=latest.revision,
+                    (
+                        await self.store.update(
+                            AgentRun,
+                            latest.id,
+                            {"status": RunStatus.FAILED, "completed_at": utc_now()},
+                            expected_revision=latest.revision,
+                        )
                     )
-                self.store.append_event(
-                    run_id,
-                    "run.failed",
-                    {"reason": "duration_limit", "harness_turn_id": turn_id},
+                (
+                    await self.store.append_event(
+                        run_id,
+                        "run.failed",
+                        {"reason": "duration_limit", "harness_turn_id": turn_id},
+                    )
                 )
         finally:
             self._mission_tasks.pop(run_id, None)
-            latest = self.store.get(AgentRun, run_id)
+            latest = await self.store.get(AgentRun, run_id)
             if latest.status == RunStatus.COMPLETE and not self._closed:
                 await self._schedule_harness_recurrence(latest)
 
@@ -14061,7 +14335,7 @@ class HarnessRuntimeService:
         )
 
     async def stop(self, run_id: str, *, reason: str, actor_id: str) -> AgentRun:
-        run = self.store.get(AgentRun, run_id)
+        run = await self.store.get(AgentRun, run_id)
         if run.backend != RunBackend.HARNESS:
             raise HarnessStateError("run is not owned by the harness runtime")
         if run.status in {
@@ -14082,25 +14356,27 @@ class HarnessRuntimeService:
         )
         if task is not None and not task.done():
             task.cancel()
-        for turn in self.store.find_entities(
+        for turn in await self.store.find_entities(
             HarnessTurn,
             {"run_id": run.id, "status": HarnessTurnStatus.QUEUED.value},
             engagement_id=run.engagement_id,
         ):
             if turn.status == HarnessTurnStatus.QUEUED:
-                self.store.update(
-                    HarnessTurn,
-                    turn.id,
-                    {
-                        "status": HarnessTurnStatus.CANCELLED,
-                        "completed_at": utc_now(),
-                        "error": reason[:1_000],
-                    },
-                    expected_revision=turn.revision,
+                (
+                    await self.store.update(
+                        HarnessTurn,
+                        turn.id,
+                        {
+                            "status": HarnessTurnStatus.CANCELLED,
+                            "completed_at": utc_now(),
+                            "error": reason[:1_000],
+                        },
+                        expected_revision=turn.revision,
+                    )
                 )
-        latest = self.store.get(AgentRun, run.id)
+        latest = await self.store.get(AgentRun, run.id)
         if latest.status not in {RunStatus.CANCELLED, RunStatus.COMPLETE}:
-            latest, _ = self.store.update_with_event(
+            latest, _ = await self.store.update_with_event(
                 AgentRun,
                 latest.id,
                 {"status": RunStatus.CANCELLED, "completed_at": utc_now()},
@@ -14114,20 +14390,25 @@ class HarnessRuntimeService:
         return latest
 
     async def steer(self, run_id: str, text: str, *, actor_id: str) -> HarnessTurn:
-        run = self.store.get(AgentRun, run_id)
+        run = await self.store.get(AgentRun, run_id)
         if run.backend != RunBackend.HARNESS or not run.harness_session_id:
             raise HarnessStateError("only active harness runs can be steered")
         active = self._active.get(run.harness_session_id)
         if active is None:
             raise HarnessStateError("harness run has no active turn")
         await active.connection.steer(text.strip())
-        self.store.append_event(
-            run.id,
-            "harness.steered",
-            {"harness_turn_id": active.turn_id, "text": _bounded(text, limit=10_000)},
-            actor_id=actor_id,
+        (
+            await self.store.append_event(
+                run.id,
+                "harness.steered",
+                {
+                    "harness_turn_id": active.turn_id,
+                    "text": _bounded(text, limit=10_000),
+                },
+                actor_id=actor_id,
+            )
         )
-        return self.store.get(HarnessTurn, active.turn_id)
+        return await self.store.get(HarnessTurn, active.turn_id)
 
     async def steer_turn(
         self,
@@ -14138,11 +14419,11 @@ class HarnessRuntimeService:
         title: str = "Operator guidance",
         summary: str = "The operator added guidance to the active harness turn.",
     ) -> HarnessTurn:
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         active = self._active.get(turn.harness_session_id)
         if active is None or active.turn_id != turn.id:
             raise HarnessStateError("harness turn is not active")
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         clean = text.strip()
         if not clean:
             raise HarnessConfigurationError("steering text cannot be blank")
@@ -14166,43 +14447,45 @@ class HarnessRuntimeService:
             summary=summary,
             payload={"text": _bounded(clean, limit=10_000), "actor_id": actor_id},
         )
-        self._persist_activity(turn, session, event)
-        return self.store.get(HarnessTurn, turn.id)
+        (await self._persist_activity(turn, session, event))
+        return await self.store.get(HarnessTurn, turn.id)
 
     async def stop_subagent(self, turn_id: str, task_id: str) -> HarnessTurn:
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         active = self._active.get(turn.harness_session_id)
         if active is None or active.turn_id != turn.id:
             raise HarnessStateError("harness turn is not active")
-        session = self.store.get(HarnessSession, turn.harness_session_id)
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
         native = _session_native_capabilities(session, profile)
         if profile.kind != HarnessKind.CLAUDE_AGENT_SDK or not native.subagents:
             raise HarnessStateError("this harness does not support stopping subagents")
         await active.connection.stop_subagent(task_id)
-        self._persist_activity(
-            turn,
-            session,
-            HarnessEvent(
-                type="item_upsert",
-                origin=turn.origin,
-                harness_session_id=session.id,
-                harness_turn_id=turn.id,
-                item_id=task_id,
-                item_kind="subagent",
-                item_status="cancelled",
-                title="Subagent stopped",
-                payload={"task_id": task_id},
-            ),
+        (
+            await self._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="item_upsert",
+                    origin=turn.origin,
+                    harness_session_id=session.id,
+                    harness_turn_id=turn.id,
+                    item_id=task_id,
+                    item_kind="subagent",
+                    item_status="cancelled",
+                    title="Subagent stopped",
+                    payload={"task_id": task_id},
+                ),
+            )
         )
-        return self.store.get(HarnessTurn, turn.id)
+        return await self.store.get(HarnessTurn, turn.id)
 
     async def retry_turn(
         self, turn_id: str, *, actor_id: str = "system"
     ) -> HarnessTurn:
         """Create and start a linked replacement without changing prior execution."""
 
-        original = self.store.get(HarnessTurn, turn_id)
+        original = await self.store.get(HarnessTurn, turn_id)
         if original.status not in {
             HarnessTurnStatus.FAILED,
             HarnessTurnStatus.CANCELLED,
@@ -14211,22 +14494,24 @@ class HarnessRuntimeService:
             raise HarnessStateError(
                 "only failed, cancelled, or interrupted harness turns can be retried"
             )
-        session = self.store.get(HarnessSession, original.harness_session_id)
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        session = await self.store.get(HarnessSession, original.harness_session_id)
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
         if original.origin == HarnessTurnOrigin.CHAT:
             from .chat_assistant_config import chat_assistant_config
 
-            chat = self.store.get(ChatSession, original.chat_session_id or "")
-            original_chat_turn = self.store.get(ChatTurn, original.chat_turn_id or "")
-            blocked_plan = self.plans.for_turn(original_chat_turn.id)
+            chat = await self.store.get(ChatSession, original.chat_session_id or "")
+            original_chat_turn = await self.store.get(
+                ChatTurn, original.chat_turn_id or ""
+            )
+            blocked_plan = await self.plans.for_turn(original_chat_turn.id)
             retry_profile_id = profile.id
             retry_model = session.model
             if blocked_plan is not None and blocked_plan.phase == "blocked":
-                saved = chat_assistant_config(self.store, chat)
+                saved = await chat_assistant_config(self.store, chat)
                 if saved["backend"] == ChatBackend.HARNESS.value:
                     retry_profile_id = saved["profile_id"]
                     retry_model = saved["model"]
-            _, _, replacement = self.prepare_chat(
+            _, _, replacement = await self.prepare_chat(
                 engagement_id=original.engagement_id,
                 profile_id=retry_profile_id,
                 model=retry_model,
@@ -14292,7 +14577,7 @@ class HarnessRuntimeService:
                 ),
                 planning_enabled=True if blocked_plan is not None else None,
             )
-            replacement = self.store.update(
+            replacement = await self.store.update(
                 HarnessTurn,
                 replacement.id,
                 {
@@ -14303,10 +14588,10 @@ class HarnessRuntimeService:
                 },
                 expected_revision=replacement.revision,
             )
-            self.start_chat_turn(replacement.id)
+            (await self.start_chat_turn(replacement.id))
             return replacement
 
-        original_run = self.store.get(AgentRun, original.run_id or "")
+        original_run = await self.store.get(AgentRun, original.run_id or "")
         replacement_run = await self.start_mission(
             engagement_id=original.engagement_id,
             objective=original_run.objective,
@@ -14326,7 +14611,7 @@ class HarnessRuntimeService:
                 original_run.runtime_snapshot.get("remote_mcp_confirmed", False)
             ),
         )
-        replacement_run = self.store.update(
+        replacement_run = await self.store.update(
             AgentRun,
             replacement_run.id,
             {
@@ -14340,15 +14625,17 @@ class HarnessRuntimeService:
         )
         replacement = next(
             iter(
-                self.store.find_entities(
-                    HarnessTurn,
-                    {"run_id": replacement_run.id},
-                    engagement_id=original.engagement_id,
-                    limit=1,
+                (
+                    await self.store.find_entities(
+                        HarnessTurn,
+                        {"run_id": replacement_run.id},
+                        engagement_id=original.engagement_id,
+                        limit=1,
+                    )
                 )
             )
         )
-        return self.store.update(
+        return await self.store.update(
             HarnessTurn,
             replacement.id,
             {
@@ -14362,12 +14649,12 @@ class HarnessRuntimeService:
         )
 
     async def rewind_files(self, session_id: str, checkpoint_id: str) -> HarnessSession:
-        session = self.store.get(HarnessSession, session_id)
-        if self.session_activity(session.id).busy:
+        session = await self.store.get(HarnessSession, session_id)
+        if (await self.session_activity(session.id)).busy:
             raise HarnessStateError(
                 "files can be rewound only while the session is idle"
             )
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
         if profile.kind != HarnessKind.CLAUDE_AGENT_SDK:
             raise HarnessStateError("file checkpoint rewind is Claude-only")
         if (
@@ -14381,38 +14668,40 @@ class HarnessRuntimeService:
         if connection is None:
             raise HarnessStateError("the Claude checkpoint is no longer live")
         await connection.rewind_files(checkpoint_id)
-        latest = self.store.get(HarnessSession, session.id)
-        latest = self.store.update(
+        latest = await self.store.get(HarnessSession, session.id)
+        latest = await self.store.update(
             HarnessSession,
             latest.id,
             {"last_activity_at": utc_now()},
             expected_revision=latest.revision,
         )
         if latest.last_turn_id:
-            turn = self.store.get(HarnessTurn, latest.last_turn_id)
-            self._persist_activity(
-                turn,
-                latest,
-                HarnessEvent(
-                    type="checkpoint",
-                    origin=turn.origin,
-                    harness_session_id=latest.id,
-                    harness_turn_id=turn.id,
-                    item_id=checkpoint_id,
-                    item_status="completed",
-                    title="Files rewound",
-                    summary="Claude restored files to the selected checkpoint.",
-                    payload={
-                        "checkpoint_id": checkpoint_id,
-                        "action": "rewind",
-                    },
-                ),
+            turn = await self.store.get(HarnessTurn, latest.last_turn_id)
+            (
+                await self._persist_activity(
+                    turn,
+                    latest,
+                    HarnessEvent(
+                        type="checkpoint",
+                        origin=turn.origin,
+                        harness_session_id=latest.id,
+                        harness_turn_id=turn.id,
+                        item_id=checkpoint_id,
+                        item_status="completed",
+                        title="Files rewound",
+                        summary="Claude restored files to the selected checkpoint.",
+                        payload={
+                            "checkpoint_id": checkpoint_id,
+                            "action": "rewind",
+                        },
+                    ),
+                )
             )
         return latest
 
     async def resolve_approval(self, approval: Approval) -> None:
         try:
-            related_turn = approval_harness_turn(self.store, approval)
+            related_turn = await approval_harness_turn(self.store, approval)
         except (NotFoundError, ConflictError):
             # diagnostic-expected: a removed or changed request is not deliverable.
             related_turn = None
@@ -14421,13 +14710,13 @@ class HarnessRuntimeService:
             if future is not None and not future.done():
                 future.cancel()
             self._broker_approval_ids.discard(approval.id)
-            self._fail_unbound_approval(approval)
+            (await self._fail_unbound_approval(approval))
             raise HarnessStateError(
                 "The original approval binding is unavailable; no work was replayed"
             )
         if future is None or future.done():
             if related_turn is not None:
-                self._fail_approval_delivery(approval, related_turn)
+                (await self._fail_approval_delivery(approval, related_turn))
                 return
             raise HarnessStateError("harness permission request is no longer active")
         if related_turn is not None and related_turn.status not in {
@@ -14435,10 +14724,10 @@ class HarnessRuntimeService:
             HarnessTurnStatus.WAITING_APPROVAL,
         }:
             future.cancel()
-            self._fail_approval_delivery(approval, related_turn)
+            (await self._fail_approval_delivery(approval, related_turn))
             return
         try:
-            self._deliver_approval(approval, related_turn, future)
+            (await self._deliver_approval(approval, related_turn, future))
         except Exception:
             # A failed activity/record write must not orphan the original waiter.
             # Once the future is fulfilled, never claim that delivery failed or
@@ -14446,60 +14735,66 @@ class HarnessRuntimeService:
             if not future.done():
                 future.cancel()
                 if related_turn is not None:
-                    self._fail_approval_delivery(approval, related_turn)
+                    (await self._fail_approval_delivery(approval, related_turn))
             raise
         finally:
             self._broker_approval_ids.discard(approval.id)
 
-    def _deliver_approval(self, approval, related_turn, future) -> None:
+    async def _deliver_approval(self, approval, related_turn, future) -> None:
         allowed = approval.status == ApprovalStatus.APPROVED
         broker_owned = approval.id in self._broker_approval_ids
         if approval.tool_call_id and not broker_owned:
-            call = self.store.get(ToolCall, approval.tool_call_id)
-            self.store.update(
-                ToolCall,
-                call.id,
-                {
-                    "status": (
-                        ToolCallStatus.APPROVED if allowed else ToolCallStatus.DENIED
-                    ),
-                    "error": None
-                    if allowed
-                    else approval.decision_note or "Denied by operator",
-                },
-                expected_revision=call.revision,
+            call = await self.store.get(ToolCall, approval.tool_call_id)
+            (
+                await self.store.update(
+                    ToolCall,
+                    call.id,
+                    {
+                        "status": (
+                            ToolCallStatus.APPROVED
+                            if allowed
+                            else ToolCallStatus.DENIED
+                        ),
+                        "error": None
+                        if allowed
+                        else approval.decision_note or "Denied by operator",
+                    },
+                    expected_revision=call.revision,
+                )
             )
         if related_turn is not None:
-            related_session = self.store.get(
+            related_session = await self.store.get(
                 HarnessSession, related_turn.harness_session_id
             )
-            self._persist_activity(
-                related_turn,
-                related_session,
-                HarnessEvent(
-                    type="approval",
-                    origin=related_turn.origin,
-                    harness_session_id=related_session.id,
-                    harness_turn_id=related_turn.id,
-                    item_id=approval.tool_call_id or approval.id,
-                    item_kind=(
-                        "command"
-                        if approval.exact_request.get("category") == "command"
-                        else "file_change"
-                        if approval.exact_request.get("category") == "file"
-                        else "tool"
+            (
+                await self._persist_activity(
+                    related_turn,
+                    related_session,
+                    HarnessEvent(
+                        type="approval",
+                        origin=related_turn.origin,
+                        harness_session_id=related_session.id,
+                        harness_turn_id=related_turn.id,
+                        item_id=approval.tool_call_id or approval.id,
+                        item_kind=(
+                            "command"
+                            if approval.exact_request.get("category") == "command"
+                            else "file_change"
+                            if approval.exact_request.get("category") == "file"
+                            else "tool"
+                        ),
+                        item_status="completed" if allowed else "cancelled",
+                        title="Approval resolved",
+                        summary=(
+                            "The operator approved the request."
+                            if allowed
+                            else "The operator declined the request."
+                        ),
+                        approval_id=approval.id,
+                        tool_call_id=approval.tool_call_id,
+                        payload={"allowed": allowed},
                     ),
-                    item_status="completed" if allowed else "cancelled",
-                    title="Approval resolved",
-                    summary=(
-                        "The operator approved the request."
-                        if allowed
-                        else "The operator declined the request."
-                    ),
-                    approval_id=approval.id,
-                    tool_call_id=approval.tool_call_id,
-                    payload={"allowed": allowed},
-                ),
+                )
             )
         future.set_result(
             HarnessPermissionDecision(
@@ -14509,21 +14804,23 @@ class HarnessRuntimeService:
             )
         )
         if related_turn is not None:
-            record_delivery(
-                self.store,
-                approval.id,
-                related_turn.id,
-                "delivered",
-                "Decision delivered to the active Core waiter; execution progress is tracked separately.",
+            (
+                await record_delivery(
+                    self.store,
+                    approval.id,
+                    related_turn.id,
+                    "delivered",
+                    "Decision delivered to the active Core waiter; execution progress is tracked separately.",
+                )
             )
 
-    def _fail_unbound_approval(self, approval: Approval) -> None:
+    async def _fail_unbound_approval(self, approval: Approval) -> None:
         """Retire uncertainty using only the saved owner, never conversation search."""
         if approval.continuation is None:
             return
         turn_id = approval.continuation.harness_turn_id
         try:
-            turn = self.store.get(HarnessTurn, turn_id)
+            turn = await self.store.get(HarnessTurn, turn_id)
         except NotFoundError:
             # diagnostic-expected: a retained delivery can outlive its owning turn.
             turn = None
@@ -14538,25 +14835,29 @@ class HarnessRuntimeService:
                 or turn.chat_session_id == approval.chat_session_id
             )
         ):
-            self._fail_approval_delivery(approval, turn)
+            (await self._fail_approval_delivery(approval, turn))
         else:
-            record_delivery(
-                self.store,
-                approval.id,
-                turn_id,
-                "failed",
-                "The original request binding is unavailable. No work was replayed.",
+            (
+                await record_delivery(
+                    self.store,
+                    approval.id,
+                    turn_id,
+                    "failed",
+                    "The original request binding is unavailable. No work was replayed.",
+                )
             )
 
-    def _fail_approval_delivery(self, approval: Approval, turn: HarnessTurn) -> None:
+    async def _fail_approval_delivery(
+        self, approval: Approval, turn: HarnessTurn
+    ) -> None:
         detail = "Decision recorded, but the original request is no longer connected. No work was replayed; start a new response."
-        record_delivery(self.store, approval.id, turn.id, "failed", detail)
+        (await record_delivery(self.store, approval.id, turn.id, "failed", detail))
         if turn.status not in {
             HarnessTurnStatus.RUNNING,
             HarnessTurnStatus.WAITING_APPROVAL,
         }:
             return
-        turn = self.store.update(
+        turn = await self.store.update(
             HarnessTurn,
             turn.id,
             {
@@ -14566,28 +14867,30 @@ class HarnessRuntimeService:
             },
             expected_revision=turn.revision,
         )
-        self._interrupt_owner(turn)
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        (await self._interrupt_owner(turn))
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.status in {
             HarnessSessionStatus.RUNNING,
             HarnessSessionStatus.WAITING_APPROVAL,
         }:
-            self.store.update(
-                HarnessSession,
-                session.id,
-                {
-                    "status": HarnessSessionStatus.INTERRUPTED,
-                    "last_activity_at": utc_now(),
-                },
-                expected_revision=session.revision,
+            (
+                await self.store.update(
+                    HarnessSession,
+                    session.id,
+                    {
+                        "status": HarnessSessionStatus.INTERRUPTED,
+                        "last_activity_at": utc_now(),
+                    },
+                    expected_revision=session.revision,
+                )
             )
 
-    def _restore_approval_wait(self, turn: HarnessTurn, future) -> None:
+    async def _restore_approval_wait(self, turn: HarnessTurn, future) -> None:
         if future.cancelled() or future.exception() is not None:
             return
-        self._release_approval_wait(turn)
+        (await self._release_approval_wait(turn))
 
-    def _abandon_gateway_approval(
+    async def _abandon_gateway_approval(
         self,
         turn: HarnessTurn,
         approval_id: str | None,
@@ -14604,40 +14907,44 @@ class HarnessRuntimeService:
             self._approval_futures.pop(approval_id, None)
             self._broker_approval_ids.discard(approval_id)
             try:
-                approval: Approval | None = self.store.get(Approval, approval_id)
+                approval: Approval | None = await self.store.get(Approval, approval_id)
             except (
                 NotFoundError
             ):  # diagnostic-expected: a removed request has no card to retire
                 approval = None
             if approval is not None and approval.status == ApprovalStatus.PENDING:
-                self.store.update(
-                    Approval,
-                    approval.id,
-                    {
-                        "status": ApprovalStatus.EXPIRED,
-                        "decided_by": "system",
-                        "decided_at": utc_now(),
-                        "decision_note": "The harness stopped waiting for this "
-                        "request before a decision arrived.",
-                    },
-                    expected_revision=approval.revision,
+                (
+                    await self.store.update(
+                        Approval,
+                        approval.id,
+                        {
+                            "status": ApprovalStatus.EXPIRED,
+                            "decided_by": "system",
+                            "decided_at": utc_now(),
+                            "decision_note": "The harness stopped waiting for this "
+                            "request before a decision arrived.",
+                        },
+                        expected_revision=approval.revision,
+                    )
                 )
         if tool_call_id:
-            self._cancel_gateway_tool_call(
-                tool_call_id, "The harness stopped waiting for approval."
+            (
+                await self._cancel_gateway_tool_call(
+                    tool_call_id, "The harness stopped waiting for approval."
+                )
             )
-        latest = self.store.get(HarnessTurn, turn.id)
+        latest = await self.store.get(HarnessTurn, turn.id)
         if latest.status in {
             HarnessTurnStatus.RUNNING,
             HarnessTurnStatus.WAITING_APPROVAL,
         }:
-            self._release_approval_wait(latest)
+            (await self._release_approval_wait(latest))
 
-    def _cancel_gateway_tool_call(self, call_id: str, reason: str) -> None:
+    async def _cancel_gateway_tool_call(self, call_id: str, reason: str) -> None:
         """Record a gateway tool call that will never finish as cancelled."""
 
         try:
-            call = self.store.get(ToolCall, call_id)
+            call = await self.store.get(ToolCall, call_id)
         except NotFoundError:  # diagnostic-expected: no call was reserved yet
             return
         if call.status in {
@@ -14647,21 +14954,23 @@ class HarnessRuntimeService:
             ToolCallStatus.CANCELLED,
         }:
             return
-        self.store.update(
-            ToolCall,
-            call.id,
-            {
-                "status": ToolCallStatus.CANCELLED,
-                "error": reason,
-                "completed_at": utc_now(),
-            },
-            expected_revision=call.revision,
+        (
+            await self.store.update(
+                ToolCall,
+                call.id,
+                {
+                    "status": ToolCallStatus.CANCELLED,
+                    "error": reason,
+                    "completed_at": utc_now(),
+                },
+                expected_revision=call.revision,
+            )
         )
 
-    def _release_approval_wait(self, turn: HarnessTurn) -> None:
+    async def _release_approval_wait(self, turn: HarnessTurn) -> None:
         """Return a turn to running unless another request still waits on it."""
 
-        latest = self.store.get(HarnessTurn, turn.id)
+        latest = await self.store.get(HarnessTurn, turn.id)
         if latest.status not in {
             HarnessTurnStatus.RUNNING,
             HarnessTurnStatus.WAITING_APPROVAL,
@@ -14672,20 +14981,20 @@ class HarnessRuntimeService:
             if waiter.done():
                 continue
             try:
-                approval = self.store.get(Approval, approval_id)
-                owner = approval_harness_turn(self.store, approval)
+                approval = await self.store.get(Approval, approval_id)
+                owner = await approval_harness_turn(self.store, approval)
             except (
                 NotFoundError
             ):  # diagnostic-expected: detached request during cleanup
                 continue
             if owner is not None and owner.id == turn.id:
-                self._waiting_owner(turn, approval_id=approval_id)
+                (await self._waiting_owner(turn, approval_id=approval_id))
                 return
         from sqlalchemy import select
         from .database import EntityRow
 
-        with self.store.database.session() as database:
-            pending_input = database.scalar(
+        async with self.store.database.session() as database:
+            pending_input = await database.scalar(
                 select(EntityRow.id)
                 .where(
                     EntityRow.kind == HarnessInteraction.entity_kind,
@@ -14695,30 +15004,34 @@ class HarnessRuntimeService:
                 .limit(1)
             )
         if pending_input:
-            self._waiting_owner(turn)
+            (await self._waiting_owner(turn))
             return
         if latest.status == HarnessTurnStatus.WAITING_APPROVAL:
-            self.store.update(
-                HarnessTurn,
-                latest.id,
-                {"status": HarnessTurnStatus.RUNNING},
-                expected_revision=latest.revision,
+            (
+                await self.store.update(
+                    HarnessTurn,
+                    latest.id,
+                    {"status": HarnessTurnStatus.RUNNING},
+                    expected_revision=latest.revision,
+                )
             )
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.status == HarnessSessionStatus.WAITING_APPROVAL:
-            self.store.update(
-                HarnessSession,
-                session.id,
-                {
-                    "status": HarnessSessionStatus.RUNNING,
-                    "last_activity_at": utc_now(),
-                },
-                expected_revision=session.revision,
+            (
+                await self.store.update(
+                    HarnessSession,
+                    session.id,
+                    {
+                        "status": HarnessSessionStatus.RUNNING,
+                        "last_activity_at": utc_now(),
+                    },
+                    expected_revision=session.revision,
+                )
             )
-        self._start_owner(turn)
+        (await self._start_owner(turn))
 
     async def cancel_turn(self, harness_turn_id: str, *, reason: str) -> HarnessTurn:
-        turn = self.store.get(HarnessTurn, harness_turn_id)
+        turn = await self.store.get(HarnessTurn, harness_turn_id)
         if turn.status in {
             HarnessTurnStatus.COMPLETE,
             HarnessTurnStatus.CANCELLED,
@@ -14757,12 +15070,12 @@ class HarnessRuntimeService:
                     and not task.done()
                 ):
                     task.cancel()
-            return self.store.get(HarnessTurn, turn.id)
+            return await self.store.get(HarnessTurn, turn.id)
         cancellation_recorded = bool(
             turn.metadata.get("cancellation_activity_recorded")
         )
         if turn.status != HarnessTurnStatus.CANCELLED or not cancellation_recorded:
-            turn = self.store.update(
+            turn = await self.store.update(
                 HarnessTurn,
                 turn.id,
                 {
@@ -14777,46 +15090,50 @@ class HarnessRuntimeService:
                 expected_revision=turn.revision,
             )
         if turn.chat_turn_id:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.status not in {
                 ChatTurnStatus.COMPLETE,
                 ChatTurnStatus.CANCELLED,
                 ChatTurnStatus.FAILED,
                 ChatTurnStatus.INTERRUPTED,
             }:
-                self.store.update(
-                    ChatTurn,
-                    chat_turn.id,
-                    {"status": ChatTurnStatus.CANCELLED, "error": reason[:1_000]},
-                    expected_revision=chat_turn.revision,
+                (
+                    await self.store.update(
+                        ChatTurn,
+                        chat_turn.id,
+                        {"status": ChatTurnStatus.CANCELLED, "error": reason[:1_000]},
+                        expected_revision=chat_turn.revision,
+                    )
                 )
         elif turn.run_id:
-            run = self.store.get(AgentRun, turn.run_id)
+            run = await self.store.get(AgentRun, turn.run_id)
             if run.status not in {
                 RunStatus.COMPLETE,
                 RunStatus.CANCELLED,
                 RunStatus.FAILED,
                 RunStatus.INTERRUPTED,
             }:
-                self.store.update_with_event(
-                    AgentRun,
-                    run.id,
-                    {"status": RunStatus.CANCELLED, "completed_at": utc_now()},
-                    expected_revision=run.revision,
-                    run_id=run.id,
-                    event_type="run.cancelled",
-                    event_payload={
-                        "reason": reason[:1_000],
-                        "harness_turn_id": turn.id,
-                    },
-                    idempotency_key="run:cancelled",
+                (
+                    await self.store.update_with_event(
+                        AgentRun,
+                        run.id,
+                        {"status": RunStatus.CANCELLED, "completed_at": utc_now()},
+                        expected_revision=run.revision,
+                        run_id=run.id,
+                        event_type="run.cancelled",
+                        event_payload={
+                            "reason": reason[:1_000],
+                            "harness_turn_id": turn.id,
+                        },
+                        idempotency_key="run:cancelled",
+                    )
                 )
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.status not in {
             HarnessSessionStatus.CLOSED,
             HarnessSessionStatus.FAILED,
         }:
-            session = self.store.update(
+            session = await self.store.update(
                 HarnessSession,
                 session.id,
                 {
@@ -14826,19 +15143,21 @@ class HarnessRuntimeService:
                 expected_revision=session.revision,
             )
         if not cancellation_recorded:
-            self._persist_activity(
-                turn,
-                session,
-                HarnessEvent(
-                    type="turn_status",
-                    origin=turn.origin,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    item_status="cancelled",
-                    title="Turn stopped",
-                    summary=reason[:1_000],
-                    payload={"phase": "cancelled", "reason": reason[:1_000]},
-                ),
+            (
+                await self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="turn_status",
+                        origin=turn.origin,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        item_status="cancelled",
+                        title="Turn stopped",
+                        summary=reason[:1_000],
+                        payload={"phase": "cancelled", "reason": reason[:1_000]},
+                    ),
+                )
             )
         task = (
             self._chat_turn_tasks.get(turn.id)
@@ -14861,13 +15180,13 @@ class HarnessRuntimeService:
                     caught_error,
                     stage="turn-stop",
                 )
-        self._retire_turn_requests(turn, reason=reason, stopped=True)
+        (await self._retire_turn_requests(turn, reason=reason, stopped=True))
         # Commands, MCP calls and browser actions stop with the turn; left
         # running they would keep acting and hold the session's gateway.
         self._cancel_gateway_work(turn.id)
-        return self.store.get(HarnessTurn, turn.id)
+        return await self.store.get(HarnessTurn, turn.id)
 
-    def _retire_turn_requests(
+    async def _retire_turn_requests(
         self, turn: HarnessTurn, *, reason: str, stopped: bool
     ) -> None:
         """Settle the approvals and input requests a finished turn still holds.
@@ -14882,7 +15201,7 @@ class HarnessRuntimeService:
         owners = {turn.id, turn.run_id, turn.chat_turn_id} - {None}
         for approval_id, future in list(self._approval_futures.items()):
             try:
-                approval = self.store.get(Approval, approval_id)
+                approval = await self.store.get(Approval, approval_id)
             except NotFoundError as caught_error:
                 record_caught_exception(
                     "harnesses",
@@ -14897,39 +15216,43 @@ class HarnessRuntimeService:
             self._approval_futures.pop(approval_id, None)
             self._broker_approval_ids.discard(approval_id)
             if approval.status == ApprovalStatus.PENDING:
-                self.store.update(
-                    Approval,
-                    approval.id,
-                    {
-                        "status": ApprovalStatus.CANCELLED
-                        if stopped
-                        else ApprovalStatus.EXPIRED,
-                        "decided_at": utc_now(),
-                        "decision_note": reason[:1_000],
-                        **({} if stopped else {"decided_by": "system"}),
-                    },
-                    expected_revision=approval.revision,
+                (
+                    await self.store.update(
+                        Approval,
+                        approval.id,
+                        {
+                            "status": ApprovalStatus.CANCELLED
+                            if stopped
+                            else ApprovalStatus.EXPIRED,
+                            "decided_at": utc_now(),
+                            "decision_note": reason[:1_000],
+                            **({} if stopped else {"decided_by": "system"}),
+                        },
+                        expected_revision=approval.revision,
+                    )
                 )
             if approval.tool_call_id:
-                call = self.store.get(ToolCall, approval.tool_call_id)
+                call = await self.store.get(ToolCall, approval.tool_call_id)
                 if call.status == ToolCallStatus.WAITING_APPROVAL:
-                    self.store.update(
-                        ToolCall,
-                        call.id,
-                        {
-                            "status": ToolCallStatus.DENIED
-                            if stopped
-                            else ToolCallStatus.CANCELLED,
-                            "error": reason[:1_000],
-                            "completed_at": utc_now(),
-                        },
-                        expected_revision=call.revision,
+                    (
+                        await self.store.update(
+                            ToolCall,
+                            call.id,
+                            {
+                                "status": ToolCallStatus.DENIED
+                                if stopped
+                                else ToolCallStatus.CANCELLED,
+                                "error": reason[:1_000],
+                                "completed_at": utc_now(),
+                            },
+                            expected_revision=call.revision,
+                        )
                     )
             if not future.done():
                 future.set_result(
                     HarnessPermissionDecision(allowed=False, reason=reason)
                 )
-        pending_interactions = self.store.find_entities(
+        pending_interactions = await self.store.find_entities(
             HarnessInteraction,
             {
                 "harness_turn_id": turn.id,
@@ -14939,43 +15262,47 @@ class HarnessRuntimeService:
         )
         for interaction in pending_interactions:
             interaction_future = self._interaction_futures.pop(interaction.id, None)
-            self.store.update(
-                HarnessInteraction,
-                interaction.id,
-                {
-                    "status": HarnessInteractionStatus.CANCELLED
-                    if stopped
-                    else HarnessInteractionStatus.EXPIRED,
-                    "resolved_at": utc_now(),
-                    "metadata": {**interaction.metadata, "reason": reason[:1_000]},
-                },
-                expected_revision=interaction.revision,
+            (
+                await self.store.update(
+                    HarnessInteraction,
+                    interaction.id,
+                    {
+                        "status": HarnessInteractionStatus.CANCELLED
+                        if stopped
+                        else HarnessInteractionStatus.EXPIRED,
+                        "resolved_at": utc_now(),
+                        "metadata": {**interaction.metadata, "reason": reason[:1_000]},
+                    },
+                    expected_revision=interaction.revision,
+                )
             )
             if interaction_future is not None and not interaction_future.done():
                 interaction_future.set_result(
                     {"action": "cancel" if stopped else "expire", "response": {}}
                 )
 
-    def attach_run_to_chat(self, run_id: str) -> ChatSession:
-        run = self.store.get(AgentRun, run_id)
+    async def attach_run_to_chat(self, run_id: str) -> ChatSession:
+        run = await self.store.get(AgentRun, run_id)
         if run.backend != RunBackend.HARNESS or not run.harness_session_id:
             raise HarnessStateError(
                 "only harness runs can be discussed in harness chat"
             )
         existing = [
             item
-            for item in self.store.find_entities(
-                ChatSession,
-                {"harness_session_id": run.harness_session_id},
-                engagement_id=run.engagement_id,
+            for item in (
+                await self.store.find_entities(
+                    ChatSession,
+                    {"harness_session_id": run.harness_session_id},
+                    engagement_id=run.engagement_id,
+                )
             )
             if item.metadata.get("temporary_assistant") is not True
             and item.metadata.get("side_chat") is not True
         ]
         if existing:
             return existing[0]
-        session = self.store.get(HarnessSession, run.harness_session_id)
-        chat = self.store.create(
+        session = await self.store.get(HarnessSession, run.harness_session_id)
+        chat = await self.store.create(
             ChatSession(
                 id=str(uuid4()),
                 engagement_id=run.engagement_id,
@@ -15004,8 +15331,10 @@ class HarnessRuntimeService:
         ]
         turns = [
             turn
-            for turn in self.store.find_entities(
-                HarnessTurn, {"run_id": run.id}, engagement_id=run.engagement_id
+            for turn in (
+                await self.store.find_entities(
+                    HarnessTurn, {"run_id": run.id}, engagement_id=run.engagement_id
+                )
             )
             if turn.response
         ]
@@ -15023,19 +15352,19 @@ class HarnessRuntimeService:
                     metadata={"run_id": run.id, "handoff": "mission_to_chat"},
                 )
             )
-        with self.store.transaction() as transaction:
+        async with self.store.transaction() as transaction:
             for message in messages:
-                transaction.add(message)
+                (await transaction.add(message))
         return chat
 
-    def _compatible_session(
+    async def _compatible_session(
         self,
         session_id: str,
         engagement_id: str,
         profile_id: str,
         model: str | None,
     ) -> HarnessSession:
-        session = self.store.get(HarnessSession, session_id)
+        session = await self.store.get(HarnessSession, session_id)
         if (
             session.engagement_id != engagement_id
             or session.harness_profile_id != profile_id
@@ -15048,7 +15377,7 @@ class HarnessRuntimeService:
             raise HarnessStateError("harness session is closed")
         return session
 
-    def _validate_harness_privacy(
+    async def _validate_harness_privacy(
         self,
         engagement_id: str,
         profile: HarnessProfile,
@@ -15057,9 +15386,9 @@ class HarnessRuntimeService:
         allow_remote_mcp: bool,
         uses_gateway_tools: bool = False,
     ) -> None:
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         if engagement.scope_policy_id:
-            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
             if scope.engagement_id != engagement.id:
                 raise HarnessConfigurationError(
                     "engagement scope policy belongs to a different engagement"
@@ -15078,13 +15407,13 @@ class HarnessRuntimeService:
                     "remote harness MCP use requires explicit operator confirmation"
                 )
 
-    def _knowledge_sources(
+    async def _knowledge_sources(
         self, engagement_id: str
     ) -> tuple[list[KnowledgeSource], list[LibraryItem]]:
         engagement_sources: list[KnowledgeSource | LibraryItem] = []
         offset = 0
         while len(engagement_sources) < 10_000:
-            knowledge_page = self.store.list_entities(
+            knowledge_page = await self.store.list_entities(
                 KnowledgeSource,
                 engagement_id=engagement_id,
                 offset=offset,
@@ -15097,7 +15426,7 @@ class HarnessRuntimeService:
         library_sources: list[KnowledgeSource | LibraryItem] = []
         offset = 0
         while len(library_sources) < 10_000:
-            library_page = self.store.list_entities(
+            library_page = await self.store.list_entities(
                 LibraryItem,
                 offset=offset,
                 limit=1_000,
@@ -15129,12 +15458,12 @@ class HarnessRuntimeService:
         )
         return profile.privacy.local_only or not local_only
 
-    def _visible_knowledge_sources(
+    async def _visible_knowledge_sources(
         self,
         engagement_id: str,
         profile: HarnessProfile,
     ) -> tuple[list[KnowledgeSource], list[LibraryItem]]:
-        project, library = self._knowledge_sources(engagement_id)
+        project, library = await self._knowledge_sources(engagement_id)
         return (
             [
                 source
@@ -15148,7 +15477,7 @@ class HarnessRuntimeService:
             ],
         )
 
-    def _resolve_knowledge_access(
+    async def _resolve_knowledge_access(
         self,
         engagement_id: str,
         profile: HarnessProfile,
@@ -15158,7 +15487,7 @@ class HarnessRuntimeService:
     ) -> bool:
         if not requested or self.knowledge_retriever is None:
             return False
-        project_sources, library_sources = self._visible_knowledge_sources(
+        project_sources, library_sources = await self._visible_knowledge_sources(
             engagement_id, profile
         )
         if not project_sources and not library_sources:
@@ -15181,18 +15510,18 @@ class HarnessRuntimeService:
         connection = self._connections.get(session_id)
         return connection.connection_state if connection is not None else "disconnected"
 
-    def session_activity(self, session_id: str) -> HarnessSessionActivity:
+    async def session_activity(self, session_id: str) -> HarnessSessionActivity:
         """Return the authoritative reservation state without exposing turn content."""
 
-        session = self.store.get(HarnessSession, session_id)
+        session = await self.store.get(HarnessSession, session_id)
         live_turn = self._active.get(session.id)
         turn: HarnessTurn | None = None
         if live_turn is not None:
-            turn = self.store.get(HarnessTurn, live_turn.turn_id)
+            turn = await self.store.get(HarnessTurn, live_turn.turn_id)
         else:
             # The UI polls this every few seconds: filter in SQL and read only
             # the oldest reservation, not every turn of the project.
-            reserved = self.store.find_entities(
+            reserved = await self.store.find_entities(
                 HarnessTurn,
                 {
                     "harness_session_id": session.id,
@@ -15242,7 +15571,7 @@ class HarnessRuntimeService:
         goal: HarnessGoalSnapshot | None = None
         connection = self._connections.get(session.id)
         last_turn = (
-            self.store.get(HarnessTurn, session.last_turn_id)
+            (await self.store.get(HarnessTurn, session.last_turn_id))
             if session.last_turn_id
             else None
         )
@@ -15250,7 +15579,7 @@ class HarnessRuntimeService:
         # from the harness ledger, independent of the Core-owned ChatGoal.
         state_turn = turn or last_turn
         if state_turn is not None:
-            state = self._turn_activity_state(state_turn)
+            state = await self._turn_activity_state(state_turn)
             mode, plan, goal = state.mode, list(state.plan), state.goal
         return HarnessSessionActivity(
             session_id=session.id,
@@ -15274,7 +15603,9 @@ class HarnessRuntimeService:
                 if isinstance(connection, (GrokAcpConnection, CodexAppServerConnection))
                 and self.connection_state(session.id) != "disconnected"
                 else compatibility_commands()
-                if self.store.get(HarnessProfile, session.harness_profile_id).kind
+                if (
+                    await self.store.get(HarnessProfile, session.harness_profile_id)
+                ).kind
                 in {HarnessKind.GROK_ACP, HarnessKind.CODEX_APP_SERVER}
                 else []
             ),
@@ -15286,7 +15617,7 @@ class HarnessRuntimeService:
             ),
         )
 
-    def _butler_capabilities(
+    async def _butler_capabilities(
         self,
         project_id: str,
         *,
@@ -15295,7 +15626,7 @@ class HarnessRuntimeService:
     ) -> Any:
         from .butler_capabilities import ButlerCapabilities
 
-        return ButlerCapabilities(
+        return await ButlerCapabilities.create(
             self.store,
             self.artifact_store,
             project_id,
@@ -15316,11 +15647,15 @@ class HarnessRuntimeService:
             ),
             instructions_root=getattr(self, "butler_instructions_root", None),
             background_runtime_local=(
-                self.store.get(
-                    HarnessProfile,
-                    self.store.get(
-                        HarnessSession, turn.harness_session_id
-                    ).harness_profile_id,
+                (
+                    await self.store.get(
+                        HarnessProfile,
+                        (
+                            await self.store.get(
+                                HarnessSession, turn.harness_session_id
+                            )
+                        ).harness_profile_id,
+                    )
                 ).privacy.local_only
                 if turn is not None
                 else False
@@ -15335,14 +15670,14 @@ class HarnessRuntimeService:
             container_terminals=self.container_terminal_service,
         )
 
-    def _gateway_catalog(
+    async def _gateway_catalog(
         self,
         session: HarnessSession,
         params: dict[str, Any] | None = None,
         *,
         turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
-        current = self.store.get(HarnessSession, session.id)
+        current = await self.store.get(HarnessSession, session.id)
         planning_target = current.metadata.get("planning_target_turn_id")
         if isinstance(planning_target, str):
             planning_tools = [
@@ -15367,12 +15702,14 @@ class HarnessRuntimeService:
         if turn is None:
             active = self._active.get(current.id)
             if active is not None:
-                turn = self.store.get(HarnessTurn, active.turn_id)
+                turn = await self.store.get(HarnessTurn, active.turn_id)
         if settings_only:
-            for plugin in self._butler_capabilities(
-                current.engagement_id,
-                turn=turn,
-                background_case_id=current.metadata.get("butler_recovery_case_id"),
+            for plugin in (
+                await self._butler_capabilities(
+                    current.engagement_id,
+                    turn=turn,
+                    background_case_id=current.metadata.get("butler_recovery_case_id"),
+                )
             ).plugins():
                 spec = plugin.spec
                 read_only = spec.risk_class == RiskClass.LOCAL_READ
@@ -15390,7 +15727,9 @@ class HarnessRuntimeService:
                     }
                 )
         if current.metadata.get("browser_companion_session_id"):
-            spec = companion_spec(image_supported=self._model_image_supported(current))
+            spec = companion_spec(
+                image_supported=(await self._model_image_supported(current))
+            )
             tools.append(
                 {
                     "name": spec.name,
@@ -15436,7 +15775,9 @@ class HarnessRuntimeService:
             and self.provider_subagents is not None
             and not current.metadata.get("analysis_only")
         ):
-            kind = self.store.get(HarnessProfile, current.harness_profile_id).kind
+            kind = (
+                await self.store.get(HarnessProfile, current.harness_profile_id)
+            ).kind
             for name, (description, schema) in _gateway_subagent_tools(kind).items():
                 tools.append(
                     {
@@ -15472,7 +15813,7 @@ class HarnessRuntimeService:
                 )
         if not current.metadata.get("analysis_only"):
             if turn is not None and turn.chat_turn_id and not settings_only:
-                chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+                chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
                 if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
                     tools.append(
                         {
@@ -15513,7 +15854,7 @@ class HarnessRuntimeService:
                             },
                         }
                     )
-            work_enabled = self.work.enabled(current.engagement_id)
+            work_enabled = await self.work.enabled(current.engagement_id)
             for name, (description, schema) in _GATEWAY_WORK_SCHEMAS.items():
                 if name != "work.agents" and not work_enabled:
                     continue
@@ -15532,15 +15873,19 @@ class HarnessRuntimeService:
                         },
                     }
                 )
-        core = self._core_tool_components(current, turn) if turn is not None else None
+        core = (
+            (await self._core_tool_components(current, turn))
+            if turn is not None
+            else None
+        )
         if core is not None:
             assert turn is not None and turn.chat_turn_id is not None
             existing_names = {item["name"] for item in tools} | set(
                 _GATEWAY_RETRIEVAL_SCHEMAS
             )
-            allowed = self.store.get(ChatTurn, turn.chat_turn_id).request_snapshot.get(
-                "allowed_tool_names"
-            )
+            allowed = (
+                await self.store.get(ChatTurn, turn.chat_turn_id)
+            ).request_snapshot.get("allowed_tool_names")
             for name, spec in sorted(core.specs.items()):
                 if name in existing_names or spec.source_id:
                     continue
@@ -15553,7 +15898,7 @@ class HarnessRuntimeService:
                     "plan.submit",
                     "skill.read_resource",
                 }
-                if self.store.get(ChatTurn, turn.chat_turn_id).goal_id:
+                if (await self.store.get(ChatTurn, turn.chat_turn_id)).goal_id:
                     always.update(
                         {
                             "report_progress",
@@ -15588,10 +15933,10 @@ class HarnessRuntimeService:
                     },
                 }
             )
-        components = self._ensure_oci_components(session)
+        components = await self._ensure_oci_components(session)
         if components is not None:
-            harness_kind = self.store.get(
-                HarnessProfile, current.harness_profile_id
+            harness_kind = (
+                await self.store.get(HarnessProfile, current.harness_profile_id)
             ).kind
             for actual_name, spec in sorted(components.specs.items()):
                 if spec.budget_class != "execution":
@@ -15682,9 +16027,9 @@ class HarnessRuntimeService:
                     }
                 )
         if turn is not None and turn.chat_turn_id:
-            allowed = self.store.get(ChatTurn, turn.chat_turn_id).request_snapshot.get(
-                "allowed_tool_names"
-            )
+            allowed = (
+                await self.store.get(ChatTurn, turn.chat_turn_id)
+            ).request_snapshot.get("allowed_tool_names")
             if allowed is not None:
                 from .mcp import mcp_tool_runtime_name
 
@@ -15697,7 +16042,7 @@ class HarnessRuntimeService:
                     "plan.submit",
                     "skill.read_resource",
                 }
-                if self.store.get(ChatTurn, turn.chat_turn_id).goal_id:
+                if (await self.store.get(ChatTurn, turn.chat_turn_id)).goal_id:
                     required.update(
                         {
                             "report_progress",
@@ -15758,40 +16103,40 @@ class HarnessRuntimeService:
             result["nextCursor"] = str(index)
         return result
 
-    def _core_tool_components(
+    async def _core_tool_components(
         self, session: HarnessSession, turn: HarnessTurn
     ) -> RuntimeToolComponents | None:
         if turn.id not in self._gateway_core_components:
             from .harness_core_tools import core_components
 
-            self._gateway_core_components[turn.id] = core_components(
+            self._gateway_core_components[turn.id] = await core_components(
                 self, session, turn
             )
         return self._gateway_core_components[turn.id]
 
-    def _active_gateway_turn(self, session_id: str) -> HarnessTurn:
+    async def _active_gateway_turn(self, session_id: str) -> HarnessTurn:
         active = self._active.get(session_id)
         if active is None:
             raise HarnessStateError("gateway session has no active harness turn")
-        return self.store.get(HarnessTurn, active.turn_id)
+        return await self.store.get(HarnessTurn, active.turn_id)
 
-    def _gateway_execution_gate(self, turn: HarnessTurn) -> asyncio.Semaphore:
+    async def _gateway_execution_gate(self, turn: HarnessTurn) -> asyncio.Semaphore:
         gate = self._gateway_execution_gates.get(turn.id)
         if gate is not None:
             return gate
         limit = 1
         if turn.run_id is not None:
-            run = self.store.get(AgentRun, turn.run_id)
+            run = await self.store.get(AgentRun, turn.run_id)
             limit = run.budget.max_concurrency
-        engagement = self.store.get(Engagement, turn.engagement_id)
+        engagement = await self.store.get(Engagement, turn.engagement_id)
         if engagement.scope_policy_id:
-            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
             limit = min(limit, scope.max_concurrency)
         gate = asyncio.Semaphore(max(1, limit))
         self._gateway_execution_gates[turn.id] = gate
         return gate
 
-    def _gateway_target_gate(
+    async def _gateway_target_gate(
         self,
         session: HarnessSession,
         turn: HarnessTurn,
@@ -15807,8 +16152,8 @@ class HarnessRuntimeService:
             return None
         limit = 1
         if turn.run_id is not None:
-            limit = self.store.get(
-                AgentRun, turn.run_id
+            limit = (
+                await self.store.get(AgentRun, turn.run_id)
             ).budget.per_target_active_operations
         key = (turn.id, tool_name, target.strip().casefold())
         gate = self._gateway_target_gates.get(key)
@@ -15817,19 +16162,19 @@ class HarnessRuntimeService:
             self._gateway_target_gates[key] = gate
         return gate
 
-    def _model_image_supported(self, session: HarnessSession) -> bool:
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+    async def _model_image_supported(self, session: HarnessSession) -> bool:
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
         return any(
             option.model == session.model and option.image_input
             for option in profile.capabilities.model_options
         )
 
-    def _gateway_capabilities_offer(
+    async def _gateway_capabilities_offer(
         self, session: HarnessSession
     ) -> dict[str, Any] | None:
         """Read the fixed capability offer without rebuilding mutable tool maps."""
 
-        current = self.store.get(HarnessSession, session.id)
+        current = await self.store.get(HarnessSession, session.id)
         if (
             isinstance(current.metadata.get("planning_target_turn_id"), str)
             or _session_provider_subagent(current) is None
@@ -15837,7 +16182,7 @@ class HarnessRuntimeService:
             or current.metadata.get("analysis_only")
         ):
             return None
-        kind = self.store.get(HarnessProfile, current.harness_profile_id).kind
+        kind = (await self.store.get(HarnessProfile, current.harness_profile_id)).kind
         description, schema = _gateway_subagent_tools(kind)["subagent.capabilities"]
         return {
             "name": "subagent.capabilities",
@@ -15845,7 +16190,7 @@ class HarnessRuntimeService:
             "inputSchema": schema,
         }
 
-    def _gateway_capabilities_read(
+    async def _gateway_capabilities_read(
         self, session: HarnessSession, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """Own preflight, catalog and receipt Sessions in the same bounded worker.
@@ -15855,19 +16200,19 @@ class HarnessRuntimeService:
         No async service or mutable gateway tool map is touched here.
         """
 
-        offer = self._gateway_capabilities_offer(session)
+        offer = await self._gateway_capabilities_offer(session)
         if offer is None:
             raise ToolNotPermitted(
                 "Subagents are turned off for this conversation.",
                 rule="subagents.turned_off",
             )
-        turn = self._active_gateway_turn(session.id)
+        turn = await self._active_gateway_turn(session.id)
         if turn.chat_turn_id is not None:
-            parent = self.store.get(ChatTurn, turn.chat_turn_id)
-            chat = self.store.get(ChatSession, parent.session_id)
-            if self.plans.required(parent, chat):
-                self.plans.ensure(parent, chat)
-                self.plans.guard(parent.id, "subagent.capabilities")
+            parent = await self.store.get(ChatTurn, turn.chat_turn_id)
+            chat = await self.store.get(ChatSession, parent.session_id)
+            if await self.plans.required(parent, chat):
+                (await self.plans.ensure(parent, chat))
+                (await self.plans.guard(parent.id, "subagent.capabilities"))
         service = self.provider_subagents
         if (
             service is None
@@ -15880,7 +16225,7 @@ class HarnessRuntimeService:
                 "Subagents are turned off for this conversation.",
                 rule="subagents.turned_off",
             )
-        call = self.store.reserve_tool_call(
+        call = await self.store.reserve_tool_call(
             ToolCall(
                 id=str(uuid4()),
                 engagement_id=turn.engagement_id,
@@ -15897,18 +16242,20 @@ class HarnessRuntimeService:
             )
         )
         try:
-            call = self._attach_gateway_tool_call(turn, call.id)
+            call = await self._attach_gateway_tool_call(turn, call.id)
             if not Draft7Validator(offer["inputSchema"]).is_valid(arguments):
                 raise refused_before_execution(
                     InvalidToolArguments(
                         "subagent.capabilities accepts category, cursor and limit"
                     )
                 )
-            result = service.available_capabilities(turn.chat_turn_id, **arguments)
+            result = await service.available_capabilities(
+                turn.chat_turn_id, **arguments
+            )
         except Exception as exc:
-            self._finish_gateway_call(call.id, error=exc)
+            (await self._finish_gateway_call(call.id, error=exc))
             raise
-        self._finish_gateway_call(call.id, result=result)
+        (await self._finish_gateway_call(call.id, result=result))
         return {
             "content": [
                 {
@@ -15920,15 +16267,15 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
-    def _gateway_offered_tool(
+    async def _gateway_offered_tool(
         self, session: HarnessSession, name: str
     ) -> tuple[dict[str, Any] | None, list[str]]:
         available_names: list[str] = []
         cursor = None
         seen_cursors: set[str] = set()
-        turn = self._active_gateway_turn(session.id)
+        turn = await self._active_gateway_turn(session.id)
         for _ in range(64):
-            catalog = self._gateway_catalog(
+            catalog = await self._gateway_catalog(
                 session,
                 {"cursor": cursor} if cursor else None,
                 turn=turn,
@@ -15959,20 +16306,16 @@ class HarnessRuntimeService:
         available_names: list[str] = []
         try:
             if name == "subagent.capabilities":
-                from .read_workers import read_in_worker
-
-                offered = await read_in_worker(
-                    self._gateway_capabilities_offer, session
-                )
+                offered = await self._gateway_capabilities_offer(session)
             else:
                 if name in {"work.agents", "agent.list"}:
-                    from .read_workers import read_in_worker
-
-                    offered, available_names = await read_in_worker(
-                        self._gateway_offered_tool, session, name
+                    offered, available_names = await self._gateway_offered_tool(
+                        session, name
                     )
                 else:
-                    offered, available_names = self._gateway_offered_tool(session, name)
+                    offered, available_names = await self._gateway_offered_tool(
+                        session, name
+                    )
         except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
             fallback = ToolSpec.model_construct(
                 name=name,
@@ -16097,29 +16440,29 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         if name == "subagent.capabilities":
-            from .read_workers import read_in_worker
-
-            return await read_in_worker(
-                self._gateway_capabilities_read, session, arguments
-            )
-        turn = self._active_gateway_turn(session.id)
-        planner_target = self.store.get(HarnessSession, session.id).metadata.get(
-            "planning_target_turn_id"
-        )
+            return await self._gateway_capabilities_read(session, arguments)
+        turn = await self._active_gateway_turn(session.id)
+        planner_target = (
+            await self.store.get(HarnessSession, session.id)
+        ).metadata.get("planning_target_turn_id")
         if isinstance(planner_target, str):
-            plan = self.plans.for_turn(planner_target)
+            plan = await self.plans.for_turn(planner_target)
             if plan is None:
                 raise PlanningBlocked("planning target is unavailable")
             if name == "plan.submit":
-                selected = self.store.get(HarnessSession, session.id).metadata
-                saved = self.plans.submit(
+                selected = (await self.store.get(HarnessSession, session.id)).metadata
+                saved = await self.plans.submit(
                     plan,
                     PlanSubmission.model_validate(arguments),
                     available_tools=set(selected.get("planning_tool_names") or []),
                     native_categories=set(
                         selected.get("planning_native_categories") or []
                     ),
-                    workspace=self.workspace_resolver(plan.engagement_id),
+                    workspace=(
+                        await resolve_workspace(
+                            self.workspace_resolver, plan.engagement_id
+                        )
+                    ),
                 )
                 value = {
                     "plan_id": saved.id,
@@ -16128,7 +16471,11 @@ class HarnessRuntimeService:
                 }
             elif name in DISCOVERY_TOOL_NAMES:
                 workspace = WorkspaceOutputService(
-                    self.workspace_resolver(plan.engagement_id)
+                    (
+                        await resolve_workspace(
+                            self.workspace_resolver, plan.engagement_id
+                        )
+                    )
                 )
                 value = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -16136,7 +16483,7 @@ class HarnessRuntimeService:
                     ),
                     timeout=5,
                 )
-                self.plans.record_discovery(plan, name, value)
+                (await self.plans.record_discovery(plan, name, value))
             else:
                 raise PlanningBlocked(
                     "only Core workspace reads and plan.submit are available during discovery"
@@ -16147,17 +16494,21 @@ class HarnessRuntimeService:
                 "isError": False,
             }
         if name == "plan.submit" and turn.chat_turn_id is not None:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.request_snapshot.get("plan_behavior") == "advisory":
-                chat = self.store.get(ChatSession, chat_turn.session_id)
-                plan = self.plans.ensure(chat_turn, chat, voluntary=True)
+                chat = await self.store.get(ChatSession, chat_turn.session_id)
+                plan = await self.plans.ensure(chat_turn, chat, voluntary=True)
                 assert plan is not None
-                saved = self.plans.submit(
+                saved = await self.plans.submit(
                     plan,
                     PlanSubmission.model_validate(arguments),
                     available_tools=set(),
                     native_categories=set(),
-                    workspace=self.workspace_resolver(chat_turn.engagement_id),
+                    workspace=(
+                        await resolve_workspace(
+                            self.workspace_resolver, chat_turn.engagement_id
+                        )
+                    ),
                     strict=False,
                 )
                 value = {
@@ -16171,15 +16522,14 @@ class HarnessRuntimeService:
                     "isError": False,
                 }
         if turn.chat_turn_id is not None:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
-            chat = self.store.get(ChatSession, chat_turn.session_id)
-            if self.plans.required(chat_turn, chat):
-                self.plans.ensure(chat_turn, chat)
-                self.plans.guard(chat_turn.id, name)
-        settings_only = (
-            self.store.get(HarnessSession, session.id).metadata.get("control_assistant")
-            is True
-        )
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
+            chat = await self.store.get(ChatSession, chat_turn.session_id)
+            if await self.plans.required(chat_turn, chat):
+                (await self.plans.ensure(chat_turn, chat))
+                (await self.plans.guard(chat_turn.id, name))
+        settings_only = (await self.store.get(HarnessSession, session.id)).metadata.get(
+            "control_assistant"
+        ) is True
         if (
             name.startswith(
                 (
@@ -16202,7 +16552,7 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "This Butler capability is unavailable."
                 )
-            capability = self._butler_capabilities(turn.engagement_id, turn=turn)
+            capability = await self._butler_capabilities(turn.engagement_id, turn=turn)
             if name == "nebula.capabilities.search":
                 value = await capability.search(arguments)
             elif name == "nebula.capabilities.describe":
@@ -16276,11 +16626,11 @@ class HarnessRuntimeService:
                         "provide a product-help query of 3 to 1000 characters"
                     )
                 value = {
-                    "matches": search_product_knowledge(query),
+                    "matches": await asyncio.to_thread(search_product_knowledge, query),
                     "source": "bundled Nebula product knowledge",
                 }
             elif name == "nebula.help.project_context":
-                value = project_context(self.store, turn.engagement_id)
+                value = await project_context(self.store, turn.engagement_id)
             elif name == "nebula.settings.catalog":
                 value = catalog()
             elif name == "nebula.settings.api_schema":
@@ -16311,7 +16661,7 @@ class HarnessRuntimeService:
             elif name == "nebula.settings.headless_session":
                 value = request_headless_session(arguments)
             elif name == "nebula.settings.notebook":
-                value = notebook_settings(self.store, turn.engagement_id)
+                value = await notebook_settings(self.store, turn.engagement_id)
             elif name == "nebula.settings.set_notebook":
                 value = await set_notebook_settings(
                     self.store,
@@ -16322,11 +16672,11 @@ class HarnessRuntimeService:
                     arguments,
                 )
             elif name == "nebula.settings.models":
-                value = model_choices(self.store)
+                value = await model_choices(self.store)
             elif name == "nebula.settings.set_default_model":
-                value = set_default_model(self.store, arguments)
+                value = await set_default_model(self.store, arguments)
             else:
-                value = set_post_tool_preference(
+                value = await set_post_tool_preference(
                     self.store, self.artifact_store, turn.engagement_id, arguments
                 )
             return {
@@ -16334,7 +16684,7 @@ class HarnessRuntimeService:
                 "structuredContent": value,
                 "isError": False,
             }
-        core = self._core_tool_components(session, turn)
+        core = await self._core_tool_components(session, turn)
         if (
             core is not None
             and name in core.specs
@@ -16347,14 +16697,16 @@ class HarnessRuntimeService:
 
             return await self._run_gateway_work(session, turn, execute_core())
         if name == "browser.companion":
-            current = self.store.get(HarnessSession, session.id)
+            current = await self.store.get(HarnessSession, session.id)
             companion_id = current.metadata.get("browser_companion_session_id")
             from .browser_companion_tools import attached_session
 
             if (
                 not isinstance(companion_id, str)
-                or attached_session(
-                    self.store, turn.engagement_id, turn.chat_session_id
+                or (
+                    await attached_session(
+                        self.store, turn.engagement_id, turn.chat_session_id
+                    )
                 )
                 != companion_id
             ):
@@ -16363,12 +16715,12 @@ class HarnessRuntimeService:
                 detached = NotFoundError("No browser is attached to this conversation.")
                 setattr(detached, "_nebula_before_execution", True)
                 raise detached
-            components = companion_components(
+            components = await companion_components(
                 self.store,
                 turn.engagement_id,
                 companion_id,
                 artifact_store=self.artifact_store,
-                image_supported=self._model_image_supported(current),
+                image_supported=(await self._model_image_supported(current)),
             )
             invocation = ToolInvocation(
                 id=str(uuid4()),
@@ -16390,7 +16742,7 @@ class HarnessRuntimeService:
             )
 
             async def execute_companion() -> ToolExecutionResult:
-                async with self._gateway_execution_gate(turn):
+                async with await self._gateway_execution_gate(turn):
                     return await components.broker.execute(invocation, components.scope)
 
             result = await self._run_gateway_work(session, turn, execute_companion())
@@ -16413,19 +16765,16 @@ class HarnessRuntimeService:
         if name in _GATEWAY_AGENT_MESSAGE_NAMES:
             return await self._gateway_agent_message(session, turn, name, arguments)
         if name == "goal.block":
-            return self._gateway_goal_block_call(turn, arguments)
+            return await self._gateway_goal_block_call(turn, arguments)
         if name in _GATEWAY_WORK_SCHEMAS:
             if name == "work.agents":
                 # Its roster is a database read; keep it off the MCP event loop.
-                from .read_workers import read_in_worker
 
-                return await read_in_worker(
-                    self._gateway_work_call, turn, name, arguments
-                )
-            return self._gateway_work_call(turn, name, arguments)
+                return await self._gateway_work_call(turn, name, arguments)
+            return await self._gateway_work_call(turn, name, arguments)
 
         async def execute_action() -> dict[str, Any]:
-            async with self._gateway_execution_gate(turn):
+            async with await self._gateway_execution_gate(turn):
                 return await self._gateway_action_call(session, turn, name, arguments)
 
         return await self._run_gateway_work(session, turn, execute_action())
@@ -16450,7 +16799,7 @@ class HarnessRuntimeService:
         running = self._gateway_work.setdefault(turn.id, set())
         running.add(task)
         budget = _gateway_call_budget_seconds(
-            self.store.get(HarnessProfile, session.harness_profile_id).kind
+            (await self.store.get(HarnessProfile, session.harness_profile_id)).kind
         )
         try:
             done, _ = await asyncio.wait({task}, timeout=budget)
@@ -16475,7 +16824,7 @@ class HarnessRuntimeService:
             if not running and self._gateway_work.get(turn.id) is running:
                 self._gateway_work.pop(turn.id, None)
             if not task.done():
-                task.add_done_callback(_consume_gateway_work)
+                task.add_done_callback(async_done_callback(_consume_gateway_work))
 
     def _cancel_gateway_work(self, turn_id: str) -> list[asyncio.Task[Any]]:
         """Cancel the gateway work a turn left running; return it to await."""
@@ -16503,11 +16852,7 @@ class HarnessRuntimeService:
         """
 
         if name == "subagent.capabilities":
-            from .read_workers import read_in_worker
-
-            return await read_in_worker(
-                self._gateway_capabilities_read, session, arguments
-            )
+            return await self._gateway_capabilities_read(session, arguments)
         service = self.provider_subagents
         if (
             service is None
@@ -16535,9 +16880,9 @@ class HarnessRuntimeService:
             started_at=utc_now(),
             metadata={"harness_turn_id": turn.id, "budget_class": "subagent"},
         )
-        call = self.store.reserve_tool_call(call)
-        call = self._attach_gateway_tool_call(turn, call.id)
-        kind = self.store.get(HarnessProfile, session.harness_profile_id).kind
+        call = await self.store.reserve_tool_call(call)
+        call = await self._attach_gateway_tool_call(turn, call.id)
+        kind = (await self.store.get(HarnessProfile, session.harness_profile_id)).kind
         try:
             _, schema = _gateway_subagent_tools(kind)[name]
             if not Draft7Validator(schema).is_valid(arguments):
@@ -16558,7 +16903,11 @@ class HarnessRuntimeService:
                     chat_turn_id=turn.chat_turn_id,
                     tool_name=name,
                     arguments=arguments,
-                    workspace=self.workspace_resolver(turn.engagement_id),
+                    workspace=(
+                        await resolve_workspace(
+                            self.workspace_resolver, turn.engagement_id
+                        )
+                    ),
                     # A vendor retry of the same call reuses the same child.
                     idempotency_key=f"harness-subagent:{turn.id}:"
                     + hashlib.sha256(
@@ -16602,7 +16951,7 @@ class HarnessRuntimeService:
                         "the start of your next turn."
                     )
             elif name == "subagent.list":
-                result = service.list_output(parent_session_id, harness=True)
+                result = await service.list_output(parent_session_id, harness=True)
             elif name == "subagent.message":
                 result = await service.send_to_child(
                     parent_session_id,
@@ -16615,7 +16964,7 @@ class HarnessRuntimeService:
                     ).hexdigest()[:40],
                 )
             else:
-                record = service._owned(
+                record = await service._owned(
                     parent_session_id, str(arguments.get("subagent_id") or "")
                 )
                 record = await service.stop(record.id)
@@ -16623,7 +16972,7 @@ class HarnessRuntimeService:
             if name in {"subagent.start", "subagent.message", "subagent.stop"}:
                 # A harness receives subagent news only through these results,
                 # a steer or its next prompt, so each result carries it.
-                result = service.with_harness_updates(parent_session_id, result)
+                result = await service.with_harness_updates(parent_session_id, result)
         except (ToolBrokerError, ChatError) as exc:
             record_caught_exception(
                 "harnesses",
@@ -16633,12 +16982,12 @@ class HarnessRuntimeService:
                 stage="gateway",
                 metadata={"tool_name": name},
             )
-            self._finish_gateway_call(call.id, error=exc)
+            (await self._finish_gateway_call(call.id, error=exc))
             raise
         except Exception as exc:
-            self._finish_gateway_call(call.id, error=exc)
+            (await self._finish_gateway_call(call.id, error=exc))
             raise
-        self._finish_gateway_call(call.id, result=result)
+        (await self._finish_gateway_call(call.id, result=result))
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
         return {
             "content": [{"type": "text", "text": serialized}],
@@ -16646,7 +16995,7 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
-    def _prepare_gateway_agent_message(
+    async def _prepare_gateway_agent_message(
         self,
         session: HarnessSession,
         turn: HarnessTurn,
@@ -16689,8 +17038,8 @@ class HarnessRuntimeService:
             started_at=utc_now(),
             metadata={"harness_turn_id": turn.id, "budget_class": "agent_message"},
         )
-        call = self.store.reserve_tool_call(call)
-        call = self._attach_gateway_tool_call(turn, call.id)
+        call = await self.store.reserve_tool_call(call)
+        call = await self._attach_gateway_tool_call(turn, call.id)
         invocation = ToolInvocation(
             id=call.id,
             engagement_id=turn.engagement_id,
@@ -16700,7 +17049,9 @@ class HarnessRuntimeService:
             chat_turn_id=turn.chat_turn_id,
             tool_name=_GATEWAY_AGENT_MESSAGE_TO_PROVIDER[name],
             arguments=arguments,
-            workspace=self.workspace_resolver(turn.engagement_id),
+            workspace=(
+                await resolve_workspace(self.workspace_resolver, turn.engagement_id)
+            ),
             idempotency_key=f"harness-agent-message:{turn.id}:"
             + hashlib.sha256(
                 json.dumps(
@@ -16713,7 +17064,7 @@ class HarnessRuntimeService:
         )
         return service, call, invocation
 
-    def _gateway_agent_message_failed(
+    async def _gateway_agent_message_failed(
         self, name: str, call: ToolCall, exc: Exception
     ) -> None:
         if isinstance(exc, (ToolBrokerError, ChatError)):
@@ -16725,12 +17076,12 @@ class HarnessRuntimeService:
                 stage="gateway",
                 metadata={"tool_name": name},
             )
-        self._finish_gateway_call(call.id, error=exc)
+        (await self._finish_gateway_call(call.id, error=exc))
 
-    def _gateway_agent_message_result(
+    async def _gateway_agent_message_result(
         self, call: ToolCall, result: dict[str, Any]
     ) -> dict[str, Any]:
-        self._finish_gateway_call(call.id, result=result)
+        (await self._finish_gateway_call(call.id, result=result))
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
         return {
             "content": [{"type": "text", "text": serialized}],
@@ -16738,7 +17089,7 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
-    def _gateway_agent_list_call(
+    async def _gateway_agent_list_call(
         self,
         session: HarnessSession,
         turn: HarnessTurn,
@@ -16746,15 +17097,15 @@ class HarnessRuntimeService:
     ) -> dict[str, Any]:
         """Run the complete peer-list read and its audit writes in a worker."""
 
-        service, call, invocation = self._prepare_gateway_agent_message(
+        service, call, invocation = await self._prepare_gateway_agent_message(
             session, turn, "agent.list", arguments
         )
         try:
-            result = service.list_output(invocation)
+            result = await service.list_output(invocation)
         except Exception as exc:
-            self._gateway_agent_message_failed("agent.list", call, exc)
+            (await self._gateway_agent_message_failed("agent.list", call, exc))
             raise
-        return self._gateway_agent_message_result(call, result)
+        return await self._gateway_agent_message_result(call, result)
 
     async def _gateway_agent_message(
         self,
@@ -16769,17 +17120,13 @@ class HarnessRuntimeService:
         """
 
         if name == "agent.list":
-            from .read_workers import read_in_worker
-
-            return await read_in_worker(
-                self._gateway_agent_list_call, session, turn, arguments
-            )
-        service, call, invocation = self._prepare_gateway_agent_message(
+            return await self._gateway_agent_list_call(session, turn, arguments)
+        service, call, invocation = await self._prepare_gateway_agent_message(
             session, turn, name, arguments
         )
         try:
             if name == "agent.read":
-                result = service.read_output(invocation)
+                result = await service.read_output(invocation)
             else:
                 result = await service.send(
                     invocation,
@@ -16787,16 +17134,16 @@ class HarnessRuntimeService:
                     str(arguments.get("message") or ""),
                 )
         except Exception as exc:
-            self._gateway_agent_message_failed(name, call, exc)
+            (await self._gateway_agent_message_failed(name, call, exc))
             raise
-        return self._gateway_agent_message_result(call, result)
+        return await self._gateway_agent_message_result(call, result)
 
-    def _gateway_work_call(
+    async def _gateway_work_call(
         self, turn: HarnessTurn, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """Use the active turn's project and actor, never caller-supplied scope."""
 
-        if name != "work.agents" and not self.work.enabled(turn.engagement_id):
+        if name != "work.agents" and not (await self.work.enabled(turn.engagement_id)):
             raise ToolNotPermitted(
                 "Work MCP is off for this project.", rule="work.turned_off"
             )
@@ -16823,36 +17170,36 @@ class HarnessRuntimeService:
             started_at=utc_now(),
             metadata={"harness_turn_id": turn.id, "budget_class": "work"},
         )
-        call = self.store.reserve_tool_call(call)
-        self._attach_gateway_tool_call(turn, call.id)
+        call = await self.store.reserve_tool_call(call)
+        (await self._attach_gateway_tool_call(turn, call.id))
         try:
             if name == "work.agents":
                 result: dict[str, Any] = {
                     "agents": [
                         agent.model_dump(mode="json")
-                        for agent in self.work.agent_roster(turn.engagement_id)
+                        for agent in (await self.work.agent_roster(turn.engagement_id))
                     ]
                 }
             elif name == "work.list":
                 list_request = WorkListRequest.model_validate(arguments)
-                target_id = self.work.agent_project(
+                target_id = await self.work.agent_project(
                     turn.engagement_id, list_request.project_name
                 )
-                result = self.work.agent_list_page(
+                result = await self.work.agent_list_page(
                     target_id, offset=list_request.offset, limit=list_request.limit
                 )
             elif name == "work.get":
                 get_request = WorkGetRequest.model_validate(arguments)
-                target_id = self.work.agent_item_project(
+                target_id = await self.work.agent_item_project(
                     turn.engagement_id, get_request.item_id
                 )
-                result = self.work.agent_get_item(
+                result = await self.work.agent_get_item(
                     target_id,
                     get_request.item_id,
                     description_offset=get_request.description_offset,
                 )
             elif name == "work.create":
-                target_id = self.work.agent_project(
+                target_id = await self.work.agent_project(
                     turn.engagement_id, arguments.get("project_name")
                 )
                 data = WorkCreate.model_validate(
@@ -16866,7 +17213,7 @@ class HarnessRuntimeService:
                     data = data.model_copy(
                         update={"source_kind": "mission", "source_id": turn.run_id}
                     )
-                item = self.work.create(
+                item = await self.work.create(
                     target_id,
                     data,
                     actor_id=actor_id,
@@ -16879,11 +17226,13 @@ class HarnessRuntimeService:
                 result = {"item": item.model_dump(mode="json")}
             else:
                 item_id = str(arguments["item_id"])
-                target_id = self.work.agent_item_project(turn.engagement_id, item_id)
+                target_id = await self.work.agent_item_project(
+                    turn.engagement_id, item_id
+                )
                 check_in_data = WorkCheckIn.model_validate(
                     {key: value for key, value in arguments.items() if key != "item_id"}
                 )
-                update = self.work.check_in(
+                update = await self.work.check_in(
                     target_id,
                     item_id,
                     check_in_data,
@@ -16896,9 +17245,9 @@ class HarnessRuntimeService:
                 )
                 result = {"update": update.model_dump(mode="json")}
         except Exception as exc:
-            self._finish_gateway_call(call.id, error=exc)
+            (await self._finish_gateway_call(call.id, error=exc))
             raise
-        self._finish_gateway_call(call.id, result=result)
+        (await self._finish_gateway_call(call.id, result=result))
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
         return {
             "content": [{"type": "text", "text": serialized}],
@@ -16906,7 +17255,7 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
-    def _gateway_goal_block_call(
+    async def _gateway_goal_block_call(
         self, turn: HarnessTurn, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """Block only the Core goal that owns this active harness chat turn."""
@@ -16915,14 +17264,14 @@ class HarnessRuntimeService:
 
         if not turn.chat_turn_id or not turn.chat_session_id:
             raise HarnessConfigurationError("Only a goal chat turn can block its goal")
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.metadata.get("control_assistant") or turn.metadata.get(
             "analysis_only"
         ):
             raise HarnessConfigurationError("This turn cannot block a Core goal")
-        chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+        chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
         goals = ChatGoalService(self.store)
-        goal = goals.get(turn.chat_session_id)
+        goal = await goals.get(turn.chat_session_id)
         if (
             chat_turn.goal_id != goal.id
             or chat_turn.session_id != turn.chat_session_id
@@ -16947,18 +17296,20 @@ class HarnessRuntimeService:
             started_at=utc_now(),
             metadata={"harness_turn_id": turn.id, "budget_class": "goal"},
         )
-        call = self.store.reserve_tool_call(call)
-        self._attach_gateway_tool_call(turn, call.id)
+        call = await self.store.reserve_tool_call(call)
+        (await self._attach_gateway_tool_call(turn, call.id))
         try:
-            goals.write(
-                turn.chat_session_id,
-                GoalWrite(
-                    expected_revision=goal.revision,
-                    action="block",
-                    reason=reason,
-                ),
+            (
+                await goals.write(
+                    turn.chat_session_id,
+                    GoalWrite(
+                        expected_revision=goal.revision,
+                        action="block",
+                        reason=reason,
+                    ),
+                )
             )
-            saved = goals.get(turn.chat_session_id)
+            saved = await goals.get(turn.chat_session_id)
             result = {
                 "goal_id": saved.id,
                 "status": saved.status.value,
@@ -16966,9 +17317,9 @@ class HarnessRuntimeService:
                 "revision": saved.revision,
             }
         except Exception as exc:
-            self._finish_gateway_call(call.id, error=exc)
+            (await self._finish_gateway_call(call.id, error=exc))
             raise
-        self._finish_gateway_call(call.id, result=result)
+        (await self._finish_gateway_call(call.id, result=result))
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
         return {
             "content": [{"type": "text", "text": serialized}],
@@ -16976,7 +17327,7 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
-    def _finish_gateway_call(
+    async def _finish_gateway_call(
         self,
         call_id: str,
         *,
@@ -16985,11 +17336,11 @@ class HarnessRuntimeService:
     ) -> None:
         from .butler_oversight import _entity_in_transaction
 
-        with self.store.transaction(immediate=True) as transaction:
-            latest = _entity_in_transaction(transaction, ToolCall, call_id)
+        async with self.store.transaction(immediate=True) as transaction:
+            latest = await _entity_in_transaction(transaction, ToolCall, call_id)
             if latest is None:
                 raise NotFoundError("gateway tool call is unavailable")
-            saved = transaction.update(
+            saved = await transaction.update(
                 ToolCall,
                 latest.id,
                 {
@@ -17005,7 +17356,7 @@ class HarnessRuntimeService:
             if error is not None and saved.tool_name == "subagent.start":
                 from .butler_recovery import record_subagent_start_failure
 
-                record_subagent_start_failure(transaction, saved, error)
+                (await record_subagent_start_failure(transaction, saved, error))
 
     async def _gateway_action_call(
         self,
@@ -17024,8 +17375,10 @@ class HarnessRuntimeService:
             if spec is not None and "cwd" in spec.path_arguments:
                 arguments["cwd"] = "."
             if spec is not None:
-                arguments = self._bounded_foreground_timeout(session, spec, arguments)
-            target_gate = self._gateway_target_gate(
+                arguments = await self._bounded_foreground_timeout(
+                    session, spec, arguments
+                )
+            target_gate = await self._gateway_target_gate(
                 session, turn, oci_tool_name, arguments
             )
             if target_gate is None:
@@ -17056,8 +17409,10 @@ class HarnessRuntimeService:
         try:
             decision = await ticket.decision
         except asyncio.CancelledError:
-            self._abandon_gateway_approval(
-                turn, ticket.approval_id, ticket.tool_call_id
+            (
+                await self._abandon_gateway_approval(
+                    turn, ticket.approval_id, ticket.tool_call_id
+                )
             )
             raise
         if not decision.allowed or not ticket.tool_call_id:
@@ -17071,9 +17426,9 @@ class HarnessRuntimeService:
                 },
                 "isError": True,
             }
-        call = self.store.get(ToolCall, ticket.tool_call_id)
+        call = await self.store.get(ToolCall, ticket.tool_call_id)
         if call.status == ToolCallStatus.APPROVED:
-            call = self.store.update(
+            call = await self.store.update(
                 ToolCall,
                 call.id,
                 {"status": ToolCallStatus.RUNNING, "started_at": utc_now()},
@@ -17090,8 +17445,10 @@ class HarnessRuntimeService:
                 arguments=arguments,
             )
         except asyncio.CancelledError:
-            self._cancel_gateway_tool_call(
-                call.id, "The harness turn ended before the MCP call finished."
+            (
+                await self._cancel_gateway_tool_call(
+                    call.id, "The harness turn ended before the MCP call finished."
+                )
             )
             raise
         except (
@@ -17155,7 +17512,9 @@ class HarnessRuntimeService:
             task_id=call.task_id,
             tool_name=spec.name,
             arguments=arguments,
-            workspace=self.workspace_resolver(turn.engagement_id),
+            workspace=(
+                await resolve_workspace(self.workspace_resolver, turn.engagement_id)
+            ),
             requested_by="harness-gateway",
         )
         try:
@@ -17163,36 +17522,40 @@ class HarnessRuntimeService:
                 call, invocation, spec, raw_result
             )
         except Exception as exc:
-            latest = self.store.get(ToolCall, call.id)
-            self.store.update(
-                ToolCall,
-                latest.id,
-                {
-                    "status": ToolCallStatus.FAILED,
-                    "error": "artifact persistence failed: " + _safe_error(exc),
-                    "completed_at": utc_now(),
-                },
-                expected_revision=latest.revision,
+            latest = await self.store.get(ToolCall, call.id)
+            (
+                await self.store.update(
+                    ToolCall,
+                    latest.id,
+                    {
+                        "status": ToolCallStatus.FAILED,
+                        "error": "artifact persistence failed: " + _safe_error(exc),
+                        "completed_at": utc_now(),
+                    },
+                    expected_revision=latest.revision,
+                )
             )
             raise HarnessTransportError(
                 "Nebula could not persist the tool result"
             ) from exc
         receipt = recorded.receipt
         assert receipt is not None
-        latest = self.store.get(ToolCall, call.id)
-        self.store.update(
-            ToolCall,
-            latest.id,
-            {
-                "status": ToolCallStatus.FAILED
-                if is_error
-                else ToolCallStatus.COMPLETE,
-                "result": receipt.as_model_result(),
-                "result_artifact_id": recorded.result_artifact_id,
-                "error": _safe_error(failure) if failure is not None else None,
-                "completed_at": utc_now(),
-            },
-            expected_revision=latest.revision,
+        latest = await self.store.get(ToolCall, call.id)
+        (
+            await self.store.update(
+                ToolCall,
+                latest.id,
+                {
+                    "status": ToolCallStatus.FAILED
+                    if is_error
+                    else ToolCallStatus.COMPLETE,
+                    "result": receipt.as_model_result(),
+                    "result_artifact_id": recorded.result_artifact_id,
+                    "error": _safe_error(failure) if failure is not None else None,
+                    "completed_at": utc_now(),
+                },
+                expected_revision=latest.revision,
+            )
         )
         serialized = json.dumps(receipt.as_model_result(), sort_keys=True)
         if failure is not None:
@@ -17240,7 +17603,7 @@ class HarnessRuntimeService:
             "isError": is_error,
         }
 
-    def _bounded_foreground_timeout(
+    async def _bounded_foreground_timeout(
         self, session: HarnessSession, spec: ToolSpec, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         """Keep a foreground command inside the harness's own tool timeout.
@@ -17252,7 +17615,8 @@ class HarnessRuntimeService:
         """
 
         limit_ms = _foreground_timeout_limit_ms(
-            spec, self.store.get(HarnessProfile, session.harness_profile_id).kind
+            spec,
+            (await self.store.get(HarnessProfile, session.harness_profile_id)).kind,
         )
         if limit_ms is None or arguments.get("background") is True:
             return arguments
@@ -17311,19 +17675,23 @@ class HarnessRuntimeService:
             ApprovalRequired
         ) as paused:  # diagnostic-expected: durable approval interaction flow
             decision = await self._wait_for_broker_approval(turn, paused.approval)
-            approval = self.store.get(Approval, paused.approval.id)
+            approval = await self.store.get(Approval, paused.approval.id)
             if not decision.allowed and approval.status == ApprovalStatus.PENDING:
-                call = self.store.get(ToolCall, paused.approval.tool_call_id or "")
+                call = await self.store.get(
+                    ToolCall, paused.approval.tool_call_id or ""
+                )
                 if call.status == ToolCallStatus.WAITING_APPROVAL:
-                    self.store.update(
-                        ToolCall,
-                        call.id,
-                        {
-                            "status": ToolCallStatus.CANCELLED,
-                            "error": decision.reason or "Harness turn cancelled",
-                            "completed_at": utc_now(),
-                        },
-                        expected_revision=call.revision,
+                    (
+                        await self.store.update(
+                            ToolCall,
+                            call.id,
+                            {
+                                "status": ToolCallStatus.CANCELLED,
+                                "error": decision.reason or "Harness turn cancelled",
+                                "completed_at": utc_now(),
+                            },
+                            expected_revision=call.revision,
+                        )
                     )
                 return self._gateway_denial(decision.reason or "Harness turn cancelled")
             try:
@@ -17340,7 +17708,7 @@ class HarnessRuntimeService:
             return self._gateway_denial(denial.decision.reason)
         finally:
             try:
-                self._attach_gateway_tool_call(turn, invocation.id)
+                (await self._attach_gateway_tool_call(turn, invocation.id))
             except (
                 NotFoundError
             ):  # diagnostic-expected: no provisional call exists before reservation
@@ -17350,22 +17718,24 @@ class HarnessRuntimeService:
             # Trusted passive runtimes may return structured values directly.
             # The MCP boundary still converts them into the same durable,
             # bounded receipt contract as command output.
-            call = self.store.get(ToolCall, StoreToolLedger._call_id(invocation))
+            call = await self.store.get(ToolCall, StoreToolLedger._call_id(invocation))
             spec = components.specs[tool_name]
             result = await self.evidence_recorder.record(call, invocation, spec, result)
             if result.receipt is None:
                 raise HarnessTransportError(
                     f"command-runtime gateway capability {gateway_name!r} returned no result receipt"
                 )
-            latest = self.store.get(ToolCall, call.id)
-            self.store.update(
-                ToolCall,
-                latest.id,
-                {
-                    "result": result.receipt.as_model_result(),
-                    "result_artifact_id": result.result_artifact_id,
-                },
-                expected_revision=latest.revision,
+            latest = await self.store.get(ToolCall, call.id)
+            (
+                await self.store.update(
+                    ToolCall,
+                    latest.id,
+                    {
+                        "result": result.receipt.as_model_result(),
+                        "result_artifact_id": result.result_artifact_id,
+                    },
+                    expected_revision=latest.revision,
+                )
             )
         receipt = result.receipt
         if receipt is None:
@@ -17374,7 +17744,7 @@ class HarnessRuntimeService:
             )
         # Idempotent broker replay can return the original durable call rather
         # than this request's provisional invocation id.
-        self._attach_gateway_tool_call(turn, receipt.tool_call_id)
+        (await self._attach_gateway_tool_call(turn, receipt.tool_call_id))
         serialized = json.dumps(
             receipt.as_model_result(), ensure_ascii=False, sort_keys=True
         )
@@ -17393,39 +17763,45 @@ class HarnessRuntimeService:
             "isError": True,
         }
 
-    def _attach_gateway_tool_call(self, turn: HarnessTurn, call_id: str) -> ToolCall:
-        call = self.store.get(ToolCall, call_id)
+    async def _attach_gateway_tool_call(
+        self, turn: HarnessTurn, call_id: str
+    ) -> ToolCall:
+        call = await self.store.get(ToolCall, call_id)
         if call.metadata.get("harness_turn_id") != turn.id:
-            call = self.store.update(
+            call = await self.store.update(
                 ToolCall,
                 call.id,
                 {"metadata": {**call.metadata, "harness_turn_id": turn.id}},
                 expected_revision=call.revision,
             )
-        latest_turn = self.store.get(HarnessTurn, turn.id)
+        latest_turn = await self.store.get(HarnessTurn, turn.id)
         if call.id not in latest_turn.tool_call_ids:
-            self.store.update(
-                HarnessTurn,
-                latest_turn.id,
-                {"tool_call_ids": [*latest_turn.tool_call_ids, call.id]},
-                expected_revision=latest_turn.revision,
+            (
+                await self.store.update(
+                    HarnessTurn,
+                    latest_turn.id,
+                    {"tool_call_ids": [*latest_turn.tool_call_ids, call.id]},
+                    expected_revision=latest_turn.revision,
+                )
             )
         if turn.chat_turn_id:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if call.id not in chat_turn.tool_call_ids:
                 artifact_query = call.metadata.get("budget_class") == "artifact_query"
-                self.store.update(
-                    ChatTurn,
-                    chat_turn.id,
-                    {
-                        "next_step": chat_turn.next_step + 1,
-                        "execution_tool_calls": chat_turn.execution_tool_calls
-                        + (0 if artifact_query else 1),
-                        "artifact_queries": chat_turn.artifact_queries
-                        + (1 if artifact_query else 0),
-                        "tool_call_ids": [*chat_turn.tool_call_ids, call.id],
-                    },
-                    expected_revision=chat_turn.revision,
+                (
+                    await self.store.update(
+                        ChatTurn,
+                        chat_turn.id,
+                        {
+                            "next_step": chat_turn.next_step + 1,
+                            "execution_tool_calls": chat_turn.execution_tool_calls
+                            + (0 if artifact_query else 1),
+                            "artifact_queries": chat_turn.artifact_queries
+                            + (1 if artifact_query else 0),
+                            "tool_call_ids": [*chat_turn.tool_call_ids, call.id],
+                        },
+                        expected_revision=chat_turn.revision,
+                    )
                 )
         return call
 
@@ -17434,36 +17810,46 @@ class HarnessRuntimeService:
     ) -> HarnessPermissionDecision:
         if not approval.tool_call_id:
             raise HarnessStateError("broker approval has no tool call")
-        self._attach_gateway_tool_call(turn, approval.tool_call_id)
+        (await self._attach_gateway_tool_call(turn, approval.tool_call_id))
         future: asyncio.Future[HarnessPermissionDecision] = (
             asyncio.get_running_loop().create_future()
         )
         self._approval_futures[approval.id] = future
         self._broker_approval_ids.add(approval.id)
-        latest_turn = self.store.get(HarnessTurn, turn.id)
-        self.store.update(
-            HarnessTurn,
-            latest_turn.id,
-            {"status": HarnessTurnStatus.WAITING_APPROVAL},
-            expected_revision=latest_turn.revision,
+        latest_turn = await self.store.get(HarnessTurn, turn.id)
+        (
+            await self.store.update(
+                HarnessTurn,
+                latest_turn.id,
+                {"status": HarnessTurnStatus.WAITING_APPROVAL},
+                expected_revision=latest_turn.revision,
+            )
         )
-        session = self.store.get(HarnessSession, turn.harness_session_id)
-        self.store.update(
-            HarnessSession,
-            session.id,
-            {
-                "status": HarnessSessionStatus.WAITING_APPROVAL,
-                "last_activity_at": utc_now(),
-            },
-            expected_revision=session.revision,
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        (
+            await self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.WAITING_APPROVAL,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
         )
-        self._waiting_owner(turn, approval_id=approval.id)
+        (await self._waiting_owner(turn, approval_id=approval.id))
 
-        future.add_done_callback(lambda done: self._restore_approval_wait(turn, done))
+        future.add_done_callback(
+            async_done_callback(lambda done: self._restore_approval_wait(turn, done))
+        )
         try:
             return await future
         except asyncio.CancelledError:
-            self._abandon_gateway_approval(turn, approval.id, approval.tool_call_id)
+            (
+                await self._abandon_gateway_approval(
+                    turn, approval.id, approval.tool_call_id
+                )
+            )
             raise
 
     async def _gateway_retrieval(
@@ -17491,8 +17877,8 @@ class HarnessRuntimeService:
                 "budget_class": "artifact_query",
             },
         )
-        call = self.store.reserve_tool_call(call)
-        call = self._attach_gateway_tool_call(turn, call.id)
+        call = await self.store.reserve_tool_call(call)
+        call = await self._attach_gateway_tool_call(turn, call.id)
         try:
             schema = _GATEWAY_RETRIEVAL_SCHEMAS[name]
             Draft7Validator(schema).validate(arguments)
@@ -17504,58 +17890,72 @@ class HarnessRuntimeService:
                 raise InvalidToolArguments("artifact_id is a SHA-256 digest")
             if name == "tool_output.search":
                 output_service = ToolOutputService(self.store, self.artifact_store)
-                result = await asyncio.to_thread(
-                    output_service.search,
+                result = await output_service.search(
                     engagement_id=turn.engagement_id,
                     owner_id=owner_id,
                     **arguments,
                 )
             elif name == "tool_output.read":
                 output_service = ToolOutputService(self.store, self.artifact_store)
-                result = await asyncio.to_thread(
-                    output_service.read,
+                result = await output_service.read(
                     engagement_id=turn.engagement_id,
                     owner_id=owner_id,
                     **arguments,
                 )
             elif name == "workspace.find":
                 workspace_service = WorkspaceOutputService(
-                    self.workspace_resolver(turn.engagement_id)
+                    (
+                        await resolve_workspace(
+                            self.workspace_resolver, turn.engagement_id
+                        )
+                    )
                 )
                 result = await asyncio.to_thread(workspace_service.find, **arguments)
             elif name == "workspace.search":
                 workspace_service = WorkspaceOutputService(
-                    self.workspace_resolver(turn.engagement_id)
+                    (
+                        await resolve_workspace(
+                            self.workspace_resolver, turn.engagement_id
+                        )
+                    )
                 )
                 result = await asyncio.to_thread(workspace_service.search, **arguments)
             else:
                 workspace_service = WorkspaceOutputService(
-                    self.workspace_resolver(turn.engagement_id)
+                    (
+                        await resolve_workspace(
+                            self.workspace_resolver, turn.engagement_id
+                        )
+                    )
                 )
                 result = await asyncio.to_thread(workspace_service.read, **arguments)
         except Exception as exc:
-            latest = self.store.get(ToolCall, call.id)
-            self.store.update(
+            latest = await self.store.get(ToolCall, call.id)
+            (
+                await self.store.update(
+                    ToolCall,
+                    latest.id,
+                    {
+                        "status": ToolCallStatus.FAILED,
+                        "error": _safe_error(exc),
+                        "completed_at": utc_now(),
+                    },
+                    expected_revision=latest.revision,
+                )
+            )
+            raise
+        latest = await self.store.get(ToolCall, call.id)
+        (
+            await self.store.update(
                 ToolCall,
                 latest.id,
                 {
-                    "status": ToolCallStatus.FAILED,
-                    "error": _safe_error(exc),
+                    "status": ToolCallStatus.COMPLETE,
+                    "result": result,
                     "completed_at": utc_now(),
                 },
                 expected_revision=latest.revision,
             )
-            raise
-        latest = self.store.get(ToolCall, call.id)
-        self.store.update(
-            ToolCall,
-            latest.id,
-            {
-                "status": ToolCallStatus.COMPLETE,
-                "result": result,
-                "completed_at": utc_now(),
-            },
-            expected_revision=latest.revision,
         )
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
         return {
@@ -17594,9 +17994,9 @@ class HarnessRuntimeService:
                 "knowledge.list limit must be an integer between 1 and 100"
             )
 
-        session = self.store.get(HarnessSession, turn.harness_session_id)
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
-        project_sources, library_sources = self._visible_knowledge_sources(
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
+        project_sources, library_sources = await self._visible_knowledge_sources(
             turn.engagement_id, profile
         )
         if (
@@ -17656,8 +18056,8 @@ class HarnessRuntimeService:
                 "retrieval_backend": "knowledge_index",
             },
         )
-        call = self.store.reserve_tool_call(call)
-        call = self._attach_gateway_tool_call(turn, call.id)
+        call = await self.store.reserve_tool_call(call)
+        call = await self._attach_gateway_tool_call(turn, call.id)
         try:
             sources = []
             for source_scope, source in visible[offset : offset + limit]:
@@ -17691,28 +18091,32 @@ class HarnessRuntimeService:
                 "sources": sources,
             }
         except Exception as exc:
-            latest = self.store.get(ToolCall, call.id)
-            self.store.update(
+            latest = await self.store.get(ToolCall, call.id)
+            (
+                await self.store.update(
+                    ToolCall,
+                    latest.id,
+                    {
+                        "status": ToolCallStatus.FAILED,
+                        "error": _safe_error(exc),
+                        "completed_at": utc_now(),
+                    },
+                    expected_revision=latest.revision,
+                )
+            )
+            raise
+        latest = await self.store.get(ToolCall, call.id)
+        (
+            await self.store.update(
                 ToolCall,
                 latest.id,
                 {
-                    "status": ToolCallStatus.FAILED,
-                    "error": _safe_error(exc),
+                    "status": ToolCallStatus.COMPLETE,
+                    "result": payload,
                     "completed_at": utc_now(),
                 },
                 expected_revision=latest.revision,
             )
-            raise
-        latest = self.store.get(ToolCall, call.id)
-        self.store.update(
-            ToolCall,
-            latest.id,
-            {
-                "status": ToolCallStatus.COMPLETE,
-                "result": payload,
-                "completed_at": utc_now(),
-            },
-            expected_revision=latest.revision,
         )
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return {
@@ -17744,9 +18148,9 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(
                 "knowledge.search query must be at most 512 characters"
             )
-        session = self.store.get(HarnessSession, turn.harness_session_id)
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
-        project_sources, library_sources = self._visible_knowledge_sources(
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
+        project_sources, library_sources = await self._visible_knowledge_sources(
             turn.engagement_id, profile
         )
         if (
@@ -17789,10 +18193,10 @@ class HarnessRuntimeService:
                 "retrieval_backend": "knowledge_index",
             },
         )
-        call = self.store.reserve_tool_call(call)
-        call = self._attach_gateway_tool_call(turn, call.id)
+        call = await self.store.reserve_tool_call(call)
+        call = await self._attach_gateway_tool_call(turn, call.id)
         try:
-            result = await asyncio.to_thread(
+            result = await call_async(
                 self.knowledge_retriever,
                 turn.engagement_id,
                 clean_query,
@@ -17833,31 +18237,35 @@ class HarnessRuntimeService:
                 ),
             }
         except Exception as exc:
-            latest = self.store.get(ToolCall, call.id)
-            self.store.update(
+            latest = await self.store.get(ToolCall, call.id)
+            (
+                await self.store.update(
+                    ToolCall,
+                    latest.id,
+                    {
+                        "status": ToolCallStatus.FAILED,
+                        "error": _safe_error(exc),
+                        "completed_at": utc_now(),
+                    },
+                    expected_revision=latest.revision,
+                )
+            )
+            raise
+        latest = await self.store.get(ToolCall, call.id)
+        (
+            await self.store.update(
                 ToolCall,
                 latest.id,
                 {
-                    "status": ToolCallStatus.FAILED,
-                    "error": _safe_error(exc),
+                    "status": ToolCallStatus.COMPLETE,
+                    "result": payload,
                     "completed_at": utc_now(),
                 },
                 expected_revision=latest.revision,
             )
-            raise
-        latest = self.store.get(ToolCall, call.id)
-        self.store.update(
-            ToolCall,
-            latest.id,
-            {
-                "status": ToolCallStatus.COMPLETE,
-                "result": payload,
-                "completed_at": utc_now(),
-            },
-            expected_revision=latest.revision,
         )
         if matches:
-            self._record_searched_citations(turn.id, result.matches[:8])
+            (await self._record_searched_citations(turn.id, result.matches[:8]))
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return {
             "content": [{"type": "text", "text": serialized}],
@@ -17865,7 +18273,9 @@ class HarnessRuntimeService:
             "isError": False,
         }
 
-    def _record_searched_citations(self, turn_id: str, matches: list[Any]) -> None:
+    async def _record_searched_citations(
+        self, turn_id: str, matches: list[Any]
+    ) -> None:
         """Keep a gateway search's excerpts for the answer's citations.
 
         As for provider turns, an excerpt the relevance model labelled weak
@@ -17873,7 +18283,7 @@ class HarnessRuntimeService:
         (``_answer_citations``); a later search ranking it higher cites it.
         """
 
-        latest_turn = self.store.get(HarnessTurn, turn_id)
+        latest_turn = await self.store.get(HarnessTurn, turn_id)
         stored_citations = [
             item
             for item in latest_turn.metadata.get("citations", [])
@@ -17903,17 +18313,19 @@ class HarnessRuntimeService:
             cited.add(key)
             changed = True
         if changed:
-            self.store.update(
-                HarnessTurn,
-                latest_turn.id,
-                {
-                    "metadata": {
-                        **latest_turn.metadata,
-                        "citations": stored_citations,
-                        "searched_weak_citations": list(weak.values()),
-                    }
-                },
-                expected_revision=latest_turn.revision,
+            (
+                await self.store.update(
+                    HarnessTurn,
+                    latest_turn.id,
+                    {
+                        "metadata": {
+                            **latest_turn.metadata,
+                            "citations": stored_citations,
+                            "searched_weak_citations": list(weak.values()),
+                        }
+                    },
+                    expected_revision=latest_turn.revision,
+                )
             )
 
     @staticmethod
@@ -18022,16 +18434,18 @@ class HarnessRuntimeService:
     async def _connection(
         self, session: HarnessSession, turn: HarnessTurn
     ) -> HarnessConnection:
-        session = self.store.get(HarnessSession, session.id)
+        session = await self.store.get(HarnessSession, session.id)
         browser_binding = session.metadata.get("browser_companion_session_id")
         browser_binding = browser_binding if isinstance(browser_binding, str) else None
-        subagent_binding = self._subagent_binding(session)
+        subagent_binding = await self._subagent_binding(session)
         knowledge_binding = turn.metadata.get("knowledge_access") is True
         owner = (
-            self.store.get(ChatTurn, turn.chat_turn_id) if turn.chat_turn_id else None
+            (await self.store.get(ChatTurn, turn.chat_turn_id))
+            if turn.chat_turn_id
+            else None
         )
         core_snapshot = dict(owner.request_snapshot) if owner else {}
-        # Session replacement and handoff provenance is immutable history,
+        # AsyncSession replacement and handoff provenance is immutable history,
         # not a change to the gateway's effective tool configuration.
         for provenance in (
             "harness_session_id",
@@ -18081,22 +18495,22 @@ class HarnessRuntimeService:
                 existing = None
         if existing is not None:
             return existing
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
         analysis_only = bool(session.metadata.get("analysis_only"))
         if not analysis_only and (
             "execution_mode" not in session.metadata
             or "approval_policy" not in session.metadata
         ):
-            execution_mode = self._project_execution_mode(session.engagement_id)
-            session = self.store.update(
+            execution_mode = await self._project_execution_mode(session.engagement_id)
+            session = await self.store.update(
                 HarnessSession,
                 session.id,
                 {
                     "metadata": {
                         **session.metadata,
                         "execution_mode": execution_mode,
-                        "approval_policy": self._project_approval_policy(
-                            session.engagement_id
+                        "approval_policy": (
+                            await self._project_approval_policy(session.engagement_id)
                         ),
                         "harness_permission_mode": session.metadata.get(
                             "harness_permission_mode", "managed"
@@ -18120,14 +18534,15 @@ class HarnessRuntimeService:
         core_planned_grok = (
             core_planned_gateway and profile.kind == HarnessKind.GROK_ACP
         )
-        self._ensure_oci_components(session)
+        (await self._ensure_oci_components(session))
 
         async def permission_handler(
             request: HarnessPermissionRequest,
         ) -> PermissionTicket:
             if core_planned_grok and request.category == "permission":
                 offered_names = {
-                    f"nebula__{item['name']}" for item in gateway_catalog({})["tools"]
+                    f"nebula__{item['name']}"
+                    for item in (await gateway_catalog({}))["tools"]
                 }
                 grok_future: asyncio.Future[HarnessPermissionDecision] = (
                     asyncio.get_running_loop().create_future()
@@ -18166,7 +18581,7 @@ class HarnessRuntimeService:
                     )
                 )
                 return PermissionTicket(None, None, future)
-            active_turn = self._active_gateway_turn(session.id)
+            active_turn = await self._active_gateway_turn(session.id)
             return await self._request_permission(
                 active_turn.id,
                 request,
@@ -18178,13 +18593,13 @@ class HarnessRuntimeService:
         async def interaction_handler(
             request: HarnessInteractionRequest,
         ) -> tuple[str, asyncio.Future[dict[str, Any]]]:
-            active_turn = self._active_gateway_turn(session.id)
+            active_turn = await self._active_gateway_turn(session.id)
             return await self._request_interaction(active_turn.id, request)
 
         portable_names = profile.kind == HarnessKind.GROK_ACP
 
-        def gateway_catalog(params: dict[str, Any]) -> dict[str, Any]:
-            catalog = self._gateway_catalog(session, params, turn=turn)
+        async def gateway_catalog(params: dict[str, Any]) -> dict[str, Any]:
+            catalog = await self._gateway_catalog(session, params, turn=turn)
             if not portable_names:
                 return catalog
             return {
@@ -18195,17 +18610,19 @@ class HarnessRuntimeService:
                 ],
             }
 
-        def gateway_call(name: str, arguments: dict[str, Any]) -> Any:
+        async def gateway_call(name: str, arguments: dict[str, Any]) -> Any:
             if portable_names:
                 matches = [
                     tool["name"]
-                    for tool in self._gateway_catalog(session, turn=turn)["tools"]
+                    for tool in (await self._gateway_catalog(session, turn=turn))[
+                        "tools"
+                    ]
                     if _portable_gateway_tool_name(tool["name"]) == name
                 ]
                 if len(matches) != 1:
                     raise HarnessConfigurationError("Unknown or ambiguous gateway tool")
                 name = matches[0]
-            return self._gateway_call(session, name, arguments)
+            return await self._gateway_call(session, name, arguments)
 
         gateway = McpGatewaySession(
             list_tools=gateway_catalog,
@@ -18221,7 +18638,7 @@ class HarnessRuntimeService:
         self._gateways[session.id] = gateway
         execution_mode = _session_execution_mode(session)
         isolated_workspace = (
-            self.workspace_resolver(session.engagement_id)
+            (await resolve_workspace(self.workspace_resolver, session.engagement_id))
             if execution_mode == "host"
             and not analysis_only
             and not core_planned_gateway
@@ -18236,7 +18653,7 @@ class HarnessRuntimeService:
                     / "harness-workspaces"
                     / hashlib.sha256(session.id.encode()).hexdigest()
                 )
-            session = self.store.update(
+            session = await self.store.update(
                 HarnessSession,
                 session.id,
                 {"metadata": {**session.metadata, "workspace_binding_version": 1}},
@@ -18258,7 +18675,9 @@ class HarnessRuntimeService:
                         )
 
         try:
-            catalog = gateway_catalog({}) if launch is not None else {"tools": []}
+            catalog = (
+                (await gateway_catalog({})) if launch is not None else {"tools": []}
+            )
             gateway_tools = tuple(
                 {
                     "name": str(tool.get("name") or ""),
@@ -18293,7 +18712,7 @@ class HarnessRuntimeService:
         self._connection_knowledge_bindings[session.id] = knowledge_binding
         return connection
 
-    def _subagent_binding(self, session: HarnessSession) -> str | None:
+    async def _subagent_binding(self, session: HarnessSession) -> str | None:
         """The collaboration catalog and instructions this vendor carries.
 
         Provider-subagent limits and peer-agent messaging are both part of the
@@ -18315,7 +18734,7 @@ class HarnessRuntimeService:
             and self.agent_messages is not None
         ):
             parts.append("agent-messaging")
-        if self.work.enabled(session.engagement_id):
+        if await self.work.enabled(session.engagement_id):
             parts.append("work")
         return "\0".join(parts) if parts else None
 
@@ -18326,12 +18745,12 @@ class HarnessRuntimeService:
         *,
         adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None,
     ) -> PermissionTicket:
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         chat_turn_id = turn.chat_turn_id
         if chat_turn_id is not None:
-            chat_turn = self.store.get(ChatTurn, chat_turn_id)
-            chat = self.store.get(ChatSession, chat_turn.session_id)
-            requires_plan = self.plans.required(chat_turn, chat)
+            chat_turn = await self.store.get(ChatTurn, chat_turn_id)
+            chat = await self.store.get(ChatSession, chat_turn.session_id)
+            requires_plan = await self.plans.required(chat_turn, chat)
         else:
             requires_plan = False
         if requires_plan:
@@ -18339,7 +18758,7 @@ class HarnessRuntimeService:
                 raise PlanningBlocked(
                     "a chat turn is required for the native plan gate"
                 )
-            self.plans.ensure(chat_turn, chat)
+            (await self.plans.ensure(chat_turn, chat))
             if request.category == "mcp" and request.server_name == "nebula":
                 pass  # The gateway checks the exact offered name before dispatch.
             elif request.category == "mcp":
@@ -18354,14 +18773,14 @@ class HarnessRuntimeService:
                     raise PlanningBlocked(
                         "unmapped native capability is unavailable under Plan before acting"
                     )
-                plan = self.plans.for_turn(chat_turn_id)
+                plan = await self.plans.for_turn(chat_turn_id)
                 if (
                     category == "isolated_workspace_read"
                     and plan is not None
                     and "isolated_workspace_write" in plan.native_categories
                 ):
                     category = "isolated_workspace_write"
-                self.plans.guard_native(chat_turn_id, category)
+                (await self.plans.guard_native(chat_turn_id, category))
         if request.category == "mcp" and request.server_name == "nebula":
             gateway_future: asyncio.Future[HarnessPermissionDecision] = (
                 asyncio.get_running_loop().create_future()
@@ -18373,8 +18792,8 @@ class HarnessRuntimeService:
                 )
             )
             return PermissionTicket(None, None, gateway_future)
-        turn = self.store.get(HarnessTurn, turn_id)
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         if (
             session.metadata.get("control_assistant") is True
             and session.metadata.get("settings_grok_home_version") == 1
@@ -18385,7 +18804,7 @@ class HarnessRuntimeService:
             target = raw_input.get("tool_name") if isinstance(raw_input, dict) else None
             allowed = {
                 f"nebula__{_portable_gateway_tool_name(tool['name'])}"
-                for tool in self._gateway_catalog(session)["tools"]
+                for tool in (await self._gateway_catalog(session))["tools"]
                 if tool["name"].startswith(
                     (
                         "nebula.help.",
@@ -18407,16 +18826,16 @@ class HarnessRuntimeService:
                     )
                 )
                 return PermissionTicket(None, None, scoped_future)
-        policy, server, tool, risk, rationale = self._permission_policy(
+        policy, server, tool, risk, rationale = await self._permission_policy(
             session, request
         )
         frozen = session.metadata.get("scope_snapshot")
         if isinstance(frozen, dict):
             scope = ScopePolicy.model_validate(frozen)
         else:
-            engagement = self.store.get(Engagement, session.engagement_id)
+            engagement = await self.store.get(Engagement, session.engagement_id)
             scope = (
-                self.store.get(ScopePolicy, engagement.scope_policy_id)
+                (await self.store.get(ScopePolicy, engagement.scope_policy_id))
                 if engagement.scope_policy_id
                 else ScopePolicy(engagement_id=engagement.id)
             ).model_copy(update={"bypass_permissions": False})
@@ -18469,10 +18888,12 @@ class HarnessRuntimeService:
             and risk not in PolicyEngine._always_approve
             and any(
                 item.browser_security_allow_all
-                for item in self.store.list_entities(
-                    AutomationProjectPolicy,
-                    engagement_id=turn.engagement_id,
-                    limit=1,
+                for item in (
+                    await self.store.list_entities(
+                        AutomationProjectPolicy,
+                        engagement_id=turn.engagement_id,
+                        limit=1,
+                    )
                 )
             )
         ):
@@ -18519,26 +18940,30 @@ class HarnessRuntimeService:
                 "policy_rule": denial_rule if policy == McpApprovalMode.DENY else None,
             },
         )
-        call = self.store.reserve_tool_call(call)
-        call = self._attach_gateway_tool_call(turn, call.id)
+        call = await self.store.reserve_tool_call(call)
+        call = await self._attach_gateway_tool_call(turn, call.id)
         future: asyncio.Future[HarnessPermissionDecision] = (
             asyncio.get_running_loop().create_future()
         )
         if policy == McpApprovalMode.ALLOW:
-            self.store.update(
-                ToolCall,
-                call.id,
-                {"status": ToolCallStatus.APPROVED},
-                expected_revision=call.revision,
+            (
+                await self.store.update(
+                    ToolCall,
+                    call.id,
+                    {"status": ToolCallStatus.APPROVED},
+                    expected_revision=call.revision,
+                )
             )
             future.set_result(HarnessPermissionDecision(allowed=True, reason=rationale))
             return PermissionTicket(None, call.id, future)
         if policy == McpApprovalMode.DENY:
-            self.store.update(
-                ToolCall,
-                call.id,
-                {"status": ToolCallStatus.DENIED, "error": rationale},
-                expected_revision=call.revision,
+            (
+                await self.store.update(
+                    ToolCall,
+                    call.id,
+                    {"status": ToolCallStatus.DENIED, "error": rationale},
+                    expected_revision=call.revision,
+                )
             )
             future.set_result(
                 HarnessPermissionDecision(
@@ -18565,71 +18990,81 @@ class HarnessRuntimeService:
             policy_rationale=rationale,
             requested_by="harness",
         )
-        with self.store.transaction() as transaction:
-            transaction.add(approval)
-            transaction.update(
-                ToolCall,
-                call.id,
-                {
-                    "status": ToolCallStatus.WAITING_APPROVAL,
-                    "approval_id": approval.id,
-                },
-                expected_revision=call.revision,
+        async with self.store.transaction() as transaction:
+            (await transaction.add(approval))
+            (
+                await transaction.update(
+                    ToolCall,
+                    call.id,
+                    {
+                        "status": ToolCallStatus.WAITING_APPROVAL,
+                        "approval_id": approval.id,
+                    },
+                    expected_revision=call.revision,
+                )
             )
         self._approval_futures[approval.id] = future
-        latest_turn = self.store.get(HarnessTurn, turn.id)
-        self.store.update(
-            HarnessTurn,
-            latest_turn.id,
-            {"status": HarnessTurnStatus.WAITING_APPROVAL},
-            expected_revision=latest_turn.revision,
+        latest_turn = await self.store.get(HarnessTurn, turn.id)
+        (
+            await self.store.update(
+                HarnessTurn,
+                latest_turn.id,
+                {"status": HarnessTurnStatus.WAITING_APPROVAL},
+                expected_revision=latest_turn.revision,
+            )
         )
-        session = self.store.get(HarnessSession, session.id)
-        self.store.update(
-            HarnessSession,
-            session.id,
-            {
-                "status": HarnessSessionStatus.WAITING_APPROVAL,
-                "last_activity_at": utc_now(),
-            },
-            expected_revision=session.revision,
+        session = await self.store.get(HarnessSession, session.id)
+        (
+            await self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.WAITING_APPROVAL,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
         )
-        self._waiting_owner(turn, approval_id=approval.id)
+        (await self._waiting_owner(turn, approval_id=approval.id))
 
-        future.add_done_callback(lambda done: self._restore_approval_wait(turn, done))
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        future.add_done_callback(
+            async_done_callback(lambda done: self._restore_approval_wait(turn, done))
+        )
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id)
         if profile.kind == HarnessKind.CLAUDE_AGENT_SDK:
-            self._persist_activity(
-                turn,
-                session,
-                HarnessEvent(
-                    type="approval",
-                    origin=turn.origin,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    item_id=call.id,
-                    parent_item_id=(
-                        str(request.annotations.get("vendor_item_id"))
-                        if request.annotations.get("vendor_item_id")
-                        else None
+            (
+                await self._persist_activity(
+                    turn,
+                    session,
+                    HarnessEvent(
+                        type="approval",
+                        origin=turn.origin,
+                        harness_session_id=session.id,
+                        harness_turn_id=turn.id,
+                        item_id=call.id,
+                        parent_item_id=(
+                            str(request.annotations.get("vendor_item_id"))
+                            if request.annotations.get("vendor_item_id")
+                            else None
+                        ),
+                        item_kind=(
+                            "command"
+                            if request.category == "command"
+                            else "file_change"
+                            if request.category == "file"
+                            else "tool"
+                        ),
+                        item_status="waiting_approval",
+                        title=f"{request.category.title()} approval required",
+                        summary="Claude is waiting for an operator decision.",
+                        approval_id=approval.id,
+                        tool_call_id=call.id,
+                        payload={
+                            "category": request.category,
+                            "arguments": request.arguments,
+                        },
                     ),
-                    item_kind=(
-                        "command"
-                        if request.category == "command"
-                        else "file_change"
-                        if request.category == "file"
-                        else "tool"
-                    ),
-                    item_status="waiting_approval",
-                    title=f"{request.category.title()} approval required",
-                    summary="Claude is waiting for an operator decision.",
-                    approval_id=approval.id,
-                    tool_call_id=call.id,
-                    payload={
-                        "category": request.category,
-                        "arguments": request.arguments,
-                    },
-                ),
+                )
             )
         return PermissionTicket(
             approval.id,
@@ -18647,9 +19082,9 @@ class HarnessRuntimeService:
     async def _request_interaction(
         self, turn_id: str, request: HarnessInteractionRequest
     ) -> tuple[str, asyncio.Future[dict[str, Any]]]:
-        turn = self.store.get(HarnessTurn, turn_id)
-        session = self.store.get(HarnessSession, turn.harness_session_id)
-        interaction = self.store.create(
+        turn = await self.store.get(HarnessTurn, turn_id)
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        interaction = await self.store.create(
             HarnessInteraction(
                 id=str(uuid4()),
                 engagement_id=turn.engagement_id,
@@ -18673,48 +19108,56 @@ class HarnessRuntimeService:
             asyncio.get_running_loop().create_future()
         )
         self._interaction_futures[interaction.id] = future
-        latest_turn = self.store.get(HarnessTurn, turn.id)
-        self.store.update(
-            HarnessTurn,
-            latest_turn.id,
-            {"status": HarnessTurnStatus.WAITING_APPROVAL},
-            expected_revision=latest_turn.revision,
+        latest_turn = await self.store.get(HarnessTurn, turn.id)
+        (
+            await self.store.update(
+                HarnessTurn,
+                latest_turn.id,
+                {"status": HarnessTurnStatus.WAITING_APPROVAL},
+                expected_revision=latest_turn.revision,
+            )
         )
-        latest_session = self.store.get(HarnessSession, session.id)
-        self.store.update(
-            HarnessSession,
-            latest_session.id,
-            {
-                "status": HarnessSessionStatus.WAITING_APPROVAL,
-                "last_activity_at": utc_now(),
-            },
-            expected_revision=latest_session.revision,
+        latest_session = await self.store.get(HarnessSession, session.id)
+        (
+            await self.store.update(
+                HarnessSession,
+                latest_session.id,
+                {
+                    "status": HarnessSessionStatus.WAITING_APPROVAL,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=latest_session.revision,
+            )
         )
-        self._waiting_owner(turn)
+        (await self._waiting_owner(turn))
 
-        def restore(_: asyncio.Future[dict[str, Any]]) -> None:
-            current_turn = self.store.get(HarnessTurn, turn.id)
+        async def restore(_: asyncio.Future[dict[str, Any]]) -> None:
+            current_turn = await self.store.get(HarnessTurn, turn.id)
             if current_turn.status == HarnessTurnStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessTurn,
-                    current_turn.id,
-                    {"status": HarnessTurnStatus.RUNNING},
-                    expected_revision=current_turn.revision,
+                (
+                    await self.store.update(
+                        HarnessTurn,
+                        current_turn.id,
+                        {"status": HarnessTurnStatus.RUNNING},
+                        expected_revision=current_turn.revision,
+                    )
                 )
-            current_session = self.store.get(HarnessSession, session.id)
+            current_session = await self.store.get(HarnessSession, session.id)
             if current_session.status == HarnessSessionStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessSession,
-                    current_session.id,
-                    {
-                        "status": HarnessSessionStatus.RUNNING,
-                        "last_activity_at": utc_now(),
-                    },
-                    expected_revision=current_session.revision,
+                (
+                    await self.store.update(
+                        HarnessSession,
+                        current_session.id,
+                        {
+                            "status": HarnessSessionStatus.RUNNING,
+                            "last_activity_at": utc_now(),
+                        },
+                        expected_revision=current_session.revision,
+                    )
                 )
-            self._start_owner(turn)
+            (await self._start_owner(turn))
 
-        future.add_done_callback(restore)
+        future.add_done_callback(async_done_callback(restore))
         if request.auto_resolution_ms is not None:
             create_diagnostic_task(
                 self._auto_resolve_interaction(
@@ -18731,7 +19174,7 @@ class HarnessRuntimeService:
         self, interaction_id: str, delay_ms: int
     ) -> None:
         await asyncio.sleep(delay_ms / 1_000)
-        interaction = self.store.get(HarnessInteraction, interaction_id)
+        interaction = await self.store.get(HarnessInteraction, interaction_id)
         if interaction.status == HarnessInteractionStatus.PENDING:
             await self.resolve_interaction(
                 interaction_id,
@@ -18769,35 +19212,39 @@ class HarnessRuntimeService:
         future = self._approval_futures.pop(approval_id, None)
         self._broker_approval_ids.discard(approval_id)
         try:
-            approval = self.store.get(Approval, approval_id)
+            approval = await self.store.get(Approval, approval_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: a removed request has no card to retire
             approval = None
         if approval is not None and approval.status == ApprovalStatus.PENDING:
-            self.store.update(
-                Approval,
-                approval.id,
-                {
-                    "status": ApprovalStatus.EXPIRED,
-                    "decided_by": "harness",
-                    "decided_at": utc_now(),
-                    "decision_note": reason,
-                },
-                expected_revision=approval.revision,
+            (
+                await self.store.update(
+                    Approval,
+                    approval.id,
+                    {
+                        "status": ApprovalStatus.EXPIRED,
+                        "decided_by": "harness",
+                        "decided_at": utc_now(),
+                        "decision_note": reason,
+                    },
+                    expected_revision=approval.revision,
+                )
             )
             if approval.tool_call_id:
-                call = self.store.get(ToolCall, approval.tool_call_id)
+                call = await self.store.get(ToolCall, approval.tool_call_id)
                 if call.status == ToolCallStatus.WAITING_APPROVAL:
-                    self.store.update(
-                        ToolCall,
-                        call.id,
-                        {
-                            "status": ToolCallStatus.CANCELLED,
-                            "error": reason,
-                            "completed_at": utc_now(),
-                        },
-                        expected_revision=call.revision,
+                    (
+                        await self.store.update(
+                            ToolCall,
+                            call.id,
+                            {
+                                "status": ToolCallStatus.CANCELLED,
+                                "error": reason,
+                                "completed_at": utc_now(),
+                            },
+                            expected_revision=call.revision,
+                        )
                     )
         if future is not None and not future.done():
             # Releases the turn's waiting-approval state like any decision.
@@ -18814,7 +19261,7 @@ class HarnessRuntimeService:
         action: Literal["answer", "decline", "cancel", "expire"],
         response: dict[str, Any],
     ) -> HarnessInteraction:
-        interaction = self.store.get(HarnessInteraction, interaction_id)
+        interaction = await self.store.get(HarnessInteraction, interaction_id)
         if interaction.status != HarnessInteractionStatus.PENDING:
             raise HarnessStateError(
                 f"harness interaction is already {interaction.status.value}"
@@ -18831,7 +19278,7 @@ class HarnessRuntimeService:
             "cancel": HarnessInteractionStatus.CANCELLED,
             "expire": HarnessInteractionStatus.EXPIRED,
         }[action]
-        updated = self.store.update(
+        updated = await self.store.update(
             HarnessInteraction,
             interaction.id,
             {
@@ -18854,7 +19301,7 @@ class HarnessRuntimeService:
         )
         return updated
 
-    def _permission_policy(
+    async def _permission_policy(
         self, session: HarnessSession, request: HarnessPermissionRequest
     ) -> tuple[
         McpApprovalMode,
@@ -18864,7 +19311,7 @@ class HarnessRuntimeService:
         str,
     ]:
         if request.category != "mcp":
-            profile = self.store.get(HarnessProfile, session.harness_profile_id)
+            profile = await self.store.get(HarnessProfile, session.harness_profile_id)
             native = _session_native_capabilities(session, profile)
             vendor_name = request.vendor_name
             if profile.kind == HarnessKind.CLAUDE_AGENT_SDK:
@@ -19070,7 +19517,7 @@ class HarnessRuntimeService:
             risk = RiskClass.WORKSPACE_WRITE
         return mode, server, tool, risk, rationale
 
-    def _turn_tool_calls(
+    async def _turn_tool_calls(
         self, turn: HarnessTurn, *, statuses: Sequence[ToolCallStatus]
     ) -> list[ToolCall]:
         """Return this turn's tool calls in ``statuses``, oldest first.
@@ -19081,13 +19528,13 @@ class HarnessRuntimeService:
         """
 
         wanted = [status.value for status in statuses]
-        return self.store.list_harness_turn_tool_calls(
+        return await self.store.list_harness_turn_tool_calls(
             turn.id,
             engagement_id=turn.engagement_id,
             statuses=wanted,
         )
 
-    def _record_tool_event(
+    async def _record_tool_event(
         self, turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
     ) -> HarnessEvent:
         if _is_gateway_subagent_tool(event.tool_name):
@@ -19098,7 +19545,7 @@ class HarnessRuntimeService:
             if receipt is None:
                 return event
             try:
-                gateway_call = self.store.get(ToolCall, receipt.tool_call_id)
+                gateway_call = await self.store.get(ToolCall, receipt.tool_call_id)
             except (
                 NotFoundError
             ):  # diagnostic-expected: stale tool receipts are ignored safely
@@ -19121,7 +19568,7 @@ class HarnessRuntimeService:
                 update={"tool_call_id": receipt.tool_call_id, "payload": payload}
             )
         if event.server_id in {"codex", "claude"}:
-            return self._record_native_tool_event(turn, event)
+            return await self._record_native_tool_event(turn, event)
         profiles = [
             McpServerProfile.model_validate(item) for item in session.mcp_snapshot
         ]
@@ -19138,21 +19585,23 @@ class HarnessRuntimeService:
             return event
         existing = [
             call
-            for call in self._turn_tool_calls(
-                turn,
-                statuses=(
-                    ToolCallStatus.PROPOSED,
-                    ToolCallStatus.WAITING_APPROVAL,
-                    ToolCallStatus.APPROVED,
-                    ToolCallStatus.RUNNING,
-                    ToolCallStatus.CANCELLED,
-                ),
+            for call in (
+                await self._turn_tool_calls(
+                    turn,
+                    statuses=(
+                        ToolCallStatus.PROPOSED,
+                        ToolCallStatus.WAITING_APPROVAL,
+                        ToolCallStatus.APPROVED,
+                        ToolCallStatus.RUNNING,
+                        ToolCallStatus.CANCELLED,
+                    ),
+                )
             )
             if call.mcp_server_id == server.id and call.mcp_tool_name == event.tool_name
         ]
         call: ToolCall | None = existing[-1] if existing else None
         if call is None:
-            call = self.store.create(
+            call = await self.store.create(
                 ToolCall(
                     id=str(uuid4()),
                     engagement_id=turn.engagement_id,
@@ -19178,7 +19627,7 @@ class HarnessRuntimeService:
                 )
             )
         elif event.type == "tool_started" and call.status == ToolCallStatus.APPROVED:
-            call = self.store.update(
+            call = await self.store.update(
                 ToolCall,
                 call.id,
                 {"status": ToolCallStatus.RUNNING, "started_at": utc_now()},
@@ -19186,8 +19635,8 @@ class HarnessRuntimeService:
             )
         if event.type == "tool_completed":
             failed = bool(event.payload.get("error"))
-            call = self.store.get(ToolCall, call.id)
-            call = self.store.update(
+            call = await self.store.get(ToolCall, call.id)
+            call = await self.store.update(
                 ToolCall,
                 call.id,
                 {
@@ -19208,7 +19657,7 @@ class HarnessRuntimeService:
             update={"tool_call_id": call.id, "server_id": server.id}
         )
 
-    def _record_native_tool_event(
+    async def _record_native_tool_event(
         self, turn: HarnessTurn, event: HarnessEvent
     ) -> HarnessEvent:
         vendor = event.server_id or "vendor"
@@ -19220,14 +19669,16 @@ class HarnessRuntimeService:
         )
         pending = [
             call
-            for call in self._turn_tool_calls(
-                turn,
-                statuses=(
-                    ToolCallStatus.PROPOSED,
-                    ToolCallStatus.WAITING_APPROVAL,
-                    ToolCallStatus.APPROVED,
-                    ToolCallStatus.RUNNING,
-                ),
+            for call in (
+                await self._turn_tool_calls(
+                    turn,
+                    statuses=(
+                        ToolCallStatus.PROPOSED,
+                        ToolCallStatus.WAITING_APPROVAL,
+                        ToolCallStatus.APPROVED,
+                        ToolCallStatus.RUNNING,
+                    ),
+                )
             )
             if call.mcp_server_id is None
         ]
@@ -19260,7 +19711,7 @@ class HarnessRuntimeService:
                 if raw_arguments is not None
                 else {}
             )
-            call = self.store.create(
+            call = await self.store.create(
                 ToolCall(
                     id=str(uuid4()),
                     engagement_id=turn.engagement_id,
@@ -19285,12 +19736,12 @@ class HarnessRuntimeService:
                     },
                 )
             )
-            call = self._attach_gateway_tool_call(turn, call.id)
+            call = await self._attach_gateway_tool_call(turn, call.id)
         elif event.type == "tool_started" and call.status in {
             ToolCallStatus.PROPOSED,
             ToolCallStatus.APPROVED,
         }:
-            call = self.store.update(
+            call = await self.store.update(
                 ToolCall,
                 call.id,
                 {
@@ -19305,7 +19756,7 @@ class HarnessRuntimeService:
                 expected_revision=call.revision,
             )
         if event.type == "tool_completed":
-            call = self.store.get(ToolCall, call.id)
+            call = await self.store.get(ToolCall, call.id)
             raw_error = event.payload.get("error")
             status = str(event.payload.get("status") or "").lower()
             failed = bool(raw_error) or status in {"failed", "error", "declined"}
@@ -19342,7 +19793,7 @@ class HarnessRuntimeService:
                         "redacted": True,
                     },
                 )
-                self.store.create(stored.artifact)
+                (await self.store.create(stored.artifact))
                 artifact_id = stored.artifact.id
             except Exception as exc:
                 record_caught_exception(
@@ -19352,19 +19803,23 @@ class HarnessRuntimeService:
                     exc,
                     stage="artifact-persistence",
                 )
-            self.store.update(
-                ToolCall,
-                call.id,
-                {
-                    "status": (
-                        ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE
-                    ),
-                    "result": safe_result,
-                    "error": _safe_error(Exception(str(raw_error))) if failed else None,
-                    "completed_at": utc_now(),
-                    "result_artifact_id": artifact_id,
-                },
-                expected_revision=call.revision,
+            (
+                await self.store.update(
+                    ToolCall,
+                    call.id,
+                    {
+                        "status": (
+                            ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE
+                        ),
+                        "result": safe_result,
+                        "error": _safe_error(Exception(str(raw_error)))
+                        if failed
+                        else None,
+                        "completed_at": utc_now(),
+                        "result_artifact_id": artifact_id,
+                    },
+                    expected_revision=call.revision,
+                )
             )
             if artifact_id:
                 return event.model_copy(
@@ -19379,16 +19834,16 @@ class HarnessRuntimeService:
                 )
         return event.model_copy(update={"tool_call_id": call.id})
 
-    def _persist_activity(
+    async def _persist_activity(
         self, turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
     ) -> HarnessEvent:
         """Append an activity event before exposing it to any live subscriber."""
 
         if event.vendor is None:
-            profile = self.store.get(HarnessProfile, session.harness_profile_id)
+            profile = await self.store.get(HarnessProfile, session.harness_profile_id)
             event = event.model_copy(update={"vendor": profile.kind})
         if event.type == "usage" and turn.run_id:
-            run_cost_usd = self._record_harness_run_usage(turn, event)
+            run_cost_usd = await self._record_harness_run_usage(turn, event)
             if run_cost_usd is not None:
                 event = event.model_copy(
                     update={
@@ -19402,7 +19857,7 @@ class HarnessRuntimeService:
             concurrent = 0
             for active in self._active.values():
                 try:
-                    active_turn = self.store.get(HarnessTurn, active.turn_id)
+                    active_turn = await self.store.get(HarnessTurn, active.turn_id)
                 except NotFoundError:  # diagnostic-expected: completed turns leave the active set asynchronously
                     continue
                 if active_turn.engagement_id == turn.engagement_id:
@@ -19437,7 +19892,7 @@ class HarnessRuntimeService:
                             "redacted": True,
                         },
                     )
-                    self.store.create(stored.artifact)
+                    (await self.store.create(stored.artifact))
                     event = event.model_copy(
                         update={
                             "artifact_ids": [stored.artifact.id],
@@ -19484,25 +19939,29 @@ class HarnessRuntimeService:
             )
             canonical_payload = self._activity_payload(turn, session, canonical_status)
             if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
-                self.store.append_operation_event(
-                    turn.id,
-                    "harness_turn",
-                    turn.engagement_id,
-                    "harness.turn_status",
-                    canonical_payload,
+                (
+                    await self.store.append_operation_event(
+                        turn.id,
+                        "harness_turn",
+                        turn.engagement_id,
+                        "harness.turn_status",
+                        canonical_payload,
+                    )
                 )
             else:
                 if not turn.run_id:
                     raise HarnessStateError("mission harness turn has no run ledger")
-                self.store.append_event(
-                    turn.run_id,
-                    "harness.turn_status",
-                    canonical_payload,
+                (
+                    await self.store.append_event(
+                        turn.run_id,
+                        "harness.turn_status",
+                        canonical_payload,
+                    )
                 )
         payload = self._activity_payload(turn, session, event)
         durable: OperationEvent | RunEvent
         if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
-            durable = self.store.append_operation_event(
+            durable = await self.store.append_operation_event(
                 turn.id,
                 "harness_turn",
                 turn.engagement_id,
@@ -19512,7 +19971,7 @@ class HarnessRuntimeService:
         else:
             if not turn.run_id:
                 raise HarnessStateError("mission harness turn has no run ledger")
-            durable = self.store.append_event(
+            durable = await self.store.append_event(
                 turn.run_id,
                 f"harness.{event.type}",
                 payload,
@@ -19520,13 +19979,16 @@ class HarnessRuntimeService:
         self._wake_activity_followers(turn.id)
         try:
             if event.quota_snapshot is not None and self._quota_snapshot_observer:
-                self._quota_snapshot_observer(
-                    session.harness_profile_id, event.quota_snapshot
+                await call_async(
+                    self._quota_snapshot_observer,
+                    session.harness_profile_id,
+                    event.quota_snapshot,
                 )
             if self._rate_limit_observer and (
                 event.reason_code == "rate_limited" or event.type == "usage"
             ):
-                self._rate_limit_observer(
+                await call_async(
+                    self._rate_limit_observer,
                     session.harness_profile_id,
                     turn.id,
                     durable.id,
@@ -19538,7 +20000,7 @@ class HarnessRuntimeService:
                 and event.type in {"usage", "completed"}
                 and self._quota_read_observer
             ):
-                self._quota_read_observer(session.harness_profile_id)
+                await call_async(self._quota_read_observer, session.harness_profile_id)
         except Exception as exc:
             record_caught_exception(
                 "harnesses",
@@ -19555,13 +20017,13 @@ class HarnessRuntimeService:
             }
         )
 
-    def _record_harness_run_usage(
+    async def _record_harness_run_usage(
         self, turn: HarnessTurn, event: HarnessEvent
     ) -> float | None:
         detailed = event.detailed_usage
         if detailed is None or detailed.cost_usd is None or not turn.run_id:
             return None
-        run = self.store.get(AgentRun, turn.run_id)
+        run = await self.store.get(AgentRun, turn.run_id)
         raw_usage = run.metadata.get("harness_turn_usage")
         turn_usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
         turn_usage[turn.id] = {
@@ -19586,23 +20048,25 @@ class HarnessRuntimeService:
             for item in entries
             if isinstance(item.get("output_tokens"), (int, float))
         )
-        self.store.update(
-            AgentRun,
-            run.id,
-            {
-                "metadata": {
-                    **run.metadata,
-                    "harness_turn_usage": turn_usage,
-                    "spent_usd": spent_usd,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                }
-            },
-            expected_revision=run.revision,
+        (
+            await self.store.update(
+                AgentRun,
+                run.id,
+                {
+                    "metadata": {
+                        **run.metadata,
+                        "harness_turn_usage": turn_usage,
+                        "spent_usd": spent_usd,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                    }
+                },
+                expected_revision=run.revision,
+            )
         )
         return spent_usd
 
-    def activity_events(
+    async def activity_events(
         self, turn_id: str, *, after_sequence: int = 0, limit: int = 1_000
     ) -> HarnessActivityEventList:
         """Replay normalized harness events from the turn's authoritative ledger."""
@@ -19611,10 +20075,10 @@ class HarnessRuntimeService:
             raise ValueError("after_sequence cannot be negative")
         if not 1 <= limit <= 10_000:
             raise ValueError("limit must be between 1 and 10000")
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         durable_events: Sequence[OperationEvent | RunEvent]
         if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
-            durable_events = self.store.replay_operation_events(
+            durable_events = await self.store.replay_operation_events(
                 turn.id, after_sequence=after_sequence, limit=limit
             )
         else:
@@ -19622,7 +20086,7 @@ class HarnessRuntimeService:
                 raise HarnessStateError("mission harness turn has no run ledger")
             # The run ledger interleaves every turn of the run with the
             # mission's own events; only this turn's harness rows replay it.
-            durable_events = self.store.replay_events(
+            durable_events = await self.store.replay_events(
                 turn.run_id,
                 after_sequence=after_sequence,
                 limit=limit,
@@ -19644,7 +20108,7 @@ class HarnessRuntimeService:
             next_sequence=next_sequence,
         )
 
-    def _turn_activity_state(self, turn: HarnessTurn) -> _TurnActivityState:
+    async def _turn_activity_state(self, turn: HarnessTurn) -> _TurnActivityState:
         """Return the turn's latest mode, plan and goal, reading only new rows.
 
         The ledger is append-only, so each read folds the rows after the last
@@ -19663,7 +20127,7 @@ class HarnessRuntimeService:
                 if cached
                 else _TurnActivityState()
             )
-        state = self._fold_turn_activity_state(turn, state)
+        state = await self._fold_turn_activity_state(turn, state)
         with self._turn_activity_state_lock:
             current = self._turn_activity_states.pop(turn.id, None)
             if current is not None and current.cursor > state.cursor:
@@ -19673,13 +20137,13 @@ class HarnessRuntimeService:
                 self._turn_activity_states.popitem(last=False)
         return state
 
-    def _fold_turn_activity_state(
+    async def _fold_turn_activity_state(
         self, turn: HarnessTurn, state: _TurnActivityState
     ) -> _TurnActivityState:
         if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
-            through = self.store.last_operation_event_sequence(turn.id)
+            through = await self.store.last_operation_event_sequence(turn.id)
             while state.cursor < through:
-                rows = self.store.replay_operation_events(
+                rows = await self.store.replay_operation_events(
                     turn.id,
                     after_sequence=state.cursor,
                     through_sequence=through,
@@ -19694,7 +20158,7 @@ class HarnessRuntimeService:
                 state.cursor = rows[-1].sequence if len(rows) == 1_000 else through
             return state
         while True:
-            page = self.activity_events(
+            page = await self.activity_events(
                 turn.id, after_sequence=state.cursor, limit=1_000
             )
             for event in page.events:
@@ -19747,92 +20211,104 @@ class HarnessRuntimeService:
             payload["run_cost_usd"] = run_cost_usd
         return payload
 
-    def _start_owner(self, turn: HarnessTurn) -> None:
+    async def _start_owner(self, turn: HarnessTurn) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.status in {
                 ChatTurnStatus.ROUTING,
                 ChatTurnStatus.WAITING_APPROVAL,
             }:
-                self.store.update(
-                    ChatTurn,
-                    chat_turn.id,
-                    {"status": ChatTurnStatus.ROUTING, "approval_id": None},
-                    expected_revision=chat_turn.revision,
+                (
+                    await self.store.update(
+                        ChatTurn,
+                        chat_turn.id,
+                        {"status": ChatTurnStatus.ROUTING, "approval_id": None},
+                        expected_revision=chat_turn.revision,
+                    )
                 )
         elif turn.run_id:
-            run = self.store.get(AgentRun, turn.run_id)
+            run = await self.store.get(AgentRun, turn.run_id)
             if run.status in {RunStatus.QUEUED, RunStatus.WAITING_APPROVAL}:
                 changes: dict[str, Any] = {"status": RunStatus.RUNNING}
                 if run.started_at is None:
                     changes["started_at"] = utc_now()
-                self.store.update(
-                    AgentRun, run.id, changes, expected_revision=run.revision
+                (
+                    await self.store.update(
+                        AgentRun, run.id, changes, expected_revision=run.revision
+                    )
                 )
 
-    def _waiting_owner(
+    async def _waiting_owner(
         self, turn: HarnessTurn, *, approval_id: str | None = None
     ) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
-            chat_owner = self.store.get(ChatTurn, turn.chat_turn_id)
-            self.store.update(
-                ChatTurn,
-                chat_owner.id,
-                {
-                    "status": ChatTurnStatus.WAITING_APPROVAL,
-                    "approval_id": approval_id,
-                },
-                expected_revision=chat_owner.revision,
+            chat_owner = await self.store.get(ChatTurn, turn.chat_turn_id)
+            (
+                await self.store.update(
+                    ChatTurn,
+                    chat_owner.id,
+                    {
+                        "status": ChatTurnStatus.WAITING_APPROVAL,
+                        "approval_id": approval_id,
+                    },
+                    expected_revision=chat_owner.revision,
+                )
             )
         elif turn.run_id:
-            run_owner = self.store.get(AgentRun, turn.run_id)
-            self.store.update(
-                AgentRun,
-                run_owner.id,
-                {"status": RunStatus.WAITING_APPROVAL},
-                expected_revision=run_owner.revision,
+            run_owner = await self.store.get(AgentRun, turn.run_id)
+            (
+                await self.store.update(
+                    AgentRun,
+                    run_owner.id,
+                    {"status": RunStatus.WAITING_APPROVAL},
+                    expected_revision=run_owner.revision,
+                )
             )
 
-    def _account_terminal_chat_usage(
+    async def _account_terminal_chat_usage(
         self, turn: HarnessTurn, usage: ChatTokenUsage, *, usage_reported: bool
     ) -> None:
         """Debit consumed tokens even when a completion guard rejects an answer."""
         if not turn.chat_turn_id:
             return
-        owner = self.store.get(ChatTurn, turn.chat_turn_id)
+        owner = await self.store.get(ChatTurn, turn.chat_turn_id)
         if owner.status == ChatTurnStatus.COMPLETE or owner.request_snapshot.get(
             "harness_usage_accounted"
         ):
             return
-        settled = self.store.get(HarnessTurn, turn.id)
+        settled = await self.store.get(HarnessTurn, turn.id)
         if settled.status not in {
             HarnessTurnStatus.FAILED,
             HarnessTurnStatus.CANCELLED,
             HarnessTurnStatus.INTERRUPTED,
         }:
             return
-        with self.store.transaction() as transaction:
-            transaction.update(
-                HarnessTurn,
-                settled.id,
-                {"usage": usage},
-                expected_revision=settled.revision,
+        async with self.store.transaction() as transaction:
+            (
+                await transaction.update(
+                    HarnessTurn,
+                    settled.id,
+                    {"usage": usage},
+                    expected_revision=settled.revision,
+                )
             )
-            transaction.update(
-                ChatTurn,
-                owner.id,
-                {
-                    "usage": usage,
-                    "request_snapshot": {
-                        **owner.request_snapshot,
-                        "harness_usage_accounted": True,
-                        "harness_usage_reported": usage_reported,
+            (
+                await transaction.update(
+                    ChatTurn,
+                    owner.id,
+                    {
+                        "usage": usage,
+                        "request_snapshot": {
+                            **owner.request_snapshot,
+                            "harness_usage_accounted": True,
+                            "harness_usage_reported": usage_reported,
+                        },
                     },
-                },
-                expected_revision=owner.revision,
+                    expected_revision=owner.revision,
+                )
             )
             if owner.goal_id:
-                goal = self.store.get(ChatGoal, owner.goal_id)
+                goal = await self.store.get(ChatGoal, owner.goal_id)
                 metadata = dict(goal.metadata)
                 if not usage_reported:
                     metadata["usage_unknown"] = True
@@ -19860,11 +20336,13 @@ class HarnessRuntimeService:
                         blocked_reason=settled.error
                         or "The harness turn ended before its response was accepted.",
                     )
-                transaction.update(
-                    ChatGoal, goal.id, changes, expected_revision=goal.revision
+                (
+                    await transaction.update(
+                        ChatGoal, goal.id, changes, expected_revision=goal.revision
+                    )
                 )
 
-    def _complete_owner(
+    async def _complete_owner(
         self,
         turn: HarnessTurn,
         final_message: str,
@@ -19875,16 +20353,16 @@ class HarnessRuntimeService:
         # Gateway reads can add citations while the vendor turn is running.
         # Reload before persisting the final chat message so those citations
         # are not lost through the stream loop's older turn snapshot.
-        turn = self.store.get(HarnessTurn, turn.id)
+        turn = await self.store.get(HarnessTurn, turn.id)
         if (
             turn.origin == HarnessTurnOrigin.CHAT
             and turn.chat_turn_id
             and turn.chat_session_id
         ):
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.status == ChatTurnStatus.COMPLETE:
                 return
-            existing = self._chat_messages(
+            existing = await self._chat_messages(
                 turn.engagement_id, turn.chat_session_id, include_replaced=True
             )
             message = ChatMessage(
@@ -19895,7 +20373,9 @@ class HarnessRuntimeService:
                 role=ChatRole.ASSISTANT,
                 content=_bounded_harness_message(final_message)[0]
                 or "Harness completed without a text response.",
-                model=self.store.get(HarnessSession, turn.harness_session_id).model,
+                model=(
+                    await self.store.get(HarnessSession, turn.harness_session_id)
+                ).model,
                 usage=usage,
                 elapsed_ms=max(
                     0,
@@ -19904,20 +20384,22 @@ class HarnessRuntimeService:
                 citations=self._answer_citations(turn, final_message),
                 metadata={"harness_turn_id": turn.id},
             )
-            with self.store.transaction() as transaction:
-                transaction.add(message)
-                transaction.update(
-                    ChatTurn,
-                    chat_turn.id,
-                    {
-                        "status": ChatTurnStatus.COMPLETE,
-                        "usage": usage,
-                        "final_message_id": message.id,
-                    },
-                    expected_revision=chat_turn.revision,
+            async with self.store.transaction() as transaction:
+                (await transaction.add(message))
+                (
+                    await transaction.update(
+                        ChatTurn,
+                        chat_turn.id,
+                        {
+                            "status": ChatTurnStatus.COMPLETE,
+                            "usage": usage,
+                            "final_message_id": message.id,
+                        },
+                        expected_revision=chat_turn.revision,
+                    )
                 )
                 if chat_turn.goal_id:
-                    goal = self.store.get(ChatGoal, chat_turn.goal_id)
+                    goal = await self.store.get(ChatGoal, chat_turn.goal_id)
                     combined = ChatTokenUsage(
                         input_tokens=goal.usage.input_tokens + usage.input_tokens,
                         output_tokens=goal.usage.output_tokens + usage.output_tokens,
@@ -19946,8 +20428,10 @@ class HarnessRuntimeService:
                         if (
                             goal.status != ChatGoalStatus.RUNNING
                             or goal.execution_claim_id != chat_turn.id
-                            or ChatGoalService(self.store).has_working_subagents(
-                                chat_turn.session_id
+                            or (
+                                await ChatGoalService(self.store).has_working_subagents(
+                                    chat_turn.session_id
+                                )
                             )
                         ):
                             raise ChatHistoryConflict(
@@ -19996,11 +20480,13 @@ class HarnessRuntimeService:
                                     "blocked_reason": reason,
                                 }
                             )
-                    transaction.update(
-                        ChatGoal, goal.id, changes, expected_revision=goal.revision
+                    (
+                        await transaction.update(
+                            ChatGoal, goal.id, changes, expected_revision=goal.revision
+                        )
                     )
         elif turn.run_id:
-            run = self.store.get(AgentRun, turn.run_id)
+            run = await self.store.get(AgentRun, turn.run_id)
             if run.status not in {RunStatus.CANCELLED, RunStatus.INTERRUPTED}:
                 final_summary = (
                     final_message.strip()
@@ -20029,32 +20515,34 @@ class HarnessRuntimeService:
                             "harness_turn_id": turn.id,
                         }
                     )
-                    self.store.update_with_event(
-                        AgentRun,
-                        run.id,
-                        {
-                            "status": RunStatus.RUNNING,
-                            "metadata": {
-                                **run.metadata,
-                                "stage_summaries": summaries,
-                                "completed_tasks": stage_index + 1,
+                    (
+                        await self.store.update_with_event(
+                            AgentRun,
+                            run.id,
+                            {
+                                "status": RunStatus.RUNNING,
+                                "metadata": {
+                                    **run.metadata,
+                                    "stage_summaries": summaries,
+                                    "completed_tasks": stage_index + 1,
+                                    "harness_turn_id": turn.id,
+                                },
+                            },
+                            expected_revision=run.revision,
+                            run_id=run.id,
+                            event_type="stage.completed",
+                            event_payload={
+                                "summary": final_summary,
+                                "stage_index": stage_index,
+                                "stage_count": stage_count,
+                                "stage_title": turn.metadata.get("mission_stage_title"),
                                 "harness_turn_id": turn.id,
                             },
-                        },
-                        expected_revision=run.revision,
-                        run_id=run.id,
-                        event_type="stage.completed",
-                        event_payload={
-                            "summary": final_summary,
-                            "stage_index": stage_index,
-                            "stage_count": stage_count,
-                            "stage_title": turn.metadata.get("mission_stage_title"),
-                            "harness_turn_id": turn.id,
-                        },
-                        idempotency_key=f"run:stage:{stage_index}:completed",
+                            idempotency_key=f"run:stage:{stage_index}:completed",
+                        )
                     )
                     return
-                run, _ = self.store.update_with_event(
+                run, _ = await self.store.update_with_event(
                     AgentRun,
                     run.id,
                     {
@@ -20082,16 +20570,18 @@ class HarnessRuntimeService:
                     },
                     idempotency_key="run:completed",
                 )
-                for chat in self._attached_chats(turn.harness_session_id):
-                    self._append_chat_handoff(
-                        chat,
-                        role=ChatRole.ASSISTANT,
-                        content=final_summary,
-                        run_id=run.id,
-                        usage=usage,
+                for chat in await self._attached_chats(turn.harness_session_id):
+                    (
+                        await self._append_chat_handoff(
+                            chat,
+                            role=ChatRole.ASSISTANT,
+                            content=final_summary,
+                            run_id=run.id,
+                            usage=usage,
+                        )
                     )
 
-    def _keep_stopped_answer(
+    async def _keep_stopped_answer(
         self,
         turn_id: str,
         text: str,
@@ -20106,12 +20596,12 @@ class HarnessRuntimeService:
         """
 
         try:
-            turn = self.store.get(HarnessTurn, turn_id)
+            turn = await self.store.get(HarnessTurn, turn_id)
             if stopped_by_harness:
                 # The vendor ended the turn itself (Codex interrupted/cancelled,
                 # ACP stopReason cancelled). Viewers settle it as stopped, unlike
                 # a turn Core had to abandon with an uncertain outcome.
-                turn = self.store.update(
+                turn = await self.store.update(
                     HarnessTurn,
                     turn.id,
                     {"metadata": {**turn.metadata, "stopped_by_harness": True}},
@@ -20124,7 +20614,7 @@ class HarnessRuntimeService:
                 or not turn.chat_session_id
             ):
                 return
-            existing = self._chat_messages(
+            existing = await self._chat_messages(
                 turn.engagement_id, turn.chat_session_id, include_replaced=True
             )
             if any(
@@ -20133,26 +20623,34 @@ class HarnessRuntimeService:
                 for item in existing
             ):
                 return
-            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
-            self.store.create(
-                ChatMessage(
-                    id=str(uuid4()),
-                    engagement_id=turn.engagement_id,
-                    session_id=turn.chat_session_id,
-                    sequence=max((item.sequence for item in existing), default=0) + 1,
-                    role=ChatRole.ASSISTANT,
-                    content=text,
-                    model=self.store.get(HarnessSession, turn.harness_session_id).model,
-                    usage=usage,
-                    elapsed_ms=max(
-                        0,
-                        round(
-                            (utc_now() - chat_turn.created_at).total_seconds() * 1000
+            chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
+            (
+                await self.store.create(
+                    ChatMessage(
+                        id=str(uuid4()),
+                        engagement_id=turn.engagement_id,
+                        session_id=turn.chat_session_id,
+                        sequence=max((item.sequence for item in existing), default=0)
+                        + 1,
+                        role=ChatRole.ASSISTANT,
+                        content=text,
+                        model=(
+                            await self.store.get(
+                                HarnessSession, turn.harness_session_id
+                            )
+                        ).model,
+                        usage=usage,
+                        elapsed_ms=max(
+                            0,
+                            round(
+                                (utc_now() - chat_turn.created_at).total_seconds()
+                                * 1000
+                            ),
                         ),
-                    ),
-                    finish_reason="interrupted",
-                    citations=self._answer_citations(turn, text),
-                    metadata={"harness_turn_id": turn.id, "interrupted": True},
+                        finish_reason="interrupted",
+                        citations=self._answer_citations(turn, text),
+                        metadata={"harness_turn_id": turn.id, "interrupted": True},
+                    )
                 )
             )
         except Exception as exc:
@@ -20167,37 +20665,41 @@ class HarnessRuntimeService:
                 metadata={"entity_type": "harness_turn", "entity_id": turn_id},
             )
 
-    def _interrupt_owner(self, turn: HarnessTurn) -> None:
+    async def _interrupt_owner(self, turn: HarnessTurn) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:
-            chat_owner = self.store.get(ChatTurn, turn.chat_turn_id)
+            chat_owner = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_owner.status not in {
                 ChatTurnStatus.COMPLETE,
                 ChatTurnStatus.CANCELLED,
                 ChatTurnStatus.FAILED,
                 ChatTurnStatus.INTERRUPTED,
             }:
-                self.store.update(
-                    ChatTurn,
-                    chat_owner.id,
-                    {"status": ChatTurnStatus.INTERRUPTED, "error": turn.error},
-                    expected_revision=chat_owner.revision,
+                (
+                    await self.store.update(
+                        ChatTurn,
+                        chat_owner.id,
+                        {"status": ChatTurnStatus.INTERRUPTED, "error": turn.error},
+                        expected_revision=chat_owner.revision,
+                    )
                 )
         elif turn.run_id:
-            run_owner = self.store.get(AgentRun, turn.run_id)
+            run_owner = await self.store.get(AgentRun, turn.run_id)
             if run_owner.status not in {
                 RunStatus.COMPLETE,
                 RunStatus.CANCELLED,
                 RunStatus.FAILED,
                 RunStatus.INTERRUPTED,
             }:
-                self.store.update(
-                    AgentRun,
-                    run_owner.id,
-                    {"status": RunStatus.INTERRUPTED, "completed_at": utc_now()},
-                    expected_revision=run_owner.revision,
+                (
+                    await self.store.update(
+                        AgentRun,
+                        run_owner.id,
+                        {"status": RunStatus.INTERRUPTED, "completed_at": utc_now()},
+                        expected_revision=run_owner.revision,
+                    )
                 )
 
-    def _fail_turn(
+    async def _fail_turn(
         self,
         turn_id: str,
         status: HarnessTurnStatus,
@@ -20205,14 +20707,14 @@ class HarnessRuntimeService:
         *,
         diagnostic: Mapping[str, Any] | None = None,
     ) -> None:
-        turn = self.store.get(HarnessTurn, turn_id)
+        turn = await self.store.get(HarnessTurn, turn_id)
         if turn.status not in {
             HarnessTurnStatus.COMPLETE,
             HarnessTurnStatus.CANCELLED,
             HarnessTurnStatus.FAILED,
             HarnessTurnStatus.INTERRUPTED,
         }:
-            turn = self.store.update(
+            turn = await self.store.update(
                 HarnessTurn,
                 turn.id,
                 {
@@ -20237,24 +20739,28 @@ class HarnessRuntimeService:
                 },
                 expected_revision=turn.revision,
             )
-        self._interrupt_owner(turn)
-        session = self.store.get(HarnessSession, turn.harness_session_id)
+        (await self._interrupt_owner(turn))
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
         reason = diagnostic.get("reason_code") if diagnostic else None
         if status != HarnessTurnStatus.CANCELLED:
             try:
-                profile = self.store.get(HarnessProfile, session.harness_profile_id)
-                self.store.update(
-                    HarnessProfile,
-                    profile.id,
-                    {
-                        "capabilities": profile.capabilities.model_copy(
-                            update={
-                                "turn_state": "failed",
-                                "last_turn_failure_reason": reason,
-                            }
-                        )
-                    },
-                    expected_revision=profile.revision,
+                profile = await self.store.get(
+                    HarnessProfile, session.harness_profile_id
+                )
+                (
+                    await self.store.update(
+                        HarnessProfile,
+                        profile.id,
+                        {
+                            "capabilities": profile.capabilities.model_copy(
+                                update={
+                                    "turn_state": "failed",
+                                    "last_turn_failure_reason": reason,
+                                }
+                            )
+                        },
+                        expected_revision=profile.revision,
+                    )
                 )
             except Exception as evidence_error:
                 record_caught_exception(
@@ -20265,31 +20771,35 @@ class HarnessRuntimeService:
                     stage="profile-evidence",
                 )
         if session.status != HarnessSessionStatus.CLOSED:
-            self.store.update(
-                HarnessSession,
-                session.id,
-                {
-                    "status": HarnessSessionStatus.INTERRUPTED,
-                    "last_activity_at": utc_now(),
-                },
-                expected_revision=session.revision,
+            (
+                await self.store.update(
+                    HarnessSession,
+                    session.id,
+                    {
+                        "status": HarnessSessionStatus.INTERRUPTED,
+                        "last_activity_at": utc_now(),
+                    },
+                    expected_revision=session.revision,
+                )
             )
 
-    def _attached_chats(self, harness_session_id: str) -> list[ChatSession]:
+    async def _attached_chats(self, harness_session_id: str) -> list[ChatSession]:
         return [
             chat
-            for chat in self.store.find_entities(
-                ChatSession,
-                {
-                    "backend": ChatBackend.HARNESS.value,
-                    "harness_session_id": harness_session_id,
-                },
+            for chat in (
+                await self.store.find_entities(
+                    ChatSession,
+                    {
+                        "backend": ChatBackend.HARNESS.value,
+                        "harness_session_id": harness_session_id,
+                    },
+                )
             )
             if chat.metadata.get("temporary_assistant") is not True
             and chat.metadata.get("side_chat") is not True
         ]
 
-    def _append_chat_handoff(
+    async def _append_chat_handoff(
         self,
         chat: ChatSession,
         *,
@@ -20298,10 +20808,10 @@ class HarnessRuntimeService:
         run_id: str,
         usage: ChatTokenUsage | None,
     ) -> ChatMessage:
-        messages = self._chat_messages(
+        messages = await self._chat_messages(
             chat.engagement_id, chat.id, include_replaced=True
         )
-        return self.store.create(
+        return await self.store.create(
             ChatMessage(
                 id=str(uuid4()),
                 engagement_id=chat.engagement_id,

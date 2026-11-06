@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
 from .diagnostics import record_caught_exception
 
 import base64
+import asyncio
+import inspect
 import binascii
 import builtins
 import hashlib
@@ -36,7 +40,8 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .artifacts import ArtifactStore
 from .database import Base, Database, EntityRow, OperationEventRow
@@ -536,15 +541,15 @@ class TerminalCommandHistory:
         manifest_sha256: str | None = None,
         default_tools: tuple[str, ...] | list[str] = (),
     ) -> "Osc633CommandParser":
-        policy_provider: Callable[[], TerminalRecordingPolicy] | None = None
+        policy_provider: MaybeAsync[[], TerminalRecordingPolicy] | None = None
         if (
             runtime_image_digest is not None
             and manifest_sha256 is not None
             and default_tools
         ):
 
-            def policy_provider() -> TerminalRecordingPolicy:
-                return self.recording_policy(
+            async def policy_provider() -> TerminalRecordingPolicy:
+                return await self.recording_policy(
                     engagement_id,
                     runtime_image_digest=runtime_image_digest,
                     manifest_sha256=manifest_sha256,
@@ -580,13 +585,13 @@ class TerminalCommandHistory:
         with self._inventory_lock:
             self._inventory = (runtime_image_digest, manifest_sha256, normalized)
 
-    def recording_tools(self, engagement_id: str) -> TerminalRecordingTools:
+    async def recording_tools(self, engagement_id: str) -> TerminalRecordingTools:
         engagement_id = _bounded_identifier("engagement_id", engagement_id)
         with self._inventory_lock:
             inventory = self._inventory
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
-            row = session.get(TerminalCommandPreferenceRow, engagement_id)
+        async with self.database.session() as session:
+            (await self._require_project(session, engagement_id))
+            row = await session.get(TerminalCommandPreferenceRow, engagement_id)
             custom, disabled, revision, updated_at = self._preference_values(row)
         defaults = inventory[2] if inventory is not None else ()
         effective = sorted((set(defaults) | set(custom)) - set(disabled))
@@ -603,7 +608,7 @@ class TerminalCommandHistory:
             updated_at=updated_at,
         )
 
-    def update_recording_tools(
+    async def update_recording_tools(
         self,
         engagement_id: str,
         request: TerminalRecordingToolsUpdate,
@@ -622,9 +627,9 @@ class TerminalCommandHistory:
         now = _aware_utc(self._clock(), field="clock")
         next_revision = request.expected_revision + 1
         try:
-            with self.database.session() as session:
-                self._require_project(session, engagement_id)
-                row = session.get(TerminalCommandPreferenceRow, engagement_id)
+            async with self.database.session() as session:
+                (await self._require_project(session, engagement_id))
+                row = await session.get(TerminalCommandPreferenceRow, engagement_id)
                 observed_revision = row.revision if row is not None else 0
                 if observed_revision != request.expected_revision:
                     raise TerminalRecordingToolsConflict(
@@ -644,7 +649,7 @@ class TerminalCommandHistory:
                         )
                     )
                 else:
-                    changed = session.execute(
+                    changed = await session.execute(
                         update(TerminalCommandPreferenceRow)
                         .where(
                             TerminalCommandPreferenceRow.engagement_id == engagement_id,
@@ -664,7 +669,7 @@ class TerminalCommandHistory:
                             "terminal recording-tool preference revision changed"
                         )
                 operation_id = f"terminal-recording-policy:{engagement_id}"
-                last_sequence = session.scalar(
+                last_sequence = await session.scalar(
                     select(func.max(OperationEventRow.sequence)).where(
                         OperationEventRow.operation_id == operation_id
                     )
@@ -686,7 +691,7 @@ class TerminalCommandHistory:
                     occurred_at=now,
                 )
                 session.add(OperationEventRow(**event.model_dump(mode="python")))
-                session.flush()
+                (await session.flush())
         except IntegrityError as exc:
             record_caught_exception(
                 "terminal-audit",
@@ -698,9 +703,9 @@ class TerminalCommandHistory:
             raise TerminalRecordingToolsConflict(
                 "terminal recording-tool preference revision changed"
             ) from exc
-        return self.recording_tools(engagement_id)
+        return await self.recording_tools(engagement_id)
 
-    def recording_policy(
+    async def recording_policy(
         self,
         engagement_id: str,
         *,
@@ -709,9 +714,9 @@ class TerminalCommandHistory:
         default_tools: tuple[str, ...] | list[str],
     ) -> TerminalRecordingPolicy:
         defaults = set(_normalized_tool_names(default_tools))
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
-            row = session.get(TerminalCommandPreferenceRow, engagement_id)
+        async with self.database.session() as session:
+            (await self._require_project(session, engagement_id))
+            row = await session.get(TerminalCommandPreferenceRow, engagement_id)
             custom, disabled, revision, _updated_at = self._preference_values(row)
         return TerminalRecordingPolicy(
             revision=revision,
@@ -733,7 +738,7 @@ class TerminalCommandHistory:
             _optional_utc(row.updated_at),
         )
 
-    def recover_spools(self) -> int:
+    async def recover_spools(self) -> int:
         """Commit bounded output left by an interrupted Core process."""
 
         if self.spool_root is None:
@@ -804,11 +809,13 @@ class TerminalCommandHistory:
                     recording_policy_revision=policy_revision,
                     runtime_image_digest=metadata.get("runtime_image_digest"),
                 )
-                self.record_capture(
-                    engagement_id=str(metadata["engagement_id"]),
-                    session_id=str(metadata["session_id"]),
-                    operator_id=str(metadata["operator_id"]),
-                    capture=capture,
+                (
+                    await self.record_capture(
+                        engagement_id=str(metadata["engagement_id"]),
+                        session_id=str(metadata["session_id"]),
+                        operator_id=str(metadata["operator_id"]),
+                        capture=capture,
+                    )
                 )
                 recovered += 1
             except Exception as exc:
@@ -830,22 +837,24 @@ class TerminalCommandHistory:
                             "session_id", str(metadata["session_id"])
                         )
                         actor = str(metadata.get("operator_id") or "system")
-                        self.store.append_operation_event(
-                            session_id,
-                            "container_terminal",
-                            engagement_id,
-                            "container_terminal.audit_gap",
-                            {
-                                "status": "capture_failed",
-                                "record_id": metadata.get("record_id"),
-                                "shell_sequence": metadata.get("shell_sequence"),
-                                "output_sha256": metadata.get("output_sha256"),
-                                "error": f"spool_recovery_{type(exc).__name__}",
-                            },
-                            actor_id=actor,
-                            idempotency_key=(
-                                f"terminal-audit-spool-recovery:{metadata_path.stem}"
-                            ),
+                        (
+                            await self.store.append_operation_event(
+                                session_id,
+                                "container_terminal",
+                                engagement_id,
+                                "container_terminal.audit_gap",
+                                {
+                                    "status": "capture_failed",
+                                    "record_id": metadata.get("record_id"),
+                                    "shell_sequence": metadata.get("shell_sequence"),
+                                    "output_sha256": metadata.get("output_sha256"),
+                                    "error": f"spool_recovery_{type(exc).__name__}",
+                                },
+                                actor_id=actor,
+                                idempotency_key=(
+                                    f"terminal-audit-spool-recovery:{metadata_path.stem}"
+                                ),
+                            )
                         )
                     except Exception as caught_error:
                         record_caught_exception(
@@ -862,76 +871,92 @@ class TerminalCommandHistory:
                 continue
         return recovered
 
-    def status(self, engagement_id: str) -> TerminalCommandHistoryStatus:
+    async def status(self, engagement_id: str) -> TerminalCommandHistoryStatus:
         engagement_id = _bounded_identifier("engagement_id", engagement_id)
         degraded = ("interrupted", "framing_lost", "capture_failed")
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
-            count, oldest, newest, output_bytes = session.execute(
-                select(
-                    func.count(TerminalCommandRow.id),
-                    func.min(TerminalCommandRow.occurred_at),
-                    func.max(TerminalCommandRow.occurred_at),
-                    func.coalesce(
-                        func.sum(TerminalCommandRow.captured_output_bytes), 0
-                    ),
-                ).where(TerminalCommandRow.engagement_id == engagement_id)
+        async with self.database.session() as session:
+            (await self._require_project(session, engagement_id))
+            count, oldest, newest, output_bytes = (
+                await session.execute(
+                    select(
+                        func.count(TerminalCommandRow.id),
+                        func.min(TerminalCommandRow.occurred_at),
+                        func.max(TerminalCommandRow.occurred_at),
+                        func.coalesce(
+                            func.sum(TerminalCommandRow.captured_output_bytes), 0
+                        ),
+                    ).where(TerminalCommandRow.engagement_id == engagement_id)
+                )
             ).one()
             degraded_count = int(
-                session.scalar(
-                    select(func.count(TerminalCommandRow.id)).where(
-                        TerminalCommandRow.engagement_id == engagement_id,
-                        TerminalCommandRow.status.in_(degraded),
+                (
+                    await session.scalar(
+                        select(func.count(TerminalCommandRow.id)).where(
+                            TerminalCommandRow.engagement_id == engagement_id,
+                            TerminalCommandRow.status.in_(degraded),
+                        )
                     )
                 )
                 or 0
             )
             recorded_output_count = int(
-                session.scalar(
-                    select(func.count(TerminalCommandRow.id)).where(
-                        TerminalCommandRow.engagement_id == engagement_id,
-                        TerminalCommandRow.capture_decision.in_(
-                            ("selected_tool", "legacy_all_commands")
-                        ),
-                        TerminalCommandRow.raw_output_artifact_id.is_not(None),
+                (
+                    await session.scalar(
+                        select(func.count(TerminalCommandRow.id)).where(
+                            TerminalCommandRow.engagement_id == engagement_id,
+                            TerminalCommandRow.capture_decision.in_(
+                                ("selected_tool", "legacy_all_commands")
+                            ),
+                            TerminalCommandRow.raw_output_artifact_id.is_not(None),
+                        )
                     )
                 )
                 or 0
             )
             metadata_only_count = int(
-                session.scalar(
-                    select(func.count(TerminalCommandRow.id)).where(
-                        TerminalCommandRow.engagement_id == engagement_id,
-                        TerminalCommandRow.capture_decision.in_(
-                            ("not_selected", "legacy_metadata_only")
-                        ),
+                (
+                    await session.scalar(
+                        select(func.count(TerminalCommandRow.id)).where(
+                            TerminalCommandRow.engagement_id == engagement_id,
+                            TerminalCommandRow.capture_decision.in_(
+                                ("not_selected", "legacy_metadata_only")
+                            ),
+                        )
                     )
                 )
                 or 0
             )
             classification_failure_count = int(
-                session.scalar(
-                    select(func.count(TerminalCommandRow.id)).where(
-                        TerminalCommandRow.engagement_id == engagement_id,
-                        TerminalCommandRow.capture_decision == "classification_failed",
+                (
+                    await session.scalar(
+                        select(func.count(TerminalCommandRow.id)).where(
+                            TerminalCommandRow.engagement_id == engagement_id,
+                            TerminalCommandRow.capture_decision
+                            == "classification_failed",
+                        )
                     )
                 )
                 or 0
             )
             truncated_count = int(
-                session.scalar(
-                    select(func.count(TerminalCommandRow.id)).where(
-                        TerminalCommandRow.engagement_id == engagement_id,
-                        TerminalCommandRow.output_truncated.is_(True),
+                (
+                    await session.scalar(
+                        select(func.count(TerminalCommandRow.id)).where(
+                            TerminalCommandRow.engagement_id == engagement_id,
+                            TerminalCommandRow.output_truncated.is_(True),
+                        )
                     )
                 )
                 or 0
             )
             audit_gap_count = int(
-                session.scalar(
-                    select(func.count(OperationEventRow.id)).where(
-                        OperationEventRow.engagement_id == engagement_id,
-                        OperationEventRow.event_type == "container_terminal.audit_gap",
+                (
+                    await session.scalar(
+                        select(func.count(OperationEventRow.id)).where(
+                            OperationEventRow.engagement_id == engagement_id,
+                            OperationEventRow.event_type
+                            == "container_terminal.audit_gap",
+                        )
                     )
                 )
                 or 0
@@ -950,7 +975,7 @@ class TerminalCommandHistory:
             newest_recorded_at=_optional_utc(newest),
         )
 
-    def record(
+    async def record(
         self,
         *,
         engagement_id: str,
@@ -963,7 +988,7 @@ class TerminalCommandHistory:
         """Persist compatibility metadata when no framed result is available."""
 
         timestamp = _aware_utc(occurred_at or self._clock(), field="occurred_at")
-        return self._insert_metadata_record(
+        return await self._insert_metadata_record(
             engagement_id=engagement_id,
             session_id=session_id,
             operator_id=None,
@@ -981,7 +1006,7 @@ class TerminalCommandHistory:
             ),
         )
 
-    def record_capture(
+    async def record_capture(
         self,
         *,
         engagement_id: str,
@@ -1011,7 +1036,7 @@ class TerminalCommandHistory:
             raise ValueError("terminal output hash does not match captured bytes")
         if capture.capture_decision in {"not_selected", "classification_failed"}:
             try:
-                return self._insert_metadata_record(
+                return await self._insert_metadata_record(
                     engagement_id=engagement_id,
                     session_id=session_id,
                     operator_id=operator_id,
@@ -1033,7 +1058,7 @@ class TerminalCommandHistory:
             finally:
                 self._cleanup_spool(capture)
         if self.store is None or self.artifact_store is None:
-            return self._insert_metadata_record(
+            return await self._insert_metadata_record(
                 engagement_id=engagement_id,
                 session_id=session_id,
                 operator_id=operator_id,
@@ -1057,11 +1082,11 @@ class TerminalCommandHistory:
             )
 
         record_id = capture.record_id or str(uuid4())
-        with self.database.session() as session:
-            existing = session.get(TerminalCommandRow, record_id)
+        async with self.database.session() as session:
+            existing = await session.get(TerminalCommandRow, record_id)
             if existing is not None:
                 self._cleanup_spool(capture)
-                return self._to_record(existing)
+                return await self._to_record(existing)
         command_sha256 = hashlib.sha256(capture.command.encode("utf-8")).hexdigest()
         redacted = redacted_display(capture.output.decode("utf-8", errors="replace"))
         raw = self.artifact_store.put_bytes_with_status(
@@ -1128,11 +1153,11 @@ class TerminalCommandHistory:
             "recording_policy_revision": capture.recording_policy_revision,
             "runtime_image_digest": capture.runtime_image_digest,
         }
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
-            StoreTransaction(session).add_all([raw.artifact, safe.artifact])
+        async with self.database.session() as session:
+            (await self._require_project(session, engagement_id))
+            (await StoreTransaction(session).add_all([raw.artifact, safe.artifact]))
             session.add(row)
-            last_sequence = session.scalar(
+            last_sequence = await session.scalar(
                 select(func.max(OperationEventRow.sequence)).where(
                     OperationEventRow.operation_id == session_id
                 )
@@ -1151,9 +1176,9 @@ class TerminalCommandHistory:
                 occurred_at=capture.completed_at,
             )
             session.add(OperationEventRow(**event.model_dump(mode="python")))
-            session.flush()
+            (await session.flush())
         self._cleanup_spool(capture)
-        return self._to_record(row)
+        return await self._to_record(row)
 
     @staticmethod
     def _cleanup_spool(capture: CapturedTerminalCommand) -> None:
@@ -1162,7 +1187,7 @@ class TerminalCommandHistory:
         if capture.spool_metadata_path is not None:
             capture.spool_metadata_path.unlink(missing_ok=True)
 
-    def _insert_metadata_record(
+    async def _insert_metadata_record(
         self,
         *,
         engagement_id: str,
@@ -1219,14 +1244,14 @@ class TerminalCommandHistory:
             recording_policy_revision=recording_policy_revision,
             runtime_image_digest=runtime_image_digest,
         )
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
-            existing = session.get(TerminalCommandRow, row.id)
+        async with self.database.session() as session:
+            (await self._require_project(session, engagement_id))
+            existing = await session.get(TerminalCommandRow, row.id)
             if existing is not None:
-                return self._to_record(existing)
+                return await self._to_record(existing)
             session.add(row)
             if operator_id is not None and shell_sequence is not None:
-                last_sequence = session.scalar(
+                last_sequence = await session.scalar(
                     select(func.max(OperationEventRow.sequence)).where(
                         OperationEventRow.operation_id == session_id
                     )
@@ -1261,10 +1286,10 @@ class TerminalCommandHistory:
                     occurred_at=occurred_at,
                 )
                 session.add(OperationEventRow(**event.model_dump(mode="python")))
-            session.flush()
-        return self._to_record(row)
+            (await session.flush())
+        return await self._to_record(row)
 
-    def list(
+    async def list(
         self,
         engagement_id: str,
         *,
@@ -1306,34 +1331,38 @@ class TerminalCommandHistory:
             predicate = predicate & (
                 TerminalCommandRow.occurred_at <= _aware_utc(date_to, field="date_to")
             )
-        with self.database.session() as session:
+        async with self.database.session() as session:
             if search_pattern is not None:
                 # SQLite's ``lower()`` folds ASCII only, so ``MÜNCHEN`` never
                 # matched; fold both sides with Python's casefold instead.
                 folded = (
                     func.nebula_casefold(TerminalCommandRow.command)
-                    if _register_casefold(session)
+                    if (await _register_casefold(session))
                     else func.lower(TerminalCommandRow.command)
                 )
                 predicate = predicate & folded.like(search_pattern, escape="\\")
-            self._require_project(session, engagement_id)
+            (await self._require_project(session, engagement_id))
             total = int(
-                session.scalar(
-                    select(func.count(TerminalCommandRow.id)).where(predicate)
+                (
+                    await session.scalar(
+                        select(func.count(TerminalCommandRow.id)).where(predicate)
+                    )
                 )
                 or 0
             )
-            rows = session.scalars(
-                select(TerminalCommandRow)
-                .where(predicate)
-                .order_by(
-                    TerminalCommandRow.occurred_at.desc(),
-                    TerminalCommandRow.id.desc(),
+            rows = (
+                await session.scalars(
+                    select(TerminalCommandRow)
+                    .where(predicate)
+                    .order_by(
+                        TerminalCommandRow.occurred_at.desc(),
+                        TerminalCommandRow.id.desc(),
+                    )
+                    .offset(offset)
+                    .limit(limit)
                 )
-                .offset(offset)
-                .limit(limit)
             ).all()
-        records = [self._to_record(row) for row in rows]
+        records = [(await self._to_record(row)) for row in rows]
         consumed = offset + len(records)
         return TerminalCommandPage(
             records=records,
@@ -1343,33 +1372,37 @@ class TerminalCommandHistory:
             next_offset=consumed if consumed < total else None,
         )
 
-    def all_records(self, engagement_id: str) -> builtins.list[TerminalCommandRecord]:
+    async def all_records(
+        self, engagement_id: str
+    ) -> builtins.list[TerminalCommandRecord]:
         records: builtins.list[TerminalCommandRecord] = []
         offset = 0
         while True:
-            page = self.list(engagement_id, offset=offset, limit=MAX_PAGE_SIZE)
+            page = await self.list(engagement_id, offset=offset, limit=MAX_PAGE_SIZE)
             records.extend(page.records)
             if page.next_offset is None:
                 return records
             offset = page.next_offset
 
-    def export_payload(
+    async def export_payload(
         self, engagement_id: str
     ) -> tuple[builtins.list[dict[str, Any]], set[str]]:
         """Return chronological audit records plus their immutable artifacts."""
 
         engagement_id = _bounded_identifier("engagement_id", engagement_id)
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
-            rows = session.scalars(
-                select(TerminalCommandRow)
-                .where(TerminalCommandRow.engagement_id == engagement_id)
-                .order_by(TerminalCommandRow.occurred_at, TerminalCommandRow.id)
+        async with self.database.session() as session:
+            (await self._require_project(session, engagement_id))
+            rows = (
+                await session.scalars(
+                    select(TerminalCommandRow)
+                    .where(TerminalCommandRow.engagement_id == engagement_id)
+                    .order_by(TerminalCommandRow.occurred_at, TerminalCommandRow.id)
+                )
             ).all()
         payloads: list[dict[str, Any]] = []
         artifact_ids: set[str] = set()
         for row in rows:
-            payload = self._to_record(row).model_dump(mode="json")
+            payload = (await self._to_record(row)).model_dump(mode="json")
             payload["raw_output_artifact_id"] = row.raw_output_artifact_id
             payload["redacted_output_artifact_id"] = row.redacted_output_artifact_id
             payloads.append(payload)
@@ -1383,14 +1416,14 @@ class TerminalCommandHistory:
             )
         return payloads, artifact_ids
 
-    def output_bytes(
+    async def output_bytes(
         self, engagement_id: str, record_id: str, *, raw: bool
     ) -> tuple[bytes, str]:
         if self.store is None or self.artifact_store is None:
             raise NotFoundError("terminal audit artifact storage is unavailable")
         engagement_id = _bounded_identifier("engagement_id", engagement_id)
-        with self.database.session() as session:
-            row = session.get(TerminalCommandRow, record_id)
+        async with self.database.session() as session:
+            row = await session.get(TerminalCommandRow, record_id)
             if row is None or row.engagement_id != engagement_id:
                 raise NotFoundError(f"terminal command record not found: {record_id}")
             artifact_id = (
@@ -1398,33 +1431,33 @@ class TerminalCommandHistory:
             )
         if artifact_id is None:
             raise NotFoundError("terminal command output is unavailable")
-        artifact = self.store.get(Artifact, artifact_id)
+        artifact = await self.store.get(Artifact, artifact_id)
         if not self.artifact_store.verify(artifact):
             raise ValueError("terminal command output failed integrity verification")
         return self.artifact_store.read(artifact), artifact.media_type
 
-    def clear(self, engagement_id: str) -> int:
-        self._require_existing_project(engagement_id)
+    async def clear(self, engagement_id: str) -> int:
+        (await self._require_existing_project(engagement_id))
         raise TerminalAuditImmutableError(
             "terminal audit records are retained for the Project lifetime"
         )
 
-    def set_enabled(
+    async def set_enabled(
         self, engagement_id: str, *, enabled: bool
     ) -> TerminalCommandHistoryStatus:
-        self._require_existing_project(engagement_id)
+        (await self._require_existing_project(engagement_id))
         if enabled:
-            return self.status(engagement_id)
+            return await self.status(engagement_id)
         raise TerminalAuditImmutableError("terminal audit capture cannot be disabled")
 
-    def _require_existing_project(self, engagement_id: str) -> None:
+    async def _require_existing_project(self, engagement_id: str) -> None:
         engagement_id = _bounded_identifier("engagement_id", engagement_id)
-        with self.database.session() as session:
-            self._require_project(session, engagement_id)
+        async with self.database.session() as session:
+            (await self._require_project(session, engagement_id))
 
     @staticmethod
-    def _require_project(session: Session, engagement_id: str) -> None:
-        exists = session.scalar(
+    async def _require_project(session: AsyncSession, engagement_id: str) -> None:
+        exists = await session.scalar(
             select(EntityRow.id).where(
                 EntityRow.id == engagement_id,
                 EntityRow.kind == Engagement.entity_kind,
@@ -1434,7 +1467,7 @@ class TerminalCommandHistory:
             raise NotFoundError(f"engagement entity not found: {engagement_id}")
 
     @staticmethod
-    def _to_record(row: TerminalCommandRow) -> TerminalCommandRecord:
+    async def _to_record(row: TerminalCommandRow) -> TerminalCommandRecord:
         occurred_at = _optional_utc(row.occurred_at)
         if occurred_at is None:
             raise ValueError("terminal command row is missing occurred_at")
@@ -1488,7 +1521,7 @@ class Osc633CommandParser:
         spool_root: Path | None = None,
         spool_context: dict[str, str] | None = None,
         clock: Callable[[], datetime] = utc_now,
-        policy_provider: Callable[[], TerminalRecordingPolicy] | None = None,
+        policy_provider: (MaybeAsync[[], TerminalRecordingPolicy] | None) = None,
     ) -> None:
         if max_frame_bytes < len(self.START_PREFIX) + 5:
             raise ValueError("max_frame_bytes is too small")
@@ -1511,6 +1544,35 @@ class Osc633CommandParser:
         return len(self._pending)
 
     def feed(self, chunk: bytes) -> TerminalCommandParseResult:
+        """Parse with an injected synchronous policy, for offline consumers."""
+        return self._feed(chunk, self.policy_provider)
+
+    async def feed_async(self, chunk: bytes) -> TerminalCommandParseResult:
+        """Read the current policy on Core's loop, then spool on a file worker."""
+        from .async_utils import call_async
+
+        policy = None
+        failure = None
+        if (
+            self.policy_provider is not None
+            and self.START_PREFIX in self._pending + chunk
+        ):
+            try:
+                policy = await call_async(self.policy_provider)
+            except Exception as exc:
+                # diagnostic-expected: current_policy rethrows this on the parser worker, whose existing failure path records and classifies the capture.
+                failure = exc
+
+        def current_policy():
+            if failure is not None:
+                raise failure
+            return policy
+
+        return await asyncio.to_thread(
+            self._feed, chunk, current_policy if self.policy_provider else None
+        )
+
+    def _feed(self, chunk: bytes, policy_provider) -> TerminalCommandParseResult:
         if not isinstance(chunk, bytes):
             raise TypeError("terminal chunks must be bytes")
         data = self._pending + chunk
@@ -1551,7 +1613,7 @@ class Osc633CommandParser:
             handled = False
             if len(raw_frame) <= self.max_frame_bytes:
                 if prefix == self.START_PREFIX:
-                    started = self._parse_start(payload)
+                    started = self._parse_start(payload, policy_provider)
                     if started is not None:
                         if self._active is not None:
                             captures.append(
@@ -1657,7 +1719,9 @@ class Osc633CommandParser:
             return bel, 1
         return st, 2
 
-    def _parse_start(self, payload: bytes) -> _CaptureAccumulator | None:
+    def _parse_start(
+        self, payload: bytes, policy_provider
+    ) -> _CaptureAccumulator | None:
         parts = payload.split(b";", 3)
         if len(parts) != 4:
             return None
@@ -1687,9 +1751,13 @@ class Osc633CommandParser:
         started_at = _aware_utc(self._clock(), field="clock")
         policy: TerminalRecordingPolicy | None = None
         classification_failed = False
-        if self.policy_provider is not None:
+        if policy_provider is not None:
             try:
-                policy = self.policy_provider()
+                policy = policy_provider()
+                if inspect.isawaitable(policy):
+                    if inspect.iscoroutine(policy):
+                        policy.close()
+                    raise TypeError("Async terminal policy requires feed_async")
             except Exception as caught_error:
                 record_caught_exception(
                     "terminal-audit",
@@ -1974,7 +2042,7 @@ def _sql_casefold(value: object) -> object:
     return value.casefold() if isinstance(value, str) else value
 
 
-def _register_casefold(session: Session) -> bool:
+async def _register_casefold(session: AsyncSession) -> bool:
     """Expose Unicode case folding on the connection this session queries with.
 
     Registering on the very connection that runs the query means pooling and
@@ -1982,11 +2050,14 @@ def _register_casefold(session: Session) -> bool:
     without ``create_function`` so callers can fall back to SQL ``lower()``.
     """
 
-    raw = session.connection().connection.dbapi_connection
-    create_function = getattr(raw, "create_function", None)
-    if create_function is None:
+    connection = await session.connection()
+    if connection.dialect.name != "sqlite":
         return False
-    create_function("nebula_casefold", 1, _sql_casefold, deterministic=True)
+    raw = await connection.get_raw_connection()
+    assert raw.driver_connection is not None
+    await raw.driver_connection.create_function(
+        "nebula_casefold", 1, _sql_casefold, deterministic=True
+    )
     return True
 
 

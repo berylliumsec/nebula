@@ -6,7 +6,11 @@ more thinking. These tests pin the two things that replaced it: a request that
 asks for the answer alone, and a retry budget a running goal owns.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 
 import pytest
 
@@ -157,24 +161,28 @@ class ThinkingProvider(FakeProvider):
         )
 
 
-def _fixture(tmp_path, *, answer_on: int, monkeypatch, with_goal: bool, **goal_fields):
+async def _fixture(
+    tmp_path, *, answer_on: int, monkeypatch, with_goal: bool, **goal_fields
+):
     store = NebulaStore(tmp_path / "reasoning.db")
-    store.create(Engagement(id="project", name="Project"))
-    profile = store.create(_profile(local=True))
+    (await store.create(Engagement(id="project", name="Project")))
+    profile = await store.create(_profile(local=True))
     provider = ThinkingProvider(profile.id, answer_on=answer_on)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     goal = None
     if with_goal:
-        store.create(
-            ChatSession(
-                id="session",
-                engagement_id="project",
-                title="Goal chat",
-                provider_profile_id=profile.id,
-                model="model-a",
+        (
+            await store.create(
+                ChatSession(
+                    id="session",
+                    engagement_id="project",
+                    title="Goal chat",
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                )
             )
         )
-        goal = store.create(
+        goal = await store.create(
             ChatGoal(
                 id="goal-1",
                 engagement_id="project",
@@ -201,14 +209,14 @@ def _send(service, profile, **extra):
     )
 
 
-def test_recovery_asks_for_the_answer_alone_instead_of_more_room_to_think(
+async def test_recovery_asks_for_the_answer_alone_instead_of_more_room_to_think(
     tmp_path, monkeypatch
 ):
-    store, profile, provider, _ = _fixture(
+    store, profile, provider, _ = await _fixture(
         tmp_path, answer_on=2, monkeypatch=monkeypatch, with_goal=False
     )
     service = ChatService(store)
-    response = asyncio.run(service.complete(_send(service, profile)))
+    response = await service.complete(_send(service, profile))
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
     assert response.message.content == "Recovered visible answer."
@@ -218,31 +226,35 @@ def test_recovery_asks_for_the_answer_alone_instead_of_more_room_to_think(
     assert normal[-1].metadata["final_answer_recovery"] == "reasoning_only"
 
 
-def test_outside_goal_mode_one_recovery_is_the_automatic_budget(tmp_path, monkeypatch):
-    store, profile, provider, _ = _fixture(
+async def test_outside_goal_mode_one_recovery_is_the_automatic_budget(
+    tmp_path, monkeypatch
+):
+    store, profile, provider, _ = await _fixture(
         tmp_path, answer_on=99, monkeypatch=monkeypatch, with_goal=False
     )
     service = ChatService(store)
     prepared = _send(service, profile)
     with pytest.raises(ProviderResponseError):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
     assert len(normal) == 2
     # The turn is left resumable: the operator decides whether to ask again.
-    turn = store.get(ChatTurn, prepared.turn.id)
+    turn = await store.get(ChatTurn, prepared.turn.id)
     assert turn.request_snapshot["final_answer_recovery"]["attempts"] == 2
-    assert service.recoverable_final_answer_turn(turn.session_id) is not None
+    assert (await service.recoverable_final_answer_turn(turn.session_id)) is not None
 
 
-def test_a_running_goal_keeps_asking_until_it_gets_an_answer(tmp_path, monkeypatch):
-    store, profile, provider, goal = _fixture(
+async def test_a_running_goal_keeps_asking_until_it_gets_an_answer(
+    tmp_path, monkeypatch
+):
+    store, profile, provider, goal = await _fixture(
         tmp_path, answer_on=4, monkeypatch=monkeypatch, with_goal=True
     )
     monkeypatch.setattr(chat_module.asyncio, "sleep", _no_delay)
     service = ChatService(store)
-    response = asyncio.run(
-        service.complete(_send(service, profile, session_id="session", goal_id=goal.id))
+    response = await service.complete(
+        _send(service, profile, session_id="session", goal_id=goal.id)
     )
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
@@ -251,38 +263,38 @@ def test_a_running_goal_keeps_asking_until_it_gets_an_answer(tmp_path, monkeypat
     assert len(normal) == 4
     assert [item.reasoning_effort for item in normal] == [None, "none", "none", "none"]
     # Every attempt is charged, so the goal's own budget is what bounds it.
-    assert store.get(ChatGoal, goal.id).usage.total_tokens == 516 * 3 + 7
+    assert (await store.get(ChatGoal, goal.id)).usage.total_tokens == 516 * 3 + 7
 
 
 async def _no_delay(_seconds: float) -> None:
     return None
 
 
-def test_a_goal_that_can_never_finish_is_blocked_rather_than_looping(
+async def test_a_goal_that_can_never_finish_is_blocked_rather_than_looping(
     tmp_path, monkeypatch
 ):
-    store, profile, provider, goal = _fixture(
+    store, profile, provider, goal = await _fixture(
         tmp_path, answer_on=99, monkeypatch=monkeypatch, with_goal=True
     )
     monkeypatch.setattr(chat_module.asyncio, "sleep", _no_delay)
     service = ChatService(store)
     with pytest.raises(ProviderResponseError):
-        asyncio.run(
-            service.complete(
+        (
+            await service.complete(
                 _send(service, profile, session_id="session", goal_id=goal.id)
             )
         )
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
     assert len(normal) == chat_module._GOAL_FINAL_ANSWER_STALL_LIMIT + 1
-    blocked = store.get(ChatGoal, goal.id)
+    blocked = await store.get(ChatGoal, goal.id)
     assert blocked.status == ChatGoalStatus.BLOCKED
     assert "no answer" in (blocked.blocked_reason or "")
     # Blocked, not cancelled: the operator can resume and it tries again.
     assert blocked.completed_at is None
 
 
-def _retry_decision(store, goal_id: str | None, attempts: int, tmp_path):
+async def _retry_decision(store, goal_id: str | None, attempts: int, tmp_path):
     """Ask the retry budget directly; the loop around it is covered above."""
 
     service = ChatService(store)
@@ -295,22 +307,22 @@ def _retry_decision(store, goal_id: str | None, attempts: int, tmp_path):
         goal_id=goal_id,
     )
     prepared = type("Prepared", (), {"turn": turn})()
-    return service._may_retry_final_answer(prepared, attempts)
+    return await service._may_retry_final_answer(prepared, attempts)
 
 
-def test_the_retry_budget_honours_what_the_operator_did_to_the_goal(
+async def test_the_retry_budget_honours_what_the_operator_did_to_the_goal(
     tmp_path, monkeypatch
 ):
-    store, _profile_row, _provider, goal = _fixture(
+    store, _profile_row, _provider, goal = await _fixture(
         tmp_path, answer_on=99, monkeypatch=monkeypatch, with_goal=True
     )
 
     # Inside the automatic budget, every conversation gets one more ask.
-    assert _retry_decision(store, None, 1, tmp_path)[0] is True
+    assert (await _retry_decision(store, None, 1, tmp_path))[0] is True
     # Past it, a conversation without a goal stops and leaves the turn resumable.
-    assert _retry_decision(store, None, 2, tmp_path)[0] is False
+    assert (await _retry_decision(store, None, 2, tmp_path))[0] is False
     # A running goal keeps going, after a wait.
-    allowed, delay = _retry_decision(store, goal.id, 2, tmp_path)
+    allowed, delay = await _retry_decision(store, goal.id, 2, tmp_path)
     assert allowed is True and delay > 0
 
     for status in (
@@ -319,44 +331,50 @@ def test_the_retry_budget_honours_what_the_operator_did_to_the_goal(
         ChatGoalStatus.COMPLETED,
         ChatGoalStatus.CANCELLED,
     ):
-        current = store.get(ChatGoal, goal.id)
-        store.update(
+        current = await store.get(ChatGoal, goal.id)
+        (
+            await store.update(
+                ChatGoal,
+                goal.id,
+                {
+                    "status": status,
+                    "active_since": None,
+                    "blocked_reason": "held",
+                    "completion_summary": "done",
+                    "completion_evidence": [{"kind": "operator_confirmation"}],
+                },
+                expected_revision=current.revision,
+            )
+        )
+        # A goal the operator stopped is not retried on their behalf.
+        assert (await _retry_decision(store, goal.id, 2, tmp_path))[0] is False
+
+    # A goal whose own time budget ran out stops too, without being touched.
+    current = await store.get(ChatGoal, goal.id)
+    (
+        await store.update(
             ChatGoal,
             goal.id,
             {
-                "status": status,
+                "status": ChatGoalStatus.RUNNING,
+                "time_budget_seconds": 60,
+                "elapsed_seconds": 90,
                 "active_since": None,
-                "blocked_reason": "held",
-                "completion_summary": "done",
-                "completion_evidence": [{"kind": "operator_confirmation"}],
             },
             expected_revision=current.revision,
         )
-        # A goal the operator stopped is not retried on their behalf.
-        assert _retry_decision(store, goal.id, 2, tmp_path)[0] is False
-
-    # A goal whose own time budget ran out stops too, without being touched.
-    current = store.get(ChatGoal, goal.id)
-    store.update(
-        ChatGoal,
-        goal.id,
-        {
-            "status": ChatGoalStatus.RUNNING,
-            "time_budget_seconds": 60,
-            "elapsed_seconds": 90,
-            "active_since": None,
-        },
-        expected_revision=current.revision,
     )
-    assert _retry_decision(store, goal.id, 2, tmp_path)[0] is False
-    assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.RUNNING
+    assert (await _retry_decision(store, goal.id, 2, tmp_path))[0] is False
+    assert (await store.get(ChatGoal, goal.id)).status == ChatGoalStatus.RUNNING
 
 
-def test_a_goal_that_is_gone_stops_retrying(tmp_path, monkeypatch):
-    store, _profile_row, _provider, _goal = _fixture(
+async def test_a_goal_that_is_gone_stops_retrying(tmp_path, monkeypatch):
+    store, _profile_row, _provider, _goal = await _fixture(
         tmp_path, answer_on=99, monkeypatch=monkeypatch, with_goal=True
     )
-    assert _retry_decision(store, "goal-that-never-existed", 2, tmp_path)[0] is False
+    assert (await _retry_decision(store, "goal-that-never-existed", 2, tmp_path))[
+        0
+    ] is False
 
 
 def test_backoff_grows_and_then_holds():
@@ -367,27 +385,25 @@ def test_backoff_grows_and_then_holds():
     assert _final_answer_backoff_seconds(30) == 30
 
 
-def test_the_operators_reasoning_level_is_sent_and_remembered(tmp_path, monkeypatch):
-    store, profile, provider, _ = _fixture(
+async def test_the_operators_reasoning_level_is_sent_and_remembered(
+    tmp_path, monkeypatch
+):
+    store, profile, provider, _ = await _fixture(
         tmp_path, answer_on=1, monkeypatch=monkeypatch, with_goal=False
     )
     service = ChatService(store)
-    response = asyncio.run(
-        service.complete(_send(service, profile, reasoning_effort="low"))
-    )
+    response = await service.complete(_send(service, profile, reasoning_effort="low"))
 
     normal = [item for item in provider.requests if not item.metadata.get("operation")]
     assert normal[0].reasoning_effort == "low"
-    session = store.get(ChatSession, response.session_id)
+    session = await store.get(ChatSession, response.session_id)
     assert session.metadata["reasoning_effort"] == "low"
 
     # Returning to the model's default is a choice, so it round-trips as one.
-    asyncio.run(
-        service.complete(_send(service, profile, session_id=response.session_id))
-    )
-    assert (
-        store.get(ChatSession, response.session_id).metadata["reasoning_effort"] is None
-    )
+    (await service.complete(_send(service, profile, session_id=response.session_id)))
+    assert (await store.get(ChatSession, response.session_id)).metadata[
+        "reasoning_effort"
+    ] is None
 
 
 def test_an_unknown_reasoning_level_is_refused_at_the_boundary():
@@ -397,3 +413,6 @@ def test_an_unknown_reasoning_level_is_refused_at_the_boundary():
             messages=[{"role": "user", "content": "hi"}],
             reasoning_effort="ludicrous",
         )
+
+
+pytestmark = pytest.mark.anyio

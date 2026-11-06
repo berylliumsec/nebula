@@ -1,10 +1,14 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import base64
 import re
 
 import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import _assert_unique_api_operations, create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -28,11 +32,11 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
-def test_project_scope_persists_all_targets_and_normalizes_root_domain_urls(api):
+async def test_project_scope_persists_all_targets_and_normalizes_root_domain_urls(api):
     client, store = api
-    engagement = store.create(Engagement(name="Unrestricted assessment"))
+    engagement = await store.create(Engagement(name="Unrestricted assessment"))
 
-    updated = client.put(
+    updated = await client.put(
         f"/api/v1/engagements/{engagement.id}/scope",
         headers=_auth(),
         json={
@@ -44,39 +48,49 @@ def test_project_scope_persists_all_targets_and_normalizes_root_domain_urls(api)
     assert updated.status_code == 200
     assert updated.json()["allowed_domains"] == ["www.google.com"]
     assert updated.json()["allow_all_targets"] is True
-    loaded = client.get(f"/api/v1/engagements/{engagement.id}/scope", headers=_auth())
+    loaded = await client.get(
+        f"/api/v1/engagements/{engagement.id}/scope", headers=_auth()
+    )
     assert loaded.status_code == 200
     assert loaded.json()["allow_all_targets"] is True
 
 
-def test_permission_bypass_requires_explicit_opt_in_and_is_durable(api):
+async def test_permission_bypass_requires_explicit_opt_in_and_is_durable(api):
     client, store = api
-    engagement = store.create(Engagement(name="Permission modes"))
+    engagement = await store.create(Engagement(name="Permission modes"))
     endpoint = f"/api/v1/engagements/{engagement.id}/scope"
-    all_destinations = client.put(
+    all_destinations = await client.put(
         endpoint, headers=_auth(), json={"allow_all_targets": True}
     )
     assert all_destinations.status_code == 200
     assert all_destinations.json()["bypass_permissions"] is False
 
-    bypass = client.put(endpoint, headers=_auth(), json={"bypass_permissions": True})
+    bypass = await client.put(
+        endpoint, headers=_auth(), json={"bypass_permissions": True}
+    )
     assert bypass.status_code == 200
-    assert client.get(endpoint, headers=_auth()).json()["bypass_permissions"] is True
-    retained = client.put(endpoint, headers=_auth(), json={"allowed_ports": [443]})
+    assert (await client.get(endpoint, headers=_auth())).json()[
+        "bypass_permissions"
+    ] is True
+    retained = await client.put(
+        endpoint, headers=_auth(), json={"allowed_ports": [443]}
+    )
     assert retained.json()["bypass_permissions"] is True
 
-    invalid = client.put(endpoint, headers=_auth(), json={"local_only": True})
+    invalid = await client.put(endpoint, headers=_auth(), json={"local_only": True})
     assert invalid.status_code == 422
-    assert client.get(endpoint, headers=_auth()).json()["bypass_permissions"] is True
+    assert (await client.get(endpoint, headers=_auth())).json()[
+        "bypass_permissions"
+    ] is True
 
 
-def test_assistant_defaults_are_project_scoped_and_patch_independently(api):
+async def test_assistant_defaults_are_project_scoped_and_patch_independently(api):
     client, store = api
-    first = store.create(Engagement(name="First"))
-    second = store.create(Engagement(name="Second"))
+    first = await store.create(Engagement(name="First"))
+    second = await store.create(Engagement(name="Second"))
     endpoint = f"/api/v1/engagements/{first.id}/assistant-defaults"
 
-    saved = client.patch(
+    saved = await client.patch(
         endpoint,
         headers=_auth(),
         json={
@@ -93,7 +107,7 @@ def test_assistant_defaults_are_project_scoped_and_patch_independently(api):
     assert saved.json()["model"] == "chosen-model"
     assert saved.json()["mcp_server_ids"] == ["mcp-1"]
 
-    patched = client.patch(
+    patched = await client.patch(
         endpoint,
         headers=_auth(),
         json={"changes": {"allow_agent_messaging": True}},
@@ -101,20 +115,21 @@ def test_assistant_defaults_are_project_scoped_and_patch_independently(api):
     assert patched.status_code == 200
     assert patched.json()["model"] == "chosen-model"
     assert patched.json()["allow_subagents"] is True
-    assert client.get(endpoint, headers=_auth()).json() == patched.json()
-    assert store.get(Engagement, first.id).assistant_defaults.model == "chosen-model"
+    assert (await client.get(endpoint, headers=_auth())).json() == patched.json()
     assert (
-        client.get(
+        await store.get(Engagement, first.id)
+    ).assistant_defaults.model == "chosen-model"
+    assert (
+        await client.get(
             f"/api/v1/engagements/{second.id}/assistant-defaults", headers=_auth()
-        ).json()["model"]
-        is None
-    )
+        )
+    ).json()["model"] is None
 
-    invalid = client.patch(
+    invalid = await client.patch(
         endpoint, headers=_auth(), json={"changes": {"not_a_setting": True}}
     )
     assert invalid.status_code == 422
-    assert client.get(endpoint, headers=_auth()).json() == patched.json()
+    assert (await client.get(endpoint, headers=_auth())).json() == patched.json()
 
 
 @pytest.fixture
@@ -132,9 +147,9 @@ def api(tmp_path):
     )
 
 
-def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
+async def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
     client, store = api
-    orphan = client.post(
+    orphan = await client.post(
         "/api/v1/assets",
         headers=_auth(),
         json={"engagement_id": "missing", "name": "orphan"},
@@ -143,22 +158,26 @@ def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
     assert (
         "assets.engagement_id references missing engagements" in orphan.json()["detail"]
     )
-    assert store.count(Asset) == 0
+    assert (await store.count(Asset)) == 0
 
-    first = store.create(Engagement(name="First"))
-    second = store.create(Engagement(name="Second"))
-    first_asset = client.post(
-        "/api/v1/assets",
-        headers=_auth(),
-        json={"engagement_id": first.id, "name": "first.example"},
+    first = await store.create(Engagement(name="First"))
+    second = await store.create(Engagement(name="Second"))
+    first_asset = (
+        await client.post(
+            "/api/v1/assets",
+            headers=_auth(),
+            json={"engagement_id": first.id, "name": "first.example"},
+        )
     ).json()
-    second_asset = client.post(
-        "/api/v1/assets",
-        headers=_auth(),
-        json={"engagement_id": second.id, "name": "second.example"},
+    second_asset = (
+        await client.post(
+            "/api/v1/assets",
+            headers=_auth(),
+            json={"engagement_id": second.id, "name": "second.example"},
+        )
     ).json()
 
-    cross_service = client.post(
+    cross_service = await client.post(
         "/api/v1/services",
         headers=_auth(),
         json={
@@ -169,7 +188,7 @@ def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
     )
     assert cross_service.status_code == 422
     assert "owned by engagement" in cross_service.json()["detail"]
-    valid_service = client.post(
+    valid_service = await client.post(
         "/api/v1/services",
         headers=_auth(),
         json={
@@ -180,13 +199,13 @@ def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
     )
     assert valid_service.status_code == 201
 
-    foreign_finding = store.create(
+    foreign_finding = await store.create(
         Finding(
             engagement_id=second.id,
             title="Foreign finding",
         )
     )
-    cross_report = client.post(
+    cross_report = await client.post(
         "/api/v1/reports",
         headers=_auth(),
         json={
@@ -196,7 +215,7 @@ def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
         },
     )
     assert cross_report.status_code == 422
-    missing_report = client.post(
+    missing_report = await client.post(
         "/api/v1/reports",
         headers=_auth(),
         json={
@@ -208,14 +227,14 @@ def test_generic_create_rejects_orphans_and_cross_engagement_references(api):
     assert missing_report.status_code == 422
 
     # Store/import transactions remain deliberately unchanged by API validation.
-    direct_orphan = store.create(Asset(engagement_id="legacy", name="imported"))
-    assert store.get(Asset, direct_orphan.id) == direct_orphan
+    direct_orphan = await store.create(Asset(engagement_id="legacy", name="imported"))
+    assert (await store.get(Asset, direct_orphan.id)) == direct_orphan
 
 
-def test_project_create_atomically_attaches_a_deny_network_default_scope(api):
+async def test_project_create_atomically_attaches_a_deny_network_default_scope(api):
     client, store = api
 
-    response = client.post(
+    response = await client.post(
         "/api/v1/engagements",
         headers=_auth(),
         json={"name": "Fresh project"},
@@ -224,7 +243,7 @@ def test_project_create_atomically_attaches_a_deny_network_default_scope(api):
     assert response.status_code == 201
     project = response.json()
     assert project["scope_policy_id"] == f"scope:{project['id']}"
-    scope = store.get(ScopePolicy, project["scope_policy_id"])
+    scope = await store.get(ScopePolicy, project["scope_policy_id"])
     assert scope.engagement_id == project["id"]
     assert scope.allowed_cidrs == []
     assert scope.allowed_domains == []
@@ -243,21 +262,21 @@ def test_project_create_atomically_attaches_a_deny_network_default_scope(api):
         ("revision", 77),
     ],
 )
-def test_generic_create_rejects_server_managed_fields(api, field, value):
+async def test_generic_create_rejects_server_managed_fields(api, field, value):
     client, store = api
     payload = {"name": "Managed fields", field: value}
 
-    response = client.post("/api/v1/engagements", headers=_auth(), json=payload)
+    response = await client.post("/api/v1/engagements", headers=_auth(), json=payload)
 
     assert response.status_code == 422
     assert "server-managed" in response.json()["detail"]
-    assert store.count(Engagement) == 0
+    assert (await store.count(Engagement)) == 0
 
 
-def test_generic_harness_create_allows_only_provided_kinds(api):
+async def test_generic_harness_create_allows_only_provided_kinds(api):
     client, store = api
 
-    unsupported = client.post(
+    unsupported = await client.post(
         "/api/v1/harnesses",
         headers=_auth(),
         json={"name": "Claude", "kind": "claude_agent_sdk"},
@@ -268,9 +287,9 @@ def test_generic_harness_create_allows_only_provided_kinds(api):
         "harness kind 'claude_agent_sdk' is not provided"
         in unsupported.json()["detail"]
     )
-    assert store.count(HarnessProfile) == 0
+    assert (await store.count(HarnessProfile)) == 0
 
-    supported = client.post(
+    supported = await client.post(
         "/api/v1/harnesses",
         headers=_auth(),
         json={
@@ -284,17 +303,19 @@ def test_generic_harness_create_allows_only_provided_kinds(api):
     assert supported.json()["kind"] == "codex_app_server"
 
 
-def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
+async def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
     client, store = api
-    first = store.create(Engagement(name="First"))
-    second = store.create(Engagement(name="Second"))
-    asset = client.post(
-        "/api/v1/assets",
-        headers=_auth(),
-        json={"engagement_id": first.id, "name": "asset"},
+    first = await store.create(Engagement(name="First"))
+    second = await store.create(Engagement(name="Second"))
+    asset = (
+        await client.post(
+            "/api/v1/assets",
+            headers=_auth(),
+            json={"engagement_id": first.id, "name": "asset"},
+        )
     ).json()
 
-    moved = client.patch(
+    moved = await client.patch(
         f"/api/v1/assets/{asset['id']}",
         headers=_auth(),
         json={
@@ -304,16 +325,16 @@ def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
     )
     assert moved.status_code == 422
     assert "engagement ownership cannot be changed" in moved.json()["detail"]
-    assert store.get(Asset, asset["id"]).revision == 1
+    assert (await store.get(Asset, asset["id"])).revision == 1
 
-    renamed = client.patch(
+    renamed = await client.patch(
         f"/api/v1/assets/{asset['id']}",
         headers=_auth(),
         json={"changes": {"name": "renamed"}, "expected_revision": 1},
     )
     assert renamed.status_code == 200
     assert renamed.json()["revision"] == 2
-    stale_invalid = client.patch(
+    stale_invalid = await client.patch(
         f"/api/v1/assets/{asset['id']}",
         headers=_auth(),
         json={
@@ -325,7 +346,7 @@ def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
 
     replacement = dict(renamed.json())
     replacement["engagement_id"] = second.id
-    cross_replace = client.put(
+    cross_replace = await client.put(
         f"/api/v1/assets/{asset['id']}",
         headers={**_auth(), "If-Match": "2"},
         json=replacement,
@@ -333,7 +354,7 @@ def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
     assert cross_replace.status_code == 422
     replacement["engagement_id"] = first.id
     replacement["name"] = "replacement"
-    valid_replace = client.put(
+    valid_replace = await client.put(
         f"/api/v1/assets/{asset['id']}",
         headers={**_auth(), "If-Match": "2"},
         json=replacement,
@@ -341,7 +362,7 @@ def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
     assert valid_replace.status_code == 200
     assert valid_replace.json()["revision"] == 3
     replacement["engagement_id"] = second.id
-    stale_replace = client.put(
+    stale_replace = await client.put(
         f"/api/v1/assets/{asset['id']}",
         headers={**_auth(), "If-Match": "2"},
         json=replacement,
@@ -349,27 +370,29 @@ def test_patch_and_replace_preserve_ownership_and_revision_precedence(api):
     assert stale_replace.status_code == 409
 
 
-def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(api):
+async def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(
+    api,
+):
     client, store = api
-    engagement = store.create(Engagement(name="Finding review"))
-    other = store.create(Engagement(name="Other review"))
-    first_asset = store.create(
+    engagement = await store.create(Engagement(name="Finding review"))
+    other = await store.create(Engagement(name="Other review"))
+    first_asset = await store.create(
         Asset(engagement_id=engagement.id, name="old.example.test")
     )
-    second_asset = store.create(
+    second_asset = await store.create(
         Asset(engagement_id=engagement.id, name="new.example.test")
     )
-    foreign_asset = store.create(
+    foreign_asset = await store.create(
         Asset(engagement_id=other.id, name="foreign.example.test")
     )
-    evidence = store.create(
+    evidence = await store.create(
         Evidence(
             engagement_id=engagement.id,
             evidence_type="operator_upload",
             title="proof.txt",
         )
     )
-    finding = store.create(
+    finding = await store.create(
         Finding(
             engagement_id=engagement.id,
             title="Original finding",
@@ -382,7 +405,7 @@ def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(
         )
     )
 
-    updated = client.patch(
+    updated = await client.patch(
         f"/api/v1/findings/{finding.id}",
         headers=_auth(),
         json={
@@ -416,7 +439,7 @@ def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(
     }
     assert {key: updated.json()[key] for key in expected} == expected
 
-    malformed = client.patch(
+    malformed = await client.patch(
         f"/api/v1/findings/{finding.id}",
         headers=_auth(),
         json={
@@ -425,9 +448,9 @@ def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(
         },
     )
     assert malformed.status_code == 422
-    assert store.get(Finding, finding.id).revision == finding.revision + 1
+    assert (await store.get(Finding, finding.id)).revision == finding.revision + 1
 
-    cross_engagement = client.patch(
+    cross_engagement = await client.patch(
         f"/api/v1/findings/{finding.id}",
         headers=_auth(),
         json={
@@ -438,7 +461,7 @@ def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(
     assert cross_engagement.status_code == 422
     assert "owned by engagement" in cross_engagement.json()["detail"]
 
-    stale = client.patch(
+    stale = await client.patch(
         f"/api/v1/findings/{finding.id}",
         headers=_auth(),
         json={
@@ -447,25 +470,29 @@ def test_finding_patch_updates_all_analyst_fields_and_preserves_revision_guards(
         },
     )
     assert stale.status_code == 409
-    assert store.get(Finding, finding.id).title == "Updated finding"
+    assert (await store.get(Finding, finding.id)).title == "Updated finding"
 
 
-def test_engagement_scope_policy_must_belong_to_the_same_engagement(api):
+async def test_engagement_scope_policy_must_belong_to_the_same_engagement(api):
     client, store = api
-    first = store.create(Engagement(name="First"))
-    second = store.create(Engagement(name="Second"))
-    first_scope = client.post(
-        "/api/v1/scope-policies",
-        headers=_auth(),
-        json={"engagement_id": first.id},
+    first = await store.create(Engagement(name="First"))
+    second = await store.create(Engagement(name="Second"))
+    first_scope = (
+        await client.post(
+            "/api/v1/scope-policies",
+            headers=_auth(),
+            json={"engagement_id": first.id},
+        )
     ).json()
-    second_scope = client.post(
-        "/api/v1/scope-policies",
-        headers=_auth(),
-        json={"engagement_id": second.id},
+    second_scope = (
+        await client.post(
+            "/api/v1/scope-policies",
+            headers=_auth(),
+            json={"engagement_id": second.id},
+        )
     ).json()
 
-    cross = client.patch(
+    cross = await client.patch(
         f"/api/v1/engagements/{first.id}",
         headers=_auth(),
         json={
@@ -474,7 +501,7 @@ def test_engagement_scope_policy_must_belong_to_the_same_engagement(api):
         },
     )
     assert cross.status_code == 422
-    valid = client.patch(
+    valid = await client.patch(
         f"/api/v1/engagements/{first.id}",
         headers=_auth(),
         json={
@@ -485,11 +512,11 @@ def test_engagement_scope_policy_must_belong_to_the_same_engagement(api):
     assert valid.status_code == 200
 
 
-def test_reports_reject_unknown_status_and_unsigned_or_forged_finalization(api):
+async def test_reports_reject_unknown_status_and_unsigned_or_forged_finalization(api):
     client, store = api
-    engagement = store.create(Engagement(name="Reports"))
+    engagement = await store.create(Engagement(name="Reports"))
 
-    unknown = client.post(
+    unknown = await client.post(
         "/api/v1/reports",
         headers=_auth(),
         json={
@@ -498,7 +525,7 @@ def test_reports_reject_unknown_status_and_unsigned_or_forged_finalization(api):
             "status": "published",
         },
     )
-    unsigned = client.post(
+    unsigned = await client.post(
         "/api/v1/reports",
         headers=_auth(),
         json={
@@ -507,12 +534,14 @@ def test_reports_reject_unknown_status_and_unsigned_or_forged_finalization(api):
             "status": "final",
         },
     )
-    operator = client.post(
-        "/api/v1/operator-profiles",
-        headers=_auth(),
-        json={"display_name": "Report reviewer"},
+    operator = (
+        await client.post(
+            "/api/v1/operator-profiles",
+            headers=_auth(),
+            json={"display_name": "Report reviewer"},
+        )
     ).json()
-    forged = client.post(
+    forged = await client.post(
         "/api/v1/reports",
         headers=_auth(),
         json={
@@ -542,7 +571,7 @@ def test_reports_reject_unknown_status_and_unsigned_or_forged_finalization(api):
         ),
     ],
 )
-def test_provider_profiles_are_runtime_validated_before_persistence(
+async def test_provider_profiles_are_runtime_validated_before_persistence(
     api, changes, detail
 ):
     client, store = api
@@ -557,16 +586,16 @@ def test_provider_profiles_are_runtime_validated_before_persistence(
     }
     payload.update(changes)
 
-    response = client.post("/api/v1/providers", headers=_auth(), json=payload)
+    response = await client.post("/api/v1/providers", headers=_auth(), json=payload)
 
     assert response.status_code == 422
     assert detail in str(response.json()["detail"])
-    assert store.count(ProviderProfile) == 0
+    assert (await store.count(ProviderProfile)) == 0
 
 
-def test_provider_patch_validates_candidate_after_revision_check(api):
+async def test_provider_patch_validates_candidate_after_revision_check(api):
     client, store = api
-    created = client.post(
+    created = await client.post(
         "/api/v1/providers",
         headers=_auth(),
         json={
@@ -578,7 +607,7 @@ def test_provider_patch_validates_candidate_after_revision_check(api):
     )
     assert created.status_code == 201
     profile = created.json()
-    invalid = client.patch(
+    invalid = await client.patch(
         f"/api/v1/providers/{profile['id']}",
         headers=_auth(),
         json={
@@ -587,7 +616,7 @@ def test_provider_patch_validates_candidate_after_revision_check(api):
         },
     )
     assert invalid.status_code == 422
-    valid = client.patch(
+    valid = await client.patch(
         f"/api/v1/providers/{profile['id']}",
         headers=_auth(),
         json={
@@ -597,7 +626,7 @@ def test_provider_patch_validates_candidate_after_revision_check(api):
     )
     assert valid.status_code == 200
     assert valid.json()["revision"] == profile["revision"] + 1
-    stale_invalid = client.patch(
+    stale_invalid = await client.patch(
         f"/api/v1/providers/{profile['id']}",
         headers=_auth(),
         json={"changes": {"provider_type": "unknown"}, "expected_revision": 1},
@@ -605,31 +634,31 @@ def test_provider_patch_validates_candidate_after_revision_check(api):
     assert stale_invalid.status_code == 409
     replacement = dict(valid.json())
     replacement["provider_type"] = "unknown"
-    invalid_replace = client.put(
+    invalid_replace = await client.put(
         f"/api/v1/providers/{profile['id']}",
         headers={**_auth(), "If-Match": str(valid.json()["revision"])},
         json=replacement,
     )
     assert invalid_replace.status_code == 422
-    assert store.get(ProviderProfile, profile["id"]).provider_type == "vllm"
+    assert (await store.get(ProviderProfile, profile["id"])).provider_type == "vllm"
 
 
-def test_generic_delete_honors_if_match_revision(api):
+async def test_generic_delete_honors_if_match_revision(api):
     client, store = api
-    engagement = store.create(Engagement(name="Revision-safe delete"))
-    asset = store.create(Asset(engagement_id=engagement.id, name="host"))
-    updated = store.update(
+    engagement = await store.create(Engagement(name="Revision-safe delete"))
+    asset = await store.create(Asset(engagement_id=engagement.id, name="host"))
+    updated = await store.update(
         Asset,
         asset.id,
         {"name": "new host name"},
         expected_revision=asset.revision,
     )
 
-    stale = client.delete(
+    stale = await client.delete(
         f"/api/v1/assets/{asset.id}",
         headers={**_auth(), "If-Match": str(asset.revision)},
     )
-    current = client.delete(
+    current = await client.delete(
         f"/api/v1/assets/{asset.id}",
         headers={**_auth(), "If-Match": str(updated.revision)},
     )
@@ -638,7 +667,7 @@ def test_generic_delete_honors_if_match_revision(api):
     assert current.status_code == 204
 
 
-def test_vertex_profile_requires_project_and_location_options(api):
+async def test_vertex_profile_requires_project_and_location_options(api):
     client, _ = api
     payload = {
         "name": "Vertex",
@@ -649,8 +678,8 @@ def test_vertex_profile_requires_project_and_location_options(api):
         "metadata": {"default_model": "gemini-test"},
     }
 
-    missing = client.post("/api/v1/providers", headers=_auth(), json=payload)
-    configured = client.post(
+    missing = await client.post("/api/v1/providers", headers=_auth(), json=payload)
+    configured = await client.post(
         "/api/v1/providers",
         headers=_auth(),
         json={
@@ -670,10 +699,10 @@ def test_vertex_profile_requires_project_and_location_options(api):
     assert configured.status_code == 201
 
 
-def test_api_evidence_attribution_requires_a_persisted_operator(api):
+async def test_api_evidence_attribution_requires_a_persisted_operator(api):
     client, store = api
-    engagement = store.create(Engagement(name="Attribution"))
-    missing = client.post(
+    engagement = await store.create(Engagement(name="Attribution"))
+    missing = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={
@@ -686,12 +715,14 @@ def test_api_evidence_attribution_requires_a_persisted_operator(api):
         },
     )
     assert missing.status_code == 422
-    operator = client.post(
-        "/api/v1/operator-profiles",
-        headers=_auth(),
-        json={"display_name": "Jordan"},
+    operator = (
+        await client.post(
+            "/api/v1/operator-profiles",
+            headers=_auth(),
+            json={"display_name": "Jordan"},
+        )
     ).json()
-    created = client.post(
+    created = await client.post(
         "/api/v1/evidence/upload",
         headers=_auth(),
         json={
@@ -706,18 +737,20 @@ def test_api_evidence_attribution_requires_a_persisted_operator(api):
     assert created.status_code == 201
 
 
-def test_approval_decision_uses_active_operator_attribution(api):
+async def test_approval_decision_uses_active_operator_attribution(api):
     client, store = api
-    engagement = store.create(Engagement(name="Approval"))
-    operator = client.post(
-        "/api/v1/operator-profiles",
-        headers=_auth(),
-        json={"display_name": "Jordan"},
+    engagement = await store.create(Engagement(name="Approval"))
+    operator = (
+        await client.post(
+            "/api/v1/operator-profiles",
+            headers=_auth(),
+            json={"display_name": "Jordan"},
+        )
     ).json()
-    run = store.create(
+    run = await store.create(
         AgentRun(engagement_id=engagement.id, objective="Approval attribution")
     )
-    approval = store.create(
+    approval = await store.create(
         Approval(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -728,7 +761,7 @@ def test_approval_decision_uses_active_operator_attribution(api):
         )
     )
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/approvals/{approval.id}/decision",
         headers=_auth(),
         json={"decision": "approve"},
@@ -736,7 +769,7 @@ def test_approval_decision_uses_active_operator_attribution(api):
 
     assert response.status_code == 200
     assert response.json()["decided_by"] == operator["id"]
-    assert store.replay_events(run.id)[0].actor_id == operator["id"]
+    assert (await store.replay_events(run.id))[0].actor_id == operator["id"]
 
 
 def test_route_operations_are_unique_after_parameter_normalization(api):
@@ -767,22 +800,24 @@ def test_route_operations_are_unique_after_parameter_normalization(api):
         _assert_unique_api_operations(duplicate)
 
 
-def test_finding_patch_starts_from_the_projected_relation_arrays(api):
+async def test_finding_patch_starts_from_the_projected_relation_arrays(api):
     client, store = api
-    engagement = store.create(Engagement(name="Projected patch"))
-    evidence = store.create(
+    engagement = await store.create(Engagement(name="Projected patch"))
+    evidence = await store.create(
         Evidence(
             engagement_id=engagement.id,
             evidence_type="operator_upload",
             title="proof.txt",
         )
     )
-    finding = client.post(
-        "/api/v1/findings",
-        headers=_auth(),
-        json={"engagement_id": engagement.id, "title": "Linked later"},
+    finding = (
+        await client.post(
+            "/api/v1/findings",
+            headers=_auth(),
+            json={"engagement_id": engagement.id, "title": "Linked later"},
+        )
     ).json()
-    linked = client.post(
+    linked = await client.post(
         f"/api/v1/projects/{engagement.id}/relations",
         headers=_auth(),
         json={
@@ -800,15 +835,17 @@ def test_finding_patch_starts_from_the_projected_relation_arrays(api):
         },
     )
     assert linked.status_code == 201
-    assert store.get(Finding, finding["id"]).evidence_ids == []
-    operator = client.post(
-        "/api/v1/operator-profiles",
-        headers=_auth(),
-        json={"display_name": "Verifier"},
+    assert (await store.get(Finding, finding["id"])).evidence_ids == []
+    operator = (
+        await client.post(
+            "/api/v1/operator-profiles",
+            headers=_auth(),
+            json={"display_name": "Verifier"},
+        )
     ).json()
 
     # The evidence-backed rule sees the edge, not the stale stored array.
-    confirmed = client.patch(
+    confirmed = await client.patch(
         f"/api/v1/findings/{finding['id']}",
         headers=_auth(),
         json={
@@ -823,7 +860,7 @@ def test_finding_patch_starts_from_the_projected_relation_arrays(api):
     assert confirmed.status_code == 200
     assert confirmed.json()["status"] == "confirmed"
     assert confirmed.json()["evidence_ids"] == [evidence.id]
-    stored = store.get(Finding, finding["id"])
+    stored = await store.get(Finding, finding["id"])
     assert stored.revision == 2
     assert stored.evidence_ids == [evidence.id]
 
@@ -837,90 +874,98 @@ def _grant(granted_by: str) -> dict:
     }
 
 
-def test_generic_scope_writes_attribute_grants_to_the_writing_operator(api):
+async def test_generic_scope_writes_attribute_grants_to_the_writing_operator(api):
     """A client cannot name someone else as the operator who granted authority."""
 
     client, store = api
-    operator = client.post(
-        "/api/v1/operator-profiles",
-        headers=_auth(),
-        json={"display_name": "Jordan"},
+    operator = (
+        await client.post(
+            "/api/v1/operator-profiles",
+            headers=_auth(),
+            json={"display_name": "Jordan"},
+        )
     ).json()
-    engagement = store.create(Engagement(name="Grants"))
+    engagement = await store.create(Engagement(name="Grants"))
 
-    created = client.post(
+    created = await client.post(
         "/api/v1/scope-policies",
         headers=_auth(),
         json={"engagement_id": engagement.id, "grants": [_grant("someone-else")]},
     )
     assert created.status_code == 201, created.text
     scope_id = created.json()["id"]
-    assert [grant.granted_by for grant in store.get(ScopePolicy, scope_id).grants] == [
-        operator["id"]
-    ]
+    assert [
+        grant.granted_by for grant in (await store.get(ScopePolicy, scope_id)).grants
+    ] == [operator["id"]]
 
-    current = store.get(ScopePolicy, scope_id).model_dump(mode="json")
-    replaced = client.put(
+    current = (await store.get(ScopePolicy, scope_id)).model_dump(mode="json")
+    replaced = await client.put(
         f"/api/v1/scope-policies/{scope_id}",
         headers=_auth(),
         json={**current, "grants": [_grant("forged"), _grant("forged-too")]},
     )
     assert replaced.status_code == 200, replaced.text
-    assert [grant.granted_by for grant in store.get(ScopePolicy, scope_id).grants] == [
+    assert [
+        grant.granted_by for grant in (await store.get(ScopePolicy, scope_id)).grants
+    ] == [
         operator["id"],
         operator["id"],
     ]
 
-    patched = client.patch(
+    patched = await client.patch(
         f"/api/v1/scope-policies/{scope_id}",
         headers=_auth(),
         json={"changes": {"grants": [_grant("forged")]}},
     )
     assert patched.status_code == 200, patched.text
     assert patched.json()["grants"][0]["granted_by"] == operator["id"]
-    assert [grant.granted_by for grant in store.get(ScopePolicy, scope_id).grants] == [
-        operator["id"]
-    ]
+    assert [
+        grant.granted_by for grant in (await store.get(ScopePolicy, scope_id)).grants
+    ] == [operator["id"]]
 
 
-def test_generic_scope_patch_without_grants_keeps_their_attribution(api):
+async def test_generic_scope_patch_without_grants_keeps_their_attribution(api):
     """The packaged browser smoke test widens a new project's scope this way."""
 
     client, store = api
-    project = client.post(
-        "/api/v1/engagements", headers=_auth(), json={"name": "Packaged browser"}
+    project = (
+        await client.post(
+            "/api/v1/engagements", headers=_auth(), json={"name": "Packaged browser"}
+        )
     ).json()
     scope_id = project["scope_policy_id"]
-    scope = store.get(ScopePolicy, scope_id)
-    store.update(
-        ScopePolicy,
-        scope_id,
-        {"grants": [_grant("earlier-operator")]},
-        expected_revision=scope.revision,
+    scope = await store.get(ScopePolicy, scope_id)
+    (
+        await store.update(
+            ScopePolicy,
+            scope_id,
+            {"grants": [_grant("earlier-operator")]},
+            expected_revision=scope.revision,
+        )
     )
 
-    response = client.patch(
+    response = await client.patch(
         f"/api/v1/scope-policies/{scope_id}",
         headers=_auth(),
         json={"changes": {"allowed_cidrs": ["127.0.0.1/32"]}},
     )
 
     assert response.status_code == 200, response.text
-    updated = store.get(ScopePolicy, scope_id)
+    updated = await store.get(ScopePolicy, scope_id)
     assert updated.allowed_cidrs == ["127.0.0.1/32"]
     assert [grant.granted_by for grant in updated.grants] == ["earlier-operator"]
 
 
-def _operator(client: TestClient, name: str) -> str:
-    created = client.post(
+async def _operator(client: TestClient, name: str) -> str:
+    created = await client.post(
         "/api/v1/operator-profiles", headers=_auth(), json={"display_name": name}
     )
     assert created.status_code == 201, created.text
     return created.json()["id"]
 
 
-def _activate(client: TestClient, operator_id: str) -> None:
-    activated = client.post(
+async def _activate(client: TestClient, operator_id: str) -> None:
+    activated = await client.post(
         f"/api/v1/operator-profiles/{operator_id}/activate", headers=_auth(), json={}
     )
     assert activated.status_code == 200, activated.text
@@ -943,20 +988,22 @@ def _scope_grant(
     }
 
 
-def _attribution(store: NebulaStore, scope_id: str) -> list[tuple[str, object]]:
+async def _attribution(store: NebulaStore, scope_id: str) -> list[tuple[str, object]]:
     return [
         (grant.granted_by, grant.granted_at)
-        for grant in store.get(ScopePolicy, scope_id).grants
+        for grant in (await store.get(ScopePolicy, scope_id)).grants
     ]
 
 
-def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(api):
+async def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(api):
     """Saving a project's scope re-credits only the grants the saver changed."""
 
     client, store = api
-    alice = _operator(client, "Alice")
-    project = client.post(
-        "/api/v1/engagements", headers=_auth(), json={"name": "Shared scope"}
+    alice = await _operator(client, "Alice")
+    project = (
+        await client.post(
+            "/api/v1/engagements", headers=_auth(), json={"name": "Shared scope"}
+        )
     ).json()
     url = f"/api/v1/engagements/{project['id']}/scope"
     scan = _scope_grant(
@@ -964,18 +1011,18 @@ def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(api):
         targets=["10.0.0.0/24", "example.com"],
     )
     browse = _scope_grant(risk_classes=["passive"], targets=["app.example.com"])
-    granted = client.put(url, headers=_auth(), json={"grants": [scan, browse]})
+    granted = await client.put(url, headers=_auth(), json={"grants": [scan, browse]})
     assert granted.status_code == 200, granted.text
     scope_id = granted.json()["id"]
-    alice_grants = store.get(ScopePolicy, scope_id).grants
+    alice_grants = (await store.get(ScopePolicy, scope_id)).grants
     assert [grant.granted_by for grant in alice_grants] == [alice, alice]
 
-    bob = _operator(client, "Bob")
-    _activate(client, bob)
+    bob = await _operator(client, "Bob")
+    (await _activate(client, bob))
     # The settings page echoes each grant it read. Bob widens the domains,
     # renews one grant and adds another; the first grant comes back with its
     # lists reordered and a client that names someone else as its granter.
-    current = client.get(url, headers=_auth()).json()
+    current = (await client.get(url, headers=_auth())).json()
     echoed_scan, echoed_browse = current["grants"]
     unchanged = {
         **echoed_scan,
@@ -991,7 +1038,7 @@ def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(api):
         granted_by=alice,
         granted_at="2000-01-01T00:00:00Z",
     )
-    saved = client.put(
+    saved = await client.put(
         url,
         headers=_auth(),
         json={
@@ -1002,26 +1049,31 @@ def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(api):
     )
 
     assert saved.status_code == 200, saved.text
-    attribution = _attribution(store, scope_id)
+    attribution = await _attribution(store, scope_id)
     assert attribution[0] == (alice, alice_grants[0].granted_at)
     assert [granted_by for granted_by, _ in attribution[1:]] == [bob, bob]
     for _, granted_at in attribution[1:]:
         assert granted_at > alice_grants[1].granted_at
-    assert saved.json()["grants"] == client.get(url, headers=_auth()).json()["grants"]
-    assert store.get(ScopePolicy, scope_id).allowed_domains == ["example.com"]
+    assert (
+        saved.json()["grants"]
+        == (await client.get(url, headers=_auth())).json()["grants"]
+    )
+    assert (await store.get(ScopePolicy, scope_id)).allowed_domains == ["example.com"]
 
 
-def test_project_scope_refuses_a_new_grant_that_has_already_expired(api):
+async def test_project_scope_refuses_a_new_grant_that_has_already_expired(api):
     """Core stamps a new grant with the save time, so it must expire later."""
 
     client, store = api
-    _operator(client, "Alice")
-    project = client.post(
-        "/api/v1/engagements", headers=_auth(), json={"name": "Expired grant"}
+    (await _operator(client, "Alice"))
+    project = (
+        await client.post(
+            "/api/v1/engagements", headers=_auth(), json={"name": "Expired grant"}
+        )
     ).json()
     url = f"/api/v1/engagements/{project['id']}/scope"
 
-    refused = client.put(
+    refused = await client.put(
         url,
         headers=_auth(),
         json={
@@ -1038,49 +1090,53 @@ def test_project_scope_refuses_a_new_grant_that_has_already_expired(api):
 
     assert refused.status_code == 422, refused.text
     assert "grant 1 expired" in refused.json()["detail"]
-    assert store.get(ScopePolicy, project["scope_policy_id"]).grants == []
+    assert (await store.get(ScopePolicy, project["scope_policy_id"])).grants == []
 
 
-def test_generic_scope_saves_keep_unchanged_grants_and_credit_the_saver(api):
+async def test_generic_scope_saves_keep_unchanged_grants_and_credit_the_saver(api):
     """Replace and patch follow the project scope route's attribution rule."""
 
     client, store = api
-    alice = _operator(client, "Alice")
-    project = client.post(
-        "/api/v1/engagements", headers=_auth(), json={"name": "Generic scope"}
+    alice = await _operator(client, "Alice")
+    project = (
+        await client.post(
+            "/api/v1/engagements", headers=_auth(), json={"name": "Generic scope"}
+        )
     ).json()
     scope_id = project["scope_policy_id"]
     url = f"/api/v1/scope-policies/{scope_id}"
     scan = _scope_grant(risk_classes=["active_scan"], targets=["10.0.0.0/24"])
-    granted = client.patch(url, headers=_auth(), json={"changes": {"grants": [scan]}})
+    granted = await client.patch(
+        url, headers=_auth(), json={"changes": {"grants": [scan]}}
+    )
     assert granted.status_code == 200, granted.text
-    [alice_grant] = store.get(ScopePolicy, scope_id).grants
+    [alice_grant] = (await store.get(ScopePolicy, scope_id)).grants
     assert alice_grant.granted_by == alice
 
-    bob = _operator(client, "Bob")
-    _activate(client, bob)
-    current = client.get(url, headers=_auth()).json()
+    bob = await _operator(client, "Bob")
+    (await _activate(client, bob))
+    current = (await client.get(url, headers=_auth())).json()
     echoed = {**current["grants"][0], "granted_by": "mallory"}
     narrowed = {**current["grants"][0], "targets": ["10.0.0.0/25"]}
-    replaced = client.put(
+    replaced = await client.put(
         url,
         headers=_auth(),
         # The same grant saved twice is the stored grant plus a new one.
         json={**current, "grants": [echoed, dict(scan), narrowed]},
     )
     assert replaced.status_code == 200, replaced.text
-    attribution = _attribution(store, scope_id)
+    attribution = await _attribution(store, scope_id)
     assert attribution[0] == (alice, alice_grant.granted_at)
     assert [granted_by for granted_by, _ in attribution[1:]] == [bob, bob]
     bob_duplicate_at = attribution[1][1]
     assert bob_duplicate_at > alice_grant.granted_at
 
-    carol = _operator(client, "Carol")
-    _activate(client, carol)
-    current = client.get(url, headers=_auth()).json()
+    carol = await _operator(client, "Carol")
+    (await _activate(client, carol))
+    current = (await client.get(url, headers=_auth())).json()
     # Grants carry no id: of two stored grants that authorize the same thing,
     # the one whose attribution the client echoed is the one saved again.
-    patched = client.patch(
+    patched = await client.patch(
         url,
         headers=_auth(),
         json={
@@ -1094,7 +1150,10 @@ def test_generic_scope_saves_keep_unchanged_grants_and_credit_the_saver(api):
         },
     )
     assert patched.status_code == 200, patched.text
-    attribution = _attribution(store, scope_id)
+    attribution = await _attribution(store, scope_id)
     assert attribution[0] == (bob, bob_duplicate_at)
     assert attribution[1][0] == carol
     assert [grant["granted_by"] for grant in patched.json()["grants"]] == [bob, carol]
+
+
+pytestmark = pytest.mark.anyio

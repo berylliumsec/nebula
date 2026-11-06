@@ -250,9 +250,11 @@ def _chroma_files(chroma_root: Path, engagement_root: Path) -> Iterable[Path]:
             yield sqlite_path
         for child in sorted(chroma_root.iterdir()):
             if child.is_dir() and _UUID_DIRECTORY.fullmatch(child.name):
-                yield from _iter_regular_files(child)
+                for _entity in _iter_regular_files(child):
+                    yield _entity
         return
-    yield from _iter_regular_files(chroma_root)
+    for _entity in _iter_regular_files(chroma_root):
+        yield _entity
 
 
 def _read_chroma_documents(database_path: Path) -> list[tuple[str, dict[str, Any]]]:
@@ -314,7 +316,7 @@ class LegacyEngagementImporter:
         self.artifact_store = artifact_store
         self.allow_external_chroma = allow_external_chroma
 
-    def import_engagement(self, source: str | Path) -> ImportReport:
+    async def import_engagement(self, source: str | Path) -> ImportReport:
         source_path = Path(source).expanduser().resolve()
         report = ImportReport(source_path=str(source_path))
         stored_blobs: list[StoredArtifact] = []
@@ -535,8 +537,8 @@ class LegacyEngagementImporter:
                     "source changed during import; no database records were committed"
                 )
 
-            with self.store.transaction() as transaction:
-                transaction.add_all(entities)
+            async with self.store.transaction() as transaction:
+                (await transaction.add_all(entities))
             report.imported_counts = dict(sorted(counts.items()))
             report.status = "completed"
         except Exception as exc:
@@ -645,7 +647,7 @@ class LegacyEngagementImporter:
         return artifact
 
 
-def import_2x_engagement(
+async def import_2x_engagement(
     source: str | Path,
     store: NebulaStore,
     artifact_store: ArtifactStore,
@@ -654,7 +656,7 @@ def import_2x_engagement(
 ) -> ImportReport:
     """Functional entry point used by ``nebula import-2x``."""
 
-    return LegacyEngagementImporter(
+    return await LegacyEngagementImporter(
         store,
         artifact_store,
         allow_external_chroma=allow_external_chroma,

@@ -423,15 +423,15 @@ class BrowserSecurityService:
                 "Research traffic belongs only to the headless agent security session"
             )
 
-    def workspace(self, engagement_id: str) -> BrowserWorkspace:
-        self.store.get(Engagement, engagement_id)
+    async def workspace(self, engagement_id: str) -> BrowserWorkspace:
+        (await self.store.get(Engagement, engagement_id))
         cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
         # Every identity and session stays selectable, and the defaults below
         # are only created when the Project truly has none.
-        identities = self.store.find_entities(
+        identities = await self.store.find_entities(
             BrowserIdentity, {}, engagement_id=engagement_id
         )
-        sessions = self.store.find_entities(
+        sessions = await self.store.find_entities(
             BrowserSession, {}, engagement_id=engagement_id
         )
         identities = [
@@ -455,7 +455,7 @@ class BrowserSecurityService:
                 # partition as the historical Project-only storage key.
                 storage_partition="browser-00000000-0000-0000-0000-000000000000",
             )
-            self._create(identity, "browser_identity.created", "system")
+            (await self._create(identity, "browser_identity.created", "system"))
             identities = [identity]
         if not sessions and not cutover:
             session = BrowserSession(
@@ -463,51 +463,61 @@ class BrowserSecurityService:
                 name="Research session",
                 identity_id=identities[0].id,
             )
-            self._create(session, "browser_session.created", "system")
+            (await self._create(session, "browser_session.created", "system"))
             sessions = [session]
         return BrowserWorkspace(
             identities=identities,
             sessions=sessions,
-            traffic=self.store.list_latest_entities(
-                BrowserTrafficExchange, engagement_id=engagement_id
+            traffic=(
+                await self.store.list_latest_entities(
+                    BrowserTrafficExchange, engagement_id=engagement_id
+                )
             ),
-            frames=self.store.list_latest_entities(
-                BrowserWebSocketFrame, engagement_id=engagement_id
+            frames=(
+                await self.store.list_latest_entities(
+                    BrowserWebSocketFrame, engagement_id=engagement_id
+                )
             ),
-            actions=self.store.list_latest_entities(
-                BrowserAction, engagement_id=engagement_id
+            actions=(
+                await self.store.list_latest_entities(
+                    BrowserAction, engagement_id=engagement_id
+                )
             ),
-            handoffs=self.store.list_latest_entities(
-                BrowserHandoff, engagement_id=engagement_id
+            handoffs=(
+                await self.store.list_latest_entities(
+                    BrowserHandoff, engagement_id=engagement_id
+                )
             ),
         )
 
-    def create_identity(
+    async def create_identity(
         self, engagement_id: str, request: BrowserIdentityCreateRequest, actor_id: str
     ) -> BrowserIdentity:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         identity = BrowserIdentity(engagement_id=engagement_id, **request.model_dump())
-        return self._create(identity, "browser_identity.created", actor_id)
+        return await self._create(identity, "browser_identity.created", actor_id)
 
-    def create_session(
+    async def create_session(
         self, engagement_id: str, request: BrowserSessionCreateRequest, actor_id: str
     ) -> BrowserSession:
         if os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1":
             raise BrowserWorkflowError(
                 "New research sessions are created by the Core headless security runtime"
             )
-        identity = self._owned(BrowserIdentity, request.identity_id, engagement_id)
+        identity = await self._owned(
+            BrowserIdentity, request.identity_id, engagement_id
+        )
         if identity.revoked_at is not None:
             raise BrowserWorkflowError(
                 "revoked browser identities cannot start sessions"
             )
         session = BrowserSession(engagement_id=engagement_id, **request.model_dump())
-        return self._create(session, "browser_session.created", actor_id)
+        return await self._create(session, "browser_session.created", actor_id)
 
-    def sync_session(
+    async def sync_session(
         self, session_id: str, request: BrowserSessionSyncRequest
     ) -> BrowserSession:
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError(
                 "only active browser sessions can synchronize tabs"
@@ -516,7 +526,7 @@ class BrowserSecurityService:
             update={"tabs": request.tabs, "active_tab_id": request.active_tab_id}
         )
         BrowserSession.model_validate(candidate.model_dump())
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserSession,
             session.id,
             {
@@ -538,10 +548,10 @@ class BrowserSecurityService:
         )
         return updated
 
-    def update_capture_settings(
+    async def update_capture_settings(
         self, session_id: str, request: BrowserCaptureSettingsRequest, actor_id: str
     ) -> BrowserSession:
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         if request.proxy_enabled and not request.trust_acknowledged:
             raise BrowserWorkflowError(
                 "enabling the capture proxy requires explicit Project CA trust acknowledgement"
@@ -573,7 +583,7 @@ class BrowserSecurityService:
             }
         )
         BrowserSession.model_validate(candidate.model_dump())
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserSession,
             session.id,
             {
@@ -604,7 +614,7 @@ class BrowserSecurityService:
         )
         return updated
 
-    def upload_body_artifact(
+    async def upload_body_artifact(
         self,
         session_id: str,
         request: BrowserBodyArtifactUploadRequest,
@@ -614,7 +624,7 @@ class BrowserSecurityService:
             raise BrowserWorkflowError(
                 "browser body artifacts require an artifact store"
             )
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError(
                 "body artifacts require an active browser session"
@@ -649,30 +659,32 @@ class BrowserSecurityService:
         )
         artifact = stored.artifact.model_copy(update={"redacted": True})
         try:
-            self.store.create_with_operation_event(
-                artifact,
-                operation_id=artifact.id,
-                operation_kind="artifact",
-                engagement_id=session.engagement_id,
-                event_type="browser_body_artifact.created",
-                event_payload={
-                    "session_id": session.id,
-                    "direction": request.direction,
-                    "sha256": artifact.sha256,
-                    "size": artifact.size,
-                },
-                actor_id=actor_id,
-                idempotency_key=f"create:{artifact.id}",
+            (
+                await self.store.create_with_operation_event(
+                    artifact,
+                    operation_id=artifact.id,
+                    operation_kind="artifact",
+                    engagement_id=session.engagement_id,
+                    event_type="browser_body_artifact.created",
+                    event_payload={
+                        "session_id": session.id,
+                        "direction": request.direction,
+                        "sha256": artifact.sha256,
+                        "size": artifact.size,
+                    },
+                    actor_id=actor_id,
+                    idempotency_key=f"create:{artifact.id}",
+                )
             )
         except Exception:
             self.artifact_store.discard_new_blob(stored)
             raise
         return artifact
 
-    def record_traffic(
+    async def record_traffic(
         self, session_id: str, request: BrowserTrafficRecordRequest, actor_id: str
     ) -> BrowserTrafficExchange:
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         self._require_agent_security_runtime(session)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError(
@@ -682,7 +694,7 @@ class BrowserSecurityService:
             raise BrowserWorkflowError(
                 "traffic tab does not belong to the browser session"
             )
-        scope = self._scope(session.engagement_id)
+        scope = await self._scope(session.engagement_id)
         scope_state: Literal["in_scope", "out_of_scope", "inactive", "unconfigured"] = (
             "in_scope"
         )
@@ -715,7 +727,7 @@ class BrowserSecurityService:
         ):
             if artifact_id is None:
                 continue
-            artifact = self.store.get(Artifact, artifact_id)
+            artifact = await self.store.get(Artifact, artifact_id)
             if (
                 artifact.engagement_id != session.engagement_id
                 or artifact.metadata.get("browser_session_id") != session.id
@@ -763,26 +775,28 @@ class BrowserSecurityService:
                 }
             ),
         )
-        created = self._create(exchange, "browser_traffic.recorded", actor_id)
+        created = await self._create(exchange, "browser_traffic.recorded", actor_id)
         # Keep Target authoritative without making the native worker duplicate
         # site-map writes. A blocked/out-of-scope exchange remains traffic
         # evidence but is deliberately excluded from the in-scope map.
         from .browser_research import BrowserResearchService
 
-        BrowserResearchService(self.store, self, self.artifact_store).record_exchange(
-            created, actor_id
+        (
+            await BrowserResearchService(
+                self.store, self, self.artifact_store
+            ).record_exchange(created, actor_id)
         )
         return created
 
-    def record_websocket_frame(
+    async def record_websocket_frame(
         self,
         session_id: str,
         request: BrowserWebSocketFrameRecordRequest,
         actor_id: str,
     ) -> BrowserWebSocketFrame:
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         self._require_agent_security_runtime(session)
-        exchange = self._owned(
+        exchange = await self._owned(
             BrowserTrafficExchange, request.exchange_id, session.engagement_id
         )
         if exchange.session_id != session.id or exchange.protocol != "websocket":
@@ -807,19 +821,19 @@ class BrowserSecurityService:
             payload_bytes=request.payload_bytes,
             truncated=request.truncated or preview != request.payload_preview,
         )
-        return self._create(frame, "browser_websocket_frame.recorded", actor_id)
+        return await self._create(frame, "browser_websocket_frame.recorded", actor_id)
 
-    def propose_action(
+    async def propose_action(
         self, session_id: str, request: BrowserActionProposalRequest
     ) -> BrowserAction:
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError("actions require an active browser session")
         if request.tab_id not in {tab.id for tab in session.tabs}:
             raise BrowserWorkflowError(
                 "action tab does not belong to the browser session"
             )
-        scope = self._scope(session.engagement_id)
+        scope = await self._scope(session.engagement_id)
         self._require_in_scope(
             scope, request.page_url, f"browser.{request.kind.value}", RiskClass.PASSIVE
         )
@@ -901,8 +915,10 @@ class BrowserSecurityService:
             expires_at=utc_now() + ACTION_LIFETIME,
             **request.model_dump(),
         )
-        created = self._create(action, "browser_action.proposed", request.proposed_by)
-        policies = self.store.list_entities(
+        created = await self._create(
+            action, "browser_action.proposed", request.proposed_by
+        )
+        policies = await self.store.list_entities(
             AutomationProjectPolicy,
             engagement_id=session.engagement_id,
             limit=2,
@@ -910,7 +926,7 @@ class BrowserSecurityService:
         if scope.bypass_permissions or (
             policies and policies[0].approval_policy == AutomationApprovalPolicy.NEVER
         ):
-            return self.decide_action(
+            return await self.decide_action(
                 created.id,
                 BrowserActionDecisionRequest(
                     decision="approve",
@@ -920,14 +936,14 @@ class BrowserSecurityService:
             )
         return created
 
-    def decide_action(
+    async def decide_action(
         self, action_id: str, request: BrowserActionDecisionRequest
     ) -> BrowserAction:
-        action = self.store.get(BrowserAction, action_id)
+        action = await self.store.get(BrowserAction, action_id)
         if action.status != BrowserActionStatus.PROPOSED:
             raise BrowserWorkflowError("only proposed browser actions can be decided")
         if utc_now() >= action.expires_at:
-            return self._transition_action(
+            return await self._transition_action(
                 action,
                 request.expected_revision,
                 BrowserActionStatus.EXPIRED,
@@ -944,7 +960,7 @@ class BrowserSecurityService:
             changes.update(
                 {"approved_by": request.operator_id, "approved_at": utc_now()}
             )
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserAction,
             action.id,
             changes,
@@ -958,21 +974,21 @@ class BrowserSecurityService:
         )
         return updated
 
-    def start_action(
+    async def start_action(
         self, action_id: str, request: BrowserActionExecutionRequest
     ) -> BrowserAction:
-        action = self.store.get(BrowserAction, action_id)
+        action = await self.store.get(BrowserAction, action_id)
         if action.status != BrowserActionStatus.APPROVED:
             raise BrowserWorkflowError("only approved browser actions can execute")
         if utc_now() >= action.expires_at:
-            return self._transition_action(
+            return await self._transition_action(
                 action,
                 request.expected_revision,
                 BrowserActionStatus.EXPIRED,
                 "browser_action.expired",
                 request.device_id,
             )
-        scope = self._scope(action.engagement_id)
+        scope = await self._scope(action.engagement_id)
         if (
             scope.id != action.scope_policy_id
             or scope.revision != action.scope_policy_revision
@@ -995,7 +1011,7 @@ class BrowserSecurityService:
             self._require_in_scope(
                 scope, target, "browser.replay", RiskClass.ACTIVE_SCAN
             )
-        return self._transition_action(
+        return await self._transition_action(
             action,
             request.expected_revision,
             BrowserActionStatus.EXECUTING,
@@ -1003,14 +1019,14 @@ class BrowserSecurityService:
             request.device_id,
         )
 
-    def finish_action(
+    async def finish_action(
         self, action_id: str, request: BrowserActionResultRequest
     ) -> BrowserAction:
-        action = self.store.get(BrowserAction, action_id)
+        action = await self.store.get(BrowserAction, action_id)
         if action.status != BrowserActionStatus.EXECUTING:
             raise BrowserWorkflowError("only executing browser actions can finish")
         for evidence_id in request.evidence_ids:
-            self._owned(Evidence, evidence_id, action.engagement_id)
+            (await self._owned(Evidence, evidence_id, action.engagement_id))
         status = (
             BrowserActionStatus.COMPLETE
             if request.state == "complete"
@@ -1023,7 +1039,7 @@ class BrowserSecurityService:
             "evidence_ids": request.evidence_ids,
             "error": request.error,
         }
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserAction,
             action.id,
             changes,
@@ -1037,15 +1053,15 @@ class BrowserSecurityService:
         )
         return updated
 
-    def create_handoff(
+    async def create_handoff(
         self, session_id: str, request: BrowserHandoffCreateRequest
     ) -> BrowserHandoff:
-        session = self.store.get(BrowserSession, session_id)
+        session = await self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
             raise BrowserWorkflowError("handoffs require an active browser session")
         if request.command == "navigate" and request.url:
             self._require_in_scope(
-                self._scope(session.engagement_id),
+                (await self._scope(session.engagement_id)),
                 request.url,
                 "browser.navigate",
                 RiskClass.PASSIVE,
@@ -1062,24 +1078,24 @@ class BrowserSecurityService:
             expires_at=utc_now() + HANDOFF_LIFETIME,
             **request.model_dump(),
         )
-        return self._create(
+        return await self._create(
             handoff, "browser_handoff.queued", request.requested_by_device_id
         )
 
-    def claim_handoff(
+    async def claim_handoff(
         self, handoff_id: str, request: BrowserHandoffClaimRequest
     ) -> BrowserHandoff:
-        handoff = self.store.get(BrowserHandoff, handoff_id)
+        handoff = await self.store.get(BrowserHandoff, handoff_id)
         if handoff.status != BrowserHandoffStatus.QUEUED:
             raise BrowserWorkflowError("only queued browser handoffs can be claimed")
         if utc_now() >= handoff.expires_at:
-            return self._transition_handoff(
+            return await self._transition_handoff(
                 handoff,
                 request.expected_revision,
                 BrowserHandoffStatus.EXPIRED,
                 request.desktop_device_id,
             )
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserHandoff,
             handoff.id,
             {
@@ -1097,10 +1113,10 @@ class BrowserSecurityService:
         )
         return updated
 
-    def finish_handoff(
+    async def finish_handoff(
         self, handoff_id: str, request: BrowserHandoffResultRequest
     ) -> BrowserHandoff:
-        handoff = self.store.get(BrowserHandoff, handoff_id)
+        handoff = await self.store.get(BrowserHandoff, handoff_id)
         if (
             handoff.status != BrowserHandoffStatus.CLAIMED
             or handoff.claimed_by_device_id != request.desktop_device_id
@@ -1111,7 +1127,7 @@ class BrowserSecurityService:
             if request.state == "complete"
             else BrowserHandoffStatus.FAILED
         )
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserHandoff,
             handoff.id,
             {"status": status, "completed_at": utc_now(), "error": request.error},
@@ -1125,11 +1141,11 @@ class BrowserSecurityService:
         )
         return updated
 
-    def _scope(self, engagement_id: str) -> ScopePolicy:
-        engagement = self.store.get(Engagement, engagement_id)
+    async def _scope(self, engagement_id: str) -> ScopePolicy:
+        engagement = await self.store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
             raise BrowserWorkflowError("Project scope is not configured")
-        scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+        scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
         if scope.engagement_id != engagement_id:
             raise BrowserWorkflowError("Project scope ownership is invalid")
         return scope
@@ -1157,14 +1173,14 @@ class BrowserSecurityService:
         if decision.effect == PolicyEffect.DENY:
             raise BrowserWorkflowError(decision.reason)
 
-    def _owned(self, model: type[Any], entity_id: str, engagement_id: str) -> Any:
-        entity = self.store.get(model, entity_id)
+    async def _owned(self, model: type[Any], entity_id: str, engagement_id: str) -> Any:
+        entity = await self.store.get(model, entity_id)
         if getattr(entity, "engagement_id", None) != engagement_id:
             raise BrowserWorkflowError("browser entity belongs to another Project")
         return entity
 
-    def _create(self, entity: Any, event_type: str, actor_id: str) -> Any:
-        created, _ = self.store.create_with_operation_event(
+    async def _create(self, entity: Any, event_type: str, actor_id: str) -> Any:
+        created, _ = await self.store.create_with_operation_event(
             entity,
             operation_id=entity.id,
             operation_kind=entity.entity_kind,
@@ -1176,7 +1192,7 @@ class BrowserSecurityService:
         )
         return created
 
-    def _transition_action(
+    async def _transition_action(
         self,
         action: BrowserAction,
         revision: int,
@@ -1184,7 +1200,7 @@ class BrowserSecurityService:
         event_type: str,
         actor_id: str,
     ) -> BrowserAction:
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserAction,
             action.id,
             {"status": status},
@@ -1198,14 +1214,14 @@ class BrowserSecurityService:
         )
         return updated
 
-    def _transition_handoff(
+    async def _transition_handoff(
         self,
         handoff: BrowserHandoff,
         revision: int,
         status: BrowserHandoffStatus,
         actor_id: str,
     ) -> BrowserHandoff:
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserHandoff,
             handoff.id,
             {"status": status},

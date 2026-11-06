@@ -1,3 +1,8 @@
+from nebula.v3.async_utils import async_all
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import threading
 import time
@@ -5,7 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import (
     HarnessMissionHandoffRequest,
@@ -57,13 +62,13 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
-def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(
+async def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(
     tmp_path,
 ):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "scheduled.db")
-        engagement = store.create(Engagement(name="Scheduled mission"))
-        profile = _profile(store)
+        engagement = await store.create(Engagement(name="Scheduled mission"))
+        profile = await _profile(store)
         provider = RecordingProvider(profile)
         scheduled_for = utc_now() + timedelta(days=1)
         first = MissionService(
@@ -86,10 +91,10 @@ def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(
             scheduled_for=scheduled_for,
             repeat_interval_seconds=86_400,
         )
-        assert store.get(AgentRun, run.id).status == RunStatus.QUEUED
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.QUEUED
         assert run.id in first._scheduled_tasks
         await first.shutdown()
-        assert store.get(AgentRun, run.id).status == RunStatus.QUEUED
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.QUEUED
 
         restored = MissionService(
             store,
@@ -104,14 +109,16 @@ def test_scheduled_native_mission_survives_service_restart_and_can_be_cancelled(
         assert cancelled.status == RunStatus.CANCELLED
         await restored.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_native_startup_leaves_scheduled_harness_missions_for_harness_runtime(tmp_path):
+async def test_native_startup_leaves_scheduled_harness_missions_for_harness_runtime(
+    tmp_path,
+):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "cross-runtime-schedule.db")
-        engagement = store.create(Engagement(name="Harness schedule ownership"))
-        scheduled = store.create(
+        engagement = await store.create(Engagement(name="Harness schedule ownership"))
+        scheduled = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="Remain owned by the harness runtime",
@@ -132,15 +139,15 @@ def test_native_startup_leaves_scheduled_harness_missions_for_harness_runtime(tm
 
         await service.startup()
 
-        assert store.get(AgentRun, scheduled.id).status == RunStatus.QUEUED
-        assert store.replay_events(scheduled.id) == []
+        assert (await store.get(AgentRun, scheduled.id)).status == RunStatus.QUEUED
+        assert (await store.replay_events(scheduled.id)) == []
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def _profile(store, *, enabled=True, models=None):
-    return store.create(
+async def _profile(store, *, enabled=True, models=None):
+    return await store.create(
         ProviderProfile(
             name="Lab model",
             provider_type="vllm",
@@ -324,15 +331,15 @@ def test_api_rejects_conflicting_mission_service_configuration(tmp_path):
         )
 
 
-def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
+async def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
     tmp_path,
 ):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "restart.db")
-        engagement = store.create(Engagement(name="Restart reconciliation"))
-        profile = _profile(store)
+        engagement = await store.create(Engagement(name="Restart reconciliation"))
+        profile = await _profile(store)
         provider = RecordingProvider(profile)
-        interrupted = store.create(
+        interrupted = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="Interrupted API work",
@@ -342,7 +349,7 @@ def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
                 metadata={"origin": "api", "analysis_only": True},
             )
         )
-        task = store.create(
+        task = await store.create(
             Task(
                 engagement_id=engagement.id,
                 run_id=interrupted.id,
@@ -351,7 +358,7 @@ def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
                 status=TaskStatus.RUNNING,
             )
         )
-        attempt = store.create(
+        attempt = await store.create(
             AgentAttempt(
                 engagement_id=engagement.id,
                 run_id=interrupted.id,
@@ -361,7 +368,7 @@ def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
                 status=TaskStatus.RUNNING,
             )
         )
-        external = store.create(
+        external = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="Owned by a different runtime",
@@ -379,32 +386,32 @@ def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
 
         await service.startup()
         for _ in range(500):
-            if store.get(AgentRun, interrupted.id).status == RunStatus.COMPLETE:
+            if (await store.get(AgentRun, interrupted.id)).status == RunStatus.COMPLETE:
                 break
             await asyncio.sleep(0.01)
 
-        recovered = store.get(AgentRun, interrupted.id)
+        recovered = await store.get(AgentRun, interrupted.id)
         assert recovered.status == RunStatus.COMPLETE
         recovery = recovered.metadata["restart_recovery"]
         assert recovery["required"] is False
         assert recovery["automatic"] is True
         assert stats["recovered"] == 1
-        assert store.get(Task, task.id).status == TaskStatus.RUNNING
-        assert store.get(AgentAttempt, attempt.id).status == TaskStatus.RUNNING
-        assert [event.event_type for event in store.replay_events(interrupted.id)][
-            :2
-        ] == ["run.recovery_queued", "run.recovery_started"]
-        assert store.get(AgentRun, external.id).status == RunStatus.RUNNING
-        assert store.replay_events(external.id) == []
+        assert (await store.get(Task, task.id)).status == TaskStatus.RUNNING
+        assert (await store.get(AgentAttempt, attempt.id)).status == TaskStatus.RUNNING
+        assert [
+            event.event_type for event in (await store.replay_events(interrupted.id))
+        ][:2] == ["run.recovery_queued", "run.recovery_started"]
+        assert (await store.get(AgentRun, external.id)).status == RunStatus.RUNNING
+        assert (await store.replay_events(external.id)) == []
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_retries_an_optimistic_reconciliation_race(tmp_path, monkeypatch):
+async def test_startup_retries_an_optimistic_reconciliation_race(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "restart-race.db")
-    engagement = store.create(Engagement(name="Restart race"))
-    interrupted = store.create(
+    engagement = await store.create(Engagement(name="Restart race"))
+    interrupted = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Interrupted API work",
@@ -419,25 +426,27 @@ def test_startup_retries_an_optimistic_reconciliation_race(tmp_path, monkeypatch
     original = store.update_with_event
     calls = 0
 
-    def race_once(*args, **kwargs):
+    async def race_once(*args, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:
             raise ConflictError("simulated optimistic race")
-        return original(*args, **kwargs)
+        return await original(*args, **kwargs)
 
     monkeypatch.setattr(store, "update_with_event", race_once)
 
-    recovered = service._reconcile_interrupted_run(interrupted.id)
+    recovered = await service._reconcile_interrupted_run(interrupted.id)
 
     assert calls == 2
     assert recovered.status == RunStatus.QUEUED
 
 
-def test_restart_auto_continues_mission_without_rewriting_unknown_effect(tmp_path):
+async def test_restart_auto_continues_mission_without_rewriting_unknown_effect(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "restart-effect.db")
-    engagement = store.create(Engagement(name="Restart effect"))
-    run = store.create(
+    engagement = await store.create(Engagement(name="Restart effect"))
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Apply one bounded change",
@@ -445,7 +454,7 @@ def test_restart_auto_continues_mission_without_rewriting_unknown_effect(tmp_pat
             metadata={"origin": "api"},
         )
     )
-    call = store.create(
+    call = await store.create(
         ToolCall(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -457,7 +466,7 @@ def test_restart_auto_continues_mission_without_rewriting_unknown_effect(tmp_pat
     )
     service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
 
-    interrupted = service._reconcile_interrupted_run(run.id)
+    interrupted = await service._reconcile_interrupted_run(run.id)
 
     recovery = interrupted.metadata["restart_recovery"]
     assert interrupted.status == RunStatus.QUEUED
@@ -466,13 +475,15 @@ def test_restart_auto_continues_mission_without_rewriting_unknown_effect(tmp_pat
     assert recovery["unresolved_tool_call_ids"] == []
     assert recovery["auto_continued_unknown_tool_call_ids"] == [call.id]
     # Restart classification must not overwrite a late worker's ledger slot.
-    assert store.get(ToolCall, call.id).status == ToolCallStatus.RUNNING
+    assert (await store.get(ToolCall, call.id)).status == ToolCallStatus.RUNNING
 
 
-def test_mission_recovery_preserves_late_ledger_outcome_after_auto_continue(tmp_path):
+async def test_mission_recovery_preserves_late_ledger_outcome_after_auto_continue(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "late-effect.db")
-    engagement = store.create(Engagement(name="Late effect"))
-    run = store.create(
+    engagement = await store.create(Engagement(name="Late effect"))
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Apply one bounded change",
@@ -480,7 +491,7 @@ def test_mission_recovery_preserves_late_ledger_outcome_after_auto_continue(tmp_
             metadata={"origin": "api"},
         )
     )
-    call = store.create(
+    call = await store.create(
         ToolCall(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -491,31 +502,35 @@ def test_mission_recovery_preserves_late_ledger_outcome_after_auto_continue(tmp_
         )
     )
     service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
-    interrupted = service._reconcile_interrupted_run(run.id)
+    interrupted = await service._reconcile_interrupted_run(run.id)
 
     # The old worker commits its bounded result after the restart snapshot.
-    late = store.get(ToolCall, call.id)
-    store.update(
-        ToolCall,
-        late.id,
-        {
-            "status": ToolCallStatus.COMPLETE,
-            "completed_at": utc_now(),
-            "result": {"schema": "nebula.tool-result/v2", "status": "completed"},
-        },
-        expected_revision=late.revision,
+    late = await store.get(ToolCall, call.id)
+    (
+        await store.update(
+            ToolCall,
+            late.id,
+            {
+                "status": ToolCallStatus.COMPLETE,
+                "completed_at": utc_now(),
+                "result": {"schema": "nebula.tool-result/v2", "status": "completed"},
+            },
+            expected_revision=late.revision,
+        )
     )
 
     decision = interrupted.metadata["restart_recovery"]["decisions"][-1]
     assert decision["source"] == "automatic_restart_recovery"
     assert decision["outcome"] == "unknown"
-    assert store.get(ToolCall, call.id).status == ToolCallStatus.COMPLETE
+    assert (await store.get(ToolCall, call.id)).status == ToolCallStatus.COMPLETE
 
 
-def test_mission_restart_classifies_every_effect_without_trusting_status(tmp_path):
+async def test_mission_restart_classifies_every_effect_without_trusting_status(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "effect-classifier.db")
-    engagement = store.create(Engagement(name="Effect classifier"))
-    run = store.create(
+    engagement = await store.create(Engagement(name="Effect classifier"))
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Classify every effect",
@@ -523,7 +538,7 @@ def test_mission_restart_classifies_every_effect_without_trusting_status(tmp_pat
             metadata={"origin": "api"},
         )
     )
-    running = store.create(
+    running = await store.create(
         ToolCall(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -533,7 +548,7 @@ def test_mission_restart_classifies_every_effect_without_trusting_status(tmp_pat
             started_at=utc_now(),
         )
     )
-    failed_without_receipt = store.create(
+    failed_without_receipt = await store.create(
         ToolCall(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -545,56 +560,60 @@ def test_mission_restart_classifies_every_effect_without_trusting_status(tmp_pat
             error="worker disappeared",
         )
     )
-    store.create(
-        ToolCall(
-            engagement_id=engagement.id,
-            run_id=run.id,
-            tool_name="recorded_failure",
-            status=ToolCallStatus.FAILED,
-            risk_class=RiskClass.WORKSPACE_WRITE,
-            started_at=utc_now(),
-            completed_at=utc_now(),
-            result={"schema": "nebula.tool-result/v2", "status": "failed"},
-            error="command failed",
+    (
+        await store.create(
+            ToolCall(
+                engagement_id=engagement.id,
+                run_id=run.id,
+                tool_name="recorded_failure",
+                status=ToolCallStatus.FAILED,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                started_at=utc_now(),
+                completed_at=utc_now(),
+                result={"schema": "nebula.tool-result/v2", "status": "failed"},
+                error="command failed",
+            )
         )
     )
-    store.create(
-        ToolCall(
-            engagement_id=engagement.id,
-            run_id=run.id,
-            tool_name="not_started",
-            status=ToolCallStatus.WAITING_APPROVAL,
-            risk_class=RiskClass.WORKSPACE_WRITE,
+    (
+        await store.create(
+            ToolCall(
+                engagement_id=engagement.id,
+                run_id=run.id,
+                tool_name="not_started",
+                status=ToolCallStatus.WAITING_APPROVAL,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+            )
         )
     )
     service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
 
-    service._reconcile_interrupted_run(run.id)
+    (await service._reconcile_interrupted_run(run.id))
 
-    recovery = store.get(AgentRun, run.id).metadata["restart_recovery"]
+    recovery = (await store.get(AgentRun, run.id)).metadata["restart_recovery"]
     assert recovery["auto_continued_unknown_tool_call_ids"] == [
         running.id,
         failed_without_receipt.id,
     ]
 
 
-def test_api_rejects_cloud_mission_for_local_only_engagement(tmp_path):
+async def test_api_rejects_cloud_mission_for_local_only_engagement(tmp_path):
     store = NebulaStore(tmp_path / "privacy.db")
-    engagement = store.create(Engagement(id="eng-local", name="Local mission"))
-    policy = store.create(
+    engagement = await store.create(Engagement(id="eng-local", name="Local mission"))
+    policy = await store.create(
         ScopePolicy(
             id="scope-local",
             engagement_id=engagement.id,
             local_only=True,
         )
     )
-    engagement = store.update(
+    engagement = await store.update(
         Engagement,
         engagement.id,
         {"scope_policy_id": policy.id},
         expected_revision=engagement.revision,
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             name="Cloud model",
             provider_type="custom",
@@ -610,10 +629,10 @@ def test_api_rejects_cloud_mission_for_local_only_engagement(tmp_path):
         provider_factory=lambda selected: provider,
     )
 
-    with TestClient(
+    async with TestClient(
         create_app(store, auth_token="test-token", mission_service=service)
     ) as client:
-        response = client.post(
+        response = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
@@ -622,10 +641,10 @@ def test_api_rejects_cloud_mission_for_local_only_engagement(tmp_path):
     assert response.status_code == 422
     assert "local-only" in response.json()["detail"]
     assert provider.requests == []
-    assert store.count(AgentRun, engagement_id=engagement.id) == 0
+    assert (await store.count(AgentRun, engagement_id=engagement.id)) == 0
 
 
-def test_mission_refuses_relink_between_preparation_and_queue_insert(
+async def test_mission_refuses_relink_between_preparation_and_queue_insert(
     tmp_path, monkeypatch
 ):
     old_folder = tmp_path / "old"
@@ -633,10 +652,10 @@ def test_mission_refuses_relink_between_preparation_and_queue_insert(
     old_folder.mkdir()
     new_folder.mkdir()
     store = NebulaStore(tmp_path / "relink-mission.db")
-    project = store.create(
+    project = await store.create(
         Engagement(name="Relink mission", workspace_path=str(old_folder))
     )
-    profile = _profile(store)
+    profile = await _profile(store)
     provider = RecordingProvider(profile)
     service = MissionService(
         store,
@@ -645,16 +664,18 @@ def test_mission_refuses_relink_between_preparation_and_queue_insert(
     )
     original_create = store.create_with_event
 
-    def relink_before_queue(*args, **kwargs):
-        store.relink_project_workspace(
-            project.id, str(new_folder), expected_revision=project.revision
+    async def relink_before_queue(*args, **kwargs):
+        (
+            await store.relink_project_workspace(
+                project.id, str(new_folder), expected_revision=project.revision
+            )
         )
-        return original_create(*args, **kwargs)
+        return await original_create(*args, **kwargs)
 
     monkeypatch.setattr(store, "create_with_event", relink_before_queue)
     app = create_app(store, auth_token="test-token", mission_service=service)
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(project, profile),
@@ -662,25 +683,29 @@ def test_mission_refuses_relink_between_preparation_and_queue_insert(
 
     assert response.status_code == 409, response.text
     assert "workspace changed" in response.json()["detail"].lower()
-    assert store.count(AgentRun, engagement_id=project.id) == 0
-    assert store.get(Engagement, project.id).workspace_path == str(new_folder)
+    assert (await store.count(AgentRun, engagement_id=project.id)) == 0
+    assert (await store.get(Engagement, project.id)).workspace_path == str(new_folder)
     assert provider.requests == []
 
 
-def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
+async def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
     store = NebulaStore(tmp_path / "browser-mission.db")
-    project = store.create(Engagement(name="Scoped browser mission"))
-    scope = store.create(
+    project = await store.create(Engagement(name="Scoped browser mission"))
+    scope = await store.create(
         ScopePolicy(engagement_id=project.id, allowed_domains=["example.test"])
     )
-    store.update(
-        Engagement,
-        project.id,
-        {"scope_policy_id": scope.id},
-        expected_revision=project.revision,
+    (
+        await store.update(
+            Engagement,
+            project.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=project.revision,
+        )
     )
-    identity = store.create(BrowserIdentity(engagement_id=project.id, name="Research"))
-    session = store.create(
+    identity = await store.create(
+        BrowserIdentity(engagement_id=project.id, name="Research")
+    )
+    session = await store.create(
         BrowserSession(
             engagement_id=project.id,
             identity_id=identity.id,
@@ -688,7 +713,7 @@ def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
             runtime_kind="agent_security",
         )
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             name="Local browser model",
             provider_type="vllm",
@@ -704,14 +729,14 @@ def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
         )
     )
     scheduled_for = utc_now() + timedelta(days=1)
-    with TestClient(
+    async with TestClient(
         create_app(
             store,
             auth_token="test-token",
             mission_checkpoint_path=tmp_path / "browser-mission-checkpoints.db",
         )
     ) as client:
-        response = client.post(
+        response = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(
@@ -734,33 +759,33 @@ def test_api_browser_only_mission_gets_executable_budget_and_lease(tmp_path):
         assert queued["metadata"]["browser_autonomy"]["session_id"] == session.id
         assert (
             len(
-                store.find_entities(
-                    BrowserAutomationLease,
-                    {"run_id": queued["id"]},
-                    engagement_id=project.id,
-                    limit=2,
+                (
+                    await store.find_entities(
+                        BrowserAutomationLease,
+                        {"run_id": queued["id"]},
+                        engagement_id=project.id,
+                        limit=2,
+                    )
                 )
             )
             == 1
         )
         service = client.app.state.mission_service
-        run = store.get(AgentRun, queued["id"])
+        run = await store.get(AgentRun, queued["id"])
         components = service._components(run, service.provider_factory(profile))
-        plan = asyncio.run(
-            components.supervisor.plan(
-                run.objective,
-                components.context,
-                run.budget,
-            )
+        plan = await components.supervisor.plan(
+            run.objective,
+            components.context,
+            run.budget,
         )
         assert len(plan.tasks) == 1
         assert plan.tasks[0].role.value == "network_service"
 
 
-def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
+async def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
     bootstrap_store = NebulaStore(tmp_path / "nebula.db")
-    engagement = bootstrap_store.create(Engagement(name="API mission"))
-    profile = _profile(bootstrap_store)
+    engagement = await bootstrap_store.create(Engagement(name="API mission"))
+    profile = await _profile(bootstrap_store)
     provider = RecordingProvider(profile)
     service = MissionService(
         bootstrap_store,
@@ -769,8 +794,8 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
     )
     app = create_app(bootstrap_store, auth_token="test-token", mission_service=service)
 
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
@@ -800,7 +825,7 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
                 "Scope is bounded and ready for analyst review."
             ),
         }
-        events = bootstrap_store.replay_events(queued["id"])
+        events = await bootstrap_store.replay_events(queued["id"])
         event_types = [event.event_type for event in events]
         assert event_types == [
             "run.queued",
@@ -819,13 +844,15 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
         assert provider.requests[0].model == "security-model"
         assert provider.requests[0].tools == []
 
-        discussed = client.post(f"/api/v1/runs/{queued['id']}/discuss", headers=_auth())
+        discussed = await client.post(
+            f"/api/v1/runs/{queued['id']}/discuss", headers=_auth()
+        )
         assert discussed.status_code == 200, discussed.text
         chat = discussed.json()
         assert chat["backend"] == "provider"
         assert chat["provider_profile_id"] == profile.id
         assert chat["model"] == "security-model"
-        transcript = client.get(
+        transcript = await client.get(
             f"/api/v1/chat/sessions/{chat['id']}/messages", headers=_auth()
         )
         assert transcript.status_code == 200, transcript.text
@@ -833,30 +860,29 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
             "Review the explicitly bounded scope",
             completed["metadata"]["final_summary"],
         ]
-        discussed_again = client.post(
+        discussed_again = await client.post(
             f"/api/v1/runs/{queued['id']}/discuss", headers=_auth()
         )
         assert discussed_again.status_code == 200
         assert discussed_again.json()["id"] == chat["id"]
 
-        terminal_stop = client.post(
+        terminal_stop = await client.post(
             f"/api/v1/runs/{queued['id']}/stop",
             headers=_auth(),
             json={"reason": "too late"},
         )
         assert terminal_stop.status_code == 409
         assert (
-            client.post(
+            await client.post(
                 f"/api/v1/runs/{queued['id']}/pause", headers=_auth(), json={}
-            ).status_code
-            == 404
-        )
+            )
+        ).status_code == 404
 
 
-def test_api_mission_defaults_to_unlimited_duration(tmp_path):
+async def test_api_mission_defaults_to_unlimited_duration(tmp_path):
     store = NebulaStore(tmp_path / "unlimited.db")
-    engagement = store.create(Engagement(name="Unlimited mission"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Unlimited mission"))
+    profile = await _profile(store)
     provider = RecordingProvider(profile)
     service = MissionService(
         store,
@@ -866,10 +892,10 @@ def test_api_mission_defaults_to_unlimited_duration(tmp_path):
     payload = _start_payload(engagement, profile)
     payload.pop("max_duration_seconds")
 
-    with TestClient(
+    async with TestClient(
         create_app(store, auth_token="test-token", mission_service=service)
     ) as client:
-        response = client.post("/api/v1/missions", headers=_auth(), json=payload)
+        response = await client.post("/api/v1/missions", headers=_auth(), json=payload)
         assert response.status_code == 202, response.text
         queued = response.json()
         assert queued["budget"]["max_duration_seconds"] is None
@@ -877,21 +903,21 @@ def test_api_mission_defaults_to_unlimited_duration(tmp_path):
             "complete"
         )
 
-    persisted = store.get(AgentRun, queued["id"])
+    persisted = await store.get(AgentRun, queued["id"])
     assert persisted.budget.max_duration_seconds is None
 
 
-def test_api_retry_creates_a_new_audited_run_with_frozen_runtime(tmp_path):
+async def test_api_retry_creates_a_new_audited_run_with_frozen_runtime(tmp_path):
     store = NebulaStore(tmp_path / "retry.db")
-    engagement = store.create(Engagement(name="Mission retry"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Mission retry"))
+    profile = await _profile(store)
     provider = RecordingProvider(profile)
     service = MissionService(
         store,
         checkpoint_path=tmp_path / "retry-checkpoints.db",
         provider_factory=lambda selected: provider,
     )
-    original = store.create(
+    original = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Recheck the bounded scope",
@@ -915,10 +941,10 @@ def test_api_retry_creates_a_new_audited_run_with_frozen_runtime(tmp_path):
         )
     )
 
-    with TestClient(
+    async with TestClient(
         create_app(store, auth_token="test-token", mission_service=service)
     ) as client:
-        response = client.post(
+        response = await client.post(
             f"/api/v1/runs/{original.id}/retry",
             headers=_auth(),
             json={},
@@ -932,13 +958,13 @@ def test_api_retry_creates_a_new_audited_run_with_frozen_runtime(tmp_path):
         assert retried["metadata"]["stages"] == original.metadata["stages"]
         _wait_for_status(client, retried["id"], "complete")
 
-    assert store.get(AgentRun, original.id).status == RunStatus.INTERRUPTED
+    assert (await store.get(AgentRun, original.id)).status == RunStatus.INTERRUPTED
 
 
-def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
+async def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Cancellation"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Cancellation"))
+    profile = await _profile(store)
     provider = BlockingProvider(profile)
     service = MissionService(
         store,
@@ -948,8 +974,8 @@ def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
 
-    with TestClient(app) as client:
-        started = client.post(
+    async with TestClient(app) as client:
+        started = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
@@ -957,7 +983,7 @@ def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
         assert started.status_code == 202
         run_id = started.json()["id"]
         assert provider.started.wait(timeout=5)
-        waiting_call = store.create(
+        waiting_call = await store.create(
             ToolCall(
                 engagement_id=engagement.id,
                 run_id=run_id,
@@ -967,7 +993,7 @@ def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
             )
         )
 
-        stopped = client.post(
+        stopped = await client.post(
             f"/api/v1/runs/{run_id}/stop",
             headers=_auth(),
             json={"reason": "Operator ended the review"},
@@ -977,20 +1003,22 @@ def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
         assert stopped.json()["status"] == "cancelled"
         assert provider.cancelled.wait(timeout=2)
         assert run_id not in service.active_run_ids
-        tasks = [task for task in store.list_entities(Task) if task.run_id == run_id]
+        tasks = [
+            task for task in (await store.list_entities(Task)) if task.run_id == run_id
+        ]
         attempts = [
             attempt
-            for attempt in store.list_entities(AgentAttempt)
+            for attempt in (await store.list_entities(AgentAttempt))
             if attempt.run_id == run_id
         ]
         assert tasks and {task.status for task in tasks} == {TaskStatus.CANCELLED}
         assert attempts and {attempt.status for attempt in attempts} == {
             TaskStatus.CANCELLED
         }
-        cancelled_call = store.get(ToolCall, waiting_call.id)
+        cancelled_call = await store.get(ToolCall, waiting_call.id)
         assert cancelled_call.status == ToolCallStatus.CANCELLED
         assert cancelled_call.error == "Operator ended the review"
-        events = store.replay_events(run_id)
+        events = await store.replay_events(run_id)
         assert [event.event_type for event in events][-4:] == [
             "run.stop_requested",
             "task.cancelled",
@@ -1000,11 +1028,13 @@ def test_stop_cancels_the_actual_provider_task_and_open_records(tmp_path):
         assert events[-1].payload["reason"] == "Operator ended the review"
 
 
-def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(tmp_path):
+async def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Validation"))
-    profile = _profile(store)
-    disabled = _profile(store, enabled=False, models=["disabled-model"])
+    engagement = await store.create(Engagement(name="Validation"))
+    profile = await _profile(store)
+    disabled = await _profile(store, enabled=False, models=["disabled-model"])
     provider = BlockingProvider(profile)
     service = MissionService(
         store,
@@ -1015,8 +1045,8 @@ def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(tmp_pat
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
 
-    with TestClient(app) as client:
-        outside_allowlist = client.post(
+    async with TestClient(app) as client:
+        outside_allowlist = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile, model="other-model"),
@@ -1026,7 +1056,7 @@ def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(tmp_pat
             "outside the provider profile allowlist"
             in outside_allowlist.json()["detail"]
         )
-        disabled_response = client.post(
+        disabled_response = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(
@@ -1037,7 +1067,7 @@ def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(tmp_pat
         )
         assert disabled_response.status_code == 422
         assert "disabled" in disabled_response.json()["detail"]
-        missing_model = client.post(
+        missing_model = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json={
@@ -1047,7 +1077,7 @@ def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(tmp_pat
             },
         )
         assert missing_model.status_code == 422
-        missing_name = client.post(
+        missing_name = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json={
@@ -1057,33 +1087,35 @@ def test_allowlist_disabled_profiles_and_capacity_fail_before_extra_runs(tmp_pat
             },
         )
         assert missing_name.status_code == 422
-        assert store.count(AgentRun) == 0
+        assert (await store.count(AgentRun)) == 0
 
-        first = client.post(
+        first = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
         )
         assert first.status_code == 202
         assert provider.started.wait(timeout=5)
-        capacity = client.post(
+        capacity = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
         )
         assert capacity.status_code == 429
-        assert store.count(AgentRun) == 1
-        client.post(
-            f"/api/v1/runs/{first.json()['id']}/stop",
-            headers=_auth(),
-            json={},
+        assert (await store.count(AgentRun)) == 1
+        (
+            await client.post(
+                f"/api/v1/runs/{first.json()['id']}/stop",
+                headers=_auth(),
+                json={},
+            )
         )
 
 
-def test_background_provider_failure_is_durable(tmp_path):
+async def test_background_provider_failure_is_durable(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Failure"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Failure"))
+    profile = await _profile(store)
     provider = FailingProvider(profile)
     service = MissionService(
         store,
@@ -1092,8 +1124,8 @@ def test_background_provider_failure_is_durable(tmp_path):
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
 
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
@@ -1101,16 +1133,18 @@ def test_background_provider_failure_is_durable(tmp_path):
         run_id = response.json()["id"]
         failed = _wait_for_status(client, run_id, "failed")
         assert failed["completed_at"] is not None
-        assert [event.event_type for event in store.replay_events(run_id)][-2:] == [
+        assert [event.event_type for event in (await store.replay_events(run_id))][
+            -2:
+        ] == [
             "task.failed",
             "run.failed",
         ]
 
 
-def test_stop_refuses_to_fake_cancellation_for_an_unowned_run(tmp_path):
+async def test_stop_refuses_to_fake_cancellation_for_an_unowned_run(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="External runner"))
-    external = store.create(
+    engagement = await store.create(Engagement(name="External runner"))
+    external = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Owned by another runner",
@@ -1123,8 +1157,8 @@ def test_stop_refuses_to_fake_cancellation_for_an_unowned_run(tmp_path):
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
 
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             f"/api/v1/runs/{external.id}/stop",
             headers=_auth(),
             json={"reason": "Cannot prove this stopped"},
@@ -1132,14 +1166,16 @@ def test_stop_refuses_to_fake_cancellation_for_an_unowned_run(tmp_path):
 
     assert response.status_code == 409
     assert "cancellation cannot be confirmed" in response.json()["detail"]
-    assert store.get(AgentRun, external.id).status == RunStatus.RUNNING
-    assert store.replay_events(external.id) == []
+    assert (await store.get(AgentRun, external.id)).status == RunStatus.RUNNING
+    assert (await store.replay_events(external.id)) == []
 
 
-def test_app_shutdown_leaves_owned_background_missions_for_auto_recovery(tmp_path):
+async def test_app_shutdown_leaves_owned_background_missions_for_auto_recovery(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Shutdown"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Shutdown"))
+    profile = await _profile(store)
     provider = BlockingProvider(profile)
     service = MissionService(
         store,
@@ -1149,8 +1185,8 @@ def test_app_shutdown_leaves_owned_background_missions_for_auto_recovery(tmp_pat
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
 
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
@@ -1158,7 +1194,7 @@ def test_app_shutdown_leaves_owned_background_missions_for_auto_recovery(tmp_pat
         run_id = response.json()["id"]
         assert provider.started.wait(timeout=5)
 
-    run = store.get(AgentRun, run_id)
+    run = await store.get(AgentRun, run_id)
     assert run.status not in {
         RunStatus.CANCELLED,
         RunStatus.COMPLETE,
@@ -1179,20 +1215,20 @@ def test_app_shutdown_leaves_owned_background_missions_for_auto_recovery(tmp_pat
     async def recover() -> None:
         await restored.startup()
         for _ in range(500):
-            if store.get(AgentRun, run_id).status == RunStatus.COMPLETE:
+            if (await store.get(AgentRun, run_id)).status == RunStatus.COMPLETE:
                 break
             await asyncio.sleep(0.01)
         await restored.shutdown()
 
-    asyncio.run(recover())
-    assert store.get(AgentRun, run_id).status == RunStatus.COMPLETE
+    (await recover())
+    assert (await store.get(AgentRun, run_id)).status == RunStatus.COMPLETE
     assert stats["recovered"] == 1
 
 
-def test_failure_cleanup_paginates_all_run_tasks_and_attempts(tmp_path):
+async def test_failure_cleanup_paginates_all_run_tasks_and_attempts(tmp_path):
     store = NebulaStore(tmp_path / "pagination.db")
-    engagement = store.create(Engagement(name="Large interrupted mission"))
-    run = store.create(
+    engagement = await store.create(Engagement(name="Large interrupted mission"))
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="reconcile every persisted work item",
@@ -1222,17 +1258,19 @@ def test_failure_cleanup_paginates_all_run_tasks_and_attempts(tmp_path):
         )
         for number in range(1_001)
     ]
-    store.create_many([*tasks, *attempts])
+    (await store.create_many([*tasks, *attempts]))
     service = MissionService(
         store,
         checkpoint_path=tmp_path / "mission-checkpoints.db",
     )
 
-    assert len(list(service._run_attempts(run))) == 1_001
-    service._fail_open_work(run, "Core restarted")
+    assert len(list([item async for item in service._run_attempts(run)])) == 1_001
+    (await service._fail_open_work(run, "Core restarted"))
 
-    assert all(task.status == TaskStatus.FAILED for task in service._run_tasks(run))
-    events = store.replay_events(run.id, limit=10_000)
+    assert await async_all(
+        task.status == TaskStatus.FAILED async for task in service._run_tasks(run)
+    )
+    events = await store.replay_events(run.id, limit=10_000)
     assert len(events) == 1_001
     assert events[-1].payload["task_id"] == "task-1000"
 
@@ -1245,13 +1283,15 @@ class GatedRuntime:
         self.gates = gates
         self.stats = stats
 
-    def _complete(self, run_id: str) -> None:
-        run = self.store.get(AgentRun, run_id)
-        self.store.update(
-            AgentRun,
-            run.id,
-            {"status": RunStatus.COMPLETE, "completed_at": utc_now()},
-            expected_revision=run.revision,
+    async def _complete(self, run_id: str) -> None:
+        run = await self.store.get(AgentRun, run_id)
+        (
+            await self.store.update(
+                AgentRun,
+                run.id,
+                {"status": RunStatus.COMPLETE, "completed_at": utc_now()},
+                expected_revision=run.revision,
+            )
         )
 
     async def start(self, **kwargs) -> dict:
@@ -1264,17 +1304,17 @@ class GatedRuntime:
             await gate.wait()
         finally:
             self.stats["active"] -= 1
-        self._complete(run_id)
+        (await self._complete(run_id))
         return {}
 
     async def resume(self, run_id: str, response: dict) -> dict:
         self.stats["resumed"] += 1
-        self._complete(run_id)
+        (await self._complete(run_id))
         return {}
 
     async def recover(self, run_id: str) -> dict:
         self.stats["recovered"] = self.stats.get("recovered", 0) + 1
-        self._complete(run_id)
+        (await self._complete(run_id))
         return {}
 
 
@@ -1286,8 +1326,8 @@ def _gated_runtime_factory(store, gates, stats):
     return factory
 
 
-def _waiting_run_with_approval(store, engagement, profile):
-    run = store.create(
+async def _waiting_run_with_approval(store, engagement, profile):
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Review the bounded scope after approval",
@@ -1303,7 +1343,7 @@ def _waiting_run_with_approval(store, engagement, profile):
             metadata={"origin": "api", "waiting_approval": True},
         )
     )
-    approval = store.create(
+    approval = await store.create(
         Approval(
             engagement_id=engagement.id,
             run_id=run.id,
@@ -1319,11 +1359,11 @@ def _waiting_run_with_approval(store, engagement, profile):
     return run, approval
 
 
-def test_approval_resume_is_not_blocked_by_mission_capacity(tmp_path):
+async def test_approval_resume_is_not_blocked_by_mission_capacity(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "approval-capacity.db")
-        engagement = store.create(Engagement(name="Approval capacity"))
-        profile = _profile(store)
+        engagement = await store.create(Engagement(name="Approval capacity"))
+        profile = await _profile(store)
         provider = RecordingProvider(profile)
         gates: dict[str, asyncio.Event] = {}
         stats = {"active": 0, "max_active": 0, "resumed": 0}
@@ -1351,27 +1391,27 @@ def test_approval_resume_is_not_blocked_by_mission_capacity(tmp_path):
         await asyncio.wait_for(gates.setdefault("started", asyncio.Event()).wait(), 5)
         assert len(service._tasks) == 1
 
-        waiting, approval = _waiting_run_with_approval(store, engagement, profile)
+        waiting, approval = await _waiting_run_with_approval(store, engagement, profile)
         # The waiting run already holds a logical slot: the persisted APPROVED
         # decision must never leave it stranded in WAITING_APPROVAL.
         resumed = await service.resume_after_approval(approval, actor_id="operator")
         assert resumed.status == RunStatus.RUNNING
         assert waiting.id in service._tasks
         await asyncio.wait_for(service._tasks[waiting.id], 5)
-        assert store.get(AgentRun, waiting.id).status == RunStatus.COMPLETE
+        assert (await store.get(AgentRun, waiting.id)).status == RunStatus.COMPLETE
         assert stats["resumed"] == 1
 
         gates[blocker.id].set()
         await asyncio.wait_for(service._tasks[blocker.id], 5)
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_reposting_an_approval_decision_resumes_a_stranded_run(tmp_path):
+async def test_reposting_an_approval_decision_resumes_a_stranded_run(tmp_path):
     store = NebulaStore(tmp_path / "approval-redrive.db")
-    engagement = store.create(Engagement(name="Approval redrive"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Approval redrive"))
+    profile = await _profile(store)
     provider = RecordingProvider(profile)
     gates: dict[str, asyncio.Event] = {}
     stats = {"active": 0, "max_active": 0, "resumed": 0}
@@ -1391,26 +1431,30 @@ def test_reposting_an_approval_decision_resumes_a_stranded_run(tmp_path):
         cancellation_timeout_seconds=2,
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
-    with TestClient(app) as client:
-        run, _ = _waiting_run_with_approval(store, engagement, profile)
-        approval = store.get(Approval, store.list_entities(Approval, limit=10)[0].id)
-        approval = store.update(
+    async with TestClient(app) as client:
+        run, _ = await _waiting_run_with_approval(store, engagement, profile)
+        approval = await store.get(
+            Approval, (await store.list_entities(Approval, limit=10))[0].id
+        )
+        approval = await store.update(
             Approval,
             approval.id,
             {"status": ApprovalStatus.PENDING, "decided_by": None, "decided_at": None},
             expected_revision=approval.revision,
         )
 
-        first = client.post(
+        first = await client.post(
             f"/api/v1/approvals/{approval.id}/decision",
             headers=_auth(),
             json={"decision": "approve"},
         )
         assert first.status_code == 502
-        assert store.get(Approval, approval.id).status == ApprovalStatus.APPROVED
-        assert store.get(AgentRun, run.id).status == RunStatus.WAITING_APPROVAL
+        assert (
+            await store.get(Approval, approval.id)
+        ).status == ApprovalStatus.APPROVED
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.WAITING_APPROVAL
 
-        second = client.post(
+        second = await client.post(
             f"/api/v1/approvals/{approval.id}/decision",
             headers=_auth(),
             json={"decision": "approve"},
@@ -1421,11 +1465,11 @@ def test_reposting_an_approval_decision_resumes_a_stranded_run(tmp_path):
         assert stats["resumed"] == 1
 
 
-def test_recurrence_scheduling_failure_is_recorded_on_the_completed_run(tmp_path):
+async def test_recurrence_scheduling_failure_is_recorded_on_the_completed_run(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "recurrence.db")
-        engagement = store.create(Engagement(name="Recurring"))
-        profile = _profile(store)
+        engagement = await store.create(Engagement(name="Recurring"))
+        profile = await _profile(store)
         provider = RecordingProvider(profile)
         service = MissionService(
             store,
@@ -1448,30 +1492,34 @@ def test_recurrence_scheduling_failure_is_recorded_on_the_completed_run(tmp_path
         )
         # The operator disables the profile while the occurrence is running, so
         # the next occurrence cannot be validated when this one completes.
-        latest_profile = store.get(ProviderProfile, profile.id)
-        store.update(
-            ProviderProfile,
-            profile.id,
-            {"enabled": False},
-            expected_revision=latest_profile.revision,
+        latest_profile = await store.get(ProviderProfile, profile.id)
+        (
+            await store.update(
+                ProviderProfile,
+                profile.id,
+                {"enabled": False},
+                expected_revision=latest_profile.revision,
+            )
         )
         await asyncio.wait_for(service._tasks[run.id], 10)
 
-        completed = store.get(AgentRun, run.id)
+        completed = await store.get(AgentRun, run.id)
         assert completed.status == RunStatus.COMPLETE
         assert "disabled" in str(completed.metadata.get("recurrence_error"))
-        assert store.count(AgentRun) == 1
-        events = [event.event_type for event in store.replay_events(run.id)]
+        assert (await store.count(AgentRun)) == 1
+        events = [event.event_type for event in (await store.replay_events(run.id))]
         assert events[-1] == "run.recurrence_failed"
         await service.shutdown()
 
         # Once the profile is usable again, a restart re-drives the series.
-        latest_profile = store.get(ProviderProfile, profile.id)
-        store.update(
-            ProviderProfile,
-            profile.id,
-            {"enabled": True},
-            expected_revision=latest_profile.revision,
+        latest_profile = await store.get(ProviderProfile, profile.id)
+        (
+            await store.update(
+                ProviderProfile,
+                profile.id,
+                {"enabled": True},
+                expected_revision=latest_profile.revision,
+            )
         )
         restored = MissionService(
             store,
@@ -1481,27 +1529,29 @@ def test_recurrence_scheduling_failure_is_recorded_on_the_completed_run(tmp_path
         await restored.startup()
         successors = [
             item
-            for item in store.list_entities(AgentRun, limit=10)
+            for item in (await store.list_entities(AgentRun, limit=10))
             if item.metadata.get("recurrence_of_run_id") == run.id
         ]
         assert len(successors) == 1
         assert successors[0].status == RunStatus.QUEUED
         assert successors[0].id in restored._scheduled_tasks
-        assert "recurrence_error" not in store.get(AgentRun, run.id).metadata
+        assert "recurrence_error" not in (await store.get(AgentRun, run.id)).metadata
         await restored.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_scheduled_missions_wait_for_capacity_before_running(tmp_path, monkeypatch):
+async def test_scheduled_missions_wait_for_capacity_before_running(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(
         missions_module, "SCHEDULED_CAPACITY_RETRY_SECONDS", 0.05, raising=False
     )
 
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "scheduled-capacity.db")
-        engagement = store.create(Engagement(name="Scheduled capacity"))
-        profile = _profile(store)
+        engagement = await store.create(Engagement(name="Scheduled capacity"))
+        profile = await _profile(store)
         provider = RecordingProvider(profile)
         gates: dict[str, asyncio.Event] = {}
         stats = {"active": 0, "max_active": 0, "resumed": 0}
@@ -1539,11 +1589,11 @@ def test_scheduled_missions_wait_for_capacity_before_running(tmp_path, monkeypat
         running = [
             item
             for item in runs
-            if store.get(AgentRun, item.id).status != RunStatus.QUEUED
+            if (await store.get(AgentRun, item.id)).status != RunStatus.QUEUED
         ]
         deferred = [item for item in runs if item not in running]
         assert len(running) == 1 and len(deferred) == 1
-        assert store.get(AgentRun, deferred[0].id).status == RunStatus.QUEUED
+        assert (await store.get(AgentRun, deferred[0].id)).status == RunStatus.QUEUED
 
         gates[running[0].id].set()
         await asyncio.wait_for(service._tasks[running[0].id], 5)
@@ -1554,22 +1604,22 @@ def test_scheduled_missions_wait_for_capacity_before_running(tmp_path, monkeypat
         gates[deferred[0].id].set()
         await asyncio.wait_for(service._tasks[deferred[0].id], 5)
         assert stats["max_active"] == 1
-        assert store.get(AgentRun, deferred[0].id).status == RunStatus.COMPLETE
+        assert (await store.get(AgentRun, deferred[0].id)).status == RunStatus.COMPLETE
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_cancels_a_run_the_operator_stopped_before_restart(tmp_path):
+async def test_startup_cancels_a_run_the_operator_stopped_before_restart(tmp_path):
     """MIS-6: a CANCELLING run is finalized as cancelled by restart recovery,
     never resurrected from its checkpoint and driven to completion."""
 
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "cancelling-restart.db")
-        engagement = store.create(Engagement(name="Cancelling restart"))
-        profile = _profile(store)
+        engagement = await store.create(Engagement(name="Cancelling restart"))
+        profile = await _profile(store)
         provider = RecordingProvider(profile)
-        run = store.create(
+        run = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="stop me",
@@ -1590,21 +1640,21 @@ def test_startup_cancels_a_run_the_operator_stopped_before_restart(tmp_path):
         await service.startup()
         await asyncio.sleep(0.1)
 
-        assert store.get(AgentRun, run.id).status == RunStatus.CANCELLED
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.CANCELLED
         assert stats["recovered"] == 0
         assert run.id not in service.active_run_ids
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_second_restart_recovery_starts_a_fresh_generation(tmp_path):
+async def test_second_restart_recovery_starts_a_fresh_generation(tmp_path):
     """MIS-5: a run recovered once and interrupted again reconciles under a new
     recovery generation, so its events do not collide with the first cycle's."""
 
     store = NebulaStore(tmp_path / "second-restart.db")
-    engagement = store.create(Engagement(name="Second restart"))
-    run = store.create(
+    engagement = await store.create(Engagement(name="Second restart"))
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="long mission",
@@ -1613,8 +1663,8 @@ def test_second_restart_recovery_starts_a_fresh_generation(tmp_path):
         )
     )
 
-    def running_call(name: str) -> ToolCall:
-        return store.create(
+    async def running_call(name: str) -> ToolCall:
+        return await store.create(
             ToolCall(
                 engagement_id=engagement.id,
                 run_id=run.id,
@@ -1627,33 +1677,35 @@ def test_second_restart_recovery_starts_a_fresh_generation(tmp_path):
 
     service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
 
-    first_call = running_call("first_scan")
-    first = service._reconcile_interrupted_run(run.id)
+    first_call = await running_call("first_scan")
+    first = await service._reconcile_interrupted_run(run.id)
     assert first.status == RunStatus.QUEUED
     assert first.metadata["restart_recovery"]["generation"] == 1
 
     # A fresh Core start before recovery runs re-queues the same cycle: the
     # generation is unchanged and no second recovery event is written.
-    requeued = service._reconcile_interrupted_run(run.id)
+    requeued = await service._reconcile_interrupted_run(run.id)
     assert requeued.metadata["restart_recovery"]["generation"] == 1
     queued_events = [
         event
-        for event in store.replay_events(run.id)
+        for event in (await store.replay_events(run.id))
         if event.event_type == "run.recovery_queued"
     ]
     assert len(queued_events) == 1
 
     # Recovery ran and the run was interrupted again with a new in-flight call.
-    current = store.get(AgentRun, run.id)
-    store.update(
-        AgentRun,
-        run.id,
-        {"status": RunStatus.RUNNING},
-        expected_revision=current.revision,
+    current = await store.get(AgentRun, run.id)
+    (
+        await store.update(
+            AgentRun,
+            run.id,
+            {"status": RunStatus.RUNNING},
+            expected_revision=current.revision,
+        )
     )
-    second_call = running_call("second_scan")
+    second_call = await running_call("second_scan")
 
-    second = service._reconcile_interrupted_run(run.id)
+    second = await service._reconcile_interrupted_run(run.id)
     assert second.status == RunStatus.QUEUED
     assert second.metadata["restart_recovery"]["generation"] == 2
     assert set(
@@ -1661,7 +1713,7 @@ def test_second_restart_recovery_starts_a_fresh_generation(tmp_path):
     ) == {first_call.id, second_call.id}
 
 
-def test_repeated_recovery_approval_interrupts_are_each_persisted(tmp_path):
+async def test_repeated_recovery_approval_interrupts_are_each_persisted(tmp_path):
     """MIS-5: a second recovery cycle that interrupts for approval persists the
     transition instead of dropping it under a reused idempotency key."""
 
@@ -1679,10 +1731,10 @@ def test_repeated_recovery_approval_interrupts_are_each_persisted(tmp_path):
 
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "approve-twice.db")
-        engagement = store.create(Engagement(name="Approve twice"))
-        profile = _profile(store)
+        engagement = await store.create(Engagement(name="Approve twice"))
+        profile = await _profile(store)
         provider = RecordingProvider(profile)
-        run = store.create(
+        run = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="approve twice",
@@ -1701,28 +1753,32 @@ def test_repeated_recovery_approval_interrupts_are_each_persisted(tmp_path):
             )
             await service.startup()
             await asyncio.sleep(0.2)
-            assert store.get(AgentRun, run.id).status == RunStatus.WAITING_APPROVAL
+            assert (
+                await store.get(AgentRun, run.id)
+            ).status == RunStatus.WAITING_APPROVAL
             await service.shutdown()
             # The operator approves; the resumed graph runs until the next
             # restart interrupts it for approval again.
-            current = store.get(AgentRun, run.id)
-            store.update(
-                AgentRun,
-                run.id,
-                {"status": RunStatus.RUNNING},
-                expected_revision=current.revision,
+            current = await store.get(AgentRun, run.id)
+            (
+                await store.update(
+                    AgentRun,
+                    run.id,
+                    {"status": RunStatus.RUNNING},
+                    expected_revision=current.revision,
+                )
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_mission_command_approval_decision_resumes_the_run(tmp_path):
+async def test_mission_command_approval_decision_resumes_the_run(tmp_path):
     """MIS-3: approving a Mission run_command card via the API resumes the run
     instead of leaving it stranded in WAITING_APPROVAL forever."""
 
     store = NebulaStore(tmp_path / "command-approval.db")
-    engagement = store.create(Engagement(name="Command approval"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Command approval"))
+    profile = await _profile(store)
     provider = RecordingProvider(profile)
     gates: dict[str, asyncio.Event] = {}
     stats = {"active": 0, "max_active": 0, "resumed": 0, "recovered": 0}
@@ -1734,8 +1790,8 @@ def test_mission_command_approval_decision_resumes_the_run(tmp_path):
         cancellation_timeout_seconds=2,
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
-    with TestClient(app) as client:
-        run = store.create(
+    async with TestClient(app) as client:
+        run = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="Run a scanning command after approval",
@@ -1750,7 +1806,7 @@ def test_mission_command_approval_decision_resumes_the_run(tmp_path):
                 metadata={"origin": "api", "waiting_approval": True},
             )
         )
-        call = store.create(
+        call = await store.create(
             ToolCall(
                 engagement_id=engagement.id,
                 run_id=run.id,
@@ -1763,7 +1819,7 @@ def test_mission_command_approval_decision_resumes_the_run(tmp_path):
                 idempotency_key="task:task-1:turn:1:call:0",
             )
         )
-        approval = store.create(
+        approval = await store.create(
             Approval(
                 engagement_id=engagement.id,
                 run_id=run.id,
@@ -1781,7 +1837,7 @@ def test_mission_command_approval_decision_resumes_the_run(tmp_path):
             )
         )
 
-        decision = client.post(
+        decision = await client.post(
             f"/api/v1/approvals/{approval.id}/decision",
             headers=_auth(),
             json={"decision": "approve"},
@@ -1791,4 +1847,7 @@ def test_mission_command_approval_decision_resumes_the_run(tmp_path):
         assert decision.json()["status"] == "approved"
         _wait_for_status(client, run.id, "complete")
         assert stats["resumed"] == 1
-        assert store.get(AgentRun, run.id).status == RunStatus.COMPLETE
+        assert (await store.get(AgentRun, run.id)).status == RunStatus.COMPLETE
+
+
+pytestmark = pytest.mark.anyio

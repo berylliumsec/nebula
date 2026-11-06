@@ -586,11 +586,11 @@ async def suggest_tools(
     return receipt
 
 
-def load_settings(store: Any) -> ToolSuggestionSettings | None:
+async def load_settings(store: Any) -> ToolSuggestionSettings | None:
     from .storage import NotFoundError
 
     try:
-        return store.get(ToolSuggestionSettings, SETTINGS_ID)
+        return await store.get(ToolSuggestionSettings, SETTINGS_ID)
     except NotFoundError:  # diagnostic-expected: no key has been saved yet
         return None
 
@@ -598,10 +598,10 @@ def load_settings(store: Any) -> ToolSuggestionSettings | None:
 KeySource = Literal["vault", "session", "environment"]
 
 
-def key_source(store: Any, credentials: Any) -> tuple[KeySource | None, bool]:
+async def key_source(store: Any, credentials: Any) -> tuple[KeySource | None, bool]:
     """Where the key comes from ("vault", "session", "environment") and if usable."""
 
-    settings = load_settings(store)
+    settings = await load_settings(store)
     if settings is not None and settings.secret_ref:
         status = credentials.status(settings.secret_ref)
         return status.persistence, status.available
@@ -610,12 +610,12 @@ def key_source(store: Any, credentials: Any) -> tuple[KeySource | None, bool]:
     return None, False
 
 
-def resolve_jev_client(store: Any, credentials: Any) -> JevClient | None:
+async def resolve_jev_client(store: Any, credentials: Any) -> JevClient | None:
     """A saved key wins over the environment; an unusable saved key yields None."""
 
     from .credentials import CredentialError
 
-    settings = load_settings(store)
+    settings = await load_settings(store)
     if settings is not None and settings.secret_ref:
         try:
             secret = credentials.resolve(settings.secret_ref)

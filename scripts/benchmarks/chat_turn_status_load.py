@@ -60,7 +60,7 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def _seed(args: argparse.Namespace) -> None:
+async def _seed(args: argparse.Namespace) -> None:
     from nebula.v3.domain import (
         ChatSession,
         ChatTurn,
@@ -80,17 +80,17 @@ def _seed(args: argparse.Namespace) -> None:
     root.mkdir(parents=True, exist_ok=True)
     db = root / "nebula.db"
     store = NebulaStore(db)
-    project = store.create(
+    project = await store.create(
         Engagement(id="bench-project", name="Synthetic active turns")
     )
-    archived = store.create(
+    archived = await store.create(
         Engagement(
             id="bench-archived",
             name="Synthetic archive",
             status=EngagementStatus.ARCHIVED,
         )
     )
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             id="bench-inert-provider",
             name="Inert local fixture",
@@ -103,7 +103,7 @@ def _seed(args: argparse.Namespace) -> None:
             },
         )
     )
-    harness = store.create(
+    harness = await store.create(
         HarnessProfile(
             id="bench-inert-harness",
             name="Inert harness fixture",
@@ -116,7 +116,7 @@ def _seed(args: argparse.Namespace) -> None:
     session_count = args.interrupted + args.active
     session_ids = []
     for index in range(session_count):
-        chat = store.create(
+        chat = await store.create(
             ChatSession(
                 id=f"bench-session-{index:04d}",
                 engagement_id=project.id,
@@ -135,7 +135,7 @@ def _seed(args: argparse.Namespace) -> None:
             ("Archived project", {}, archived),
         )
     ):
-        chat = store.create(
+        chat = await store.create(
             ChatSession(
                 id=f"bench-extra-session-{extra_index}",
                 engagement_id=engagement.id,
@@ -145,24 +145,28 @@ def _seed(args: argparse.Namespace) -> None:
                 metadata={"allow_agent_messaging": True, **metadata},
             )
         )
-        store.create(
-            ChatTurn(
-                id=f"bench-extra-turn-{extra_index}",
-                engagement_id=engagement.id,
-                session_id=chat.id,
-                provider_profile_id=provider.id,
-                model="fixture-model",
-                status=ChatTurnStatus.ROUTING,
+        (
+            await store.create(
+                ChatTurn(
+                    id=f"bench-extra-turn-{extra_index}",
+                    engagement_id=engagement.id,
+                    session_id=chat.id,
+                    provider_profile_id=provider.id,
+                    model="fixture-model",
+                    status=ChatTurnStatus.ROUTING,
+                )
             )
         )
     for index in range(args.active):
-        store.create(
-            WorkItem(
-                id=f"bench-work-{index:04d}",
-                engagement_id=project.id,
-                title=f"Synthetic work {index:04d}",
-                status="in_progress",
-                assignee_session_id=session_ids[args.interrupted + index],
+        (
+            await store.create(
+                WorkItem(
+                    id=f"bench-work-{index:04d}",
+                    engagement_id=project.id,
+                    title=f"Synthetic work {index:04d}",
+                    status="in_progress",
+                    assignee_session_id=session_ids[args.interrupted + index],
+                )
             )
         )
 
@@ -248,19 +252,22 @@ def _seed(args: argparse.Namespace) -> None:
         connection.close()
     expected_results = {
         "http": [
-            item.model_dump(mode="json") for item in WorkService(store).active_agents()
+            item.model_dump(mode="json")
+            for item in (await WorkService(store).active_agents())
         ],
         "work.agents": [
             item.model_dump(mode="json")
-            for item in WorkService(store).agent_roster(project.id)
+            for item in (await WorkService(store).agent_roster(project.id))
         ],
-        "agent.list": AgentMessageService(store).peers(
-            ChatSession(
-                engagement_id=project.id,
-                title="Benchmark gateway",
-                provider_profile_id=provider.id,
-                model="fixture-model",
-                metadata={"allow_agent_messaging": True},
+        "agent.list": (
+            await AgentMessageService(store).peers(
+                ChatSession(
+                    engagement_id=project.id,
+                    title="Benchmark gateway",
+                    provider_profile_id=provider.id,
+                    model="fixture-model",
+                    metadata={"allow_agent_messaging": True},
+                )
             )
         ),
     }
@@ -354,21 +361,25 @@ async def _serve(args: argparse.Namespace) -> None:
     for index in range(
         fixture["interrupted"], fixture["interrupted"] + fixture["active_routing"] - 4
     ):
-        store.update(
-            ChatTurn,
-            f"bench-turn-{index:05d}",
-            {"status": ChatTurnStatus.ROUTING, "request_snapshot": {}},
+        (
+            await store.update(
+                ChatTurn,
+                f"bench-turn-{index:05d}",
+                {"status": ChatTurnStatus.ROUTING, "request_snapshot": {}},
+            )
         )
     for index in range(4):
-        store.update(
-            ChatTurn,
-            f"bench-extra-turn-{index}",
-            {"status": ChatTurnStatus.ROUTING, "request_snapshot": {}},
+        (
+            await store.update(
+                ChatTurn,
+                f"bench-extra-turn-{index}",
+                {"status": ChatTurnStatus.ROUTING, "request_snapshot": {}},
+            )
         )
     gateways: list[McpGatewaySession] = []
     gateway_details = []
     for _ in range(args.clients):
-        chat, _, turn = runtime.prepare_chat(
+        chat, _, turn = await runtime.prepare_chat(
             engagement_id=fixture["project_id"],
             profile_id=fixture["harness_profile_id"],
             model=None,
@@ -378,7 +389,7 @@ async def _serve(args: argparse.Namespace) -> None:
             mcp_server_ids=[],
             title="Benchmark gateway",
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         runtime._active[session.id] = SimpleNamespace(
             turn_id=turn.id, connection=None, task=None
         )
@@ -644,15 +655,17 @@ async def _load(args: argparse.Namespace) -> None:
     deadline = started + args.duration
     before = _process_stats(ready["pid"])
 
-    def update_turns() -> None:
+    async def update_turns() -> None:
         store = NebulaStore(args.db)
         iteration = 0
         while not stop_writes.is_set() and time.monotonic() < deadline:
             try:
-                store.update(
-                    ChatTurn,
-                    fixture["writer_turn_id"],
-                    {"error": f"synthetic update {iteration}"},
+                (
+                    await store.update(
+                        ChatTurn,
+                        fixture["writer_turn_id"],
+                        {"error": f"synthetic update {iteration}"},
+                    )
                 )
                 write_counts["turn_updates"] += 1
             except Exception as exc:
@@ -660,13 +673,15 @@ async def _load(args: argparse.Namespace) -> None:
             iteration += 1
             stop_writes.wait(0.5)
 
-    def append_events() -> None:
+    async def append_events() -> None:
         store = NebulaStore(args.db)
         iteration = 0
         while not stop_writes.is_set() and time.monotonic() < deadline:
             try:
-                store.append_event(
-                    "synthetic-benchmark-stream", "benchmark.tick", {"n": iteration}
+                (
+                    await store.append_event(
+                        "synthetic-benchmark-stream", "benchmark.tick", {"n": iteration}
+                    )
                 )
                 write_counts["events"] += 1
             except Exception as exc:
@@ -826,12 +841,12 @@ def _query_plans(db: Path, project_id: str, *, indexed: bool) -> dict[str, list[
         connection.close()
 
 
-def _migrate(args: argparse.Namespace) -> None:
+async def _migrate(args: argparse.Namespace) -> None:
     from nebula.v3.storage import NebulaStore
 
     started = time.monotonic()
     store = NebulaStore(args.db)
-    store.database.engine.dispose()
+    (await store.database.engine.dispose())
     print(json.dumps({"migration_seconds": round(time.monotonic() - started, 2)}))
 
 
@@ -1168,7 +1183,7 @@ def _run(args: argparse.Namespace) -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def main() -> None:
+async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     seed = commands.add_parser("seed")
@@ -1221,18 +1236,18 @@ def main() -> None:
     run.add_argument("--timeout", type=float, default=20)
     args = parser.parse_args()
     if args.command == "seed":
-        _seed(args)
+        (await _seed(args))
     elif args.command == "serve":
-        asyncio.run(_serve(args))
+        (await _serve(args))
     elif args.command == "load":
-        asyncio.run(_load(args))
+        (await _load(args))
     elif args.command == "probe":
         _probe(args)
     elif args.command == "migrate":
-        _migrate(args)
+        (await _migrate(args))
     else:
         _run(args)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

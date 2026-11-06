@@ -92,9 +92,9 @@ class WebSearchResult(NebulaModel):
     published_at: str | None = Field(default=None, max_length=40)
 
 
-def load_settings(store: NebulaStore) -> WebSearchSettings | None:
+async def load_settings(store: NebulaStore) -> WebSearchSettings | None:
     try:
-        return store.get(WebSearchSettings, SETTINGS_ID)
+        return await store.get(WebSearchSettings, SETTINGS_ID)
     except NotFoundError as exc:  # diagnostic-expected: absent until first use
         record_caught_exception(
             "runtime",
@@ -208,10 +208,12 @@ class SearchRuntime:
 
     # -- runner resolution -------------------------------------------------
 
-    def _profile(self) -> StoredRunnerProfile:
+    async def _profile(self) -> StoredRunnerProfile:
         profiles = [
             profile
-            for profile in self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            for profile in (
+                await self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            )
             if profile.enabled and profile.healthy
         ]
         local = next((profile for profile in profiles if profile.id == "local"), None)
@@ -270,7 +272,7 @@ class SearchRuntime:
     async def install(self) -> str:
         """Pull the image and pin it by the digest the runtime proves."""
 
-        profile = self._profile()
+        profile = await self._profile()
         _, stderr, code = await self._run(
             profile, "pull", SOURCE_REFERENCE, timeout=PULL_TIMEOUT_SECONDS
         )
@@ -366,7 +368,7 @@ class SearchRuntime:
 
     async def state(self) -> tuple[WebSearchRuntimeState, str]:
         try:
-            profile = self._profile()
+            profile = await self._profile()
         except SearchRuntimeUnavailable as exc:
             # diagnostic-expected: an unconfigured runtime is a reportable state
             return WebSearchRuntimeState.ABSENT, str(exc)
@@ -390,11 +392,11 @@ class SearchRuntime:
         """Start the runtime if needed and return its loopback port."""
 
         async with self._lock:
-            settings = load_settings(self.store)
+            settings = await load_settings(self.store)
             engines = settings.engines if settings else list(WebSearchEngine)[:3]
             port = settings.port if settings and settings.port else _free_port()
             digest = settings.image_digest if settings else None
-            profile = self._profile()
+            profile = await self._profile()
 
             state, _ = await self.state()
             if state == WebSearchRuntimeState.READY and await self._probe(port):
@@ -425,10 +427,12 @@ class SearchRuntime:
                     "the search runtime started but never became ready: "
                     + logs.strip()[-400:]
                 )
-            self.record(
-                image_digest=digest,
-                port=port,
-                container_state=WebSearchRuntimeState.READY,
+            (
+                await self.record(
+                    image_digest=digest,
+                    port=port,
+                    container_state=WebSearchRuntimeState.READY,
+                )
             )
             self._touch()
             self._schedule_idle_stop()
@@ -491,16 +495,16 @@ class SearchRuntime:
             return
 
     async def stop(self) -> None:
-        profile = self._profile()
+        profile = await self._profile()
         _, stderr, code = await self._run(
             profile, "stop", "--time", "5", CONTAINER_NAME, timeout=30
         )
         if code != 0:
             raise WebSearchError(f"search runtime stop failed: {stderr.strip()[:500]}")
-        self.record(container_state=WebSearchRuntimeState.STOPPED)
+        (await self.record(container_state=WebSearchRuntimeState.STOPPED))
 
     async def remove(self) -> None:
-        profile = self._profile()
+        profile = await self._profile()
         _, stderr, code = await self._run(
             profile, "rm", "--force", CONTAINER_NAME, timeout=30
         )
@@ -508,18 +512,20 @@ class SearchRuntime:
             raise WebSearchError(
                 f"search runtime removal failed: {stderr.strip()[:500]}"
             )
-        self.record(container_state=WebSearchRuntimeState.ABSENT)
+        (await self.record(container_state=WebSearchRuntimeState.ABSENT))
 
-    def record(self, **changes: Any) -> None:
-        settings = load_settings(self.store)
+    async def record(self, **changes: Any) -> None:
+        settings = await load_settings(self.store)
         if settings is None:
-            self.store.create(WebSearchSettings(id=SETTINGS_ID, **changes))
+            (await self.store.create(WebSearchSettings(id=SETTINGS_ID, **changes)))
             return
-        self.store.update(
-            WebSearchSettings,
-            settings.id,
-            changes,
-            expected_revision=settings.revision,
+        (
+            await self.store.update(
+                WebSearchSettings,
+                settings.id,
+                changes,
+                expected_revision=settings.revision,
+            )
         )
 
     # -- queries -----------------------------------------------------------
@@ -533,7 +539,7 @@ class SearchRuntime:
     ) -> list[WebSearchResult]:
         port = await self.ensure_ready()
         self._touch()
-        settings = load_settings(self.store)
+        settings = await load_settings(self.store)
         engines = settings.engines if settings else list(WebSearchEngine)[:3]
         parameters: dict[str, str] = {
             "q": query,

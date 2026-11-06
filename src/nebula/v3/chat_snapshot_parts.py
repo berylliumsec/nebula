@@ -111,7 +111,9 @@ def split_request_snapshot(
     return compact, parts
 
 
-def load_snapshot_part(store: NebulaStore, part_id: str, *, session_id: str) -> Any:
+async def load_snapshot_part(
+    store: NebulaStore, part_id: str, *, session_id: str
+) -> Any:
     """The verified value of one of ``session_id``'s parts.
 
     A missing or altered part, or one stored for another conversation, is
@@ -119,7 +121,7 @@ def load_snapshot_part(store: NebulaStore, part_id: str, *, session_id: str) -> 
     """
 
     try:
-        part = store.get(ChatSnapshotPart, part_id)
+        part = await store.get(ChatSnapshotPart, part_id)
     except NotFoundError as exc:
         raise CorruptRecordError(f"chat snapshot part is missing: {part_id}") from exc
     if part.session_id != session_id:
@@ -133,7 +135,7 @@ def load_snapshot_part(store: NebulaStore, part_id: str, *, session_id: str) -> 
     return part.value
 
 
-def resolve_request_snapshot(
+async def resolve_request_snapshot(
     store: NebulaStore, snapshot: Mapping[str, Any], *, session_id: str
 ) -> dict[str, Any]:
     """A request snapshot of ``session_id``'s turn with split-out values read back."""
@@ -146,7 +148,7 @@ def resolve_request_snapshot(
         return resolved
     for key, part_id in references.items():
         if key not in resolved:
-            resolved[key] = load_snapshot_part(
+            resolved[key] = await load_snapshot_part(
                 store, str(part_id), session_id=session_id
             )
     return resolved
@@ -186,7 +188,7 @@ def split_skill_snapshots(
     return entries, parts
 
 
-def resolve_skill_snapshots(
+async def resolve_skill_snapshots(
     store: NebulaStore, entries: Iterable[Mapping[str, Any]], *, session_id: str
 ) -> list[dict[str, Any]]:
     """Full skill snapshots for ``session_id``'s goal entries, split or inline."""
@@ -197,20 +199,20 @@ def resolve_skill_snapshots(
         if "instructions" in entry or not isinstance(part_id, str):
             resolved.append(dict(entry))
             continue
-        value = load_snapshot_part(store, part_id, session_id=session_id)
+        value = await load_snapshot_part(store, part_id, session_id=session_id)
         if not isinstance(value, dict):
             raise CorruptRecordError(f"skill snapshot part is not an object: {part_id}")
         resolved.append(value)
     return resolved
 
 
-def stage_snapshot_parts(
+async def stage_snapshot_parts(
     transaction: StoreTransaction, parts: Iterable[ChatSnapshotPart]
 ) -> None:
     """Add each part not yet stored; a stored id already holds the same value."""
 
     for part in parts:
-        transaction.add_absent(part)
+        (await transaction.add_absent(part))
 
 
 __all__ = [

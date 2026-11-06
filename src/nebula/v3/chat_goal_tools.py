@@ -119,9 +119,9 @@ class GoalCompletionBroker:
                 "goal completion requires the active goal's assistant turn",
                 rule="chat.goal_complete_turn",
             )
-        turn = self.store.get(ChatTurn, invocation.chat_turn_id)
+        turn = await self.store.get(ChatTurn, invocation.chat_turn_id)
         goals = ChatGoalService(self.store)
-        goal = goals.get(invocation.chat_session_id)
+        goal = await goals.get(invocation.chat_session_id)
         if (
             turn.session_id != invocation.chat_session_id
             or turn.engagement_id != invocation.engagement_id
@@ -136,7 +136,7 @@ class GoalCompletionBroker:
                 "this turn no longer owns a running Core goal",
                 rule="chat.goal_complete_owner",
             )
-        if goals.has_working_subagents(turn.session_id):
+        if await goals.has_working_subagents(turn.session_id):
             raise ToolNotPermitted(
                 "wait for this goal's working subagents before completing it",
                 rule="chat.goal_complete_children",

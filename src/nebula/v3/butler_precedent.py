@@ -43,7 +43,7 @@ class ButlerPrecedentSnapshot(NebulaModel):
     items: list[ButlerPrecedent] = Field(max_length=4)
 
 
-def read_precedents(
+async def read_precedents(
     memory: ButlerMemoryService, project_id: str, event_type: str
 ) -> ButlerPrecedentSnapshot:
     """Read only selected-project memories; foreign source refs never enter packets."""
@@ -51,8 +51,8 @@ def read_precedents(
     query = _QUERIES.get(event_type)
     if query is None:
         raise ValueError("unsupported Butler precedent event")
-    recent = memory.list(project_id, limit=40)
-    relevant = memory.search(project_id, query, limit=3)
+    recent = await memory.list(project_id, limit=40)
+    relevant = await memory.search(project_id, query, limit=3)
     selected = [item for item in recent.items if item.scope == "global_preference"][:2]
     selected.extend(
         item

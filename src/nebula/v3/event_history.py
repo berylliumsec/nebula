@@ -22,18 +22,22 @@ history in short batches off the caller's thread. At startup Core runs
 
 from __future__ import annotations
 
+from typing import AsyncIterator
+from .async_utils import MaybeAsync
+
 from .diagnostics import record_caught_exception, record_diagnostic
 
+import asyncio
+import inspect
 import threading
-import time
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import Database, EntityRow, OperationEventRow, RunEventRow
 from .domain import utc_now
@@ -113,8 +117,8 @@ def _chunks(values: Collection[str]) -> Iterable[list[str]]:
         yield ordered[start : start + _ID_CHUNK]
 
 
-def pause_between_batches() -> None:
-    time.sleep(BATCH_PAUSE_SECONDS)
+async def pause_between_batches() -> None:
+    await asyncio.sleep(BATCH_PAUSE_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -156,12 +160,12 @@ def _run_target(owner_id: str) -> _Target:
     return ("owners", RunEventRow, RunEventRow.run_id == owner_id)
 
 
-def _drain(
+async def _drain(
     database: Database,
     targets: Iterable[_Target],
     *,
     batch_size: int,
-    pause: Callable[[], None] | None,
+    pause: MaybeAsync[[], None] | None,
     stop: threading.Event | None,
 ) -> EventHistoryPruneReport:
     """Delete each target's rows, ``batch_size`` rows per transaction."""
@@ -175,13 +179,15 @@ def _drain(
         deleted = 0
         while not (stop is not None and stop.is_set()):
             try:
-                with database.session() as session:
+                async with database.session() as session:
                     batch = select(row.id).where(predicate).limit(batch_size)
                     count = int(
-                        session.execute(
-                            delete(row)
-                            .where(row.id.in_(batch))
-                            .execution_options(synchronize_session=False)
+                        (
+                            await session.execute(
+                                delete(row)
+                                .where(row.id.in_(batch))
+                                .execution_options(synchronize_session=False)
+                            )
                         ).rowcount
                         or 0
                     )
@@ -204,7 +210,9 @@ def _drain(
             counts["batches"] += 1
             counts["run_events" if row is RunEventRow else "operation_events"] += count
             if pause is not None:
-                pause()
+                result = pause()
+                if inspect.isawaitable(result):
+                    await result
             if count < batch_size:
                 break
         if deleted:
@@ -223,13 +231,13 @@ def _drain(
     return report
 
 
-def purge_event_history(
+async def purge_event_history(
     database: Database,
     *,
     owner_ids: Collection[str] = (),
     project_ids: Collection[str] = (),
     batch_size: int = BATCH_SIZE,
-    pause: Callable[[], None] | None = None,
+    pause: MaybeAsync[[], None] | None = None,
     stop: threading.Event | None = None,
 ) -> EventHistoryPruneReport:
     """Delete the history of records and projects that were just deleted.
@@ -241,31 +249,39 @@ def purge_event_history(
     targets = [_project_target(project_id) for project_id in sorted(project_ids)]
     for owner_id in sorted(owner_ids):
         targets += [_operation_target(owner_id), _run_target(owner_id)]
-    return _drain(database, targets, batch_size=batch_size, pause=pause, stop=stop)
+    return await _drain(
+        database, targets, batch_size=batch_size, pause=pause, stop=stop
+    )
 
 
-def _missing_ids(session: Session, ids: list[str], *, kind: str | None) -> set[str]:
+async def _missing_ids(
+    session: AsyncSession, ids: list[str], *, kind: str | None
+) -> set[str]:
     missing: set[str] = set()
     for chunk in _chunks(ids):
         statement = select(EntityRow.id).where(EntityRow.id.in_(chunk))
         if kind is not None:
             statement = statement.where(EntityRow.kind == kind)
-        missing.update(set(chunk) - set(session.scalars(statement)))
+        missing.update(set(chunk) - set((await session.scalars(statement))))
     return missing
 
 
-def _distinct_owner_ids(session: Session, column: Any) -> Iterable[list[str]]:
+async def _distinct_owner_ids(
+    session: AsyncSession, column: Any
+) -> AsyncIterator[list[str]]:
     """Page through one ledger's distinct owner ids on its replay index."""
 
     after = ""
     while True:
         page = list(
-            session.scalars(
-                select(column)
-                .where(column > after)
-                .group_by(column)
-                .order_by(column)
-                .limit(_SCAN_PAGE)
+            (
+                await session.scalars(
+                    select(column)
+                    .where(column > after)
+                    .group_by(column)
+                    .order_by(column)
+                    .limit(_SCAN_PAGE)
+                )
             )
         )
         if not page:
@@ -280,16 +296,16 @@ def _is_before(value: datetime, bound: datetime) -> bool:
     return value < bound
 
 
-def _orphaned_projects(database: Database, settled_before: datetime) -> list[str]:
-    with database.session() as session:
+async def _orphaned_projects(database: Database, settled_before: datetime) -> list[str]:
+    async with database.session() as session:
         project_ids = list(
-            session.scalars(select(OperationEventRow.engagement_id).distinct())
+            (await session.scalars(select(OperationEventRow.engagement_id).distinct()))
         )
         settled = []
         for project_id in sorted(
-            _missing_ids(session, project_ids, kind="engagements")
+            (await _missing_ids(session, project_ids, kind="engagements"))
         ):
-            newest = session.scalar(
+            newest = await session.scalar(
                 select(OperationEventRow.occurred_at)
                 .where(OperationEventRow.engagement_id == project_id)
                 .order_by(OperationEventRow.occurred_at.desc())
@@ -300,7 +316,7 @@ def _orphaned_projects(database: Database, settled_before: datetime) -> list[str
         return settled
 
 
-def _orphaned_owners(
+async def _orphaned_owners(
     database: Database,
     row: Any,
     owner: Any,
@@ -309,11 +325,11 @@ def _orphaned_owners(
 ) -> list[str]:
     """Owner ids no record has, whose newest prunable event has settled."""
 
-    with database.session() as session:
+    async with database.session() as session:
         orphans: list[str] = []
-        for page in _distinct_owner_ids(session, owner):
-            for owner_id in sorted(_missing_ids(session, page, kind=None)):
-                newest = session.scalar(
+        async for page in _distinct_owner_ids(session, owner):
+            for owner_id in sorted((await _missing_ids(session, page, kind=None))):
+                newest = await session.scalar(
                     select(row.occurred_at)
                     .where(owner == owner_id, *criteria)
                     .order_by(row.sequence.desc())
@@ -324,12 +340,12 @@ def _orphaned_owners(
         return orphans
 
 
-def prune_orphaned_event_history(
+async def prune_orphaned_event_history(
     database: Database,
     *,
     batch_size: int = BATCH_SIZE,
     min_age: timedelta = SETTLE_TIME,
-    pause: Callable[[], None] | None = None,
+    pause: MaybeAsync[[], None] | None = None,
     stop: threading.Event | None = None,
 ) -> EventHistoryPruneReport:
     """Find and delete run and operation events whose owner no longer exists.
@@ -345,96 +361,100 @@ def prune_orphaned_event_history(
 
     settled_before = utc_now() - min_age
     # A terminal session or other unlisted kind is never a missing record.
-    operation_owners = _orphaned_owners(
+    operation_owners = await _orphaned_owners(
         database,
         OperationEventRow,
         OperationEventRow.operation_id,
         settled_before,
         OperationEventRow.operation_kind.in_(OWNED_OPERATION_KINDS),
     )
-    run_owners = _orphaned_owners(
+    run_owners = await _orphaned_owners(
         database, RunEventRow, RunEventRow.run_id, settled_before
     )
     targets = [
-        *map(_project_target, _orphaned_projects(database, settled_before)),
+        *map(_project_target, (await _orphaned_projects(database, settled_before))),
         *map(_operation_target, operation_owners),
         *map(_run_target, run_owners),
     ]
-    return _drain(database, targets, batch_size=batch_size, pause=pause, stop=stop)
+    return await _drain(
+        database, targets, batch_size=batch_size, pause=pause, stop=stop
+    )
 
 
 class EventHistoryPurger:
-    """Remove the history of deleted records on one background thread.
-
-    A delete hands over the ids it removed and returns at once. The thread
-    exits when nothing is pending and starts again with the next delete; an
-    interrupted purge leaves history the next startup prune removes.
-    """
+    """Drain committed deletions on the owning loop in short async batches."""
 
     def __init__(self, database: Database) -> None:
         self.database = database
-        self._lock = threading.Lock()
         self._owners: set[str] = set()
         self._projects: set[str] = set()
-        self._worker: threading.Thread | None = None
-        self._idle = threading.Event()
+        self._worker: asyncio.Task[None] | None = None
+        self._idle = asyncio.Event()
         self._idle.set()
         self._stop = threading.Event()
 
     def submit(
         self, owner_ids: Iterable[str] = (), project_ids: Iterable[str] = ()
     ) -> None:
-        with self._lock:
-            self._owners.update(owner_ids)
-            self._projects.update(project_ids)
-            if not (self._owners or self._projects):
-                return
-            self._idle.clear()
-            self._stop.clear()
-            if self._worker is None:
-                self._worker = threading.Thread(
-                    target=self._run, name="nebula-event-history-purge", daemon=True
-                )
-                self._worker.start()
+        self._owners.update(owner_ids)
+        self._projects.update(project_ids)
+        if not (self._owners or self._projects):
+            return
+        self._idle.clear()
+        self._stop.clear()
+        if self._worker is None or self._worker.done():
+            from .diagnostics import create_diagnostic_task
 
-    def _run(self) -> None:
-        while True:
-            with self._lock:
-                if self._stop.is_set() or not (self._owners or self._projects):
-                    self._worker = None
-                    self._idle.set()
-                    return
+            self._worker = create_diagnostic_task(
+                self._run(),
+                feature="storage",
+                event_code="storage.event_history.purge_worker",
+                failure_message="Removing deleted event history stopped.",
+                name="nebula-event-history-purge",
+            )
+
+    async def _run(self) -> None:
+        try:
+            while not self._stop.is_set() and (self._owners or self._projects):
                 owners, self._owners = self._owners, set()
                 projects, self._projects = self._projects, set()
+                try:
+                    await purge_event_history(
+                        self.database,
+                        owner_ids=owners,
+                        project_ids=projects,
+                        pause=pause_between_batches,
+                        stop=self._stop,
+                    )
+                except Exception as exc:
+                    record_caught_exception(
+                        "storage",
+                        "storage.event_history.purge_failed",
+                        "Removing a deleted record's event history failed; Core retries at startup.",
+                        exc,
+                        stage="event-history-purge",
+                    )
+        finally:
+            self._idle.set()
+
+    async def wait_idle(self, timeout: float | None = None) -> bool:
+        try:
+            await asyncio.wait_for(self._idle.wait(), timeout)
+            return True
+        except TimeoutError:  # diagnostic-expected: bounded idle observation reports false, without cancelling the worker.
+            return False
+
+    async def close(self, timeout: float = 10) -> None:
+        """Finish the current batch before the shared engine is disposed."""
+        self._stop.set()
+        if self._worker is not None and not self._worker.cancelled():
             try:
-                purge_event_history(
-                    self.database,
-                    owner_ids=owners,
-                    project_ids=projects,
-                    pause=pause_between_batches,
-                    stop=self._stop,
-                )
-            except Exception as exc:
-                # The records are already gone; their history waits for the
-                # next startup prune.
-                record_caught_exception(
-                    "storage",
-                    "storage.event_history.purge_failed",
-                    "Removing a deleted record's event history failed; Core retries at startup.",
-                    exc,
-                    stage="event-history-purge",
-                )
-
-    def wait_idle(self, timeout: float | None = None) -> bool:
-        """Wait until every submitted history is removed or set aside."""
-
-        return self._idle.wait(timeout)
-
-    def close(self, timeout: float = 10) -> None:
-        """Stop after the current batch; what is pending waits for startup."""
-
-        with self._lock:
-            worker = self._worker
-            self._stop.set()
-        if worker is not None:
-            worker.join(timeout)
+                await asyncio.wait_for(asyncio.shield(self._worker), timeout)
+            except TimeoutError:
+                self._worker.cancel()
+                try:
+                    await self._worker
+                except asyncio.CancelledError:
+                    # diagnostic-expected: cancellation joins the timed-out worker's transaction cleanup before engine disposal.
+                    pass
+                raise

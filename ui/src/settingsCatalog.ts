@@ -135,11 +135,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.harnesses",
     label: "Assistant harnesses",
-    description: "Configure assistant harnesses, independent provider or harness subagents, project lifecycle guards and optional task plans. Saved conversations keep their selected runtime and guards for the next turn",
+    description: "Configure assistant harnesses, independent provider or harness subagents, project lifecycle guards and optional task plans. Core goals follow the selected runtime in the same chat at a safe turn boundary; paused and blocked goals keep their state",
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "test turn", "external session", "import session history"],
+    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history"],
   },
   {
     id: "settings.mcp",

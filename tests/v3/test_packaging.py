@@ -940,3 +940,20 @@ def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_pat
     (binary / "python3").write_bytes(b"toolchain")
     with pytest.raises(ArtifactAuditError, match="forbidden installer content"):
         inspect_installer_tree(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "sqlalchemy.ext.asyncio",
+        "sqlalchemy.dialects.sqlite.aiosqlite",
+        "aiosqlite",
+        "greenlet",
+    ],
+)
+def test_core_archive_requires_native_async_database_runtime(missing):
+    complete = {
+        candidate for alternatives in REQUIRED_MEMBERS for candidate in alternatives[:1]
+    }
+    with pytest.raises(ArtifactAuditError, match="required members absent"):
+        validate_members(complete - {missing})

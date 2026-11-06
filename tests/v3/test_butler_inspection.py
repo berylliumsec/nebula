@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 from uuid import uuid4
@@ -24,10 +28,10 @@ from ui.tests.fixtures.butler_inspection_core import (
 )
 
 
-def fixture(tmp_path):
+async def fixture(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    data = seed_inspection(store, artifacts)
+    data = await seed_inspection(store, artifacts)
     service = ExecutionService(
         store=store, artifact_store=artifacts, tool_platform=None, data_root=tmp_path
     )
@@ -38,7 +42,7 @@ def fixture(tmp_path):
         auth_token="inspection-fixture-token",
     )
     gateway = SettingsAssistantApi(app, "inspection-fixture-token")
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, data["project"].id, settings_api=gateway
     )
     return store, artifacts, data, service, gateway, capabilities
@@ -63,8 +67,10 @@ async def invoke(capabilities, name, arguments=None, *, change=False):
         "results",
     ],
 )
-def test_butler_inspection_uses_owned_core_conversation_projections(tmp_path, kind):
-    store, _, data, _, _, capabilities = fixture(tmp_path)
+async def test_butler_inspection_uses_owned_core_conversation_projections(
+    tmp_path, kind
+):
+    store, _, data, _, _, capabilities = await fixture(tmp_path)
 
     async def scenario():
         turns = await invoke(capabilities, "turns", {"session_id": data["chat"].id})
@@ -103,24 +109,28 @@ def test_butler_inspection_uses_owned_core_conversation_projections(tmp_path, ki
                 },
             )
             assert second["sha256"] == first["sha256"] and len(second["text"]) <= 4096
-        assert store.get(ChatSession, data["chat"].id).revision == data["chat"].revision
+        assert (await store.get(ChatSession, data["chat"].id)).revision == data[
+            "chat"
+        ].revision
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
     "private_kind", ["control_assistant", "side_chat", "temporary_assistant"]
 )
-def test_butler_inspection_rejects_private_owners_before_core_dispatch(
+async def test_butler_inspection_rejects_private_owners_before_core_dispatch(
     tmp_path, private_kind, monkeypatch
 ):
-    store, _, data, _, _, capabilities = fixture(tmp_path)
+    store, _, data, _, _, capabilities = await fixture(tmp_path)
     chat = data["chat"]
-    store.update(
-        ChatSession,
-        chat.id,
-        {"metadata": {private_kind: True}},
-        expected_revision=chat.revision,
+    (
+        await store.update(
+            ChatSession,
+            chat.id,
+            {"metadata": {private_kind: True}},
+            expected_revision=chat.revision,
+        )
     )
 
     async def scenario():
@@ -138,25 +148,29 @@ def test_butler_inspection_rejects_private_owners_before_core_dispatch(
             with pytest.raises(ValueError, match="visible chat"):
                 await invoke(capabilities, operation, arguments)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_tool_output_is_scoped_redacted_and_artifact_metadata_is_paged(tmp_path):
-    store, artifacts, data, _, _, capabilities = fixture(tmp_path)
+async def test_butler_tool_output_is_scoped_redacted_and_artifact_metadata_is_paged(
+    tmp_path,
+):
+    store, artifacts, data, _, _, capabilities = await fixture(tmp_path)
     for i in range(51):
-        store.create(
-            artifacts.put_bytes(
-                f"file {i}\n".encode(),
-                engagement_id=data["project"].id,
-                filename=f"result-{i}.txt",
-                metadata={
-                    "tool_call_id": data["call"].id,
-                    "kind": "generated_file",
-                    "searchable": True,
-                },
+        (
+            await store.create(
+                artifacts.put_bytes(
+                    f"file {i}\n".encode(),
+                    engagement_id=data["project"].id,
+                    filename=f"result-{i}.txt",
+                    metadata={
+                        "tool_call_id": data["call"].id,
+                        "kind": "generated_file",
+                        "searchable": True,
+                    },
+                )
             )
         )
-    foreign = store.create(
+    foreign = await store.create(
         ToolCall(
             engagement_id=data["foreign"].id,
             run_id="foreign",
@@ -218,13 +232,13 @@ def test_butler_tool_output_is_scoped_redacted_and_artifact_metadata_is_paged(tm
                 },
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_execution_reads_redacted_pages_and_cancels_only_fresh_owned_work(
+async def test_butler_execution_reads_redacted_pages_and_cancels_only_fresh_owned_work(
     tmp_path, monkeypatch
 ):
-    store, _, data, service, _, capabilities = fixture(tmp_path)
+    store, _, data, service, _, capabilities = await fixture(tmp_path)
 
     async def scenario():
         rows = await invoke(capabilities, "executions")
@@ -257,11 +271,13 @@ def test_butler_execution_reads_redacted_pages_and_cancels_only_fresh_owned_work
         waiting = data["waiting"]
         task = await attach_inert_waiter(store, service, waiting)
         try:
-            store.update(
-                OperatorExecution,
-                waiting.id,
-                {"error_detail": "Operator inspected this job"},
-                expected_revision=waiting.revision,
+            (
+                await store.update(
+                    OperatorExecution,
+                    waiting.id,
+                    {"error_detail": "Operator inspected this job"},
+                    expected_revision=waiting.revision,
+                )
             )
             with pytest.raises(ValueError, match="current revision"):
                 await invoke(
@@ -271,7 +287,7 @@ def test_butler_execution_reads_redacted_pages_and_cancels_only_fresh_owned_work
                     change=True,
                 )
             assert not task.done()
-            current = store.get(OperatorExecution, waiting.id)
+            current = await store.get(OperatorExecution, waiting.id)
             receipt = await invoke(
                 capabilities,
                 "cancel_execution",
@@ -284,7 +300,9 @@ def test_butler_execution_reads_redacted_pages_and_cancels_only_fresh_owned_work
             }
             with pytest.raises(asyncio.CancelledError):
                 await task
-            assert store.get(OperatorExecution, waiting.id).status.value == "cancelled"
+            assert (
+                await store.get(OperatorExecution, waiting.id)
+            ).status.value == "cancelled"
             assert receipt["client_action"]["kind"] == "execution_refresh"
             assert await service.cancel(data["completed"].id) == data["completed"]
         finally:
@@ -292,23 +310,27 @@ def test_butler_execution_reads_redacted_pages_and_cancels_only_fresh_owned_work
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_execution_core_cancel_fences_a_racing_revision(tmp_path, monkeypatch):
-    store, _, data, service, _, capabilities = fixture(tmp_path)
+async def test_butler_execution_core_cancel_fences_a_racing_revision(
+    tmp_path, monkeypatch
+):
+    store, _, data, service, _, capabilities = await fixture(tmp_path)
     from nebula.v3.butler_inspection import ButlerInspection
 
     request = ButlerInspection._request
 
     async def concurrent_request(self, method, path, body=None):
         if "/cancel?" in path:
-            current = store.get(OperatorExecution, data["waiting"].id)
-            store.update(
-                OperatorExecution,
-                current.id,
-                {"error_detail": "Concurrent operator update"},
-                expected_revision=current.revision,
+            current = await store.get(OperatorExecution, data["waiting"].id)
+            (
+                await store.update(
+                    OperatorExecution,
+                    current.id,
+                    {"error_detail": "Concurrent operator update"},
+                    expected_revision=current.revision,
+                )
             )
         return await request(self, method, path, body)
 
@@ -329,19 +351,21 @@ def test_butler_execution_core_cancel_fences_a_racing_revision(tmp_path, monkeyp
                 )
             assert (
                 not task.done()
-                and store.get(OperatorExecution, data["waiting"].id).status.value
+                and (
+                    await store.get(OperatorExecution, data["waiting"].id)
+                ).status.value
                 == "running"
             )
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_original_download_prepares_only_linked_owned_artifacts(tmp_path):
-    store, _, data, _, _, capabilities = fixture(tmp_path)
-    large = store.create(
+async def test_butler_original_download_prepares_only_linked_owned_artifacts(tmp_path):
+    store, _, data, _, _, capabilities = await fixture(tmp_path)
+    large = await store.create(
         Artifact(
             engagement_id=data["project"].id,
             sha256="a" * 64,
@@ -350,7 +374,7 @@ def test_butler_original_download_prepares_only_linked_owned_artifacts(tmp_path)
             metadata={"tool_call_id": data["call"].id},
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         data["waiting"].model_copy(
             update={"id": str(uuid4()), "engagement_id": data["foreign"].id}
         )
@@ -399,4 +423,7 @@ def test_butler_original_download_prepares_only_linked_owned_artifacts(tmp_path)
                 change=True,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

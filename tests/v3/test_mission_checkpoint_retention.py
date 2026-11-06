@@ -9,13 +9,18 @@ pruning saver, and #571's contract (replay the journaled routing response,
 never re-run an in-flight effect) holds.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import sqlite3
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from nebula.v3.agent_tooling import BrokeredToolSpecialist, ToolMissionSupervisor
@@ -134,7 +139,7 @@ class _TurnSpecialist:
         )
 
 
-def test_a_long_task_keeps_one_checkpoint_and_none_once_it_finishes(tmp_path):
+async def test_a_long_task_keeps_one_checkpoint_and_none_once_it_finishes(tmp_path):
     """MIS-8: each superstep supersedes the previous checkpoint, so a running
     task keeps one checkpoint however many turns it takes, and a finished run
     keeps none. Before, every superstep's copy of the growing state was kept,
@@ -142,7 +147,7 @@ def test_a_long_task_keeps_one_checkpoint_and_none_once_it_finishes(tmp_path):
 
     async def scenario():
         store = NebulaStore(tmp_path / "nebula.db")
-        engagement = store.create(Engagement(name="Long task"))
+        engagement = await store.create(Engagement(name="Long task"))
         path = tmp_path / "mission-checkpoints.db"
         specialist = _TurnSpecialist(path, turns=30)
         async with sqlite_mission_runtime(
@@ -158,7 +163,7 @@ def test_a_long_task_keeps_one_checkpoint_and_none_once_it_finishes(tmp_path):
             )
         return state, specialist, path
 
-    state, specialist, path = asyncio.run(scenario())
+    state, specialist, path = await scenario()
 
     assert state["final_summary"]
     # The whole history still reaches every turn.
@@ -167,7 +172,7 @@ def test_a_long_task_keeps_one_checkpoint_and_none_once_it_finishes(tmp_path):
     assert _rows(path) == (0, 0)
 
 
-def test_the_pruning_saver_stores_the_row_the_stock_saver_stores(tmp_path):
+async def test_the_pruning_saver_stores_the_row_the_stock_saver_stores(tmp_path):
     """The override changes which rows are kept, never the row itself."""
 
     async def put(saver_cls, path):
@@ -193,15 +198,15 @@ def test_the_pruning_saver_stores_the_row_the_stock_saver_stores(tmp_path):
             connection.close()
         return saved, latest, row
 
-    stock = asyncio.run(put(AsyncSqliteSaver, tmp_path / "stock.db"))
-    pruning = asyncio.run(put(LatestCheckpointSqliteSaver, tmp_path / "pruning.db"))
+    stock = await put(AsyncSqliteSaver, tmp_path / "stock.db")
+    pruning = await put(LatestCheckpointSqliteSaver, tmp_path / "pruning.db")
 
     assert pruning[0] == stock[0]
     assert pruning[1] == stock[1]
     assert pruning[2] == stock[2]
 
 
-def test_pruning_keeps_the_latest_checkpoint_and_its_pending_writes(tmp_path):
+async def test_pruning_keeps_the_latest_checkpoint_and_its_pending_writes(tmp_path):
     """Only rows older than the committed checkpoint are removed: the
     checkpoint and pending writes a restart loads are exactly the stock
     saver's, other threads are untouched, and a write that lands late for a
@@ -241,10 +246,8 @@ def test_pruning_keeps_the_latest_checkpoint_and_its_pending_writes(tmp_path):
             _rows(path, "run-b"),
         )
 
-    stock = asyncio.run(sequence(AsyncSqliteSaver, tmp_path / "stock.db"))
-    pruning = asyncio.run(
-        sequence(LatestCheckpointSqliteSaver, tmp_path / "pruning.db")
-    )
+    stock = await sequence(AsyncSqliteSaver, tmp_path / "stock.db")
+    pruning = await sequence(LatestCheckpointSqliteSaver, tmp_path / "pruning.db")
 
     # What a restart loads is identical, including the pending writes.
     assert pruning[0] == stock[0]
@@ -360,7 +363,7 @@ async def _runtime(saver_cls, path, store, specialist):
 
 async def _crash_and_recover(tmp_path, saver_cls, crash):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Restart"))
+    engagement = await store.create(Engagement(name="Restart"))
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     path = tmp_path / "mission-checkpoints.db"
@@ -456,9 +459,11 @@ async def _crash_and_recover(tmp_path, saver_cls, crash):
         ],
         "effects_started": list(effects.started),
         "ledger": sorted(
-            (_without_ids(call.idempotency_key, call.task_id), call.status.value)
-            for call in store.iter_readable_entities(LedgerCall)
-            if call.run_id == run_id
+            [
+                (_without_ids(call.idempotency_key, call.task_id), call.status.value)
+                async for call in store.iter_readable_entities(LedgerCall)
+                if call.run_id == run_id
+            ]
         ),
         "turns": [
             (context.turn_index, len(context.prior_turns)) for context in contexts
@@ -468,7 +473,7 @@ async def _crash_and_recover(tmp_path, saver_cls, crash):
             for turn in last.prior_turns
             for record in call_records(turn.output)
         ],
-        "run_status": store.get(AgentRun, run_id).status,
+        "run_status": (await store.get(AgentRun, run_id)).status,
         "rows_after": _rows(path, run_id),
     }
 
@@ -507,15 +512,15 @@ _EXPECTED = {
 @pytest.mark.parametrize(
     "crash", ["between_supersteps", "routing_call", "tool_effect", "after_completion"]
 )
-def test_restart_recovery_is_unchanged_by_checkpoint_pruning(tmp_path, crash):
+async def test_restart_recovery_is_unchanged_by_checkpoint_pruning(tmp_path, crash):
     """MIS-8: a Core stop at each point of a turn recovers the same mission
     with the stock saver (every checkpoint kept) and the pruning saver, and
     #571's contract holds: one execution per effect, a journaled turn is never
     re-asked, an in-flight effect is never run again."""
 
-    stock = asyncio.run(_crash_and_recover(tmp_path / "stock", AsyncSqliteSaver, crash))
-    pruning = asyncio.run(
-        _crash_and_recover(tmp_path / "pruning", LatestCheckpointSqliteSaver, crash)
+    stock = await _crash_and_recover(tmp_path / "stock", AsyncSqliteSaver, crash)
+    pruning = await _crash_and_recover(
+        tmp_path / "pruning", LatestCheckpointSqliteSaver, crash
     )
 
     stock_checkpoints = stock.pop("checkpoints_at_restart")
@@ -572,16 +577,16 @@ def _leave_checkpoints(path, thread_ids):
     asyncio.run(write())
 
 
-def test_startup_discards_checkpoints_only_of_finished_runs(tmp_path):
+async def test_startup_discards_checkpoints_only_of_finished_runs(tmp_path):
     """A finished run's leftover checkpoints are removed at startup; a run
     that can still continue (interrupted, waiting) or has no readable row
     keeps its checkpoint, and old rows stay readable."""
 
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Sweep"))
+    engagement = await store.create(Engagement(name="Sweep"))
 
-    def run(status, origin="api"):
-        return store.create(
+    async def run(status, origin="api"):
+        return await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="sweep",
@@ -591,14 +596,14 @@ def test_startup_discards_checkpoints_only_of_finished_runs(tmp_path):
         )
 
     finished = [
-        run(RunStatus.COMPLETE),
-        run(RunStatus.FAILED),
-        run(RunStatus.CANCELLED),
+        (await run(RunStatus.COMPLETE)),
+        (await run(RunStatus.FAILED)),
+        (await run(RunStatus.CANCELLED)),
     ]
     # Not API-owned, so startup leaves them for their own owner to continue.
     resumable = [
-        run(RunStatus.INTERRUPTED, origin="cli"),
-        run(RunStatus.WAITING_APPROVAL, origin="cli"),
+        (await run(RunStatus.INTERRUPTED, origin="cli")),
+        (await run(RunStatus.WAITING_APPROVAL, origin="cli")),
     ]
     path = tmp_path / "mission-checkpoints.db"
     _leave_checkpoints(path, [item.id for item in finished + resumable] + ["no-run"])
@@ -613,7 +618,7 @@ def test_startup_discards_checkpoints_only_of_finished_runs(tmp_path):
                 for thread_id in [item.id for item in resumable] + ["no-run"]
             }
 
-    kept = asyncio.run(scenario())
+    kept = await scenario()
 
     for item in finished:
         assert _rows(path, item.id) == (0, 0)
@@ -627,13 +632,13 @@ def test_startup_discards_checkpoints_only_of_finished_runs(tmp_path):
     )
 
 
-def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
+async def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
     """Stopping a running Mission, or a dormant waiting one, removes its
     checkpoints once the run is cancelled."""
 
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(name="Stop"))
-    profile = _profile(store)
+    engagement = await store.create(Engagement(name="Stop"))
+    profile = await _profile(store)
     provider = BlockingProvider(profile)
     path = tmp_path / "mission-checkpoints.db"
     service = MissionService(
@@ -644,8 +649,8 @@ def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
     )
     app = create_app(store, auth_token="test-token", mission_service=service)
 
-    with TestClient(app) as client:
-        started = client.post(
+    async with TestClient(app) as client:
+        started = await client.post(
             "/api/v1/missions",
             headers=_auth(),
             json=_start_payload(engagement, profile),
@@ -656,7 +661,7 @@ def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
         assert _rows(path, run_id)[0] == 1
         # A run parked on an operator decision has no worker; its checkpoint
         # is all that is left of it.
-        waiting = store.create(
+        waiting = await store.create(
             AgentRun(
                 engagement_id=engagement.id,
                 objective="waiting for an operator",
@@ -669,7 +674,7 @@ def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
         _leave_checkpoints(path, [waiting.id])
 
         for target in (run_id, waiting.id):
-            stopped = client.post(
+            stopped = await client.post(
                 f"/api/v1/runs/{target}/stop",
                 headers=_auth(),
                 json={"reason": "Operator ended the review"},
@@ -679,4 +684,7 @@ def test_a_stopped_mission_leaves_no_checkpoint(tmp_path):
 
     assert _rows(path, run_id) == (0, 0)
     assert _rows(path, waiting.id) == (0, 0)
-    assert store.get(AgentRun, waiting.id).status == RunStatus.CANCELLED
+    assert (await store.get(AgentRun, waiting.id)).status == RunStatus.CANCELLED
+
+
+pytestmark = pytest.mark.anyio

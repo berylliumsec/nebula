@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync, call_async
+
 import asyncio
 import base64
 import hmac
@@ -13,7 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 class BrowserHostProxy:
     def __init__(
         self,
-        authorize: Callable[[str], None],
+        authorize: MaybeAsync[[str], None],
         connect: Callable[
             [str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
         ]
@@ -109,7 +111,7 @@ class BrowserHostProxy:
             destination = urlunsplit(
                 (parsed.scheme, parsed.netloc, parsed.path or "/", parsed.query, "")
             )
-            self.authorize(destination)
+            await call_async(self.authorize, destination)
             remote_reader, upstream = await asyncio.wait_for(
                 self.connect(parsed.hostname, port), 10
             )

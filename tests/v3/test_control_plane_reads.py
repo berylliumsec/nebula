@@ -1,9 +1,13 @@
 """Control-plane reads remain complete and responsive as stored history grows."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+    wait_for_database_gate,
+)
+
 import asyncio
-import threading
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import ContextVar
 from datetime import timedelta
@@ -12,7 +16,7 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 from sqlalchemy import event, update
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -40,53 +44,51 @@ from tests.v3.test_butler_capabilities import _scheduled_capabilities
 from tests.v3.test_harnesses import _runtime
 
 
-def test_interactive_and_scheduled_read_entry_points_use_worker_owned_sessions(
+async def test_interactive_and_scheduled_reads_use_task_owned_sessions(
     tmp_path, monkeypatch
 ):
-    store, project, chat, _, _, _, scheduled = _scheduled_capabilities(tmp_path)
-    interactive = ButlerCapabilities(
+    store, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
+    interactive = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id, work=scheduled._work
     )
-    store.create(
-        ChatGoal(
-            engagement_id=project.id,
-            session_id=chat.id,
-            objective="Synthetic inspection",
-            completion_criteria=["Observe stored state"],
+    (
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=chat.id,
+                objective="Synthetic inspection",
+                completion_criteria=["Observe stored state"],
+            )
         )
     )
-    loop_thread = threading.get_ident()
     observed = []
 
-    class OwnedSession(Session):
+    class OwnedSession(AsyncSession):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.owner = threading.get_ident()
+            self.owner = asyncio.current_task()
+            self.finished = False
+            observed.append(self)
 
-        def scalars(self, *args, **kwargs):
-            assert threading.get_ident() == self.owner
-            return super().scalars(*args, **kwargs)
+        async def scalars(self, *args, **kwargs):
+            assert asyncio.current_task() is self.owner
+            return await super().scalars(*args, **kwargs)
 
-        def commit(self):
-            assert threading.get_ident() == self.owner
-            return super().commit()
+        async def get(self, *args, **kwargs):
+            assert asyncio.current_task() is self.owner
+            return await super().get(*args, **kwargs)
 
-        def close(self):
-            assert threading.get_ident() == self.owner
-            return super().close()
+        async def commit(self):
+            assert asyncio.current_task() is self.owner
+            return await super().commit()
 
-    store.database._session_factory = sessionmaker(
+        async def close(self):
+            await super().close()
+            self.finished = True
+
+    store.database._session_factory = async_sessionmaker(
         bind=store.database.engine, class_=OwnedSession, expire_on_commit=False
     )
-    for method in ("find_entities", "list_entities", "iter_readable_entities"):
-        original = getattr(store, method)
-
-        def checked(*args, selected=original, **kwargs):
-            assert threading.get_ident() != loop_thread, selected.__name__
-            observed.append(selected.__name__)
-            return selected(*args, **kwargs)
-
-        monkeypatch.setattr(store, method, checked)
 
     async def exercise():
         for operation in (
@@ -141,31 +143,35 @@ def test_interactive_and_scheduled_read_entry_points_use_worker_owned_sessions(
             )
             assert result["butler_operation"] == operation
 
-    asyncio.run(exercise())
+    (await exercise())
     assert observed
+    assert all(session.finished for session in observed)
 
 
-def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp_path):
-    store, project, chat, _, _, _, scheduled = _scheduled_capabilities(tmp_path)
+async def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp_path):
+    store, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
     app = scheduled._work.app
-    release = threading.Event()
-    guard = threading.Lock()
-    entered = 0
-    loop_thread = threading.get_ident()
+    release = asyncio.Event()
+    entered = active = peak = 0
 
     def hold_catalog(conn, cursor, statement, parameters, context, executemany):
-        nonlocal entered
+        nonlocal entered, active, peak
         if (
             not statement.startswith("SELECT")
             or McpServerProfile.entity_kind not in parameters
         ):
             return
-        assert threading.get_ident() != loop_thread
-        with guard:
-            entered += 1
-        assert release.wait(5), "catalog reads blocked Core's request loop"
+        entered += 1
+        active += 1
+        peak = max(peak, active)
+        try:
+            wait_for_database_gate(conn, release)
+        finally:
+            active -= 1
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_catalog)
+    event.listen(
+        store.database.engine.sync_engine, "before_cursor_execute", hold_catalog
+    )
 
     async def read(index):
         if index % 3 == 0:
@@ -206,7 +212,12 @@ def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp_path)
             for task in tasks[:4]:
                 task.cancel()
             await asyncio.sleep(0.05)
-            assert entered == 4, "cancellation released a still-running reader's slot"
+            assert entered >= 4
+            assert active <= 4 and peak <= 4
+            assert (
+                store.database.pool_snapshot()["checked_out"]
+                <= store.database.pool_size
+            )
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="http://core.test"
             ) as client:
@@ -225,16 +236,16 @@ def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp_path)
         finally:
             release.set()
             await asyncio.gather(*tasks, return_exceptions=True)
-            # Drain all four physical workers, including cancelled callers.
-            await asyncio.gather(*(read_in_worker(lambda: None) for _ in range(4)))
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_catalog)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_catalog
+        )
 
 
-def test_worker_retains_context_and_recovers_from_a_failed_read():
+async def test_worker_retains_context_and_recovers_from_a_failed_read():
     identity = ContextVar("test_read_identity", default="missing")
 
     def failed():
@@ -247,19 +258,19 @@ def test_worker_retains_context_and_recovers_from_a_failed_read():
             await read_in_worker(failed)
         assert await read_in_worker(identity.get) == "synthetic-project"
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_racing_harness_activity_reads_cannot_publish_an_older_goal(
+async def test_racing_harness_activity_reads_cannot_publish_an_older_goal(
     tmp_path, monkeypatch
 ):
     from nebula.v3.harnesses import HarnessEvent
 
-    store, project, profile, _, _, runtime = _runtime(tmp_path)
-    session = runtime.create_session(
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
+    session = await runtime.create_session(
         engagement_id=project.id, profile_id=profile.id, model=None
     )
-    turn = store.create(
+    turn = await store.create(
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=session.id,
@@ -269,51 +280,52 @@ def test_racing_harness_activity_reads_cannot_publish_an_older_goal(
         )
     )
 
-    def record(objective):
-        runtime._persist_activity(
-            turn,
-            session,
-            HarnessEvent(
-                type="item_upsert",
-                item_kind="goal",
-                item_id="goal",
-                goal={"objective": objective, "status": "running"},
-            ),
+    async def record(objective):
+        (
+            await runtime._persist_activity(
+                turn,
+                session,
+                HarnessEvent(
+                    type="item_upsert",
+                    item_kind="goal",
+                    item_id="goal",
+                    goal={"objective": objective, "status": "running"},
+                ),
+            )
         )
 
-    record("Initial")
-    runtime._turn_activity_state(turn)
-    record("Older replay")
-    queried = threading.Event()
-    release = threading.Event()
-    loop_thread = threading.get_ident()
+    (await record("Initial"))
+    (await runtime._turn_activity_state(turn))
+    (await record("Older replay"))
+    queried = asyncio.Event()
+    release = asyncio.Event()
     original = store.replay_operation_events
+    older = None
 
-    def racing(*args, **kwargs):
-        rows = original(*args, **kwargs)
-        if threading.get_ident() != loop_thread:
+    async def racing(*args, **kwargs):
+        rows = await original(*args, **kwargs)
+        if asyncio.current_task() is older:
             queried.set()
-            assert release.wait(3)
+            await asyncio.wait_for(release.wait(), 3)
         return rows
 
     monkeypatch.setattr(store, "replay_operation_events", racing)
-    with ThreadPoolExecutor(max_workers=1) as worker:
-        older = worker.submit(runtime._turn_activity_state, turn)
-        try:
-            assert queried.wait(2)
-            record("Newest replay")
-            newest = runtime._turn_activity_state(turn)
-            release.set()
-            late = older.result(timeout=2)
-            assert newest.goal.objective == late.goal.objective == "Newest replay"
-            cached = runtime._turn_activity_states[turn.id]
-            assert cached.goal.objective == "Newest replay"
-            assert cached.cursor >= newest.cursor
-        finally:
-            release.set()
+    older = asyncio.create_task(runtime._turn_activity_state(turn))
+    try:
+        await asyncio.wait_for(queried.wait(), 2)
+        await record("Newest replay")
+        newest = await runtime._turn_activity_state(turn)
+        release.set()
+        late = await asyncio.wait_for(older, 2)
+        assert newest.goal.objective == late.goal.objective == "Newest replay"
+        cached = runtime._turn_activity_states[turn.id]
+        assert cached.goal.objective == "Newest replay"
+        assert cached.cursor >= newest.cursor
+    finally:
+        release.set()
 
 
-def test_search_policy_count_keeps_legacy_defaults_without_hydration(tmp_path):
+async def test_search_policy_count_keeps_legacy_defaults_without_hydration(tmp_path):
     store = NebulaStore(tmp_path / "policies.db")
     for index, changes in enumerate(
         (
@@ -322,22 +334,28 @@ def test_search_policy_count_keeps_legacy_defaults_without_hydration(tmp_path):
             {"web_search": False},
         )
     ):
-        store.create(
-            ScopePolicy(id=f"scope-{index}", engagement_id=f"p-{index}", **changes)
+        (
+            await store.create(
+                ScopePolicy(id=f"scope-{index}", engagement_id=f"p-{index}", **changes)
+            )
         )
-    legacy = store.get(ScopePolicy, "scope-0").model_dump(mode="json")
+    legacy = (await store.get(ScopePolicy, "scope-0")).model_dump(mode="json")
     del legacy["local_only"]
-    with store.database.session() as session:
-        session.execute(
-            update(EntityRow).where(EntityRow.id == "scope-0").values(payload=legacy)
+    async with store.database.session() as session:
+        (
+            await session.execute(
+                update(EntityRow)
+                .where(EntityRow.id == "scope-0")
+                .values(payload=legacy)
+            )
         )
-    assert store.web_search_project_count() == 1
+    assert (await store.web_search_project_count()) == 1
 
 
-def test_chat_preview_reads_recent_active_messages_in_sequence_order(
+async def test_chat_preview_reads_recent_active_messages_in_sequence_order(
     tmp_path, monkeypatch
 ):
-    store, project, chat, _, _, _, scheduled = _scheduled_capabilities(tmp_path)
+    store, project, chat, _, _, _, scheduled = await _scheduled_capabilities(tmp_path)
     now = utc_now()
     messages = [
         ChatMessage(
@@ -352,9 +370,9 @@ def test_chat_preview_reads_recent_active_messages_in_sequence_order(
         )
         for index in range(1100)
     ]
-    with store.transaction() as transaction:
-        transaction.add_chat_messages(messages)
-    expected = ChatService(store).session_messages(chat.id)[-8:]
+    async with store.transaction() as transaction:
+        (await transaction.add_chat_messages(messages))
+    expected = (await ChatService(store).session_messages(chat.id))[-8:]
     hydrated = Counter()
     from nebula.v3 import storage
 
@@ -365,30 +383,32 @@ def test_chat_preview_reads_recent_active_messages_in_sequence_order(
         return original(row, model)
 
     monkeypatch.setattr(storage, "_row_to_entity", counted)
-    result = scheduled._work.chat_detail(project.id, chat.id)
+    result = await scheduled._work.chat_detail(project.id, chat.id)
     assert result["recent_messages"] == [
         {"id": item.id, "role": item.role.value, "content": item.content[:2000]}
         for item in expected
         if item.role.value in {"user", "assistant"}
     ]
     assert hydrated[ChatMessage.entity_kind] == 108
-    assert store.get(ChatSession, chat.id).revision == chat.revision
+    assert (await store.get(ChatSession, chat.id)).revision == chat.revision
 
 
-def test_child_lookup_filters_before_hydration_and_has_no_page_horizon(
+async def test_child_lookup_filters_before_hydration_and_has_no_page_horizon(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "children.db")
-    store.create(
-        ChatSession(
-            id="parent-chat",
-            engagement_id="p",
-            title="Parent",
-            model="m",
-            provider_profile_id="synthetic",
+    (
+        await store.create(
+            ChatSession(
+                id="parent-chat",
+                engagement_id="p",
+                title="Parent",
+                model="m",
+                provider_profile_id="synthetic",
+            )
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatGoal(
             engagement_id="p",
             session_id="parent-chat",
@@ -396,18 +416,20 @@ def test_child_lookup_filters_before_hydration_and_has_no_page_horizon(
             completion_criteria=["Observe"],
         )
     )
-    store.create_many(
-        [
-            ChatGoal(
-                engagement_id="other",
-                session_id=f"other-{index}",
-                objective="Unrelated",
-                completion_criteria=["Observe"],
-            )
-            for index in range(1001)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatGoal(
+                    engagement_id="other",
+                    session_id=f"other-{index}",
+                    objective="Unrelated",
+                    completion_criteria=["Observe"],
+                )
+                for index in range(1001)
+            ]
+        )
     )
-    children = store.create_many(
+    children = await store.create_many(
         [
             ChatGoal(
                 engagement_id="p",
@@ -419,13 +441,15 @@ def test_child_lookup_filters_before_hydration_and_has_no_page_horizon(
             for index in range(2)
         ]
     )
-    store.create(
-        ChatGoal(
-            engagement_id="other",
-            session_id="wrong-project",
-            parent_goal_id=parent.id,
-            objective="Foreign",
-            completion_criteria=["Observe"],
+    (
+        await store.create(
+            ChatGoal(
+                engagement_id="other",
+                session_id="wrong-project",
+                parent_goal_id=parent.id,
+                objective="Foreign",
+                completion_criteria=["Observe"],
+            )
         )
     )
     from nebula.v3 import storage
@@ -438,26 +462,28 @@ def test_child_lookup_filters_before_hydration_and_has_no_page_horizon(
         return original(row, model)
 
     monkeypatch.setattr(storage, "_row_to_entity", counted)
-    assert [row.id for row in ChatGoalService(store).list_children("parent-chat")] == [
-        row.id for row in children
-    ]
+    assert [
+        row.id for row in (await ChatGoalService(store).list_children("parent-chat"))
+    ] == [row.id for row in children]
     assert len(hydrated) <= 4
-    assert ChatGoalService(store).list_children("missing-goal-chat") == []
+    assert (await ChatGoalService(store).list_children("missing-goal-chat")) == []
 
 
-def test_scope_catalog_reaches_late_profiles_and_keeps_notebook_scope(tmp_path):
+async def test_scope_catalog_reaches_late_profiles_and_keeps_notebook_scope(tmp_path):
     store = NebulaStore(tmp_path / "catalog.db")
-    project = store.create(Engagement(name="Synthetic"))
-    store.create_many(
-        [
-            McpServerProfile(
-                name=f"Disabled-{index}",
-                transport="stdio",
-                command="/bin/true",
-                enabled=False,
-            )
-            for index in range(1001)
-        ]
+    project = await store.create(Engagement(name="Synthetic"))
+    (
+        await store.create_many(
+            [
+                McpServerProfile(
+                    name=f"Disabled-{index}",
+                    transport="stdio",
+                    command="/bin/true",
+                    enabled=False,
+                )
+                for index in range(1001)
+            ]
+        )
     )
     capabilities = McpCapabilitySnapshot(
         checked_at=utc_now(),
@@ -465,7 +491,7 @@ def test_scope_catalog_reaches_late_profiles_and_keeps_notebook_scope(tmp_path):
             McpToolSnapshot(name="read", description="Read fixture", read_only=True)
         ],
     )
-    visible = store.create(
+    visible = await store.create(
         McpServerProfile(
             name="Late",
             transport="stdio",
@@ -475,7 +501,7 @@ def test_scope_catalog_reaches_late_profiles_and_keeps_notebook_scope(tmp_path):
             capabilities=capabilities,
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         McpServerProfile(
             name="Foreign-notebook",
             transport="stdio",
@@ -504,13 +530,13 @@ def test_scope_catalog_reaches_late_profiles_and_keeps_notebook_scope(tmp_path):
             assert visible.id in servers
             assert foreign.id not in servers
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
 @pytest.mark.parametrize("resource", ["scope-candidates", "search-status"])
-def test_slow_catalog_and_policy_status_leave_core_responsive(tmp_path, resource):
+async def test_slow_catalog_and_policy_status_leave_core_responsive(tmp_path, resource):
     store = NebulaStore(tmp_path / "slow-api.db")
-    project = store.create(Engagement(name="Synthetic"))
+    project = await store.create(Engagement(name="Synthetic"))
     app = create_app(
         store, auth_token="synthetic-token", execution_data_root=tmp_path / "runtime"
     )
@@ -524,21 +550,17 @@ def test_slow_catalog_and_policy_status_leave_core_responsive(tmp_path, resource
         if resource == "scope-candidates"
         else ScopePolicy.entity_kind
     )
-    loop_thread = threading.get_ident()
     entered = 0
-    release = threading.Event()
-    guard = threading.Lock()
+    release = asyncio.Event()
 
     def held(conn, cursor, statement, parameters, context, executemany):
         nonlocal entered
         if not statement.startswith("SELECT") or kind not in parameters:
             return
-        assert threading.get_ident() != loop_thread
-        with guard:
-            entered += 1
-        assert release.wait(5), "status read blocked Core's request loop"
+        entered += 1
+        wait_for_database_gate(conn, release)
 
-    event.listen(store.database.engine, "before_cursor_execute", held)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", held)
 
     async def exercise():
         headers = {"Authorization": "Bearer synthetic-token"}
@@ -573,12 +595,12 @@ def test_slow_catalog_and_policy_status_leave_core_responsive(tmp_path, resource
                 await asyncio.gather(*tasks, return_exceptions=True)
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", held)
+        event.remove(store.database.engine.sync_engine, "before_cursor_execute", held)
 
 
-def test_cleanup_yields_and_only_discards_expired_detached_popups(
+async def test_cleanup_yields_and_only_discards_expired_detached_popups(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "cleanup.db")
@@ -589,30 +611,30 @@ def test_cleanup_yields_and_only_discards_expired_detached_popups(
         ("expired", {"temporary_assistant": True}),
         ("renewed", {"temporary_assistant": True}),
     ):
-        store.create(
-            ChatSession(
-                id=name,
-                engagement_id="p",
-                title=name,
-                model="m",
-                provider_profile_id="synthetic",
-                created_at=old,
-                updated_at=old,
-                metadata=metadata,
+        (
+            await store.create(
+                ChatSession(
+                    id=name,
+                    engagement_id="p",
+                    title=name,
+                    model="m",
+                    provider_profile_id="synthetic",
+                    created_at=old,
+                    updated_at=old,
+                    metadata=metadata,
+                )
             )
         )
     runtime = Mock(cancel_turn=AsyncMock(), close_session=AsyncMock())
     router = temporary_chat_router(store, lambda: ChatService(store), runtime)
     original = store.expired_temporary_chat_ids
-    loop_thread = threading.get_ident()
-    release = threading.Event()
-    entered = threading.Event()
+    release = asyncio.Event()
+    entered = asyncio.Event()
 
-    def held(before):
-        assert threading.get_ident() != loop_thread
-        ids = original(before)
+    async def held(before):
+        ids = await original(before)
         entered.set()
-        assert release.wait(3)
+        await asyncio.wait_for(release.wait(), timeout=3)
         return ids
 
     monkeypatch.setattr(store, "expired_temporary_chat_ids", held)
@@ -625,13 +647,17 @@ def test_cleanup_yields_and_only_discards_expired_detached_popups(
                         break
                     await asyncio.sleep(0.005)
                 assert entered.is_set()
-                store.update(
-                    ChatSession, "renewed", {"metadata": {"temporary_assistant": True}}
+                (
+                    await store.update(
+                        ChatSession,
+                        "renewed",
+                        {"metadata": {"temporary_assistant": True}},
+                    )
                 )
                 release.set()
                 for _ in range(200):
                     with suppress(NotFoundError):
-                        store.get(ChatSession, "expired")
+                        (await store.get(ChatSession, "expired"))
                         await asyncio.sleep(0.005)
                         continue
                     break
@@ -640,7 +666,14 @@ def test_cleanup_yields_and_only_discards_expired_detached_popups(
         finally:
             release.set()
 
-    asyncio.run(exercise())
-    assert all(store.get(ChatSession, name) for name in ("ordinary", "side", "renewed"))
+    (await exercise())
+    assert all(
+        await asyncio.gather(
+            *(store.get(ChatSession, name) for name in ("ordinary", "side", "renewed"))
+        )
+    )
     with pytest.raises(NotFoundError):
-        store.get(ChatSession, "expired")
+        (await store.get(ChatSession, "expired"))
+
+
+pytestmark = pytest.mark.anyio

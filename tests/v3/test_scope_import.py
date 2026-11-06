@@ -1,10 +1,14 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import base64
 import json
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -106,11 +110,11 @@ class StructuredHarnessRuntime:
         )
 
 
-def test_scope_import_supports_codex_harness_runtime(tmp_path):
+async def test_scope_import_supports_codex_harness_runtime(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="Codex scope import"))
-    harness = store.create(
+    engagement = await store.create(Engagement(id="eng-1", name="Codex scope import"))
+    harness = await store.create(
         HarnessProfile(
             name="Local Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -127,18 +131,16 @@ def test_scope_import_supports_codex_harness_runtime(tmp_path):
         harness_runtime=runtime,  # type: ignore[arg-type]
     )
 
-    created = asyncio.run(
-        service.create(
-            engagement_id=engagement.id,
-            backend_kind="harness",
-            provider_id=None,
-            harness_profile_id=harness.id,
-            model="model-1",
-            filename="scope.txt",
-            data=b"In scope: app.example.test",
-            media_type="text/plain",
-            cloud_confirmed=False,
-        )
+    created = await service.create(
+        engagement_id=engagement.id,
+        backend_kind="harness",
+        provider_id=None,
+        harness_profile_id=harness.id,
+        model="model-1",
+        filename="scope.txt",
+        data=b"In scope: app.example.test",
+        media_type="text/plain",
+        cloud_confirmed=False,
     )
 
     assert created.status == ScopeImportStatus.READY
@@ -152,10 +154,10 @@ def test_scope_import_supports_codex_harness_runtime(tmp_path):
     assert "app.example.test" in runtime.requests[0]["files"]["scope-chunk.json"]
 
 
-def test_scope_import_is_reviewed_additive_and_revision_safe(tmp_path):
+async def test_scope_import_is_reviewed_additive_and_revision_safe(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    scope = store.create(
+    scope = await store.create(
         ScopePolicy(
             id="scope:eng-1",
             engagement_id="eng-1",
@@ -165,10 +167,10 @@ def test_scope_import_is_reviewed_additive_and_revision_safe(tmp_path):
             max_concurrency=3,
         )
     )
-    engagement = store.create(
+    engagement = await store.create(
         Engagement(id="eng-1", name="Scope import", scope_policy_id=scope.id)
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="provider-1",
             name="Structured local provider",
@@ -187,19 +189,17 @@ def test_scope_import_is_reviewed_additive_and_revision_safe(tmp_path):
         operator_id=lambda: "operator-1",
     )
 
-    created = asyncio.run(
-        service.create(
-            engagement_id=engagement.id,
-            provider_id=profile.id,
-            model="model-1",
-            filename="scope.txt",
-            data=(
-                b"In scope: 192.0.2.7\nhttps://app.example.test/login\n"
-                b"Do not test admin.example.test"
-            ),
-            media_type="text/plain",
-            cloud_confirmed=False,
-        )
+    created = await service.create(
+        engagement_id=engagement.id,
+        provider_id=profile.id,
+        model="model-1",
+        filename="scope.txt",
+        data=(
+            b"In scope: 192.0.2.7\nhttps://app.example.test/login\n"
+            b"Do not test admin.example.test"
+        ),
+        media_type="text/plain",
+        cloud_confirmed=False,
     )
 
     assert created.status == ScopeImportStatus.READY
@@ -220,14 +220,16 @@ def test_scope_import_is_reviewed_additive_and_revision_safe(tmp_path):
         if item.classification == ScopeImportClassification.EXCLUDED
     )
     with pytest.raises(ScopeImportError, match="only valid allowed candidates"):
-        service.apply(
-            created.id,
-            ScopeImportApplyRequest(
-                candidate_ids=[excluded.id], expected_scope_revision=scope.revision
-            ),
+        (
+            await service.apply(
+                created.id,
+                ScopeImportApplyRequest(
+                    candidate_ids=[excluded.id], expected_scope_revision=scope.revision
+                ),
+            )
         )
 
-    applied = service.apply(
+    applied = await service.apply(
         created.id,
         ScopeImportApplyRequest(
             candidate_ids=[item.id for item in allowed],
@@ -243,22 +245,24 @@ def test_scope_import_is_reviewed_additive_and_revision_safe(tmp_path):
     assert applied.scope_import.applied_by == "operator-1"
 
     with pytest.raises(ScopeImportError, match="not ready"):
-        service.apply(
-            created.id,
-            ScopeImportApplyRequest(
-                candidate_ids=[], expected_scope_revision=scope.revision
-            ),
+        (
+            await service.apply(
+                created.id,
+                ScopeImportApplyRequest(
+                    candidate_ids=[], expected_scope_revision=scope.revision
+                ),
+            )
         )
 
 
-def test_scope_import_rejects_a_stale_policy_revision(tmp_path):
+async def test_scope_import_rejects_a_stale_policy_revision(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    scope = store.create(ScopePolicy(id="scope:eng-1", engagement_id="eng-1"))
-    engagement = store.create(
+    scope = await store.create(ScopePolicy(id="scope:eng-1", engagement_id="eng-1"))
+    engagement = await store.create(
         Engagement(id="eng-1", name="Scope import", scope_policy_id=scope.id)
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="provider-1",
             name="Structured local provider",
@@ -274,29 +278,29 @@ def test_scope_import_rejects_a_stale_policy_revision(tmp_path):
         artifact_store=artifacts,
         provider_factory=lambda _: StructuredProvider(profile.id),
     )
-    created = asyncio.run(
-        service.create(
-            engagement_id=engagement.id,
-            provider_id=profile.id,
-            model="model-1",
-            filename="scope.txt",
-            data=b"192.0.2.7",
-            media_type="text/plain",
-            cloud_confirmed=False,
-        )
+    created = await service.create(
+        engagement_id=engagement.id,
+        provider_id=profile.id,
+        model="model-1",
+        filename="scope.txt",
+        data=b"192.0.2.7",
+        media_type="text/plain",
+        cloud_confirmed=False,
     )
     with pytest.raises(ConflictError, match="revision conflict"):
-        service.apply(
-            created.id,
-            ScopeImportApplyRequest(candidate_ids=[], expected_scope_revision=99),
+        (
+            await service.apply(
+                created.id,
+                ScopeImportApplyRequest(candidate_ids=[], expected_scope_revision=99),
+            )
         )
 
 
-def test_scope_import_api_create_list_and_apply(tmp_path):
+async def test_scope_import_api_create_list_and_apply(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="API import"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-1", name="API import"))
+    profile = await store.create(
         ProviderProfile(
             id="provider-1",
             name="Structured local provider",
@@ -322,7 +326,7 @@ def test_scope_import_api_create_list_and_apply(tmp_path):
     )
     headers = {"Authorization": "Bearer token"}
 
-    created_response = client.post(
+    created_response = await client.post(
         f"/api/v1/engagements/{engagement.id}/scope-imports",
         headers=headers,
         json={
@@ -339,15 +343,16 @@ def test_scope_import_api_create_list_and_apply(tmp_path):
     created = created_response.json()
     assert created["status"] == "ready"
     assert (
-        client.get(
+        await client.get(
             f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
-        ).json()[0]["id"]
-        == created["id"]
-    )
+        )
+    ).json()[0]["id"] == created["id"]
     # A Project with a long import history still lists the import just made.
-    seed_older_copies(store, store.get(ScopeImport, created["id"]))
-    listed = client.get(
-        f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+    (await seed_older_copies(store, (await store.get(ScopeImport, created["id"]))))
+    listed = (
+        await client.get(
+            f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+        )
     ).json()
     assert len(listed) == 1_000
     assert listed[-1]["id"] == created["id"]
@@ -356,7 +361,7 @@ def test_scope_import_api_create_list_and_apply(tmp_path):
         for item in created["candidates"]
         if item["classification"] == "allowed"
     ]
-    applied = client.post(
+    applied = await client.post(
         f"/api/v1/engagements/{engagement.id}/scope-imports/{created['id']}/apply",
         headers=headers,
         json={"candidate_ids": selected, "expected_scope_revision": 0},
@@ -384,8 +389,8 @@ class ScriptedProvider(StructuredProvider):
         )
 
 
-def _structured_profile(store):
-    return store.create(
+async def _structured_profile(store):
+    return await store.create(
         ProviderProfile(
             id="provider-1",
             name="Structured local provider",
@@ -412,11 +417,11 @@ def _create_import(service, engagement_id, profile_id, data: bytes):
     )
 
 
-def test_scope_import_splits_an_oversized_section_into_bounded_chunks(tmp_path):
+async def test_scope_import_splits_an_oversized_section_into_bounded_chunks(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="Large scope"))
-    profile = _structured_profile(store)
+    engagement = await store.create(Engagement(id="eng-1", name="Large scope"))
+    profile = await _structured_profile(store)
     provider = StructuredProvider(profile.id)
     service = ScopeImportService(
         store=store, artifact_store=artifacts, provider_factory=lambda _: provider
@@ -447,11 +452,13 @@ def test_scope_import_splits_an_oversized_section_into_bounded_chunks(tmp_path):
     ]
 
 
-def test_scope_import_reports_document_errors_as_document_errors(tmp_path, monkeypatch):
+async def test_scope_import_reports_document_errors_as_document_errors(
+    tmp_path, monkeypatch
+):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="Document error"))
-    profile = _structured_profile(store)
+    engagement = await store.create(Engagement(id="eng-1", name="Document error"))
+    profile = await _structured_profile(store)
     service = ScopeImportService(
         store=store,
         artifact_store=artifacts,
@@ -472,7 +479,7 @@ def test_scope_import_reports_document_errors_as_document_errors(tmp_path, monke
     )
     headers = {"Authorization": "Bearer token"}
 
-    response = client.post(
+    response = await client.post(
         f"/api/v1/engagements/{engagement.id}/scope-imports",
         headers=headers,
         json={
@@ -489,18 +496,20 @@ def test_scope_import_reports_document_errors_as_document_errors(tmp_path, monke
     assert response.status_code == 413
     assert "exceeds the AI chunk limit" in response.json()["detail"]
     assert "provider" not in response.json()["detail"]
-    listed = client.get(
-        f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+    listed = (
+        await client.get(
+            f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+        )
     ).json()
     assert listed[0]["status"] == "failed"
     assert "exceeds the AI chunk limit" in listed[0]["error_detail"]
 
 
-def test_scope_import_flags_a_cidr_whose_host_bits_were_masked(tmp_path):
+async def test_scope_import_flags_a_cidr_whose_host_bits_were_masked(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="Host bits"))
-    profile = _structured_profile(store)
+    engagement = await store.create(Engagement(id="eng-1", name="Host bits"))
+    profile = await _structured_profile(store)
     provider = ScriptedProvider(
         profile.id,
         [
@@ -545,11 +554,11 @@ def test_scope_import_flags_a_cidr_whose_host_bits_were_masked(tmp_path):
     assert clean.warnings == []
 
 
-def test_scope_import_warns_when_an_allowed_target_covers_an_exclusion(tmp_path):
+async def test_scope_import_warns_when_an_allowed_target_covers_an_exclusion(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="Overlap"))
-    profile = _structured_profile(store)
+    engagement = await store.create(Engagement(id="eng-1", name="Overlap"))
+    profile = await _structured_profile(store)
 
     def proposal(target_type, classification, raw_value):
         return {
@@ -605,13 +614,13 @@ def test_scope_import_warns_when_an_allowed_target_covers_an_exclusion(tmp_path)
     )
 
 
-def test_stale_generating_scope_import_is_failed_on_startup_and_discardable(
+async def test_stale_generating_scope_import_is_failed_on_startup_and_discardable(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-1", name="Interrupted"))
-    stranded = store.create(
+    engagement = await store.create(Engagement(id="eng-1", name="Interrupted"))
+    stranded = await store.create(
         ScopeImport(
             engagement_id=engagement.id,
             artifact_id="artifact-1",
@@ -623,10 +632,10 @@ def test_stale_generating_scope_import_is_failed_on_startup_and_discardable(
     assert stranded.status == ScopeImportStatus.GENERATING
     service = ScopeImportService(store=store, artifact_store=artifacts)
     with pytest.raises(ScopeImportError, match="discarded"):
-        service.discard(stranded.id)
+        (await service.discard(stranded.id))
 
     headers = {"Authorization": "Bearer token"}
-    with TestClient(
+    async with TestClient(
         create_app(
             store,
             artifact_store=artifacts,
@@ -634,14 +643,19 @@ def test_stale_generating_scope_import_is_failed_on_startup_and_discardable(
             auth_token="token",
         )
     ) as client:
-        listed = client.get(
-            f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+        listed = (
+            await client.get(
+                f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+            )
         ).json()
         assert listed[0]["status"] == "failed"
         assert "restarted" in listed[0]["error_detail"]
-        discarded = client.post(
+        discarded = await client.post(
             f"/api/v1/engagements/{engagement.id}/scope-imports/{stranded.id}/discard",
             headers=headers,
         )
         assert discarded.status_code == 200
         assert discarded.json()["status"] == "discarded"
+
+
+pytestmark = pytest.mark.anyio

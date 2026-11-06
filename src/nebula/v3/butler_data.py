@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 import json
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -44,8 +46,8 @@ class ButlerData:
         self.project_id = project_id
         self.core_api = core_api
 
-    def _chat(self, session_id: str) -> ChatSession:
-        session = self.store.get(ChatSession, session_id)
+    async def _chat(self, session_id: str) -> ChatSession:
+        session = await self.store.get(ChatSession, session_id)
         if session.engagement_id != self.project_id or any(
             session.metadata.get(key) is True
             for key in ("control_assistant", "side_chat", "temporary_assistant")
@@ -53,28 +55,27 @@ class ButlerData:
             raise ValueError("choose a visible chat from this project's work roster")
         return session
 
-    def _result(self, result_id: str) -> StructuredResult:
-        result = self.store.get(StructuredResult, result_id)
+    async def _result(self, result_id: str) -> StructuredResult:
+        result = await self.store.get(StructuredResult, result_id)
         if result.engagement_id != self.project_id:
             raise ValueError("choose a saved result from the selected project")
         return result
 
-    def _writable(self) -> None:
+    async def _writable(self) -> None:
         if (
-            self.store.get(Engagement, self.project_id).status
-            == EngagementStatus.ARCHIVED
-        ):
+            await self.store.get(Engagement, self.project_id)
+        ).status == EngagementStatus.ARCHIVED:
             raise ValueError("restore the project before changing its saved data")
 
-    def results(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def results(self, arguments: dict[str, Any]) -> dict[str, Any]:
         filters = {}
         if session_id := arguments.get("session_id"):
-            self._chat(session_id)
+            (await self._chat(session_id))
             filters["chat_session_id"] = session_id
         if stream := arguments.get("stream"):
             filters["stream"] = stream
         offset = arguments.get("offset", 0)
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             StructuredResult,
             filters,
             engagement_id=self.project_id,
@@ -87,11 +88,13 @@ class ButlerData:
             "next_offset": offset + 20 if len(rows) > 20 else None,
         }
 
-    def result(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return summarize(self._result(arguments["result_id"])).model_dump(mode="json")
+    async def result(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return summarize((await self._result(arguments["result_id"]))).model_dump(
+            mode="json"
+        )
 
-    def read_result(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = self._result(arguments["result_id"])
+    async def read_result(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = await self._result(arguments["result_id"])
         if result.revision != arguments["expected_revision"]:
             raise ValueError("result changed; read its current revision")
         field = arguments.get("field", "result")
@@ -112,9 +115,9 @@ class ButlerData:
             "next_offset": end if end < len(text) else None,
         }
 
-    def delete_result(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._writable()
-        result = self._result(arguments["result_id"])
+    async def delete_result(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        (await self._writable())
+        result = await self._result(arguments["result_id"])
         if result.revision != arguments["expected_revision"]:
             raise ValueError("result changed; read its current revision")
         return {
@@ -161,17 +164,17 @@ class ButlerData:
             "limit": 20,
         }
         if session_id := arguments.get("session_id"):
-            self._chat(session_id)
+            (await self._chat(session_id))
             params["session_id"] = session_id
         return await self._request(
             "GET",
             f"/api/v1/chat/projects/{quote(self.project_id, safe='')}/search?{urlencode(params)}",
         )
 
-    def bookmarks(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        session = self._chat(arguments["session_id"])
+    async def bookmarks(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        session = await self._chat(arguments["session_id"])
         offset = arguments.get("offset", 0)
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             ChatBookmark,
             {"session_id": session.id},
             engagement_id=self.project_id,
@@ -193,9 +196,9 @@ class ButlerData:
         }
 
     async def set_bookmark(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        self._writable()
-        session = self._chat(arguments["session_id"])
-        message = self.store.get(ChatMessage, arguments["message_id"])
+        (await self._writable())
+        session = await self._chat(arguments["session_id"])
+        message = await self.store.get(ChatMessage, arguments["message_id"])
         if message.session_id != session.id or message.engagement_id != self.project_id:
             raise ValueError("choose a message from the selected chat search results")
         saved = await self._request(
@@ -203,7 +206,9 @@ class ButlerData:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/bookmarks/{quote(message.id, safe='')}",
             {key: arguments[key] for key in ("active", "expected_revision")},
         )
-        observed = self.store.get(ChatBookmark, bookmark_id(session.id, message.id))
+        observed = await self.store.get(
+            ChatBookmark, bookmark_id(session.id, message.id)
+        )
         if (
             observed.revision != saved["revision"]
             or observed.active != arguments["active"]
@@ -318,10 +323,10 @@ class ButlerData:
             ) -> dict[str, Any]:
                 handler = getattr(self, selected)
                 if selected in {"search_chats", "set_bookmark"}:
-                    return await handler(arguments)
+                    return await call_async(handler, arguments)
                 if selected_read:
                     return await read_in_worker(handler, arguments)
-                return handler(arguments)
+                return await call_async(handler, arguments)
 
             actions.append(
                 AnalysisTool(

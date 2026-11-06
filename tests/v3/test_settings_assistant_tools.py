@@ -1,7 +1,11 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -241,11 +245,11 @@ def test_browser_actions_are_bounded_intents_until_the_requesting_device_applies
         request_project_execution_mode({"mode": "unconfined"})
 
 
-def test_post_tool_change_reads_back_from_core(tmp_path):
+async def test_post_tool_change_reads_back_from_core(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    project = store.create(Engagement(name="Bounded project"))
-    result = set_post_tool_preference(
+    project = await store.create(Engagement(name="Bounded project"))
+    result = await set_post_tool_preference(
         store, artifacts, project.id, {"setting": "take_notes", "enabled": False}
     )
     assert result == {
@@ -259,43 +263,54 @@ def test_post_tool_change_reads_back_from_core(tmp_path):
         "client_action": {"kind": "post_tool_refresh", "project_id": project.id},
     }
     with pytest.raises(Exception):
-        set_post_tool_preference(
-            store,
-            artifacts,
-            project.id,
-            {"setting": "take_notes", "enabled": True},
+        (
+            await set_post_tool_preference(
+                store,
+                artifacts,
+                project.id,
+                {"setting": "take_notes", "enabled": True},
+            )
         )
-    assert (
-        store.get(Engagement, project.id).metadata["post_tool_assistant"]["take_notes"]
-        is False
-    )
+    assert (await store.get(Engagement, project.id)).metadata["post_tool_assistant"][
+        "take_notes"
+    ] is False
 
 
-def test_project_context_reads_mode_and_linked_workspace_without_creating_policy(
+async def test_project_context_reads_mode_and_linked_workspace_without_creating_policy(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
-    project = store.create(Engagement(name="Bounded project"))
-    other = store.create(Engagement(name="Other project"))
-    store.create(
-        AutomationProjectPolicy(
-            engagement_id=other.id, execution_mode="host", host_access_acknowledged=True
+    project = await store.create(Engagement(name="Bounded project"))
+    other = await store.create(Engagement(name="Other project"))
+    (
+        await store.create(
+            AutomationProjectPolicy(
+                engagement_id=other.id,
+                execution_mode="host",
+                host_access_acknowledged=True,
+            )
         )
     )
-    default = project_context(store, project.id)
+    default = await project_context(store, project.id)
     assert default["execution_mode"] == "host"
     assert default["policy_source"] == "default"
     assert "No execution policy is stored" in default["policy_description"]
     assert "pending acknowledgment" in default["policy_description"]
     assert default["linked_workspace_path"] is None
-    assert not store.find_entities(
-        AutomationProjectPolicy, {"engagement_id": project.id}
+    assert not (
+        await store.find_entities(
+            AutomationProjectPolicy, {"engagement_id": project.id}
+        )
     )
-    auto_default = store.create(Engagement(name="Auto default"))
-    store.create(
-        AutomationProjectPolicy(engagement_id=auto_default.id, execution_mode="docker")
+    auto_default = await store.create(Engagement(name="Auto default"))
+    (
+        await store.create(
+            AutomationProjectPolicy(
+                engagement_id=auto_default.id, execution_mode="docker"
+            )
+        )
     )
-    stored_docker = project_context(store, auto_default.id)
+    stored_docker = await project_context(store, auto_default.id)
     assert stored_docker["policy_source"] == "stored"
     assert (
         "may be the automatically created default"
@@ -304,20 +319,22 @@ def test_project_context_reads_mode_and_linked_workspace_without_creating_policy
 
     linked = tmp_path / "linked"
     linked.mkdir()
-    project = store.update(
+    project = await store.update(
         Engagement,
         project.id,
         {"workspace_path": str(linked)},
         expected_revision=project.revision,
     )
-    store.create(
-        AutomationProjectPolicy(
-            engagement_id=project.id,
-            execution_mode="host",
-            host_access_acknowledged=True,
+    (
+        await store.create(
+            AutomationProjectPolicy(
+                engagement_id=project.id,
+                execution_mode="host",
+                host_access_acknowledged=True,
+            )
         )
     )
-    observed = project_context(store, project.id)
+    observed = await project_context(store, project.id)
     assert observed["execution_mode"] == "host"
     assert observed["policy_source"] == "stored"
     assert "host-access acknowledgment" in observed["policy_description"]
@@ -326,10 +343,10 @@ def test_project_context_reads_mode_and_linked_workspace_without_creating_policy
     assert "Existing command sessions" in observed["existing_sessions"]
 
 
-def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
+async def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    project = store.create(Engagement(name="Project A"))
+    project = await store.create(Engagement(name="Project A"))
     names = {
         plugin.spec.name for plugin in provider_plugins(store, artifacts, project.id)
     }
@@ -353,12 +370,12 @@ def test_provider_tools_are_bounded_to_catalog_and_project(tmp_path):
     }
 
 
-def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(
+async def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    project = store.create(Engagement(name="Bounded project"))
+    project = await store.create(Engagement(name="Bounded project"))
     runtime = RuntimePlatform(
         store=store, artifact_store=artifacts, data_root=tmp_path / "runtime"
     )
@@ -369,8 +386,8 @@ def test_provider_runtime_offers_settings_tools_only_to_the_settings_assistant(
         model="small",
         allow_empty=True,
     )
-    ordinary = runtime.chat_components(**common)
-    settings = runtime.chat_components(**common, settings_assistant=True)
+    ordinary = await runtime.chat_components(**common)
+    settings = await runtime.chat_components(**common, settings_assistant=True)
     assert not BUTLER_TOOL_NAMES.intersection(ordinary.specs)
     assert set(settings.specs) == BUTLER_TOOL_NAMES | {
         "workspace.find",
@@ -416,9 +433,9 @@ def test_control_session_keeps_its_identity_and_accepts_selected_assistant_tools
         )
 
 
-def test_default_model_change_requires_advertised_value_and_reads_back(tmp_path):
+async def test_default_model_change_requires_advertised_value_and_reads_back(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             name="Local model",
             provider_type="ollama",
@@ -426,7 +443,7 @@ def test_default_model_change_requires_advertised_value_and_reads_back(tmp_path)
             model_allowlist=["small", "large"],
         )
     )
-    harness = store.create(
+    harness = await store.create(
         HarnessProfile(
             name="Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -434,51 +451,53 @@ def test_default_model_change_requires_advertised_value_and_reads_back(tmp_path)
             capabilities=HarnessCapabilities(models=["model-a", "model-b"]),
         )
     )
-    choices = model_choices(store)
+    choices = await model_choices(store)
     assert choices["providers"][0]["models"] == ["small", "large"]
     assert choices["harnesses"][0]["models"] == ["model-a", "model-b"]
     assert (
-        set_default_model(
+        await set_default_model(
             store,
             {
                 "kind": "provider",
                 "profile_id": provider.id,
                 "model": "large",
             },
-        )["default_model"]
-        == "large"
-    )
+        )
+    )["default_model"] == "large"
     assert (
-        set_default_model(
+        await set_default_model(
             store,
             {
                 "kind": "harness",
                 "profile_id": harness.id,
                 "model": "model-b",
             },
-        )["default_model"]
-        == "model-b"
-    )
-    with pytest.raises(ValueError):
-        set_default_model(
-            store,
-            {
-                "kind": "provider",
-                "profile_id": provider.id,
-                "model": "unlisted",
-            },
         )
-    assert store.get(ProviderProfile, provider.id).metadata["default_model"] == "large"
+    )["default_model"] == "model-b"
+    with pytest.raises(ValueError):
+        (
+            await set_default_model(
+                store,
+                {
+                    "kind": "provider",
+                    "profile_id": provider.id,
+                    "model": "unlisted",
+                },
+            )
+        )
+    assert (await store.get(ProviderProfile, provider.id)).metadata[
+        "default_model"
+    ] == "large"
 
 
-def test_control_session_lookup_is_authenticated_and_project_scoped(tmp_path):
+async def test_control_session_lookup_is_authenticated_and_project_scoped(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    first = store.create(Engagement(name="First"))
-    second = store.create(Engagement(name="Second"))
-    provider = store.create(
+    first = await store.create(Engagement(name="First"))
+    second = await store.create(Engagement(name="Second"))
+    provider = await store.create(
         ProviderProfile(name="Local", provider_type="ollama", is_local=True)
     )
-    ordinary = store.create(
+    ordinary = await store.create(
         ChatSession(
             engagement_id=first.id,
             title="Ordinary",
@@ -486,7 +505,7 @@ def test_control_session_lookup_is_authenticated_and_project_scoped(tmp_path):
             model="small",
         )
     )
-    control = store.create(
+    control = await store.create(
         ChatSession(
             engagement_id=first.id,
             title="Nebula assistant",
@@ -495,19 +514,24 @@ def test_control_session_lookup_is_authenticated_and_project_scoped(tmp_path):
             metadata={"control_assistant": True},
         )
     )
-    store.create(
-        ChatSession(
-            engagement_id=second.id,
-            title="Other project",
-            provider_profile_id=provider.id,
-            model="small",
-            metadata={"control_assistant": True},
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=second.id,
+                title="Other project",
+                provider_profile_id=provider.id,
+                model="small",
+                metadata={"control_assistant": True},
+            )
         )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
     url = f"/api/v1/chat/control-assistant/session?engagement_id={first.id}"
-    assert client.get(url).status_code == 401
-    response = client.get(url, headers={"Authorization": "Bearer test-token"})
+    assert (await client.get(url)).status_code == 401
+    response = await client.get(url, headers={"Authorization": "Bearer test-token"})
     assert response.status_code == 200, response.text
     assert response.json()["id"] == control.id
     assert response.json()["id"] != ordinary.id
+
+
+pytestmark = pytest.mark.anyio

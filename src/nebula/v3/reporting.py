@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import async_done_callback, call_async
+
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -12,7 +16,6 @@ import asyncio
 import hashlib
 import io
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -93,7 +96,7 @@ class ReportRenderService:
         *,
         store: NebulaStore,
         artifact_store: ArtifactStore,
-        operator_id: Callable[[], str] | None = None,
+        operator_id: (MaybeAsync[[], str] | None) = None,
         font_root: str | Path | None = None,
         cpu_workers: CpuWorkerPool | ReportCpuExecutor | None = None,
     ) -> None:
@@ -116,7 +119,7 @@ class ReportRenderService:
             await self.cpu_workers.start()
         # Only readable records: one unreadable row must not keep Core from
         # starting and settling the others.
-        for render in self.store.iter_readable_entities(
+        async for render in self.store.iter_readable_entities(
             ReportRender,
             {
                 "status": [
@@ -125,7 +128,7 @@ class ReportRenderService:
                 ]
             },
         ):
-            updated = self.store.update(
+            updated = await self.store.update(
                 ReportRender,
                 render.id,
                 {
@@ -134,7 +137,11 @@ class ReportRenderService:
                 },
                 expected_revision=render.revision,
             )
-            self._event(updated, "report_render.interrupted", {"status": "interrupted"})
+            (
+                await self._event(
+                    updated, "report_render.interrupted", {"status": "interrupted"}
+                )
+            )
 
     async def shutdown(self) -> None:
         self._shutting_down = True
@@ -159,9 +166,7 @@ class ReportRenderService:
         # Assembling the snapshot hashes every referenced artifact, so it runs
         # off the event loop and outside the render lock; the lock only
         # serializes queueing below.
-        prepared = await asyncio.to_thread(
-            self._prepare_render, report_id, report_revision
-        )
+        prepared = await self._prepare_render(report_id, report_revision)
         if prepared.cached is not None:
             return prepared.cached
         report = prepared.report
@@ -191,7 +196,7 @@ class ReportRenderService:
                 snapshot_artifact_id=snapshot_artifact.artifact.id,
             )
             try:
-                self.store.create_many([snapshot_artifact.artifact, render])
+                (await self.store.create_many([snapshot_artifact.artifact, render]))
             except Exception as caught_error:
                 record_caught_exception(
                     "reports",
@@ -202,15 +207,17 @@ class ReportRenderService:
                 )
                 self.artifact_store.discard_new_blob(snapshot_artifact)
                 raise
-            self._event(
-                render,
-                "report_render.queued",
-                {
-                    "status": render.status.value,
-                    "report_id": report.id,
-                    "report_revision": report.revision,
-                    "input_fingerprint": fingerprint,
-                },
+            (
+                await self._event(
+                    render,
+                    "report_render.queued",
+                    {
+                        "status": render.status.value,
+                        "report_id": report.id,
+                        "report_revision": report.revision,
+                        "input_fingerprint": fingerprint,
+                    },
+                )
             )
             task = create_diagnostic_task(
                 self._render(
@@ -222,34 +229,38 @@ class ReportRenderService:
                 name=f"report-render-{render.id}",
             )
             self._tasks[render.id] = task
-            task.add_done_callback(lambda _task: self._tasks.pop(render.id, None))
+            task.add_done_callback(
+                async_done_callback(lambda _task: self._tasks.pop(render.id, None))
+            )
             return render
 
-    def _prepare_render(self, report_id: str, report_revision: int) -> _PreparedRender:
+    async def _prepare_render(
+        self, report_id: str, report_revision: int
+    ) -> _PreparedRender:
         """Build the snapshot and look for a verified completed render of it.
 
         Runs on a worker thread: it hashes every referenced artifact and the
         cached PDF, which must not stall the event loop.
         """
 
-        report = self.store.get(Report, report_id)
+        report = await self.store.get(Report, report_id)
         if report.revision != report_revision:
             raise ReportRenderError(
                 "report_revision_stale",
                 "save the report revision before exporting PDF",
             )
-        snapshot = self._canonical_snapshot(report)
+        snapshot = await self._canonical_snapshot(report)
         snapshot_bytes = _canonical_json(snapshot)
         fingerprint = hashlib.sha256(snapshot_bytes).hexdigest()
         cached: ReportRender | None = None
-        for prior in self._all_renders(report.engagement_id):
+        for prior in await self._all_renders(report.engagement_id):
             if (
                 prior.input_fingerprint == fingerprint
                 and prior.status == ReportRenderStatus.COMPLETED
                 and prior.pdf_artifact_id
             ):
-                artifact = self.store.get(Artifact, prior.pdf_artifact_id)
-                if self.artifact_store.verify(artifact):
+                artifact = await self.store.get(Artifact, prior.pdf_artifact_id)
+                if await asyncio.to_thread(self.artifact_store.verify, artifact):
                     cached = prior
                     break
         return _PreparedRender(
@@ -260,14 +271,14 @@ class ReportRenderService:
             cached=cached,
         )
 
-    def pdf(self, render_id: str) -> tuple[Artifact, Path]:
-        render = self.store.get(ReportRender, render_id)
+    async def pdf(self, render_id: str) -> tuple[Artifact, Path]:
+        render = await self.store.get(ReportRender, render_id)
         if render.status != ReportRenderStatus.COMPLETED or not render.pdf_artifact_id:
             raise ReportRenderError(
                 "render_not_ready", "report PDF is not ready", status_code=409
             )
-        artifact = self.store.get(Artifact, render.pdf_artifact_id)
-        if not self.artifact_store.verify(artifact):
+        artifact = await self.store.get(Artifact, render.pdf_artifact_id)
+        if not await asyncio.to_thread(self.artifact_store.verify, artifact):
             raise ReportRenderError(
                 "render_integrity", "report PDF failed integrity verification"
             )
@@ -276,21 +287,25 @@ class ReportRenderService:
     async def _render(
         self, render_id: str, snapshot: dict[str, Any], *, input_bytes: int = 0
     ) -> None:
-        render = self.store.get(ReportRender, render_id)
+        render = await self.store.get(ReportRender, render_id)
 
-        def mark_rendering() -> None:
+        async def mark_rendering() -> None:
             nonlocal render
-            render = self.store.update(
+            render = await self.store.update(
                 ReportRender,
                 render.id,
                 {"status": ReportRenderStatus.RENDERING},
                 expected_revision=render.revision,
             )
-            self._event(render, "report_render.rendering", {"status": "rendering"})
+            (
+                await self._event(
+                    render, "report_render.rendering", {"status": "rendering"}
+                )
+            )
 
         try:
             if self.cpu_workers is None:
-                mark_rendering()
+                (await mark_rendering())
                 pdf_bytes, warnings = await asyncio.to_thread(self._build_pdf, snapshot)
             else:
                 pdf_bytes, warnings = await self.cpu_workers.run(
@@ -316,9 +331,9 @@ class ReportRenderService:
                     "font_hashes": self.font_hashes,
                 },
             )
-            with self.store.transaction() as transaction:
-                transaction.add(stored.artifact)
-                completed = transaction.update(
+            async with self.store.transaction() as transaction:
+                (await transaction.add(stored.artifact))
+                completed = await transaction.update(
                     ReportRender,
                     render.id,
                     {
@@ -330,14 +345,16 @@ class ReportRenderService:
                     },
                     expected_revision=render.revision,
                 )
-            self._event(
-                completed,
-                "report_render.completed",
-                {
-                    "status": "completed",
-                    "pdf_artifact_id": stored.artifact.id,
-                    "warnings": warnings,
-                },
+            (
+                await self._event(
+                    completed,
+                    "report_render.completed",
+                    {
+                        "status": "completed",
+                        "pdf_artifact_id": stored.artifact.id,
+                        "warnings": warnings,
+                    },
+                )
             )
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
@@ -347,12 +364,12 @@ class ReportRenderService:
                 caught_error,
                 stage="reporting",
             )
-            current = self.store.get(ReportRender, render_id)
+            current = await self.store.get(ReportRender, render_id)
             if current.status in {
                 ReportRenderStatus.QUEUED,
                 ReportRenderStatus.RENDERING,
             }:
-                interrupted = self.store.update(
+                interrupted = await self.store.update(
                     ReportRender,
                     current.id,
                     {
@@ -365,10 +382,12 @@ class ReportRenderService:
                     },
                     expected_revision=current.revision,
                 )
-                self._event(
-                    interrupted,
-                    "report_render.interrupted",
-                    {"status": "interrupted"},
+                (
+                    await self._event(
+                        interrupted,
+                        "report_render.interrupted",
+                        {"status": "interrupted"},
+                    )
                 )
             raise
         except Exception as exc:
@@ -379,12 +398,12 @@ class ReportRenderService:
                 exc,
                 stage="reporting",
             )
-            current = self.store.get(ReportRender, render_id)
+            current = await self.store.get(ReportRender, render_id)
             if current.status in {
                 ReportRenderStatus.QUEUED,
                 ReportRenderStatus.RENDERING,
             }:
-                failed = self.store.update(
+                failed = await self.store.update(
                     ReportRender,
                     current.id,
                     {
@@ -393,26 +412,37 @@ class ReportRenderService:
                     },
                     expected_revision=current.revision,
                 )
-                self._event(
-                    failed,
-                    "report_render.failed",
-                    {"status": "failed", "detail": str(exc)[:1000]},
+                (
+                    await self._event(
+                        failed,
+                        "report_render.failed",
+                        {"status": "failed", "detail": str(exc)[:1000]},
+                    )
                 )
 
-    def _canonical_snapshot(self, report: Report) -> dict[str, Any]:
-        engagement = self.store.get(Engagement, report.engagement_id)
+    async def _canonical_snapshot(self, report: Report) -> dict[str, Any]:
+        engagement = await self.store.get(Engagement, report.engagement_id)
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else None
         )
         findings = [
-            self._owned(Finding, finding_id, engagement.id, source="report finding")
+            (
+                await self._owned(
+                    Finding, finding_id, engagement.id, source="report finding"
+                )
+            )
             for finding_id in report.finding_ids
         ]
         observations = [
-            self._owned(
-                Observation, observation_id, engagement.id, source="report observation"
+            (
+                await self._owned(
+                    Observation,
+                    observation_id,
+                    engagement.id,
+                    source="report observation",
+                )
             )
             for observation_id in report.observation_ids
         ]
@@ -422,15 +452,17 @@ class ReportRenderService:
             for asset_id in item.asset_ids
         }
         assets = [
-            self._owned(Asset, asset_id, engagement.id, source="report content")
+            (await self._owned(Asset, asset_id, engagement.id, source="report content"))
             for asset_id in sorted(asset_ids)
         ]
         remediation_ids = {
             finding.remediation_id for finding in findings if finding.remediation_id
         }
         remediations = [
-            self._owned(
-                Remediation, remediation_id, engagement.id, source="report finding"
+            (
+                await self._owned(
+                    Remediation, remediation_id, engagement.id, source="report finding"
+                )
             )
             for remediation_id in sorted(remediation_ids)
         ]
@@ -440,17 +472,21 @@ class ReportRenderService:
             for evidence_id in item.evidence_ids
         }
         evidence = [
-            self._owned(Evidence, evidence_id, engagement.id, source="report content")
+            (
+                await self._owned(
+                    Evidence, evidence_id, engagement.id, source="report content"
+                )
+            )
             for evidence_id in sorted(evidence_ids)
         ]
         artifact_ids = set(report.artifact_ids)
         artifact_ids.update(item.artifact_id for item in evidence if item.artifact_id)
         artifacts: list[Artifact] = []
         for artifact_id in sorted(artifact_ids):
-            artifact = self._owned(
+            artifact = await self._owned(
                 Artifact, artifact_id, engagement.id, source="report content"
             )
-            if not self.artifact_store.verify(artifact):
+            if not await asyncio.to_thread(self.artifact_store.verify, artifact):
                 raise ReportRenderError(
                     "artifact_integrity",
                     f"required artifact failed integrity verification: {artifact.id}",
@@ -491,7 +527,7 @@ class ReportRenderService:
             ],
         }
 
-    def _owned(
+    async def _owned(
         self,
         model: type[Any],
         entity_id: str,
@@ -500,7 +536,7 @@ class ReportRenderService:
         source: str,
     ) -> Any:
         try:
-            entity = self.store.get(model, entity_id)
+            entity = await self.store.get(model, entity_id)
         except NotFoundError as exc:
             record_caught_exception(
                 "reports",
@@ -523,28 +559,32 @@ class ReportRenderService:
     def _build_pdf(self, snapshot: dict[str, Any]) -> tuple[bytes, list[str]]:
         return self._pdf_renderer.build(snapshot)
 
-    def _event(
+    async def _event(
         self, render: ReportRender, event_type: str, payload: dict[str, Any]
     ) -> None:
-        self.store.append_operation_event(
-            render.id,
-            "report_render",
-            render.engagement_id,
-            event_type,
-            payload,
-            actor_id=self.operator_id(),
-            idempotency_key=(
-                f"report-render:{render.id}:{event_type}"
-                if event_type not in {"report_render.failed"}
-                else None
-            ),
+        (
+            await self.store.append_operation_event(
+                render.id,
+                "report_render",
+                render.engagement_id,
+                event_type,
+                payload,
+                actor_id=(await call_async(self.operator_id)),
+                idempotency_key=(
+                    f"report-render:{render.id}:{event_type}"
+                    if event_type not in {"report_render.failed"}
+                    else None
+                ),
+            )
         )
 
-    def _all_renders(self, engagement_id: str | None = None) -> list[ReportRender]:
+    async def _all_renders(
+        self, engagement_id: str | None = None
+    ) -> list[ReportRender]:
         result: list[ReportRender] = []
         offset = 0
         while True:
-            page = self.store.list_entities(
+            page = await self.store.list_entities(
                 ReportRender,
                 engagement_id=engagement_id,
                 offset=offset,

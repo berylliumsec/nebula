@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import os
@@ -50,7 +54,9 @@ def _runner(tmp_path: Path) -> ContainerSandboxRunner:
     )
 
 
-def test_real_rootless_runtime_streams_raw_code_and_persists_only_workspace(tmp_path):
+async def test_real_rootless_runtime_streams_raw_code_and_persists_only_workspace(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir(mode=0o777)
     workspace.chmod(0o777)
@@ -109,10 +115,10 @@ print('x' * 70000)
         assert second.exit_code == 0
         assert second.stdout == "persisted=kept\n"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_real_rootless_runtime_opens_and_removes_container_terminal(tmp_path):
+async def test_real_rootless_runtime_opens_and_removes_container_terminal(tmp_path):
     workspace = tmp_path / "terminal-workspace"
     workspace.mkdir(mode=0o777)
     workspace.chmod(0o777)
@@ -152,4 +158,7 @@ def test_real_rootless_runtime_opens_and_removes_container_terminal(tmp_path):
         finally:
             await process.close()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = [pytestmark, pytest.mark.anyio]

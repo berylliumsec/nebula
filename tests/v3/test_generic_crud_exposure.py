@@ -6,12 +6,17 @@ skips the service that owns it, so every kind must be classified explicitly
 and the classification must match the route table.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import timedelta
 import hashlib
 
 import pytest
 from fastapi.routing import APIRoute
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import (
     API_PREFIX,
@@ -100,9 +105,9 @@ def generic_methods(tmp_path_factory) -> dict[str, set[str]]:
 
 
 @pytest.fixture
-def api(tmp_path):
+async def api(tmp_path):
     store = NebulaStore(tmp_path / "crud.db")
-    store.create(Engagement(id="project", name="Project"))
+    (await store.create(Engagement(id="project", name="Project")))
     return TestClient(create_app(store, auth_token=TOKEN)), store
 
 
@@ -147,63 +152,73 @@ def test_service_owned_kinds_have_no_generic_write_route(generic_methods, kind):
     assert not generic_methods.get(kind, set()) & WRITE_METHODS
 
 
-def test_goal_state_cannot_be_written_around_the_goal_service(api):
+async def test_goal_state_cannot_be_written_around_the_goal_service(api):
     client, store = api
-    store.create(
-        ProviderProfile(id="provider", name="Provider", provider_type="openrouter")
-    )
-    store.create(
-        ChatSession(
-            id="session",
-            engagement_id="project",
-            title="Goal chat",
-            provider_profile_id="provider",
-            model="model",
+    (
+        await store.create(
+            ProviderProfile(id="provider", name="Provider", provider_type="openrouter")
         )
     )
-    goal = ChatGoalService(store).create(
+    (
+        await store.create(
+            ChatSession(
+                id="session",
+                engagement_id="project",
+                title="Goal chat",
+                provider_profile_id="provider",
+                model="model",
+            )
+        )
+    )
+    goal = await ChatGoalService(store).create(
         "session", GoalCreate(objective="Ship it", completion_criteria=["Shipped"])
     )
     forged = {"status": "running", "started_at": utc_now().isoformat()}
 
     responses = [
-        client.post(
-            "/api/v1/chat-goals",
-            headers=HEADERS,
-            json={
-                "engagement_id": "project",
-                "session_id": "session",
-                "objective": "Forged",
-                "completion_criteria": ["Forged"],
-                **forged,
-            },
+        (
+            await client.post(
+                "/api/v1/chat-goals",
+                headers=HEADERS,
+                json={
+                    "engagement_id": "project",
+                    "session_id": "session",
+                    "objective": "Forged",
+                    "completion_criteria": ["Forged"],
+                    **forged,
+                },
+            )
         ),
-        client.patch(
-            f"/api/v1/chat-goals/{goal.id}",
-            headers=HEADERS,
-            json={"changes": forged, "expected_revision": goal.revision},
+        (
+            await client.patch(
+                f"/api/v1/chat-goals/{goal.id}",
+                headers=HEADERS,
+                json={"changes": forged, "expected_revision": goal.revision},
+            )
         ),
-        client.put(
-            f"/api/v1/chat-goals/{goal.id}",
-            headers=HEADERS,
-            json={**goal.model_dump(mode="json"), **forged},
+        (
+            await client.put(
+                f"/api/v1/chat-goals/{goal.id}",
+                headers=HEADERS,
+                json={**goal.model_dump(mode="json"), **forged},
+            )
         ),
-        client.delete(f"/api/v1/chat-goals/{goal.id}", headers=HEADERS),
+        (await client.delete(f"/api/v1/chat-goals/{goal.id}", headers=HEADERS)),
     ]
 
     assert [response.status_code for response in responses] == [404] * 4
-    stored = store.get(ChatGoal, goal.id)
+    stored = await store.get(ChatGoal, goal.id)
     assert (stored.status, stored.revision) == (ChatGoalStatus.DRAFT, goal.revision)
-    assert len(store.list_entities(ChatGoal, engagement_id="project")) == 1
+    assert len((await store.list_entities(ChatGoal, engagement_id="project"))) == 1
     # The goal stays reachable through the routes that own its lifecycle.
-    owned = client.get("/api/v1/chat/sessions/session/goal", headers=HEADERS)
+    owned = await client.get("/api/v1/chat/sessions/session/goal", headers=HEADERS)
     assert owned.status_code == 200, owned.text
     assert owned.json()["id"] == goal.id
 
 
-def test_workspace_provenance_receipts_cannot_be_forged_or_edited(api):
+async def test_workspace_provenance_receipts_cannot_be_forged_or_edited(api):
     client, store = api
-    receipt = store.create(
+    receipt = await store.create(
         WorkspaceProvenanceObservation(
             engagement_id="project",
             workspace_root="/workspace",
@@ -215,52 +230,62 @@ def test_workspace_provenance_receipts_cannot_be_forged_or_edited(api):
     forged_attribution = {"owned": [{"path": "secret.txt"}]}
 
     responses = [
-        client.post(
-            "/api/v1/workspace-provenance-observations",
-            headers=HEADERS,
-            json={
-                "engagement_id": "project",
-                "workspace_root": "/workspace",
-                "scope_kind": "turn",
-                "scope_id": "turn-2",
-                "actor_id": "chat:forged",
-                "attribution": forged_attribution,
-            },
+        (
+            await client.post(
+                "/api/v1/workspace-provenance-observations",
+                headers=HEADERS,
+                json={
+                    "engagement_id": "project",
+                    "workspace_root": "/workspace",
+                    "scope_kind": "turn",
+                    "scope_id": "turn-2",
+                    "actor_id": "chat:forged",
+                    "attribution": forged_attribution,
+                },
+            )
         ),
-        client.patch(
-            f"/api/v1/workspace-provenance-observations/{receipt.id}",
-            headers=HEADERS,
-            json={"changes": {"attribution": forged_attribution}},
+        (
+            await client.patch(
+                f"/api/v1/workspace-provenance-observations/{receipt.id}",
+                headers=HEADERS,
+                json={"changes": {"attribution": forged_attribution}},
+            )
         ),
-        client.put(
-            f"/api/v1/workspace-provenance-observations/{receipt.id}",
-            headers=HEADERS,
-            json={
-                **receipt.model_dump(mode="json"),
-                "attribution": forged_attribution,
-            },
+        (
+            await client.put(
+                f"/api/v1/workspace-provenance-observations/{receipt.id}",
+                headers=HEADERS,
+                json={
+                    **receipt.model_dump(mode="json"),
+                    "attribution": forged_attribution,
+                },
+            )
         ),
-        client.delete(
-            f"/api/v1/workspace-provenance-observations/{receipt.id}",
-            headers=HEADERS,
+        (
+            await client.delete(
+                f"/api/v1/workspace-provenance-observations/{receipt.id}",
+                headers=HEADERS,
+            )
         ),
     ]
 
     assert [response.status_code for response in responses] == [404] * 4
-    stored = store.get(WorkspaceProvenanceObservation, receipt.id)
+    stored = await store.get(WorkspaceProvenanceObservation, receipt.id)
     assert (stored.attribution, stored.revision) == ({}, receipt.revision)
     assert [
         item.id
-        for item in store.list_entities(
-            WorkspaceProvenanceObservation, engagement_id="project"
+        for item in (
+            await store.list_entities(
+                WorkspaceProvenanceObservation, engagement_id="project"
+            )
         )
     ] == [receipt.id]
 
 
-def test_device_sessions_cannot_be_minted_or_restored_generically(api):
+async def test_device_sessions_cannot_be_minted_or_restored_generically(api):
     client, store = api
     now = utc_now()
-    revoked = store.create(
+    revoked = await store.create(
         PairedDeviceSession(
             name="Lost phone",
             token_sha256=hashlib.sha256(b"lost-token").hexdigest(),
@@ -272,7 +297,7 @@ def test_device_sessions_cannot_be_minted_or_restored_generically(api):
     )
     far_future = (now + timedelta(days=3650)).isoformat()
 
-    minted = client.post(
+    minted = await client.post(
         "/api/v1/paired-device-sessions",
         headers=HEADERS,
         json={
@@ -283,22 +308,25 @@ def test_device_sessions_cannot_be_minted_or_restored_generically(api):
             "absolute_expires_at": far_future,
         },
     )
-    restored = client.patch(
+    restored = await client.patch(
         f"/api/v1/paired-device-sessions/{revoked.id}",
         headers=HEADERS,
         json={"changes": {"revoked_at": None, "absolute_expires_at": far_future}},
     )
-    hashes = client.get("/api/v1/paired-device-sessions", headers=HEADERS)
+    hashes = await client.get("/api/v1/paired-device-sessions", headers=HEADERS)
 
     assert (minted.status_code, restored.status_code, hashes.status_code) == (
         404,
         404,
         404,
     )
-    assert store.get(PairedDeviceSession, revoked.id).revoked_at is not None
-    assert [item.id for item in store.list_entities(PairedDeviceSession)] == [
+    assert (await store.get(PairedDeviceSession, revoked.id)).revoked_at is not None
+    assert [item.id for item in (await store.list_entities(PairedDeviceSession))] == [
         revoked.id
     ]
     # Pairing and revocation stay on the authentication routes.
-    devices = client.get("/api/v1/auth/devices", headers=HEADERS)
+    devices = await client.get("/api/v1/auth/devices", headers=HEADERS)
     assert devices.status_code == 200, devices.text
+
+
+pytestmark = pytest.mark.anyio

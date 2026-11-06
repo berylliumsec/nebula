@@ -29,7 +29,7 @@ def summary(values):
     }
 
 
-def serve(args):
+async def serve(args):
     import uvicorn
     from fastapi import Header, HTTPException
     from sqlalchemy import event
@@ -48,7 +48,7 @@ def serve(args):
     original = app.router.lifespan_context
     ready = False
 
-    @event.listens_for(store.database.engine, "before_cursor_execute")
+    @event.listens_for(store.database.engine.sync_engine, "before_cursor_execute")
     def slow_read(conn, cursor, statement, parameters, context, executemany):
         if (
             ready
@@ -57,7 +57,9 @@ def serve(args):
             and "FROM entities" in statement
             and "artifacts" in parameters
         ):
-            time.sleep(args.slow_read_ms / 1000)
+            conn.connection.dbapi_connection.run_async(
+                lambda _driver: asyncio.sleep(args.slow_read_ms / 1000)
+            )
 
     lag = []
 
@@ -90,12 +92,14 @@ def serve(args):
             authorization, "Bearer " + os.environ["NEBULA_BENCH_TOKEN"]
         ):
             raise HTTPException(status_code=401)
-        return await asyncio.to_thread(
-            ChatService(store).reconcile_stale_approved_tool_calls
-        )
+        return await ChatService(store).reconcile_stale_approved_tool_calls()
 
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
-    store.database.dispose()
+    (
+        await uvicorn.Server(
+            uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning")
+        ).serve()
+    )
+    (await store.database.dispose())
 
 
 async def drive(args, token):
@@ -152,7 +156,7 @@ async def drive(args, token):
         }
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--database", type=Path, required=True)
@@ -167,7 +171,7 @@ def main():
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.serve:
-        return serve(args)
+        return await serve(args)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         args.port = sock.getsockname()[1]
@@ -199,7 +203,7 @@ def main():
             stderr=log,
         )
         try:
-            result = asyncio.run(drive(args, token))
+            result = await drive(args, token)
         finally:
             process.send_signal(signal.SIGINT)
             try:
@@ -216,4 +220,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

@@ -16,6 +16,10 @@ Every one of them is refused before anything runs, so it has no side effects.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -111,7 +115,7 @@ def _provider_envelope(spec, arguments: dict, error: BaseException) -> dict:
 # -- provider chat --------------------------------------------------------
 
 
-def test_provider_chat_waits_at_the_running_limit_then_retries(tmp_path: Path):
+async def test_provider_chat_waits_at_the_running_limit_then_retries(tmp_path: Path):
     async def scenario() -> None:
         provider = RoutedProvider(parent=[], child=[])
 
@@ -130,7 +134,7 @@ def test_provider_chat_waits_at_the_running_limit_then_retries(tmp_path: Path):
             _response(text="Both reports are in."),
         ]
         provider.child = [_response(text="First."), _response(text="Second.")]
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
         provider.child_gate = asyncio.Event()
         prepared = await chat.prepare_async(
             _request(
@@ -140,7 +144,7 @@ def test_provider_chat_waits_at_the_running_limit_then_retries(tmp_path: Path):
                 max_active_subagents=1,
             )
         )
-        parent_turn_id = chat.start_provider_turn(prepared)
+        parent_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
         await _until(
             lambda: (
@@ -149,7 +153,7 @@ def test_provider_chat_waits_at_the_running_limit_then_retries(tmp_path: Path):
             timeout=10,
         )
 
-        history = _history(store, store.get(ChatTurn, parent_turn_id))
+        history = await _history(store, (await store.get(ChatTurn, parent_turn_id)))
         assert [(item["name"], item["status"]) for item in history] == [
             ("start_subagent", "complete"),
             ("start_subagent", "failed"),
@@ -169,15 +173,15 @@ def test_provider_chat_waits_at_the_running_limit_then_retries(tmp_path: Path):
         }
         assert "operator allows" not in history[1]["provider_result"]
         # The retry after the wait started the second subagent; both reported.
-        records = store.list_entities(ChatSubagent)
+        records = await store.list_entities(ChatSubagent)
         assert sorted(item.task for item in records) == ["One.", "Two."]
         assert {item.status for item in records} == {ChatSubagentStatus.COMPLETED}
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_provider_chat_does_not_delegate_past_an_exhausted_goal_budget(
+async def test_provider_chat_does_not_delegate_past_an_exhausted_goal_budget(
     tmp_path: Path,
 ):
     """A goal paused on its token budget refuses more subagents, for good.
@@ -189,10 +193,10 @@ def test_provider_chat_does_not_delegate_past_an_exhausted_goal_budget(
 
     async def scenario() -> None:
         budget = 500_000
-        store, project, _, chat = _setup(tmp_path, RoutedProvider([], []))
+        store, project, _, chat = await _setup(tmp_path, RoutedProvider([], []))
         chat.artifact_store = ArtifactStore(tmp_path / "artifacts")
-        session = _session(store)
-        _, goal = _running_goal(store, session, token_budget=budget)
+        session = await _session(store)
+        _, goal = await _running_goal(store, session, token_budget=budget)
         prepared = await chat.prepare_async(
             _request(
                 project,
@@ -202,7 +206,7 @@ def test_provider_chat_does_not_delegate_past_an_exhausted_goal_budget(
                 allow_subagents=True,
             )
         )
-        finished = _child(
+        finished = await _child(
             store,
             session,
             prepared.turn,
@@ -212,16 +216,18 @@ def test_provider_chat_does_not_delegate_past_an_exhausted_goal_budget(
             child_status=ChatTurnStatus.COMPLETE,
         )
         # A child's usage paused the goal at its budget (#570).
-        goal = store.get(ChatGoal, goal.id)
-        store.update(
-            ChatGoal,
-            goal.id,
-            {
-                "status": ChatGoalStatus.PAUSED,
-                "usage": ChatTokenUsage(total_tokens=budget + 40),
-                "blocked_reason": GOAL_BUDGET_SUBAGENT_NOTE,
-            },
-            expected_revision=goal.revision,
+        goal = await store.get(ChatGoal, goal.id)
+        (
+            await store.update(
+                ChatGoal,
+                goal.id,
+                {
+                    "status": ChatGoalStatus.PAUSED,
+                    "usage": ChatTokenUsage(total_tokens=budget + 40),
+                    "blocked_reason": GOAL_BUDGET_SUBAGENT_NOTE,
+                },
+                expected_revision=goal.revision,
+            )
         )
         components = prepared.tool_components
         calls = {
@@ -257,14 +263,16 @@ def test_provider_chat_does_not_delegate_past_an_exhausted_goal_budget(
             }
             assert "token budget" not in json.dumps(refused)
         # Nothing started and the message was never stored.
-        assert [item.id for item in store.list_entities(ChatSubagent)] == [finished.id]
-        assert store.list_entities(ChatSubagentMessage) == []
+        assert [item.id for item in (await store.list_entities(ChatSubagent))] == [
+            finished.id
+        ]
+        assert (await store.list_entities(ChatSubagentMessage)) == []
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_provider_chat_reports_bad_subagent_arguments_as_invalid_input(
+async def test_provider_chat_reports_bad_subagent_arguments_as_invalid_input(
     tmp_path: Path,
 ):
     async def scenario() -> None:
@@ -278,14 +286,14 @@ def test_provider_chat_reports_bad_subagent_arguments_as_invalid_input(
             ],
             child=[],
         )
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
         prepared = await chat.prepare_async(
             _request(project, content="Delegate.", allow_subagents=True)
         )
-        parent_turn_id = chat.start_provider_turn(prepared)
+        parent_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
 
-        history = _history(store, store.get(ChatTurn, parent_turn_id))
+        history = await _history(store, (await store.get(ChatTurn, parent_turn_id)))
         assert [item["status"] for item in history] == ["failed"] * 3
         for entry in history:
             refused = _envelope(entry)
@@ -295,30 +303,30 @@ def test_provider_chat_reports_bad_subagent_arguments_as_invalid_input(
             assert refused["retry_safe"] is True
             assert refused["next_action"].startswith("Correct the indicated argument")
             assert "limit" not in refused
-        assert store.list_entities(ChatSubagent) == []
+        assert (await store.list_entities(ChatSubagent)) == []
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_provider_subagent_rules_are_not_permitted(tmp_path: Path):
+async def test_provider_subagent_rules_are_not_permitted(tmp_path: Path):
     async def scenario() -> None:
-        store, project, _, chat = _setup(tmp_path, RoutedProvider([], []))
+        store, project, _, chat = await _setup(tmp_path, RoutedProvider([], []))
         prepared = await chat.prepare_async(
             _request(project, content="Delegate.", allow_subagents=True)
         )
         spec = prepared.tool_components.specs["start_subagent"]
         arguments = {"task": "Nested.", "name": None, "context": None}
-        parent_session = store.get(ChatSession, prepared.session.id)
+        parent_session = await store.get(ChatSession, prepared.session.id)
         child_session = parent_session
         for depth in range(SUBAGENT_DEPTH_CEILING):
-            child_session = _session(
+            child_session = await _session(
                 store,
                 title=f"Subagent {depth + 1}",
                 parent_session_id=child_session.id,
                 metadata={"subagent_id": f"child-record-{depth}"},
             )
-        child_turn = store.create(
+        child_turn = await store.create(
             ChatTurn(
                 engagement_id="project",
                 session_id=child_session.id,
@@ -373,24 +381,26 @@ def test_provider_subagent_rules_are_not_permitted(tmp_path: Path):
                 wait_for_reply=False,
             )
         assert caught.value.decision.rule == "subagents.parent"
-        assert store.list_entities(ChatSubagent) == []
+        assert (await store.list_entities(ChatSubagent)) == []
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_provider_agent_messaging_refusals_are_classified(tmp_path: Path):
+async def test_provider_agent_messaging_refusals_are_classified(tmp_path: Path):
     async def scenario() -> None:
         provider = RoutedProvider(parent=[], child=[])
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
 
         async def turned_off(request):
-            session = store.get(ChatSession, prepared.session.id)
-            store.update(
-                ChatSession,
-                session.id,
-                {"metadata": {**session.metadata, "allow_agent_messaging": False}},
-                expected_revision=session.revision,
+            session = await store.get(ChatSession, prepared.session.id)
+            (
+                await store.update(
+                    ChatSession,
+                    session.id,
+                    {"metadata": {**session.metadata, "allow_agent_messaging": False}},
+                    expected_revision=session.revision,
+                )
             )
             return _call("a3", "send_agent_message", session_id="peer", message="Hi")
 
@@ -404,10 +414,10 @@ def test_provider_agent_messaging_refusals_are_classified(tmp_path: Path):
         prepared = await chat.prepare_async(
             _request(project, content="Tell the peer.", allow_agent_messaging=True)
         )
-        parent_turn_id = chat.start_provider_turn(prepared)
+        parent_turn_id = await chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
 
-        history = _history(store, store.get(ChatTurn, parent_turn_id))
+        history = await _history(store, (await store.get(ChatTurn, parent_turn_id)))
         categories = [_envelope(item)["category"] for item in history]
         assert categories == [
             "invalid_arguments",
@@ -418,16 +428,16 @@ def test_provider_agent_messaging_refusals_are_classified(tmp_path: Path):
         assert {_envelope(item)["side_effects"] for item in history} == {"none"}
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # -- harness gateway ------------------------------------------------------
 
 
-def test_harness_waits_at_the_running_limit_then_retries(tmp_path: Path):
+async def test_harness_waits_at_the_running_limit_then_retries(tmp_path: Path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _harness_setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _harness_setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["First.", "Second."]
         child.gate = asyncio.Event()
         seen: dict = {}
@@ -453,7 +463,9 @@ def test_harness_waits_at_the_running_limit_then_retries(tmp_path: Path):
         )
         await runtime.start_chat_turn(turn.id)
 
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
         refused = seen["refused"]
         assert refused["tool"] == "subagent.start"
         assert refused["category"] == "capacity_reached"
@@ -467,16 +479,16 @@ def test_harness_waits_at_the_running_limit_then_retries(tmp_path: Path):
         }
         assert seen["waited"]["subagents"][0]["status"] == "completed"
         assert seen["retried"]["status"] == "running"
-        records = store.list_entities(ChatSubagent)
+        records = await store.list_entities(ChatSubagent)
         assert sorted(item.task for item in records) == ["One.", "Two."]
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_subagent_refusals_match_the_provider_categories(tmp_path: Path):
+async def test_harness_subagent_refusals_match_the_provider_categories(tmp_path: Path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _harness_setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _harness_setup(tmp_path)
         seen: dict = {}
 
         async def script(connection: ScriptedConnection, prompt: str) -> str:
@@ -489,34 +501,38 @@ def test_harness_subagent_refusals_match_the_provider_categories(tmp_path: Path)
                 await connection.call("subagent.stop", subagent_id="nope")
             )
             # Not permitted: the conversation no longer has a provider model.
-            chat_turn = store.get(ChatTurn, chat_turn_id)
-            store.update(
-                ChatTurn,
-                chat_turn.id,
-                {
-                    "request_snapshot": {
-                        **chat_turn.request_snapshot,
-                        "provider_subagent": {**SETTING, "model": ""},
+            chat_turn = await store.get(ChatTurn, chat_turn_id)
+            (
+                await store.update(
+                    ChatTurn,
+                    chat_turn.id,
+                    {
+                        "request_snapshot": {
+                            **chat_turn.request_snapshot,
+                            "provider_subagent": {**SETTING, "model": ""},
+                        },
                     },
-                },
-                expected_revision=chat_turn.revision,
+                    expected_revision=chat_turn.revision,
+                )
             )
             seen["no_model"] = _refusal(
                 await connection.call("subagent.start", task="Elsewhere.")
             )
             # Not permitted: subagents were turned off for this turn.
-            harness_turn = store.get(HarnessTurn, turn.id)
-            store.update(
-                HarnessTurn,
-                harness_turn.id,
-                {
-                    "metadata": {
-                        key: value
-                        for key, value in harness_turn.metadata.items()
-                        if key != "provider_subagent"
-                    }
-                },
-                expected_revision=harness_turn.revision,
+            harness_turn = await store.get(HarnessTurn, turn.id)
+            (
+                await store.update(
+                    HarnessTurn,
+                    harness_turn.id,
+                    {
+                        "metadata": {
+                            key: value
+                            for key, value in harness_turn.metadata.items()
+                            if key != "provider_subagent"
+                        }
+                    },
+                    expected_revision=harness_turn.revision,
+                )
             )
             seen["off"] = _refusal(
                 await connection.call("subagent.start", task="Anyway.")
@@ -528,7 +544,9 @@ def test_harness_subagent_refusals_match_the_provider_categories(tmp_path: Path)
         chat_turn_id = chat_turn.id
         await runtime.start_chat_turn(turn.id)
 
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
         # A harness conversation has no Nebula goal (its goals are the
         # vendor's), so a goal budget refusal cannot reach it.
         expected = {
@@ -548,17 +566,17 @@ def test_harness_subagent_refusals_match_the_provider_categories(tmp_path: Path)
         text = json.dumps(seen)
         for detail in ("turned off", "provider model", "describe"):
             assert detail not in text
-        assert store.list_entities(ChatSubagent) == []
+        assert (await store.list_entities(ChatSubagent)) == []
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_agent_messaging_refusals_match_the_provider_categories(
+async def test_harness_agent_messaging_refusals_match_the_provider_categories(
     tmp_path: Path,
 ):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _harness_setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _harness_setup(tmp_path)
         runtime.bind_agent_messages(chat.agent_messages)
         seen: dict = {}
 
@@ -570,17 +588,19 @@ def test_harness_agent_messaging_refusals_match_the_provider_categories(
             seen["unknown"] = _refusal(
                 await connection.call("agent.send", session_id="nope", message="Hi")
             )
-            harness_turn = store.get(HarnessTurn, turn.id)
-            store.update(
-                HarnessTurn,
-                harness_turn.id,
-                {
-                    "metadata": {
-                        **harness_turn.metadata,
-                        "allow_agent_messaging": False,
-                    }
-                },
-                expected_revision=harness_turn.revision,
+            harness_turn = await store.get(HarnessTurn, turn.id)
+            (
+                await store.update(
+                    HarnessTurn,
+                    harness_turn.id,
+                    {
+                        "metadata": {
+                            **harness_turn.metadata,
+                            "allow_agent_messaging": False,
+                        }
+                    },
+                    expected_revision=harness_turn.revision,
+                )
             )
             seen["off"] = _refusal(
                 await connection.call("agent.send", session_id="peer", message="Hi")
@@ -588,7 +608,7 @@ def test_harness_agent_messaging_refusals_match_the_provider_categories(
             return "Refused."
 
         adapter.script = script
-        _, _, turn = runtime.prepare_chat(
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=project.id,
             profile_id=harness.id,
             model=None,
@@ -600,7 +620,9 @@ def test_harness_agent_messaging_refusals_match_the_provider_categories(
         )
         await runtime.start_chat_turn(turn.id)
 
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE
         assert {key: item["category"] for key, item in seen.items()} == {
             "blank": "invalid_arguments",
             "unknown": "invalid_arguments",
@@ -610,4 +632,7 @@ def test_harness_agent_messaging_refusals_match_the_provider_categories(
         assert "turned off" not in json.dumps(seen)
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

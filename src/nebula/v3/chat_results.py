@@ -22,11 +22,11 @@ def results_router(store, artifacts):
     router = APIRouter(tags=["chat"])
 
     @router.get("/chat/projects/{project_id}/sources/{source_id}/preview")
-    def source_preview(project_id: str, source_id: str):
-        source = store.get(KnowledgeSource, source_id)
+    async def source_preview(project_id: str, source_id: str):
+        source = await store.get(KnowledgeSource, source_id)
         if source.engagement_id != project_id or not source.artifact_id:
             raise NotFoundError("Retained source is unavailable in this project")
-        artifact = store.get(Artifact, source.artifact_id)
+        artifact = await store.get(Artifact, source.artifact_id)
         if artifact.engagement_id != project_id or artifacts is None:
             raise NotFoundError("Source artifact is unavailable")
         if artifact.size > 25_000_000:
@@ -48,25 +48,27 @@ def results_router(store, artifacts):
         }
 
     @router.get("/chat/sessions/{session_id}/results")
-    def results(
+    async def results(
         session_id: str,
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=40, ge=1, le=100),
     ):
-        session = store.get(ChatSession, session_id)
-        with store.database.session() as database:
+        session = await store.get(ChatSession, session_id)
+        async with store.database.session() as database:
             page = [
                 ChatMessage.model_validate(row.payload)
-                for row in database.scalars(
-                    select(EntityRow)
-                    .where(
-                        EntityRow.kind == "chat_messages",
-                        EntityRow.engagement_id == session.engagement_id,
-                        EntityRow.chat_session_id == session_id,
+                for row in (
+                    await database.scalars(
+                        select(EntityRow)
+                        .where(
+                            EntityRow.kind == "chat_messages",
+                            EntityRow.engagement_id == session.engagement_id,
+                            EntityRow.chat_session_id == session_id,
+                        )
+                        .order_by(EntityRow.payload["sequence"].as_integer())
+                        .offset(offset)
+                        .limit(limit + 1)
                     )
-                    .order_by(EntityRow.payload["sequence"].as_integer())
-                    .offset(offset)
-                    .limit(limit + 1)
                 )
             ]
             # Offsets count stored rows, retracted ones included, so decide
@@ -78,11 +80,13 @@ def results_router(store, artifacts):
             ]
             calls = [
                 ToolCall.model_validate(row.payload)
-                for row in database.scalars(
-                    select(EntityRow).where(
-                        EntityRow.kind == "tool_calls",
-                        EntityRow.engagement_id == session.engagement_id,
-                        EntityRow.chat_session_id == session_id,
+                for row in (
+                    await database.scalars(
+                        select(EntityRow).where(
+                            EntityRow.kind == "tool_calls",
+                            EntityRow.engagement_id == session.engagement_id,
+                            EntityRow.chat_session_id == session_id,
+                        )
                     )
                 )
             ]
@@ -120,19 +124,21 @@ def results_router(store, artifacts):
                 )
             turn_id = message.metadata.get("harness_turn_id")
             if turn_id and artifacts is not None:
-                with store.database.session() as database:
+                async with store.database.session() as database:
                     diffs = [
                         Artifact.model_validate(row.payload)
-                        for row in database.scalars(
-                            select(EntityRow).where(
-                                EntityRow.kind == "artifacts",
-                                EntityRow.engagement_id == session.engagement_id,
-                                EntityRow.payload["source"].as_string()
-                                == "harness-file-diff",
-                                EntityRow.payload["metadata"][
-                                    "harness_turn_id"
-                                ].as_string()
-                                == turn_id,
+                        for row in (
+                            await database.scalars(
+                                select(EntityRow).where(
+                                    EntityRow.kind == "artifacts",
+                                    EntityRow.engagement_id == session.engagement_id,
+                                    EntityRow.payload["source"].as_string()
+                                    == "harness-file-diff",
+                                    EntityRow.payload["metadata"][
+                                        "harness_turn_id"
+                                    ].as_string()
+                                    == turn_id,
+                                )
                             )
                         )
                     ]
@@ -172,7 +178,7 @@ def results_router(store, artifacts):
                 if not call.chat_turn_id:
                     continue
                 try:
-                    turn = store.get(ChatTurn, call.chat_turn_id)
+                    turn = await store.get(ChatTurn, call.chat_turn_id)
                 except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
                     continue
                 if turn.final_message_id == message.id:
@@ -194,10 +200,10 @@ def results_router(store, artifacts):
         }
 
     @router.get("/chat/sessions/{session_id}/context-sources")
-    def context_sources(session_id: str, offset: int = Query(default=0, ge=0)):
-        session = store.get(ChatSession, session_id)
-        with store.database.session() as database:
-            rows = database.scalars(
+    async def context_sources(session_id: str, offset: int = Query(default=0, ge=0)):
+        session = await store.get(ChatSession, session_id)
+        async with store.database.session() as database:
+            rows = await database.scalars(
                 select(EntityRow)
                 .where(
                     EntityRow.kind == "chat_messages",

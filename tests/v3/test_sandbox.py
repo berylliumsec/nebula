@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 from pathlib import Path
@@ -80,16 +84,16 @@ def _request(tmp_path, **changes):
     return SandboxRequest(**values)
 
 
-def test_analysis_only_runner_fails_closed_instead_of_using_host(tmp_path):
+async def test_analysis_only_runner_fails_closed_instead_of_using_host(tmp_path):
     runner = AnalysisOnlyRunner()
-    available, reason = asyncio.run(runner.available())
+    available, reason = await runner.available()
     assert available is False
     assert "container runner" in reason
     with pytest.raises(SandboxUnavailable, match="never fall back to the host"):
-        asyncio.run(runner.run(_request(tmp_path)))
+        (await runner.run(_request(tmp_path)))
 
 
-def test_stream_reader_can_capture_without_retaining_a_second_memory_copy():
+async def test_stream_reader_can_capture_without_retaining_a_second_memory_copy():
     async def scenario():
         reader = asyncio.StreamReader()
         payload = b"nmap-line\n" * 100_000
@@ -113,10 +117,12 @@ def test_stream_reader_can_capture_without_retaining_a_second_memory_copy():
         assert observed == len(payload)
         assert captured == len(payload)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_nonblocking_pty_backpressure_waits_without_recording_an_error(monkeypatch):
+async def test_nonblocking_pty_backpressure_waits_without_recording_an_error(
+    monkeypatch,
+):
     waits: list[bool] = []
     diagnostics: list[BaseException] = []
     reads = iter([BlockingIOError(), b"ready"])
@@ -152,8 +158,8 @@ def test_nonblocking_pty_backpressure_waits_without_recording_an_error(monkeypat
         runner=object(),  # type: ignore[arg-type]
     )
 
-    assert asyncio.run(terminal.read()) == b"ready"
-    asyncio.run(terminal.write(b"ready"))
+    assert (await terminal.read()) == b"ready"
+    (await terminal.write(b"ready"))
 
     assert waits == [False, True]
     assert diagnostics == []
@@ -384,7 +390,9 @@ def test_shell_history_environment_is_reserved_for_human_terminals(tmp_path):
     assert "PROMPT_COMMAND=printf marker" in argv
 
 
-def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeypatch):
+async def test_orphan_cleanup_removes_only_strict_terminal_namespace(
+    tmp_path, monkeypatch
+):
     runtime = tmp_path / "podman"
     runtime.write_text("test runtime", encoding="utf-8")
     runtime.chmod(0o755)
@@ -414,13 +422,15 @@ def test_orphan_cleanup_removes_only_strict_terminal_namespace(tmp_path, monkeyp
 
     monkeypatch.setattr(runner, "_capture", capture)
     monkeypatch.setattr(runner, "_force_remove", remove)
-    asyncio.run(runner.cleanup_terminal_containers())
+    (await runner.cleanup_terminal_containers())
 
     assert health_checks == 2
     assert removed == ["nebula-terminal-good123"]
 
 
-def test_verified_terminal_removal_rejects_a_surviving_container(tmp_path, monkeypatch):
+async def test_verified_terminal_removal_rejects_a_surviving_container(
+    tmp_path, monkeypatch
+):
     runtime = tmp_path / "podman"
     runtime.write_text(
         "#!/bin/sh\n"
@@ -434,12 +444,10 @@ def test_verified_terminal_removal_rejects_a_surviving_container(tmp_path, monke
     runner = ContainerSandboxRunner(runtime=str(runtime))
 
     with pytest.raises(SandboxUnavailable, match="remains after removal"):
-        asyncio.run(
-            runner._force_remove("nebula-terminal-survivor", require_removed=True)
-        )
+        (await runner._force_remove("nebula-terminal-survivor", require_removed=True))
 
 
-def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
+async def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
     runtime = tmp_path / "podman"
     runtime.write_text("test runtime", encoding="utf-8")
     runtime.chmod(0o755)
@@ -464,7 +472,7 @@ def test_orphan_cleanup_revalidates_again_before_removal(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "_capture", capture)
     monkeypatch.setattr(runner, "_force_remove", remove)
-    asyncio.run(runner.cleanup_terminal_containers())
+    (await runner.cleanup_terminal_containers())
 
     assert health_checks == 2
     assert removed == []
@@ -573,7 +581,7 @@ def test_runner_profiles_require_supported_explicit_runtime_combinations():
         )
 
 
-def test_linux_rootless_podman_profile_is_certified(monkeypatch):
+async def test_linux_rootless_podman_profile_is_certified(monkeypatch):
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -589,12 +597,12 @@ def test_linux_rootless_podman_profile_is_certified(monkeypatch):
         return "podman version 4.9.3", "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is True
     assert "rootless Podman" in detail
 
 
-def test_linux_rootless_podman_socket_is_certified(monkeypatch):
+async def test_linux_rootless_podman_socket_is_certified(monkeypatch):
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -610,7 +618,7 @@ def test_linux_rootless_podman_socket_is_certified(monkeypatch):
         return "true|linux", "", 0
 
     monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is True
     assert "local rootless Podman" in detail
     assert runner._runtime_argv() == [
@@ -620,7 +628,7 @@ def test_linux_rootless_podman_socket_is_certified(monkeypatch):
     ]
 
 
-def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
+async def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -640,12 +648,12 @@ def test_linux_podman_named_connection_rejects_remote_ssh(monkeypatch):
         )
 
     monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is False
     assert "local Unix socket" in detail
 
 
-def test_linux_podman_named_connection_accepts_local_unix_socket(monkeypatch):
+async def test_linux_podman_named_connection_accepts_local_unix_socket(monkeypatch):
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -669,12 +677,12 @@ def test_linux_podman_named_connection_accepts_local_unix_socket(monkeypatch):
 
     monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
     monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is True
     assert "local rootless Podman" in detail
 
 
-def test_linux_podman_named_connection_reports_local_catalog_miss(monkeypatch):
+async def test_linux_podman_named_connection_reports_local_catalog_miss(monkeypatch):
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -690,13 +698,15 @@ def test_linux_podman_named_connection_reports_local_catalog_miss(monkeypatch):
         return "other-local|unix:///run/user/1001/podman/podman.sock", "", 0
 
     monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is False
     assert "'nebula-ci' was not found" in detail
     assert "available: other-local" in detail
 
 
-def test_linux_docker_rejects_remote_context_and_ambient_tcp_endpoint(monkeypatch):
+async def test_linux_docker_rejects_remote_context_and_ambient_tcp_endpoint(
+    monkeypatch,
+):
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -713,17 +723,17 @@ def test_linux_docker_rejects_remote_context_and_ambient_tcp_endpoint(monkeypatc
         return '[{"Endpoints":{"docker":{"Host":"tcp://runner.example:2376"}}}]', "", 0
 
     monkeypatch.setattr(runner, "_capture", remote_context)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is False
     assert "local absolute Unix socket" in detail
 
     monkeypatch.setenv("DOCKER_HOST", "tcp://runner.example:2376")
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is False
     assert "remote TCP/SSH" in detail
 
 
-def test_local_rootless_docker_profile_is_certified(monkeypatch):
+async def test_local_rootless_docker_profile_is_certified(monkeypatch):
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -744,12 +754,12 @@ def test_local_rootless_docker_profile_is_certified(monkeypatch):
         return '{"OSType":"linux","SecurityOptions":["name=rootless"]}', "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is True
     assert "rootless Docker" in detail
 
 
-def test_macos_docker_desktop_vm_requires_local_linux_desktop(monkeypatch):
+async def test_macos_docker_desktop_vm_requires_local_linux_desktop(monkeypatch):
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     runner = ContainerSandboxRunner(
         profile=RunnerProfile(
@@ -771,7 +781,7 @@ def test_macos_docker_desktop_vm_requires_local_linux_desktop(monkeypatch):
         return '{"OSType":"linux","OperatingSystem":"Docker Desktop"}', "", 0
 
     monkeypatch.setattr(runner, "_capture", capture)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is True
     assert "Docker Desktop VM" in detail
     assert runner._runtime_argv() == [
@@ -781,7 +791,7 @@ def test_macos_docker_desktop_vm_requires_local_linux_desktop(monkeypatch):
     ]
 
 
-def test_macos_podman_machine_requires_running_rootless_loopback_connection(
+async def test_macos_podman_machine_requires_running_rootless_loopback_connection(
     monkeypatch,
 ):
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
@@ -814,7 +824,7 @@ def test_macos_podman_machine_requires_running_rootless_loopback_connection(
     monkeypatch.setattr(runner, "_capture", capture)
     monkeypatch.setattr(runner, "_capture_podman_connections", capture_connections)
     monkeypatch.setattr(runner, "_capture_podman_health", capture_health)
-    available, detail = asyncio.run(runner.available())
+    available, detail = await runner.available()
     assert available is True
     assert "Podman Machine" in detail
     assert runner._runtime_argv() == [
@@ -840,7 +850,7 @@ def test_parser_and_local_tool_contracts_are_networkless_and_read_only(tmp_path)
         )
 
 
-def test_network_execution_requires_rules_and_certified_per_invocation_helper(
+async def test_network_execution_requires_rules_and_certified_per_invocation_helper(
     tmp_path, monkeypatch
 ):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
@@ -858,10 +868,12 @@ def test_network_execution_requires_rules_and_certified_per_invocation_helper(
     )
     assert request.egress_rules[0].ports == [80, 443]
     with pytest.raises(SandboxUnavailable, match="certified per-invocation"):
-        asyncio.run(runner.run(request))
+        (await runner.run(request))
 
 
-def test_actual_workspace_execution_requires_configured_roots(tmp_path, monkeypatch):
+async def test_actual_workspace_execution_requires_configured_roots(
+    tmp_path, monkeypatch
+):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
 
     async def healthy():
@@ -869,8 +881,8 @@ def test_actual_workspace_execution_requires_configured_roots(tmp_path, monkeypa
 
     monkeypatch.setattr(runner, "available", healthy)
     with pytest.raises(SandboxUnavailable, match="configured workspace roots"):
-        asyncio.run(
-            runner.run(
+        (
+            await runner.run(
                 _request(
                     tmp_path,
                     workspace_access=SandboxWorkspaceAccess.READ,
@@ -889,7 +901,7 @@ def test_egress_helper_requires_digest_and_absolute_executable():
         )
 
 
-def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
+async def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     tmp_path, monkeypatch
 ):
     calls = []
@@ -943,7 +955,7 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
         assert lease.network_mode == "container:nebula-call-egress"
         await lease.close()
 
-    asyncio.run(scenario())
+    (await scenario())
     helper_argv = calls[0][0]
     assert "--network=bridge" in helper_argv
     assert "--cap-add=NET_ADMIN" in helper_argv
@@ -956,7 +968,7 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-call-egress"]
 
 
-def test_vpn_profile_is_streamed_to_privileged_namespace_without_argv_exposure(
+async def test_vpn_profile_is_streamed_to_privileged_namespace_without_argv_exposure(
     tmp_path, monkeypatch
 ):
     calls = []
@@ -1016,7 +1028,7 @@ def test_vpn_profile_is_streamed_to_privileged_namespace_without_argv_exposure(
         )
         await lease.close()
 
-    asyncio.run(scenario())
+    (await scenario())
     helper_argv = calls[0][0]
     assert "--device=/dev/net/tun" in helper_argv
     assert "--vpn-stdin" in helper_argv
@@ -1024,7 +1036,7 @@ def test_vpn_profile_is_streamed_to_privileged_namespace_without_argv_exposure(
     assert written == b"client\ndev tun0\nsecret material\n"
 
 
-def test_failed_egress_helper_is_removed_after_bounded_startup_error(
+async def test_failed_egress_helper_is_removed_after_bounded_startup_error(
     tmp_path, monkeypatch
 ):
     calls = []
@@ -1070,11 +1082,11 @@ def test_failed_egress_helper_is_removed_after_bounded_startup_error(
                 seccomp_profile=None,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
     assert calls[1][0][-3:] == ["rm", "--force", "nebula-failed-egress-egress"]
 
 
-def test_vpn_terminal_uses_fail_closed_namespace_and_publishes_on_owner(
+async def test_vpn_terminal_uses_fail_closed_namespace_and_publishes_on_owner(
     tmp_path, monkeypatch
 ):
     calls = []
@@ -1134,7 +1146,7 @@ def test_vpn_terminal_uses_fail_closed_namespace_and_publishes_on_owner(
         )
         await lease.close()
 
-    asyncio.run(scenario())
+    (await scenario())
     helper_argv = calls[0][0]
     image_index = helper_argv.index("example.invalid/helper@sha256:" + "b" * 64)
     assert "--device=/dev/net/tun" in helper_argv[:image_index]
@@ -1147,7 +1159,7 @@ def test_vpn_terminal_uses_fail_closed_namespace_and_publishes_on_owner(
     assert written == b"client\ndev tun0\nsecret material\n"
 
 
-def test_egress_helper_creates_loopback_only_namespace_without_external_network(
+async def test_egress_helper_creates_loopback_only_namespace_without_external_network(
     monkeypatch,
 ):
     calls = []
@@ -1188,7 +1200,7 @@ def test_egress_helper_creates_loopback_only_namespace_without_external_network(
         assert lease.enabled is False
         await lease.close()
 
-    asyncio.run(scenario())
+    (await scenario())
     helper_argv = calls[0][0]
     assert "--network=none" in helper_argv
     assert "--network=bridge" not in helper_argv
@@ -1198,7 +1210,7 @@ def test_egress_helper_creates_loopback_only_namespace_without_external_network(
     assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-debug-egress"]
 
 
-def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request(
+async def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request(
     monkeypatch,
 ):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
@@ -1239,7 +1251,7 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
 
     monkeypatch.setattr(runner, "available", available)
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
-    image = asyncio.run(preparer.prepare())
+    image = await preparer.prepare()
 
     assert [call[0][0] for call in calls] == ["image", "image", "run", "run"]
     assert all("pull" not in call[0] and "build" not in call[0] for call in calls)
@@ -1294,7 +1306,7 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
         ),
     ],
 )
-def test_human_terminal_rejects_missing_malformed_or_unsafe_tool_manifests(
+async def test_human_terminal_rejects_missing_malformed_or_unsafe_tool_manifests(
     monkeypatch, stdout, stderr, return_code, message
 ):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
@@ -1317,10 +1329,10 @@ def test_human_terminal_rejects_missing_malformed_or_unsafe_tool_manifests(
 
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
     with pytest.raises(SandboxUnavailable, match=message):
-        asyncio.run(preparer._security_tool_manifest("sha256:" + "d" * 64))
+        (await preparer._security_tool_manifest("sha256:" + "d" * 64))
 
 
-def test_human_terminal_cold_preparation_pulls_builds_and_verifies(
+async def test_human_terminal_cold_preparation_pulls_builds_and_verifies(
     monkeypatch, notebook_build_resources
 ):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
@@ -1384,7 +1396,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(
 
     monkeypatch.setattr(runner, "available", available)
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
-    image = asyncio.run(preparer.prepare())
+    image = await preparer.prepare()
 
     assert [call[0][0] for call in calls] == [
         "image",
@@ -1427,7 +1439,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(
     assert "nebula-kali-tool-inventory.py" in dockerfiles[0]
 
 
-def test_human_terminal_cold_pull_failure_can_be_retried(
+async def test_human_terminal_cold_pull_failure_can_be_retried(
     monkeypatch, notebook_build_resources
 ):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
@@ -1486,15 +1498,15 @@ def test_human_terminal_cold_pull_failure_can_be_retried(
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
 
     with pytest.raises(SandboxUnavailable, match="registry unavailable"):
-        asyncio.run(preparer.prepare())
-    image = asyncio.run(preparer.prepare())
+        (await preparer.prepare())
+    image = await preparer.prepare()
 
     assert pull_attempts == 2
     assert image.refreshed is True
     assert image.digest == "sha256:" + "d" * 64
 
 
-def test_human_terminal_digest_source_must_match_release_pin(monkeypatch):
+async def test_human_terminal_digest_source_must_match_release_pin(monkeypatch):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
     source = "docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64
     preparer = ContainerImagePreparer(
@@ -1527,7 +1539,7 @@ def test_human_terminal_digest_source_must_match_release_pin(monkeypatch):
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
 
     with pytest.raises(SandboxUnavailable, match="release-pinned"):
-        asyncio.run(preparer.prepare())
+        (await preparer.prepare())
     assert pulls == 1
 
 
@@ -1542,7 +1554,7 @@ def test_human_terminal_source_cannot_cross_the_expected_repository():
         )
 
 
-def test_human_terminal_image_rejects_unproven_repository(monkeypatch):
+async def test_human_terminal_image_rejects_unproven_repository(monkeypatch):
     runner = ContainerSandboxRunner(runtime="/usr/bin/docker")
     preparer = ContainerImagePreparer(
         runner=runner,
@@ -1569,10 +1581,10 @@ def test_human_terminal_image_rejects_unproven_repository(monkeypatch):
     monkeypatch.setattr(runner, "available", available)
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
     with pytest.raises(SandboxUnavailable, match="official repository"):
-        asyncio.run(preparer.prepare())
+        (await preparer.prepare())
 
 
-def test_egress_helper_is_removed_when_readiness_wait_is_cancelled(
+async def test_egress_helper_is_removed_when_readiness_wait_is_cancelled(
     tmp_path, monkeypatch
 ):
     calls = []
@@ -1629,13 +1641,13 @@ def test_egress_helper_is_removed_when_readiness_wait_is_cancelled(
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    asyncio.run(scenario())
+    (await scenario())
     assert killed == [True]
     assert len(calls) == 2
     assert calls[1][0][-3:] == ["rm", "--force", "nebula-cancelled-egress-egress"]
 
 
-def test_run_stream_cancelled_while_feeding_stdin_removes_container_and_lease(
+async def test_run_stream_cancelled_while_feeding_stdin_removes_container_and_lease(
     tmp_path, monkeypatch
 ):
     runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
@@ -1733,7 +1745,7 @@ def test_run_stream_cancelled_while_feeding_stdin_removes_container_and_lease(
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    asyncio.run(scenario())
+    (await scenario())
     assert events == [
         "acquired:nebula-cancelled-stdin",
         "killed",
@@ -1757,3 +1769,6 @@ def test_workspace_path_with_double_quote_is_rejected_as_unsafe_mount(tmp_path):
         runner._validate(request)
     # The same folder is still fine when nothing is mounted from it.
     assert runner._validate(_request(tmp_path, workspace=workspace)) is None
+
+
+pytestmark = pytest.mark.anyio

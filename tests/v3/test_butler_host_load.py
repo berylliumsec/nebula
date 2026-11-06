@@ -1,5 +1,10 @@
 """Butler host pressure reads use current authenticated Core responses."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 from dataclasses import replace
 import threading
@@ -7,7 +12,7 @@ import time
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -21,7 +26,7 @@ from nebula.v3.tools import CapabilityInputError
 from tests.v3.test_butler_capabilities import _scheduled_capabilities
 
 
-def test_core_startup_syncs_current_host_load_guidance_into_chroma(tmp_path):
+async def test_core_startup_syncs_current_host_load_guidance_into_chroma(tmp_path):
     from scripts.build_product_knowledge import ensure, source_digest, source_paths
 
     # Poetry's source install does not run the package build hook. This test
@@ -37,8 +42,8 @@ def test_core_startup_syncs_current_host_load_guidance_into_chroma(tmp_path):
         execution_data_root=tmp_path / "execution",
     )
     try:
-        with TestClient(app) as client:
-            response = client.get(
+        async with TestClient(app) as client:
+            response = await client.get(
                 "/api/v1/host-load",
                 headers={"Authorization": "Bearer synthetic-core-guidance"},
             )
@@ -49,7 +54,7 @@ def test_core_startup_syncs_current_host_load_guidance_into_chroma(tmp_path):
             documents = index._product_collection.get()["documents"]
             assert any("nebula.work.host_load" in text for text in documents)
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
 class MutableMonitor(HostLoadMonitor):
@@ -66,9 +71,9 @@ class MutableMonitor(HostLoadMonitor):
         return self.value
 
 
-def fixture(tmp_path):
+async def fixture(tmp_path):
     store = NebulaStore(tmp_path / "host.db")
-    project = store.create(Engagement(id="project", name="Host read project"))
+    project = await store.create(Engagement(id="project", name="Host read project"))
     artifacts = ArtifactStore(tmp_path / "artifacts")
     monitor = MutableMonitor()
     app = create_app(
@@ -78,14 +83,14 @@ def fixture(tmp_path):
         host_load_gate=HostLoadGate(monitor),
         execution_data_root=tmp_path / "execution",
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, project.id, work=app.state.control_assistant_work
     )
     return store, project, monitor, app, capabilities
 
 
-def test_host_load_is_discoverable_read_only_and_rereads_core(tmp_path):
-    store, project, monitor, app, butler = fixture(tmp_path)
+async def test_host_load_is_discoverable_read_only_and_rereads_core(tmp_path):
+    store, project, monitor, app, butler = await fixture(tmp_path)
     calls = []
 
     @app.middleware("http")
@@ -135,13 +140,15 @@ def test_host_load_is_discoverable_read_only_and_rereads_core(tmp_path):
             )
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_managed_host_load_uses_fixed_route_and_preserves_unknown_values(tmp_path):
-    store, project, monitor, app, _butler = fixture(tmp_path)
+async def test_managed_host_load_uses_fixed_route_and_preserves_unknown_values(
+    tmp_path,
+):
+    store, project, monitor, app, _butler = await fixture(tmp_path)
     monitor.value = replace(
         monitor.value,
         cpu_ratio=None,
@@ -163,15 +170,21 @@ def test_managed_host_load_uses_fixed_route_and_preserves_unknown_values(tmp_pat
             assert (await client.get("/api/v1/host-load")).status_code == 401
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_scheduled_global_butler_can_discover_and_reread_host_load(tmp_path):
-    store, project, _chat, _foreign, _policy, _case, butler = _scheduled_capabilities(
-        tmp_path
-    )
+async def test_scheduled_global_butler_can_discover_and_reread_host_load(tmp_path):
+    (
+        store,
+        project,
+        _chat,
+        _foreign,
+        _policy,
+        _case,
+        butler,
+    ) = await _scheduled_capabilities(tmp_path)
     app = butler._work.app
     monitor = MutableMonitor()
     app.state.host_load.monitor = monitor
@@ -196,13 +209,15 @@ def test_scheduled_global_butler_can_discover_and_reread_host_load(tmp_path):
         assert not second["busy"] and second["cpu_ratio"] == 0.2
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
 
 
-def test_expired_host_sample_refresh_runs_off_loop_and_is_shared(tmp_path, monkeypatch):
-    store, project, monitor, app, butler = fixture(tmp_path)
+async def test_expired_host_sample_refresh_runs_off_loop_and_is_shared(
+    tmp_path, monkeypatch
+):
+    store, project, monitor, app, butler = await fixture(tmp_path)
     entered, release = threading.Event(), threading.Event()
     reads = []
     loop_thread = threading.get_ident()
@@ -247,6 +262,9 @@ def test_expired_host_sample_refresh_runs_off_loop_and_is_shared(tmp_path, monke
             await asyncio.gather(*tasks, return_exceptions=True)
 
     try:
-        asyncio.run(scenario())
+        (await scenario())
     finally:
-        store.database.dispose()
+        (await store.database.dispose())
+
+
+pytestmark = pytest.mark.anyio

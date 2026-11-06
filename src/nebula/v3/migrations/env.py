@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+
 import os
-import sqlite3
 from logging.config import fileConfig
 
 from alembic import context
@@ -17,7 +18,7 @@ if config.config_file_name is not None:
 database_url = os.getenv("NEBULA_V3_DATABASE_URL")
 if database_url:
     config.set_main_option(
-        "sqlalchemy.url", Database._normalize_url(database_url).replace("%", "%%")
+        "sqlalchemy.url", Database._normalize_sync_url(database_url).replace("%", "%%")
     )
 
 target_metadata = Base.metadata
@@ -57,8 +58,8 @@ def run_migrations_on(connection: Connection) -> None:
     rollback to this function.
     """
 
-    dbapi_connection = connection.connection.dbapi_connection
-    if not isinstance(dbapi_connection, sqlite3.Connection):
+    dbapi_connection: Any = connection.connection.dbapi_connection
+    if connection.dialect.name != "sqlite":
         _configure(connection)
         with context.begin_transaction():
             context.run_migrations()

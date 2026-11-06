@@ -36,7 +36,7 @@ def summary(values):
     }
 
 
-def serve(args):
+async def serve(args):
     from contextlib import asynccontextmanager
     import uvicorn
     from fastapi import Header, HTTPException
@@ -64,17 +64,17 @@ def serve(args):
     workspace = root / "workspace"
     workspace.mkdir()
     store = NebulaStore(root / "core.db")
-    project = store.create(
+    project = await store.create(
         Engagement(
             id="audit-project",
             name="Synthetic read audit",
             workspace_path=str(workspace),
         )
     )
-    other = store.create(
+    other = await store.create(
         Engagement(id="audit-other", name="Synthetic unrelated history")
     )
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             id="audit-provider",
             name="Inert fixture",
@@ -83,7 +83,7 @@ def serve(args):
             model_allowlist=["fixture-model"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             id="audit-chat",
             engagement_id=project.id,
@@ -92,17 +92,21 @@ def serve(args):
             model="fixture-model",
         )
     )
-    store.create(
-        ButlerAuthorityPolicy(
-            id=policy_id(project.id), engagement_id=project.id, authority="act"
+    (
+        await store.create(
+            ButlerAuthorityPolicy(
+                id=policy_id(project.id), engagement_id=project.id, authority="act"
+            )
         )
     )
-    store.create(
-        ChatGoal(
-            engagement_id=project.id,
-            session_id=chat.id,
-            objective="Synthetic parent",
-            completion_criteria=["Read only"],
+    (
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=chat.id,
+                objective="Synthetic parent",
+                completion_criteria=["Read only"],
+            )
         )
     )
     tools = [
@@ -117,60 +121,72 @@ def serve(args):
         )
         for index in range(8)
     ]
-    store.create_many(
-        [
-            McpServerProfile(
-                id=f"audit-mcp-{index:04}",
-                name=f"fixture-{index:04}",
-                transport="stdio",
-                command="/bin/true",
-                enabled=index == 2534,
-                trusted_stdio=True,
-                capabilities=McpCapabilitySnapshot(checked_at=utc_now(), tools=tools),
-            )
-            for index in range(2535)
-        ]
-    )
-    store.create_many(
-        [
-            ChatGoal(
-                engagement_id=other.id,
-                session_id=f"unrelated-{index}",
-                objective="Unrelated draft",
-                completion_criteria=["Read only"],
-            )
-            for index in range(2535)
-        ]
-    )
-    with store.transaction() as transaction:
-        transaction.add_chat_messages(
+    (
+        await store.create_many(
             [
-                ChatMessage(
-                    engagement_id=project.id,
-                    session_id=chat.id,
-                    sequence=index + 1,
-                    role="assistant",
-                    content="Synthetic " + "c" * 1024,
+                McpServerProfile(
+                    id=f"audit-mcp-{index:04}",
+                    name=f"fixture-{index:04}",
+                    transport="stdio",
+                    command="/bin/true",
+                    enabled=index == 2534,
+                    trusted_stdio=True,
+                    capabilities=McpCapabilitySnapshot(
+                        checked_at=utc_now(), tools=tools
+                    ),
                 )
-                for index in range(5000)
+                for index in range(2535)
             ]
         )
-    store.create_many(
-        [
-            ScopePolicy(engagement_id=f"unrelated-{index}", web_search=False)
-            for index in range(2535)
-        ]
     )
-    store.create_many(
-        [
-            ChatSession(
-                engagement_id=other.id,
-                title=f"Unrelated {index}",
-                provider_profile_id=provider.id,
-                model="fixture-model",
+    (
+        await store.create_many(
+            [
+                ChatGoal(
+                    engagement_id=other.id,
+                    session_id=f"unrelated-{index}",
+                    objective="Unrelated draft",
+                    completion_criteria=["Read only"],
+                )
+                for index in range(2535)
+            ]
+        )
+    )
+    async with store.transaction() as transaction:
+        (
+            await transaction.add_chat_messages(
+                [
+                    ChatMessage(
+                        engagement_id=project.id,
+                        session_id=chat.id,
+                        sequence=index + 1,
+                        role="assistant",
+                        content="Synthetic " + "c" * 1024,
+                    )
+                    for index in range(5000)
+                ]
             )
-            for index in range(2535)
-        ]
+        )
+    (
+        await store.create_many(
+            [
+                ScopePolicy(engagement_id=f"unrelated-{index}", web_search=False)
+                for index in range(2535)
+            ]
+        )
+    )
+    (
+        await store.create_many(
+            [
+                ChatSession(
+                    engagement_id=other.id,
+                    title=f"Unrelated {index}",
+                    provider_profile_id=provider.id,
+                    model="fixture-model",
+                )
+                for index in range(2535)
+            ]
+        )
     )
     artifacts = ArtifactStore(root / "artifacts")
     app = create_app(
@@ -180,7 +196,9 @@ def serve(args):
         execution_data_root=root / "execution",
     )
     work = app.state.control_assistant_work
-    interactive = ButlerCapabilities(store, artifacts, project.id, work=work)
+    interactive = await ButlerCapabilities.create(
+        store, artifacts, project.id, work=work
+    )
     global_actions = ButlerGlobalActions(
         store, work, root, "read-only-fixture", runtime_local=True
     )
@@ -228,8 +246,12 @@ def serve(args):
             change=False,
         )
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
-    store.database.dispose()
+    (
+        await uvicorn.Server(
+            uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+        ).serve()
+    )
+    (await store.database.dispose())
 
 
 async def drive(args, token, process):
@@ -347,7 +369,7 @@ async def drive(args, token, process):
         }
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--host", required=True)
@@ -358,7 +380,7 @@ def main():
     parser.add_argument("--reads", type=int, default=140)
     args = parser.parse_args()
     if args.serve:
-        return serve(args)
+        return await serve(args)
     if args.host in {"127.0.0.1", "localhost", "0.0.0.0", "::"}:
         parser.error("Use the executor's non-loopback LAN address")
     if not ipaddress.ip_address(args.host).is_private:
@@ -400,7 +422,7 @@ def main():
                 stderr=log,
             )
             try:
-                result = asyncio.run(drive(args, token, process))
+                result = await drive(args, token, process)
             finally:
                 if process.poll() is None:
                     process.send_signal(signal.SIGINT)
@@ -441,4 +463,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

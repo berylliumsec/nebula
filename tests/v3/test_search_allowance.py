@@ -9,7 +9,12 @@ nothing waits for approval, and the turn goes on. The count comes from the
 turn's own ledger, so a turn resumed after a restart keeps it.
 """
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 from nebula.v3.chat import ChatService
@@ -147,11 +152,11 @@ def _search(index: int):
     )
 
 
-def _entries(service, turn_id):
-    return service._turn_history(service.store.get(ChatTurn, turn_id))
+async def _entries(service, turn_id):
+    return service._turn_history((await service.store.get(ChatTurn, turn_id)))
 
 
-def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answers(
+async def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answers(
     tmp_path,
 ):
     broker = SearchBroker()
@@ -159,7 +164,7 @@ def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answer
     # by Core, and then the turn stops routing and answers from what it has.
     responses = [_search(index) for index in range(TURN_SEARCH_BUDGET + 3)]
     responses.append(_response(text=ANSWER))
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         responses,
         broker,
@@ -167,13 +172,13 @@ def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answer
         extra_specs=[conversation_search_spec()],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert len(broker.calls) == TURN_SEARCH_BUDGET
     searches = [
         entry
-        for entry in _entries(service, prepared.turn.id)
+        for entry in (await _entries(service, prepared.turn.id))
         if entry["name"] == CONVERSATION_SEARCH_TOOL_NAME
     ]
     assert len(searches) == TURN_SEARCH_BUDGET + 3
@@ -188,7 +193,7 @@ def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answer
         assert result["searches_this_turn"] == TURN_SEARCH_BUDGET
         assert "did not run" in entry["result_summary"]
     assert all(entry["status"] == "complete" for entry in searches)
-    turn = store.get(ChatTurn, prepared.turn.id)
+    turn = await store.get(ChatTurn, prepared.turn.id)
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.artifact_queries == TURN_SEARCH_BUDGET
     # The model read the answers as ordinary results of its calls, not errors.
@@ -203,9 +208,9 @@ def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answer
     assert not any(result.is_error for result in replayed)
 
 
-def test_a_resumed_turn_keeps_the_searches_it_already_ran(tmp_path):
+async def test_a_resumed_turn_keeps_the_searches_it_already_ran(tmp_path):
     broker = SearchBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [_search(99), _response(), _response(text=ANSWER)],
         broker,
@@ -215,21 +220,21 @@ def test_a_resumed_turn_keeps_the_searches_it_already_ran(tmp_path):
     # The searches a previous Core process ran before it restarted.
     turn = prepared.turn
     for step in range(TURN_SEARCH_BUDGET):
-        turn = service._save_tool_step(turn, _search_entry(step))
+        turn = await service._save_tool_step(turn, _search_entry(step))
     prepared.turn = turn
 
     restarted = ChatService(store, worker_id="worker")
-    completion = asyncio.run(restarted.complete(prepared))
+    completion = await restarted.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert broker.calls == []
-    last = _entries(restarted, turn.id)[-1]
+    last = (await _entries(restarted, turn.id))[-1]
     assert last["name"] == CONVERSATION_SEARCH_TOOL_NAME
     assert last["status"] == "complete"
     assert json.loads(last["provider_result"])["search_budget_spent"] is True
 
 
-def test_the_searches_one_response_asks_for_run_together(tmp_path):
+async def test_the_searches_one_response_asks_for_run_together(tmp_path):
     broker = SearchBroker()
     batch = _response(
         calls=[
@@ -241,7 +246,7 @@ def test_the_searches_one_response_asks_for_run_together(tmp_path):
             for index in range(TURN_SEARCH_BUDGET + 2)
         ]
     )
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [batch, _search(99), _response(), _response(text=ANSWER)],
         broker,
@@ -249,13 +254,13 @@ def test_the_searches_one_response_asks_for_run_together(tmp_path):
         extra_specs=[conversation_search_spec()],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     # The first response's searches all ran, past the allowance; the next
     # response's search was answered instead.
     assert len(broker.calls) == TURN_SEARCH_BUDGET + 2
-    last = _entries(service, prepared.turn.id)[-1]
+    last = (await _entries(service, prepared.turn.id))[-1]
     assert last["budget_class"] == "refused"
     assert json.loads(last["provider_result"])["searches_this_turn"] == (
         TURN_SEARCH_BUDGET + 2
@@ -283,7 +288,7 @@ def test_each_kind_of_search_has_its_own_allowance():
     assert turn_search_allowance_spent(knowledge, "safe_read", "q") is None
 
 
-def test_a_knowledge_search_past_its_allowance_is_answered_too(tmp_path):
+async def test_a_knowledge_search_past_its_allowance_is_answered_too(tmp_path):
     class KnowledgeBroker:
         def __init__(self) -> None:
             self.calls = []
@@ -315,7 +320,7 @@ def test_a_knowledge_search_past_its_allowance_is_answered_too(tmp_path):
         for index in range(TURN_SEARCH_BUDGET + 1)
     ]
     responses += [_response(), _response(text=ANSWER)]
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         responses,
         broker,
@@ -323,15 +328,18 @@ def test_a_knowledge_search_past_its_allowance_is_answered_too(tmp_path):
         extra_specs=[knowledge_search_spec()],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert len(broker.calls) == TURN_SEARCH_BUDGET
     last = [
         entry
-        for entry in _entries(service, prepared.turn.id)
+        for entry in (await _entries(service, prepared.turn.id))
         if entry["name"] == KNOWLEDGE_SEARCH_TOOL_NAME
     ][-1]
     assert last["status"] == "complete"
     assert last["budget_class"] == "refused"
     assert json.loads(last["provider_result"])["search_budget_spent"] is True
+
+
+pytestmark = pytest.mark.anyio

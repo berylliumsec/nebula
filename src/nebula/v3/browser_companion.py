@@ -145,7 +145,7 @@ class BrowserCompanion:
             # diagnostic-expected: invalid URLs are omitted instead of exporting unsafe source text.
             return None
 
-    def _record_interaction(
+    async def _record_interaction(
         self,
         session: BrowserSession,
         request: CompanionRequest,
@@ -185,9 +185,9 @@ class BrowserCompanion:
                     "contains_unredacted_page_content": True,
                 },
             )
-            artifact = self.store.create(stored.artifact)
+            artifact = await self.store.create(stored.artifact)
             metadata["artifact_id"] = artifact.id
-        observation = self.store.create(
+        observation = await self.store.create(
             Observation(
                 engagement_id=session.engagement_id,
                 observation_type="browser_companion_interaction",
@@ -208,8 +208,8 @@ class BrowserCompanion:
             }
             result["model_authentication_context"] = session.identity_id
 
-    def approval_policy(self, project_id: str) -> AutomationApprovalPolicy:
-        policies = self.store.list_entities(
+    async def approval_policy(self, project_id: str) -> AutomationApprovalPolicy:
+        policies = await self.store.list_entities(
             AutomationProjectPolicy, engagement_id=project_id, limit=2
         )
         if (
@@ -224,8 +224,8 @@ class BrowserCompanion:
             else AutomationApprovalPolicy.ON_BOUNDARY
         )
 
-    def file_catalog(self, session_id: str) -> list[dict[str, Any]]:
-        session = self.session(session_id)
+    async def file_catalog(self, session_id: str) -> list[dict[str, Any]]:
+        session = await self.session(session_id)
         return [
             {
                 "reference": alias,
@@ -236,10 +236,10 @@ class BrowserCompanion:
             for alias, item in session.metadata.get("browser_files", {}).items()
         ]
 
-    def save_file(
+    async def save_file(
         self, session_id: str, request: CompanionFileCreate
     ) -> list[dict[str, Any]]:
-        session = self.session(session_id)
+        session = await self.session(session_id)
         if self.artifact_store is None:
             raise ValueError(
                 "File storage is unavailable. Your saved conversation remains available."
@@ -268,38 +268,46 @@ class BrowserCompanion:
             "size": artifact.size,
             "media_type": artifact.media_type,
         }
-        with self.store.transaction() as transaction:
-            transaction.add(artifact)
-            transaction.update(
+        async with self.store.transaction() as transaction:
+            (await transaction.add(artifact))
+            (
+                await transaction.update(
+                    BrowserSession,
+                    session_id,
+                    {"metadata": {**session.metadata, "browser_files": entries}},
+                    expected_revision=session.revision,
+                )
+            )
+        return await self.file_catalog(session_id)
+
+    async def remove_file(
+        self, session_id: str, reference: str
+    ) -> list[dict[str, Any]]:
+        (await self.invalidate_pending_actions(session_id))
+        session = await self.session(session_id)
+        entries = dict(session.metadata.get("browser_files", {}))
+        if entries.pop(reference, None) is None:
+            raise ValueError("This file is no longer attached to the browser.")
+        (
+            await self.store.update(
                 BrowserSession,
                 session_id,
                 {"metadata": {**session.metadata, "browser_files": entries}},
                 expected_revision=session.revision,
             )
-        return self.file_catalog(session_id)
-
-    def remove_file(self, session_id: str, reference: str) -> list[dict[str, Any]]:
-        self.invalidate_pending_actions(session_id)
-        session = self.session(session_id)
-        entries = dict(session.metadata.get("browser_files", {}))
-        if entries.pop(reference, None) is None:
-            raise ValueError("This file is no longer attached to the browser.")
-        self.store.update(
-            BrowserSession,
-            session_id,
-            {"metadata": {**session.metadata, "browser_files": entries}},
-            expected_revision=session.revision,
         )
-        return self.file_catalog(session_id)
+        return await self.file_catalog(session_id)
 
-    def file_payload(self, session_id: str, reference: str | None) -> dict[str, str]:
-        session = self.session(session_id)
+    async def file_payload(
+        self, session_id: str, reference: str | None
+    ) -> dict[str, str]:
+        session = await self.session(session_id)
         entry = session.metadata.get("browser_files", {}).get(reference)
         if not entry or self.artifact_store is None:
             raise ValueError(
                 "Choose a file attached to this browser. Removed files require a new attachment and approval."
             )
-        artifact = self.store.get(Artifact, entry["artifact_id"])
+        artifact = await self.store.get(Artifact, entry["artifact_id"])
         if (
             artifact.engagement_id != session.engagement_id
             or artifact.source != "browser-upload"
@@ -321,8 +329,8 @@ class BrowserCompanion:
             "content_base64": base64.b64encode(data).decode("ascii"),
         }
 
-    def credential_catalog(self, session_id: str) -> list[dict[str, Any]]:
-        session = self.session(session_id)
+    async def credential_catalog(self, session_id: str) -> list[dict[str, Any]]:
+        session = await self.session(session_id)
         return [
             {
                 "reference": alias,
@@ -332,10 +340,10 @@ class BrowserCompanion:
             for alias, value in session.metadata.get("browser_credentials", {}).items()
         ]
 
-    def save_credential(
+    async def save_credential(
         self, session_id: str, request: CompanionCredentialCreate
     ) -> list[dict[str, Any]]:
-        session = self.session(session_id)
+        session = await self.session(session_id)
         entries = dict(session.metadata.get("browser_credentials", {}))
         if any(
             entry["label"].strip().casefold() == request.label.strip().casefold()
@@ -354,38 +362,42 @@ class BrowserCompanion:
             "reference": credential.reference,
         }
         try:
-            self.store.update(
-                BrowserSession,
-                session_id,
-                {"metadata": {**session.metadata, "browser_credentials": entries}},
-                expected_revision=session.revision,
+            (
+                await self.store.update(
+                    BrowserSession,
+                    session_id,
+                    {"metadata": {**session.metadata, "browser_credentials": entries}},
+                    expected_revision=session.revision,
+                )
             )
         except Exception:
             # diagnostic-expected: roll back the secret if its association was not saved.
             self.credentials.delete(credential.reference)
             raise
-        return self.credential_catalog(session_id)
+        return await self.credential_catalog(session_id)
 
-    def remove_credential(
+    async def remove_credential(
         self, session_id: str, reference: str
     ) -> list[dict[str, Any]]:
-        self.invalidate_pending_actions(session_id)
-        session = self.session(session_id)
+        (await self.invalidate_pending_actions(session_id))
+        session = await self.session(session_id)
         entries = dict(session.metadata.get("browser_credentials", {}))
         removed = entries.pop(reference, None)
         if removed is None:
             raise ValueError("This credential is not attached to this browser.")
-        self.store.update(
-            BrowserSession,
-            session_id,
-            {"metadata": {**session.metadata, "browser_credentials": entries}},
-            expected_revision=session.revision,
+        (
+            await self.store.update(
+                BrowserSession,
+                session_id,
+                {"metadata": {**session.metadata, "browser_credentials": entries}},
+                expected_revision=session.revision,
+            )
         )
         self.credentials.delete(removed["reference"])
-        return self.credential_catalog(session_id)
+        return await self.credential_catalog(session_id)
 
-    def protected_values(self, session_id: str) -> dict[str, str]:
-        session = self.session(session_id)
+    async def protected_values(self, session_id: str) -> dict[str, str]:
+        session = await self.session(session_id)
         values = {}
         for alias, entry in session.metadata.get("browser_credentials", {}).items():
             if self.credentials.status(entry["reference"]).available:
@@ -430,8 +442,8 @@ class BrowserCompanion:
             )
         return adapter
 
-    def session(self, session_id: str) -> BrowserSession:
-        session = self.store.get(BrowserSession, session_id)
+    async def session(self, session_id: str) -> BrowserSession:
+        session = await self.store.get(BrowserSession, session_id)
         cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
         if cutover and session.runtime_kind != "electron_visible":
             raise ValueError("This historical browser cannot receive new commands.")
@@ -442,7 +454,7 @@ class BrowserCompanion:
             raise ValueError("This session is not the active Assistant browser.")
         if session.status.value == "closed":
             raise ValueError("This browser session is closed.")
-        identity = self.store.get(BrowserIdentity, session.identity_id)
+        identity = await self.store.get(BrowserIdentity, session.identity_id)
         if identity.engagement_id != session.engagement_id or identity.revoked_at:
             raise ValueError(
                 "The browser identity is revoked or belongs to another project."
@@ -456,13 +468,13 @@ class BrowserCompanion:
         draft_id: str | None = None,
     ) -> dict[str, Any]:
         async with self._locks.setdefault(project_id, asyncio.Lock()):
-            self.store.get(Engagement, project_id)
+            (await self.store.get(Engagement, project_id))
             if conversation_id:
-                conversation = self.store.get(ChatSession, conversation_id)
+                conversation = await self.store.get(ChatSession, conversation_id)
                 if conversation.engagement_id != project_id:
                     raise ValueError("The conversation belongs to another project.")
             adapter = await self.adapter()
-            sessions = self.store.find_entities(
+            sessions = await self.store.find_entities(
                 BrowserSession, {}, engagement_id=project_id
             )
             cutover = os.environ.get("NEBULA_ONE_BROWSER_CUTOVER") == "1"
@@ -533,32 +545,32 @@ class BrowserCompanion:
                         "draft_id": draft_id,
                     },
                 )
-                self.store.create_many([identity, session])
+                (await self.store.create_many([identity, session]))
             elif (
                 conversation_id
                 and (cutover or not session.metadata.get("conversation_id"))
                 and session.metadata.get("conversation_id") != conversation_id
             ):
-                self.bind(session.id, conversation_id)
-            session = self.session(session.id)
+                (await self.bind(session.id, conversation_id))
+            session = await self.session(session.id)
             if cutover:
                 await adapter.ensure_identity(session.identity_id, project_id)
             else:
                 await adapter.ensure_identity(session.identity_id)
             previous_active_tab = session.active_tab_id
             tabs = await self.request(session.id, CompanionRequest(operation="tabs"))
-            session = self.session(session.id)
+            session = await self.session(session.id)
             available = {tab["id"] for tab in tabs["tabs"]}
             page_state_reset = bool(
                 session.metadata.get("browser_page_state_reset")
                 or (previous_active_tab and previous_active_tab not in available)
             )
             if page_state_reset:
-                self.takeover(session.id, True)
-                session = self.session(session.id)
+                (await self.takeover(session.id, True))
+                session = await self.session(session.id)
                 # Report the lost live page once. A reconnect must not replay the
                 # notice or pause control again after the operator resumes it.
-                session = self.store.update(
+                session = await self.store.update(
                     BrowserSession,
                     session.id,
                     {
@@ -570,7 +582,7 @@ class BrowserCompanion:
                     expected_revision=session.revision,
                 )
             if session.active_tab_id not in available and tabs["tabs"]:
-                session = self.store.update(
+                session = await self.store.update(
                     BrowserSession,
                     session.id,
                     {"active_tab_id": tabs["tabs"][0]["id"]},
@@ -588,30 +600,34 @@ class BrowserCompanion:
         tabs = await self.request(session_id, CompanionRequest(operation="tabs"))
         if not any(tab["id"] == tab_id for tab in tabs["tabs"]):
             raise ValueError("The selected browser tab is no longer available.")
-        session = self.session(session_id)
-        self.store.update(
-            BrowserSession,
-            session.id,
-            {"active_tab_id": tab_id},
-            expected_revision=session.revision,
+        session = await self.session(session_id)
+        (
+            await self.store.update(
+                BrowserSession,
+                session.id,
+                {"active_tab_id": tab_id},
+                expected_revision=session.revision,
+            )
         )
 
-    def bind(self, session_id: str, conversation_id: str | None) -> None:
-        session = self.session(session_id)
+    async def bind(self, session_id: str, conversation_id: str | None) -> None:
+        session = await self.session(session_id)
         if session.metadata.get("conversation_id") == conversation_id:
             return
         if conversation_id:
-            conversation = self.store.get(ChatSession, conversation_id)
+            conversation = await self.store.get(ChatSession, conversation_id)
             if conversation.engagement_id != session.engagement_id:
                 raise ValueError("The conversation belongs to another project.")
         if session.metadata.get("conversation_id"):
-            self.takeover(session_id, True)
-            session = self.session(session_id)
-        self.store.update(
-            BrowserSession,
-            session.id,
-            {"metadata": {**session.metadata, "conversation_id": conversation_id}},
-            expected_revision=session.revision,
+            (await self.takeover(session_id, True))
+            session = await self.session(session_id)
+        (
+            await self.store.update(
+                BrowserSession,
+                session.id,
+                {"metadata": {**session.metadata, "conversation_id": conversation_id}},
+                expected_revision=session.revision,
+            )
         )
 
     async def request(
@@ -630,10 +646,10 @@ class BrowserCompanion:
         if not assistant and request.operation not in {"tabs", "capture"}:
             # Manual edits invalidate old approvals, but the explicit session
             # grant remains enabled until the operator stops it.
-            self.invalidate_pending_actions(session_id)
+            (await self.invalidate_pending_actions(session_id))
         async with self._locks.setdefault(session_id, asyncio.Lock()):
-            session = self.session(session_id)
-            if not self.turn_active(chat_turn_id):
+            session = await self.session(session_id)
+            if not (await self.turn_active(chat_turn_id)):
                 raise ValueError(
                     "The originating Assistant turn ended; request a fresh action."
                 )
@@ -650,25 +666,27 @@ class BrowserCompanion:
                     raise CompanionRequestRefused(
                         "The browser tab is no longer available.", argument="tab_id"
                     )
-                self._require_in_scope(session, tab["url"], "browser.read")
+                (await self._require_in_scope(session, tab["url"], "browser.read"))
             if request.operation == "navigate":
                 if not request.url:
                     raise CompanionRequestRefused("Enter a page URL.", argument="url")
-                self._require_in_scope(session, request.url, "browser.navigate")
-            if assistant and self.session(session_id).metadata.get(
+                (await self._require_in_scope(session, request.url, "browser.navigate"))
+            if assistant and (await self.session(session_id)).metadata.get(
                 "assistant_paused", True
             ):
                 raise AssistantControlPaused(
                     "Assistant control was paused before execution."
                 )
-            if not self.turn_active(chat_turn_id):
+            if not (await self.turn_active(chat_turn_id)):
                 raise ValueError(
                     "The originating Assistant turn ended; request a fresh action."
                 )
-            protected = self.protected_values(session_id)
+            protected = await self.protected_values(session_id)
             payload = request.model_dump()
             if request.operation == "upload":
-                payload["upload_file"] = self.file_payload(session_id, request.file_ref)
+                payload["upload_file"] = await self.file_payload(
+                    session_id, request.file_ref
+                )
             elif request.file_ref:
                 raise CompanionRequestRefused(
                     "Attached file references are only valid for uploads.",
@@ -686,17 +704,19 @@ class BrowserCompanion:
                     )
                 payload["text"] = protected[request.credential_ref]
             result = await self._companion_call(adapter, session.identity_id, payload)
-            self._record_interaction(
-                session,
-                request,
-                result,
-                assistant=assistant,
-                chat_turn_id=chat_turn_id,
+            (
+                await self._record_interaction(
+                    session,
+                    request,
+                    result,
+                    assistant=assistant,
+                    chat_turn_id=chat_turn_id,
+                )
             )
-            result["credentials"] = self.credential_catalog(session_id)
-            result["files"] = self.file_catalog(session_id)
+            result["credentials"] = await self.credential_catalog(session_id)
+            result["files"] = await self.file_catalog(session_id)
             if "tabs" in result:
-                latest = self.session(session_id)
+                latest = await self.session(session_id)
                 tab_ids = {tab["id"] for tab in result["tabs"]}
                 known_ids = {tab.id for tab in latest.tabs}
                 lost_tabs = (
@@ -710,43 +730,51 @@ class BrowserCompanion:
                 active_tab = result.get("active_tab_id") or latest.active_tab_id
                 if active_tab not in tab_ids:
                     active_tab = result["tabs"][0]["id"] if result["tabs"] else None
-                self.store.update(
-                    BrowserSession,
-                    session_id,
-                    {
-                        "active_tab_id": active_tab,
-                        "metadata": metadata,
-                        "tabs": [
-                            {"id": tab["id"], "title": tab["title"], "position": index}
-                            for index, tab in enumerate(result["tabs"])
-                        ],
-                    },
-                    expected_revision=latest.revision,
-                )
-                if lost_tabs:
-                    self.takeover(session_id, True)
-            if request.operation == "navigate":
-                latest = self.session(session_id)
-                if latest.metadata.get("browser_page_state_reset"):
-                    self.store.update(
+                (
+                    await self.store.update(
                         BrowserSession,
-                        latest.id,
+                        session_id,
                         {
-                            "metadata": {
-                                **latest.metadata,
-                                "browser_page_state_reset": False,
-                            }
+                            "active_tab_id": active_tab,
+                            "metadata": metadata,
+                            "tabs": [
+                                {
+                                    "id": tab["id"],
+                                    "title": tab["title"],
+                                    "position": index,
+                                }
+                                for index, tab in enumerate(result["tabs"])
+                            ],
                         },
                         expected_revision=latest.revision,
                     )
+                )
+                if lost_tabs:
+                    (await self.takeover(session_id, True))
+            if request.operation == "navigate":
+                latest = await self.session(session_id)
+                if latest.metadata.get("browser_page_state_reset"):
+                    (
+                        await self.store.update(
+                            BrowserSession,
+                            latest.id,
+                            {
+                                "metadata": {
+                                    **latest.metadata,
+                                    "browser_page_state_reset": False,
+                                }
+                            },
+                            expected_revision=latest.revision,
+                        )
+                    )
             return result
 
-    def _require_in_scope(
+    async def _require_in_scope(
         self, session: BrowserSession, target: str, action: str
     ) -> None:
         try:
             self.security._require_in_scope(
-                self.security._scope(session.engagement_id),
+                (await self.security._scope(session.engagement_id)),
                 target,
                 action,
                 RiskClass.PASSIVE,
@@ -788,27 +816,27 @@ class BrowserCompanion:
         result: dict[str, Any] = response.json()
         return result
 
-    def actions(self, session_id: str) -> list[CompanionAction]:
+    async def actions(self, session_id: str) -> list[CompanionAction]:
         """The session's latest actions, oldest first, for the approval view."""
 
-        session = self.session(session_id)
-        return self.store.list_latest_entities(
+        session = await self.session(session_id)
+        return await self.store.list_latest_entities(
             CompanionAction,
             {"browser_session_id": session_id},
             engagement_id=session.engagement_id,
         )
 
-    def turn_active(self, chat_turn_id: str | None) -> bool:
+    async def turn_active(self, chat_turn_id: str | None) -> bool:
         if chat_turn_id is None:
             return True
-        return self.store.get(ChatTurn, chat_turn_id).status not in {
+        return (await self.store.get(ChatTurn, chat_turn_id)).status not in {
             ChatTurnStatus.COMPLETE,
             ChatTurnStatus.CANCELLED,
             ChatTurnStatus.FAILED,
             ChatTurnStatus.INTERRUPTED,
         }
 
-    def propose(
+    async def propose(
         self,
         session_id: str,
         request: CompanionRequest,
@@ -817,13 +845,13 @@ class BrowserCompanion:
         chat_turn_id: str | None = None,
     ) -> CompanionAction:
         if not operator_requested:
-            self.require_assistant_control(session_id)
-        session = self.session(session_id)
+            (await self.require_assistant_control(session_id))
+        session = await self.session(session_id)
         if not request.page_revision:
             raise ValueError("Capture the current page before proposing an action.")
         if request.operation == "upload":
-            self.file_payload(session_id, request.file_ref)
-        return self.store.create(
+            (await self.file_payload(session_id, request.file_ref))
+        return await self.store.create(
             CompanionAction(
                 engagement_id=session.engagement_id,
                 browser_session_id=session.id,
@@ -833,54 +861,60 @@ class BrowserCompanion:
             )
         )
 
-    def require_assistant_control(self, session_id: str) -> None:
+    async def require_assistant_control(self, session_id: str) -> None:
         """Refuse an assistant proposal while the operator holds control."""
 
-        if self.session(session_id).metadata.get("assistant_paused", True):
+        if (await self.session(session_id)).metadata.get("assistant_paused", True):
             raise AssistantControlPaused(
                 "Browser control is paused. Resume assistant control in the browser."
             )
 
-    def takeover(self, session_id: str, paused: bool) -> None:
-        session = self.session(session_id)
+    async def takeover(self, session_id: str, paused: bool) -> None:
+        session = await self.session(session_id)
         if session.metadata.get("assistant_paused", True) != paused:
-            self.store.update(
-                BrowserSession,
-                session_id,
-                {"metadata": {**session.metadata, "assistant_paused": paused}},
-                expected_revision=session.revision,
+            (
+                await self.store.update(
+                    BrowserSession,
+                    session_id,
+                    {"metadata": {**session.metadata, "assistant_paused": paused}},
+                    expected_revision=session.revision,
+                )
             )
         if paused:
-            self.invalidate_pending_actions(session_id)
+            (await self.invalidate_pending_actions(session_id))
 
-    def invalidate_pending_actions(self, session_id: str) -> None:
+    async def invalidate_pending_actions(self, session_id: str) -> None:
         """Invalidate approvals without changing the operator's control grant.
 
         ``running`` rows left behind by an interrupted turn or a Core restart
         are moved to ``failed`` so they read as terminal instead of in flight.
         """
-        session = self.session(session_id)
+        session = await self.session(session_id)
         now = datetime.now(timezone.utc)
-        for action in self.store.find_entities(
+        for action in await self.store.find_entities(
             CompanionAction,
             {"browser_session_id": session_id, "status": ["pending", "running"]},
             engagement_id=session.engagement_id,
         ):
             if action.status == "pending":
                 status = "revoked"
-            elif action.status == "running" and self._running_is_stale(action, now):
+            elif action.status == "running" and (
+                await self._running_is_stale(action, now)
+            ):
                 status = "failed"
             else:
                 continue
-            self.store.update(
-                CompanionAction,
-                action.id,
-                {"status": status},
-                expected_revision=action.revision,
+            (
+                await self.store.update(
+                    CompanionAction,
+                    action.id,
+                    {"status": status},
+                    expected_revision=action.revision,
+                )
             )
 
-    def _running_is_stale(self, action: CompanionAction, now: datetime) -> bool:
-        if not self.turn_active(action.chat_turn_id):
+    async def _running_is_stale(self, action: CompanionAction, now: datetime) -> bool:
+        if not (await self.turn_active(action.chat_turn_id)):
             return True
         # A live action cannot outlast its approval window by more than two
         # companion operation budgets; anything older lost its decider.
@@ -889,8 +923,8 @@ class BrowserCompanion:
     async def decide(
         self, session_id: str, action_id: str, decision: str
     ) -> CompanionAction:
-        session = self.session(session_id)
-        action = self.store.get(CompanionAction, action_id)
+        session = await self.session(session_id)
+        action = await self.store.get(CompanionAction, action_id)
         if (
             action.browser_session_id != session_id
             or action.engagement_id != session.engagement_id
@@ -901,7 +935,7 @@ class BrowserCompanion:
                 "This action has already been decided; it will not be replayed."
             )
         if (
-            not self.turn_active(action.chat_turn_id)
+            not (await self.turn_active(action.chat_turn_id))
             or decision != "approve"
             or action.expires_at <= datetime.now(timezone.utc)
             or (
@@ -909,13 +943,13 @@ class BrowserCompanion:
                 and not action.operator_requested
             )
         ):
-            return self.store.update(
+            return await self.store.update(
                 CompanionAction,
                 action.id,
                 {"status": "revoked"},
                 expected_revision=action.revision,
             )
-        running = self.store.update(
+        running = await self.store.update(
             CompanionAction,
             action.id,
             {"status": "running"},
@@ -932,14 +966,16 @@ class BrowserCompanion:
         except BaseException:
             # diagnostic-expected: cancellation of the chat turn must leave a
             # terminal state too; the exception is re-raised unchanged.
-            self.store.update(
-                CompanionAction,
-                action.id,
-                {"status": "failed"},
-                expected_revision=running.revision,
+            (
+                await self.store.update(
+                    CompanionAction,
+                    action.id,
+                    {"status": "failed"},
+                    expected_revision=running.revision,
+                )
             )
             raise
-        return self.store.update(
+        return await self.store.update(
             CompanionAction,
             action.id,
             {"status": "complete", "result": result},

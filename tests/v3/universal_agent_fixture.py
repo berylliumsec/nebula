@@ -77,26 +77,28 @@ class Provider(ChildProvider):
         return self._response("Guarded child finished.")
 
 
-def main():
+async def main():
     with tempfile.TemporaryDirectory(prefix="nebula-universal-ui-") as directory:
         root = Path(directory)
         hook(root)
         store = NebulaStore(root / "core.db")
-        store.create(
-            ProviderProfile(
-                id="provider",
-                name="Synthetic provider",
-                provider_type="vllm",
-                is_local=True,
-                model_allowlist=["model-a"],
-                capabilities={"streaming": True, "tool_calling": True},
-                capability_verifications={
-                    "model-a": {"model": "model-a", "status": "verified"}
-                },
-                privacy={"permits_sensitive_data": True},
+        (
+            await store.create(
+                ProviderProfile(
+                    id="provider",
+                    name="Synthetic provider",
+                    provider_type="vllm",
+                    is_local=True,
+                    model_allowlist=["model-a"],
+                    capabilities={"streaming": True, "tool_calling": True},
+                    capability_verifications={
+                        "model-a": {"model": "model-a", "status": "verified"}
+                    },
+                    privacy={"permits_sensitive_data": True},
+                )
             )
         )
-        harness = store.create(
+        harness = await store.create(
             HarnessProfile(
                 id="codex",
                 name="Synthetic harness",
@@ -166,14 +168,14 @@ def main():
         @app.post("/fixture/seed")
         async def seed(request: Request):
             authorize(request)
-            project = store.create(
+            project = await store.create(
                 Engagement(
                     id=str(uuid4()),
                     name="Synthetic mixed agents",
                     workspace_path=str(root),
                 )
             )
-            provider = store.create(
+            provider = await store.create(
                 ChatSession(
                     engagement_id=project.id,
                     title="Provider parent",
@@ -185,13 +187,13 @@ def main():
                     },
                 )
             )
-            session = runtime.create_session(
+            session = await runtime.create_session(
                 engagement_id=project.id,
                 profile_id=harness.id,
                 model="gpt-test",
                 tools_enabled=False,
             )
-            parent = store.create(
+            parent = await store.create(
                 ChatSession(
                     engagement_id=project.id,
                     title="Harness parent",
@@ -212,7 +214,7 @@ def main():
         @app.post("/fixture/mcp-seed")
         async def mcp_seed(request: Request):
             fixture = await seed(request)
-            server = store.create(
+            server = await store.create(
                 McpServerProfile(
                     name=f"continuity-{fixture['project']}",
                     transport="streamable_http",
@@ -241,16 +243,18 @@ def main():
         @app.get("/fixture/evidence/{identity}")
         async def evidence(identity: str, request: Request):
             authorize(request)
-            parent = store.get(ChatSession, identity)
-            records = store.find_entities(
+            parent = await store.get(ChatSession, identity)
+            records = await store.find_entities(
                 ChatSubagent, {"parent_session_id": parent.id}
             )
-            turns = store.list_session_entities(
+            turns = await store.list_session_entities(
                 ChatTurn, parent.id, newest_first=True, limit=1
             )
             snapshot = (
-                resolve_request_snapshot(
-                    store, turns[0].request_snapshot, session_id=parent.id
+                (
+                    await resolve_request_snapshot(
+                        store, turns[0].request_snapshot, session_id=parent.id
+                    )
                 )
                 if turns
                 else {}
@@ -269,14 +273,16 @@ def main():
                 },
                 "children": [
                     {
-                        "backend": store.get(
-                            ChatSession, child.child_session_id
+                        "backend": (
+                            await store.get(ChatSession, child.child_session_id)
                         ).backend.value,
                         "status": child.status.value,
                         "hooks": [
                             {"event": hook.event_name, "status": hook.status}
-                            for hook in store.list_session_entities(
-                                NativeHookExecution, child.child_session_id
+                            for hook in (
+                                await store.list_session_entities(
+                                    NativeHookExecution, child.child_session_id
+                                )
                             )
                         ],
                     }

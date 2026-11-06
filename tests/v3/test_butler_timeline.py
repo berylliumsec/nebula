@@ -1,6 +1,9 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import json
 from datetime import timedelta
 
@@ -36,8 +39,8 @@ def _store(tmp_path):
     return NebulaStore(tmp_path / "core.db")
 
 
-def _chat(store, project, title, *, parent=None, created_at=None):
-    return store.create(
+async def _chat(store, project, title, *, parent=None, created_at=None):
+    return await store.create(
         ChatSession(
             engagement_id=project.id,
             title=title,
@@ -49,15 +52,17 @@ def _chat(store, project, title, *, parent=None, created_at=None):
     )
 
 
-def test_timeline_joins_parent_child_provider_harness_and_report_evidence(tmp_path):
+async def test_timeline_joins_parent_child_provider_harness_and_report_evidence(
+    tmp_path,
+):
     store = _store(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Foreign"))
+    selected = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Foreign"))
     now = utc_now()
-    parent = _chat(store, selected, "Protocol review")
-    child = _chat(store, selected, "Parser subagent", parent=parent)
-    other = _chat(store, foreign, "Foreign review")
-    turn = store.create(
+    parent = await _chat(store, selected, "Protocol review")
+    child = await _chat(store, selected, "Parser subagent", parent=parent)
+    other = await _chat(store, foreign, "Foreign review")
+    turn = await store.create(
         ChatTurn(
             engagement_id=selected.id,
             session_id=parent.id,
@@ -65,108 +70,126 @@ def test_timeline_joins_parent_child_provider_harness_and_report_evidence(tmp_pa
             model="model-a",
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=selected.id,
-            session_id=parent.id,
-            sequence=1,
-            role=ChatRole.USER,
-            content="Review the parser boundary",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=selected.id,
+                session_id=parent.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="Review the parser boundary",
+            )
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=selected.id,
-            session_id=child.id,
-            sequence=1,
-            role=ChatRole.ASSISTANT,
-            content="Found a length check to inspect",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=selected.id,
+                session_id=child.id,
+                sequence=1,
+                role=ChatRole.ASSISTANT,
+                content="Found a length check to inspect",
+            )
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=selected.id,
-            session_id=parent.id,
-            sequence=2,
-            role=ChatRole.ASSISTANT,
-            content="Old answer outside requested window",
-            created_at=now - timedelta(hours=3),
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=selected.id,
+                session_id=parent.id,
+                sequence=2,
+                role=ChatRole.ASSISTANT,
+                content="Old answer outside requested window",
+                created_at=now - timedelta(hours=3),
+            )
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=foreign.id,
-            session_id=other.id,
-            sequence=1,
-            role=ChatRole.ASSISTANT,
-            content="Foreign project secret",
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=foreign.id,
+                session_id=other.id,
+                sequence=1,
+                role=ChatRole.ASSISTANT,
+                content="Foreign project secret",
+            )
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=selected.id,
-            session_id=parent.id,
-            sequence=3,
-            role=ChatRole.ASSISTANT,
-            content="Retracted answer must stay out of the timeline",
-            metadata={"retracted_at": now.isoformat()},
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=selected.id,
+                session_id=parent.id,
+                sequence=3,
+                role=ChatRole.ASSISTANT,
+                content="Retracted answer must stay out of the timeline",
+                metadata={"retracted_at": now.isoformat()},
+            )
         )
     )
-    store.create(
-        ChatSubagent(
-            engagement_id=selected.id,
-            parent_session_id=parent.id,
-            parent_turn_id=turn.id,
-            child_session_id=child.id,
-            name="Parser subagent",
-            task="Inspect length checks",
-            status=ChatSubagentStatus.COMPLETED,
-            started_at=now - timedelta(minutes=20),
-            finished_at=now - timedelta(minutes=5),
-            result="Identified a candidate check",
+    (
+        await store.create(
+            ChatSubagent(
+                engagement_id=selected.id,
+                parent_session_id=parent.id,
+                parent_turn_id=turn.id,
+                child_session_id=child.id,
+                name="Parser subagent",
+                task="Inspect length checks",
+                status=ChatSubagentStatus.COMPLETED,
+                started_at=now - timedelta(minutes=20),
+                finished_at=now - timedelta(minutes=5),
+                result="Identified a candidate check",
+            )
         )
     )
-    store.create(
-        ToolCall(
-            engagement_id=selected.id,
-            run_id=turn.id,
-            origin=ToolCallOrigin.CHAT,
-            chat_session_id=parent.id,
-            chat_turn_id=turn.id,
-            tool_name="workspace_search",
-            status=ToolCallStatus.COMPLETE,
-            risk_class=RiskClass.LOCAL_READ,
-            arguments={"query": "length check"},
+    (
+        await store.create(
+            ToolCall(
+                engagement_id=selected.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=parent.id,
+                chat_turn_id=turn.id,
+                tool_name="workspace_search",
+                status=ToolCallStatus.COMPLETE,
+                risk_class=RiskClass.LOCAL_READ,
+                arguments={"query": "length check"},
+            )
         )
     )
-    ChatTurnLedger(store.database).append(
-        turn.id,
-        {
-            "step": 1,
-            "status": "completed",
-            "name": "workspace_search",
-            "arguments": {"query": "length check"},
-            "result_summary": "Found three candidate files",
-        },
-    )
-    store.create(
-        ButlerAgentReport(
-            engagement_id=selected.id,
-            goal_id="goal",
-            session_id=parent.id,
-            turn_id=turn.id,
-            report_type="progress",
-            source="provider_tool",
-            actor_role="main_agent",
-            idempotency_key="progress-1",
-            details={
-                "what_changed": "Mapped two parser paths",
-                "evidence_gained": ["Static map only"],
-                "next_step": "Run a controlled case",
+    (
+        await ChatTurnLedger(store.database).append(
+            turn.id,
+            {
+                "step": 1,
+                "status": "completed",
+                "name": "workspace_search",
+                "arguments": {"query": "length check"},
+                "result_summary": "Found three candidate files",
             },
         )
     )
-    harness = store.create(
+    (
+        await store.create(
+            ButlerAgentReport(
+                engagement_id=selected.id,
+                goal_id="goal",
+                session_id=parent.id,
+                turn_id=turn.id,
+                report_type="progress",
+                source="provider_tool",
+                actor_role="main_agent",
+                idempotency_key="progress-1",
+                details={
+                    "what_changed": "Mapped two parser paths",
+                    "evidence_gained": ["Static map only"],
+                    "next_step": "Run a controlled case",
+                },
+            )
+        )
+    )
+    harness = await store.create(
         HarnessTurn(
             engagement_id=selected.id,
             harness_session_id="harness-session",
@@ -176,26 +199,30 @@ def test_timeline_joins_parent_child_provider_harness_and_report_evidence(tmp_pa
             prompt="Inspect the parser",
         )
     )
-    store.append_operation_event(
-        harness.id,
-        "harness_turn",
-        selected.id,
-        "harness.tool_completed",
-        {
-            "type": "tool_completed",
-            "title": "Search source",
-            "summary": "Read parser files",
-        },
+    (
+        await store.append_operation_event(
+            harness.id,
+            "harness_turn",
+            selected.id,
+            "harness.tool_completed",
+            {
+                "type": "tool_completed",
+                "title": "Search source",
+                "summary": "Read parser files",
+            },
+        )
     )
-    store.append_operation_event(
-        harness.id,
-        "harness_turn",
-        selected.id,
-        "harness.output_delta",
-        {"type": "output_delta", "delta": "Raw streamed output is excluded"},
+    (
+        await store.append_operation_event(
+            harness.id,
+            "harness_turn",
+            selected.id,
+            "harness.output_delta",
+            {"type": "output_delta", "delta": "Raw streamed output is excluded"},
+        )
     )
 
-    result = ButlerTimeline(store).read(
+    result = await ButlerTimeline(store).read(
         selected.id, {"agent": "Protocol review", "hours": 2}
     )
     kinds = {item["kind"] for item in result["events"]}
@@ -224,56 +251,64 @@ def test_timeline_joins_parent_child_provider_harness_and_report_evidence(tmp_pa
     assert result["has_more"] is False
 
 
-def test_timeline_pages_same_time_without_repeats_and_binds_cursor(tmp_path):
+async def test_timeline_pages_same_time_without_repeats_and_binds_cursor(tmp_path):
     store = _store(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Other"))
-    chat = _chat(store, project, "Long review")
+    project = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Other"))
+    chat = await _chat(store, project, "Long review")
     when = utc_now() - timedelta(minutes=10)
     for sequence in range(1, 7):
-        store.create(
-            ChatMessage(
-                engagement_id=project.id,
-                session_id=chat.id,
-                sequence=sequence,
-                role=ChatRole.ASSISTANT,
-                content=f"Checkpoint {sequence}",
-                created_at=when,
+        (
+            await store.create(
+                ChatMessage(
+                    engagement_id=project.id,
+                    session_id=chat.id,
+                    sequence=sequence,
+                    role=ChatRole.ASSISTANT,
+                    content=f"Checkpoint {sequence}",
+                    created_at=when,
+                )
             )
         )
     timeline = ButlerTimeline(store)
     seen = []
-    result = timeline.read(project.id, {"session_id": chat.id, "hours": 1, "limit": 2})
+    result = await timeline.read(
+        project.id, {"session_id": chat.id, "hours": 1, "limit": 2}
+    )
     while True:
         seen.extend(item["source_id"] for item in result["events"])
         if not result["has_more"]:
             break
         with pytest.raises(ValueError, match="cursor"):
-            timeline.read(foreign.id, {"cursor": result["next_cursor"]})
-        result = timeline.read(
+            (await timeline.read(foreign.id, {"cursor": result["next_cursor"]}))
+        result = await timeline.read(
             project.id, {"cursor": result["next_cursor"], "limit": 2}
         )
     assert len(seen) == 6
     assert len(set(seen)) == 6
 
 
-def test_timeline_pages_fit_core_model_delivery_bound(tmp_path):
+async def test_timeline_pages_fit_core_model_delivery_bound(tmp_path):
     store = _store(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    chat = _chat(store, project, "Verbose review")
+    project = await store.create(Engagement(name="Selected"))
+    chat = await _chat(store, project, "Verbose review")
     for sequence in range(1, 41):
-        store.create(
-            ChatMessage(
-                engagement_id=project.id,
-                session_id=chat.id,
-                sequence=sequence,
-                role=ChatRole.ASSISTANT,
-                content=f"Checkpoint {sequence}: " + "observed parser state " * 30,
+        (
+            await store.create(
+                ChatMessage(
+                    engagement_id=project.id,
+                    session_id=chat.id,
+                    sequence=sequence,
+                    role=ChatRole.ASSISTANT,
+                    content=f"Checkpoint {sequence}: " + "observed parser state " * 30,
+                )
             )
         )
     timeline = ButlerTimeline(store)
     seen = []
-    result = timeline.read(project.id, {"session_id": chat.id, "hours": 1, "limit": 80})
+    result = await timeline.read(
+        project.id, {"session_id": chat.id, "hours": 1, "limit": 80}
+    )
     for _ in range(40):
         assert len(json.dumps(result, ensure_ascii=False).encode()) <= 7_000
         assert result["events"]
@@ -281,34 +316,36 @@ def test_timeline_pages_fit_core_model_delivery_bound(tmp_path):
         if not result["has_more"]:
             break
         assert result["next_cursor"]
-        result = timeline.read(
+        result = await timeline.read(
             project.id, {"cursor": result["next_cursor"], "limit": 80}
         )
     assert len(seen) == 40
     assert len(set(seen)) == 40
 
 
-def test_timeline_resolves_ambiguous_titles_and_rejects_cross_project_target(tmp_path):
+async def test_timeline_resolves_ambiguous_titles_and_rejects_cross_project_target(
+    tmp_path,
+):
     store = _store(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Other"))
-    first = _chat(store, project, "Research agent")
-    second = _chat(store, project, "Research agent")
-    other = _chat(store, foreign, "Research agent")
+    project = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Other"))
+    first = await _chat(store, project, "Research agent")
+    second = await _chat(store, project, "Research agent")
+    other = await _chat(store, foreign, "Research agent")
     timeline = ButlerTimeline(store)
-    choice = timeline.read(project.id, {"agent": "Research agent", "hours": 4})
+    choice = await timeline.read(project.id, {"agent": "Research agent", "hours": 4})
     assert choice["selection_required"] is True
     assert {item["session_id"] for item in choice["matches"]} == {first.id, second.id}
     with pytest.raises(ValueError, match="this project"):
-        timeline.read(project.id, {"session_id": other.id, "hours": 4})
+        (await timeline.read(project.id, {"session_id": other.id, "hours": 4}))
     with pytest.raises(ValueError, match="hours"):
-        timeline.read(project.id, {"session_id": first.id, "hours": 721})
-    empty = timeline.read(project.id, {"session_id": first.id, "hours": 4})
+        (await timeline.read(project.id, {"session_id": first.id, "hours": 721}))
+    empty = await timeline.read(project.id, {"session_id": first.id, "hours": 4})
     assert empty["events"] == []
     assert empty["has_more"] is False
 
 
-def test_butler_discovers_timeline_through_provider_capability_gateway(tmp_path):
+async def test_butler_discovers_timeline_through_provider_capability_gateway(tmp_path):
     store = _store(tmp_path)
     artifacts = ArtifactStore(tmp_path / "artifacts")
     runtime = RuntimePlatform(
@@ -317,9 +354,9 @@ def test_butler_discovers_timeline_through_provider_capability_gateway(tmp_path)
     app = create_app(
         store, auth_token="test-token", artifact_store=artifacts, tool_platform=runtime
     )
-    project = store.create(Engagement(name="Selected"))
-    chat = _chat(store, project, "Agent A")
-    capability = ButlerCapabilities(
+    project = await store.create(Engagement(name="Selected"))
+    chat = await _chat(store, project, "Agent A")
+    capability = await ButlerCapabilities.create(
         store, artifacts, project.id, work=app.state.control_assistant_work
     )
 
@@ -342,4 +379,7 @@ def test_butler_discovers_timeline_through_provider_capability_gateway(tmp_path)
         assert result["target"]["session_id"] == chat.id
         assert result["events"] == []
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

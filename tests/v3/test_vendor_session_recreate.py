@@ -14,6 +14,10 @@ app-server connection. The first turn creates the vendor session, then Core
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -56,12 +60,16 @@ RECREATED = "vendor_session_recreated"
 class Conversation:
     """One Nebula chat on a real runtime service; ``restart`` mimics a Core restart."""
 
-    def __init__(self, tmp_path: Path, kind: HarnessKind, adapter: HarnessAdapter):
+    @classmethod
+    async def create(cls, tmp_path: Path, kind: HarnessKind, adapter: HarnessAdapter):
+        self = cls.__new__(cls)
         self.tmp_path = tmp_path
         self.adapter = adapter
         self.store = NebulaStore(tmp_path / "nebula.db")
-        self.engagement = self.store.create(Engagement(id="eng-a", name="Engagement A"))
-        self.profile = self.store.create(
+        self.engagement = await self.store.create(
+            Engagement(id="eng-a", name="Engagement A")
+        )
+        self.profile = await self.store.create(
             HarnessProfile(
                 id="harness-a",
                 name="Harness fixture",
@@ -73,6 +81,7 @@ class Conversation:
         )
         self.service = self._service()
         self.chat_id: str | None = None
+        return self
 
     def _service(self) -> HarnessRuntimeService:
         return HarnessRuntimeService(
@@ -87,7 +96,7 @@ class Conversation:
         self.service = self._service()
 
     async def send(self, prompt: str) -> tuple[HarnessTurn, str | None]:
-        chat, owner, turn = self.service.prepare_chat(
+        chat, owner, turn = await self.service.prepare_chat(
             engagement_id=self.engagement.id,
             profile_id=self.profile.id,
             model=None,
@@ -100,41 +109,41 @@ class Conversation:
         await asyncio.wait_for(
             self.service.start_chat_turn(turn.id), timeout=TURN_DEADLINE_SECONDS
         )
-        owner = self.store.get(ChatTurn, owner.id)
+        owner = await self.store.get(ChatTurn, owner.id)
         answer = (
-            self.store.get(ChatMessage, owner.final_message_id).content
+            (await self.store.get(ChatMessage, owner.final_message_id)).content
             if owner.final_message_id
             else None
         )
-        return self.store.get(HarnessTurn, turn.id), answer
+        return (await self.store.get(HarnessTurn, turn.id)), answer
 
-    def chat(self) -> ChatSession:
+    async def chat(self) -> ChatSession:
         assert self.chat_id is not None
-        return self.store.get(ChatSession, self.chat_id)
+        return await self.store.get(ChatSession, self.chat_id)
 
-    def session(self, session_id: str) -> HarnessSession:
-        return self.store.get(HarnessSession, session_id)
+    async def session(self, session_id: str) -> HarnessSession:
+        return await self.store.get(HarnessSession, session_id)
 
-    def statuses(self, turn_id: str) -> list[dict[str, Any]]:
+    async def statuses(self, turn_id: str) -> list[dict[str, Any]]:
         return [
             event.payload
-            for event in self.service.activity_events(turn_id).events
+            for event in (await self.service.activity_events(turn_id)).events
             if event.type == "status"
         ]
 
 
-def assert_recreated(
+async def assert_recreated(
     conversation: Conversation, turn: HarnessTurn, previous_session_id: str
 ) -> HarnessSession:
     """The turn ran on a fresh Nebula session forked for the lost vendor session."""
 
     assert turn.status == HarnessTurnStatus.COMPLETE, turn.error
     assert turn.harness_session_id != previous_session_id
-    replacement = conversation.session(turn.harness_session_id)
+    replacement = await conversation.session(turn.harness_session_id)
     assert replacement.metadata["forked_from_session_id"] == previous_session_id
     assert replacement.metadata["fork_reason"] == "vendor_session_unavailable"
     assert turn.metadata["session_rollover_reason"] == "vendor_session_unavailable"
-    chat = conversation.chat()
+    chat = await conversation.chat()
     assert chat.harness_session_id == replacement.id
     assert chat.metadata["harness_session_rollovers"][-1] == {
         **chat.metadata["harness_session_rollovers"][-1],
@@ -144,7 +153,7 @@ def assert_recreated(
     }
     recreated = [
         status
-        for status in conversation.statuses(turn.id)
+        for status in (await conversation.statuses(turn.id))
         if status.get("phase") == RECREATED
     ]
     assert len(recreated) == 1
@@ -157,15 +166,16 @@ def assert_recreated(
     return replacement
 
 
-def assert_not_recreated(
+async def assert_not_recreated(
     conversation: Conversation, turn: HarnessTurn, session_id: str, external_id: str
 ) -> None:
     assert turn.status == HarnessTurnStatus.INTERRUPTED
     assert turn.harness_session_id == session_id
-    assert conversation.chat().harness_session_id == session_id
-    assert conversation.session(session_id).external_session_id == external_id
+    assert (await conversation.chat()).harness_session_id == session_id
+    assert (await conversation.session(session_id)).external_session_id == external_id
     assert not any(
-        status.get("phase") == RECREATED for status in conversation.statuses(turn.id)
+        status.get("phase") == RECREATED
+        for status in (await conversation.statuses(turn.id))
     )
 
 
@@ -246,12 +256,15 @@ asyncio.run(main())
 class ScriptedGrokAdapter(GrokAcpAdapter):
     """The real Grok adapter; only the ``grok agent stdio`` process is scripted."""
 
-    def __init__(self, workdir: Path) -> None:
+    @classmethod
+    async def create(cls, workdir: Path):
+        self = cls.__new__(cls)
         workdir.mkdir(parents=True, exist_ok=True)
         self.agent_path = workdir / "scripted_acp_agent.py"
         self.agent_path.write_text(AGENT_SOURCE)
         self.script_path = workdir / "agent_script.json"
         self.log_path = workdir / "agent_log.jsonl"
+        return self
 
     def script(self, **script: Any) -> None:
         self.script_path.write_text(json.dumps(script))
@@ -295,11 +308,13 @@ class ScriptedGrokAdapter(GrokAcpAdapter):
 async def _grok_first_turn(tmp_path: Path) -> tuple[Conversation, ScriptedGrokAdapter]:
     adapter = ScriptedGrokAdapter(tmp_path / "agent")
     adapter.script(session_id="sess-1", prompts=["FIRST ANSWER"])
-    conversation = Conversation(tmp_path, HarnessKind.GROK_ACP, adapter)
+    conversation = await Conversation.create(tmp_path, HarnessKind.GROK_ACP, adapter)
     turn, answer = await conversation.send("FIRST QUESTION")
     assert turn.status == HarnessTurnStatus.COMPLETE, turn.error
     assert answer == "FIRST ANSWER"
-    assert conversation.session(turn.harness_session_id).external_session_id == "sess-1"
+    assert (
+        await conversation.session(turn.harness_session_id)
+    ).external_session_id == "sess-1"
     await conversation.restart()
     return conversation, adapter
 
@@ -325,7 +340,7 @@ ACP_RESOURCE_NOT_FOUND = {"code": -32002, "message": "Resource not found: sessio
     ],
     ids=["grok-fs-not-found", "acp-resource-not-found", "load-session-unsupported"],
 )
-def test_grok_session_that_cannot_be_loaded_continues_on_a_fresh_session(
+async def test_grok_session_that_cannot_be_loaded_continues_on_a_fresh_session(
     tmp_path: Path, refusal: dict[str, Any]
 ) -> None:
     async def scenario() -> None:
@@ -338,7 +353,7 @@ def test_grok_session_that_cannot_be_loaded_continues_on_a_fresh_session(
 
         turn, answer = await conversation.send("SECOND QUESTION")
 
-        replacement = assert_recreated(conversation, turn, first_session_id)
+        replacement = await assert_recreated(conversation, turn, first_session_id)
         assert answer == "SECOND ANSWER"
         assert replacement.external_session_id == "sess-2"
         # One refused resume, then one fresh session; never a loop.
@@ -359,7 +374,7 @@ def test_grok_session_that_cannot_be_loaded_continues_on_a_fresh_session(
         assert turn.harness_session_id == replacement.id
         await conversation.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -370,7 +385,7 @@ def test_grok_session_that_cannot_be_loaded_continues_on_a_fresh_session(
     ],
     ids=["auth-required", "internal-error"],
 )
-def test_grok_load_failures_other_than_not_found_keep_the_saved_session(
+async def test_grok_load_failures_other_than_not_found_keep_the_saved_session(
     tmp_path: Path, load_error: dict[str, Any]
 ) -> None:
     async def scenario() -> None:
@@ -382,12 +397,12 @@ def test_grok_load_failures_other_than_not_found_keep_the_saved_session(
         turn, answer = await conversation.send("SECOND QUESTION")
 
         assert answer is None
-        assert_not_recreated(conversation, turn, first_session_id, "sess-1")
+        (await assert_not_recreated(conversation, turn, first_session_id, "sess-1"))
         assert adapter.spawned() == 1
         assert adapter.inbound("session/new") == []
         await conversation.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # --- Claude: the real adapter and SDK client over a scripted CLI -----------
@@ -462,15 +477,17 @@ class ScriptedClaudeCli(claude_agent_sdk.Transport):
     ``initialize``.
     """
 
-    def __init__(
-        self,
+    @classmethod
+    async def create(
+        cls,
         *,
         session_id: str,
         answer: str,
         refusal: str | None = None,
         stderr: Callable[[str], None] | None = None,
         mcp_servers: list[str] | None = None,
-    ) -> None:
+    ):
+        self = cls.__new__(cls)
         self.session_id = session_id
         self.answer = answer
         self.refusal = refusal
@@ -479,6 +496,7 @@ class ScriptedClaudeCli(claude_agent_sdk.Transport):
         self.prompts: list[str] = []
         self._out: asyncio.Queue[Any] = asyncio.Queue()
         self._ready = False
+        return self
 
     async def connect(self) -> None:
         self._ready = True
@@ -555,11 +573,14 @@ class ScriptedClaudeCli(claude_agent_sdk.Transport):
 class ClaudeCliPlan:
     """Decides what each spawned CLI does, from the options the adapter built."""
 
-    def __init__(self) -> None:
+    @classmethod
+    async def create(cls):
+        self = cls.__new__(cls)
         self.refusal: str | None = None
         self.answers = ["FIRST ANSWER"]
         self.session_ids = ["claude-session-1"]
         self.spawned: list[tuple[str | None, ScriptedClaudeCli]] = []
+        return self
 
     def client(self, *, options: Any) -> Any:
         resume = options.resume
@@ -575,7 +596,7 @@ class ClaudeCliPlan:
         return claude_agent_sdk.ClaudeSDKClient(options=options, transport=cli)
 
 
-def _claude_conversation(
+async def _claude_conversation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Conversation, ClaudeCliPlan]:
     plan = ClaudeCliPlan()
@@ -589,7 +610,7 @@ def _claude_conversation(
     )
     sdk.ClaudeSDKClient = plan.client
     monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
-    conversation = Conversation(
+    conversation = await Conversation.create(
         tmp_path, HarnessKind.CLAUDE_AGENT_SDK, ClaudeAgentSdkAdapter()
     )
     return conversation, plan
@@ -599,17 +620,17 @@ async def _claude_first_turn(conversation: Conversation) -> str:
     turn, answer = await conversation.send("FIRST QUESTION")
     assert turn.status == HarnessTurnStatus.COMPLETE, turn.error
     assert answer == "FIRST ANSWER"
-    session = conversation.session(turn.harness_session_id)
+    session = await conversation.session(turn.harness_session_id)
     assert session.external_session_id == "claude-session-1"
     await conversation.restart()
     return session.id
 
 
-def test_claude_conversation_the_cli_cannot_resume_continues_on_a_fresh_session(
+async def test_claude_conversation_the_cli_cannot_resume_continues_on_a_fresh_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
-        conversation, plan = _claude_conversation(tmp_path, monkeypatch)
+        conversation, plan = await _claude_conversation(tmp_path, monkeypatch)
         first_session_id = await _claude_first_turn(conversation)
         plan.refusal = NO_CONVERSATION
         plan.answers.append("SECOND ANSWER")
@@ -617,7 +638,7 @@ def test_claude_conversation_the_cli_cannot_resume_continues_on_a_fresh_session(
 
         turn, answer = await conversation.send("SECOND QUESTION")
 
-        replacement = assert_recreated(conversation, turn, first_session_id)
+        replacement = await assert_recreated(conversation, turn, first_session_id)
         assert answer == "SECOND ANSWER"
         assert replacement.external_session_id == "claude-session-2"
         assert [resume for resume, _cli in plan.spawned] == [
@@ -631,25 +652,29 @@ def test_claude_conversation_the_cli_cannot_resume_continues_on_a_fresh_session(
         assert "SECOND QUESTION" in fresh.prompts[0]
         await conversation.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_cli_failures_other_than_a_missing_conversation_keep_the_session(
+async def test_claude_cli_failures_other_than_a_missing_conversation_keep_the_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def scenario() -> None:
-        conversation, plan = _claude_conversation(tmp_path, monkeypatch)
+        conversation, plan = await _claude_conversation(tmp_path, monkeypatch)
         first_session_id = await _claude_first_turn(conversation)
         plan.refusal = "Invalid API key · Please run /login"
 
         turn, answer = await conversation.send("SECOND QUESTION")
 
         assert answer is None
-        assert_not_recreated(conversation, turn, first_session_id, "claude-session-1")
+        (
+            await assert_not_recreated(
+                conversation, turn, first_session_id, "claude-session-1"
+            )
+        )
         assert [resume for resume, _cli in plan.spawned] == [None, "claude-session-1"]
         await conversation.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # --- Codex: the real adapter over a scripted app-server connection ---------
@@ -658,12 +683,15 @@ def test_claude_cli_failures_other_than_a_missing_conversation_keep_the_session(
 class ScriptedCodexRpc:
     """The Codex app-server requests the adapter and connection make."""
 
-    def __init__(self, plan: CodexPlan) -> None:
+    @classmethod
+    async def create(cls, plan: CodexPlan):
+        self = cls.__new__(cls)
         self.plan = plan
         self.events: asyncio.Queue[Any] = asyncio.Queue()
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.running_turns: dict[str, str] = {}
         self.connection_state = "connected"
+        return self
 
     async def request(self, method: str, params: dict[str, Any]) -> Any:
         self.calls.append((method, params))
@@ -722,17 +750,23 @@ class ScriptedCodexRpc:
 
 
 class CodexPlan:
-    def __init__(self) -> None:
+    @classmethod
+    async def create(cls):
+        self = cls.__new__(cls)
         self.resume_error: dict[str, Any] | None = None
         self.start_error: dict[str, Any] | None = None
         self.thread_ids = ["thread-1"]
         self.answers = ["FIRST ANSWER"]
         self.rpcs: list[ScriptedCodexRpc] = []
+        return self
 
 
 class ScriptedCodexAdapter(CodexAppServerAdapter):
-    def __init__(self, plan: CodexPlan) -> None:
+    @classmethod
+    async def create(cls, plan: CodexPlan):
+        self = cls.__new__(cls)
         self.plan = plan
+        return self
 
     async def _connect(self, *_args: Any, **_kwargs: Any) -> Any:
         rpc = ScriptedCodexRpc(self.plan)
@@ -742,15 +776,15 @@ class ScriptedCodexAdapter(CodexAppServerAdapter):
 
 async def _codex_first_turn(tmp_path: Path) -> tuple[Conversation, CodexPlan, str]:
     plan = CodexPlan()
-    conversation = Conversation(
+    conversation = await Conversation.create(
         tmp_path, HarnessKind.CODEX_APP_SERVER, ScriptedCodexAdapter(plan)
     )
     turn, answer = await conversation.send("FIRST QUESTION")
     assert turn.status == HarnessTurnStatus.COMPLETE, turn.error
     assert answer == "FIRST ANSWER"
-    assert conversation.session(turn.harness_session_id).external_session_id == (
-        "thread-1"
-    )
+    assert (
+        await conversation.session(turn.harness_session_id)
+    ).external_session_id == ("thread-1")
     await conversation.restart()
     return conversation, plan, turn.harness_session_id
 
@@ -768,7 +802,7 @@ def _thread_methods(plan: CodexPlan) -> list[str]:
 NO_ROLLOUT = {"code": -32600, "message": "no rollout found for thread id thread-1"}
 
 
-def test_codex_thread_without_a_rollout_continues_on_a_fresh_thread(
+async def test_codex_thread_without_a_rollout_continues_on_a_fresh_thread(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -779,7 +813,7 @@ def test_codex_thread_without_a_rollout_continues_on_a_fresh_thread(
 
         turn, answer = await conversation.send("SECOND QUESTION")
 
-        replacement = assert_recreated(conversation, turn, first_session_id)
+        replacement = await assert_recreated(conversation, turn, first_session_id)
         assert answer == "SECOND ANSWER"
         assert replacement.external_session_id == "thread-2"
         assert _thread_methods(plan) == [
@@ -789,10 +823,10 @@ def test_codex_thread_without_a_rollout_continues_on_a_fresh_thread(
         ]
         await conversation.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_recreates_the_thread_once_even_when_the_fresh_thread_fails(
+async def test_codex_recreates_the_thread_once_even_when_the_fresh_thread_fails(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -814,10 +848,10 @@ def test_codex_recreates_the_thread_once_even_when_the_fresh_thread_fails(
         ]
         await conversation.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_resume_errors_other_than_a_missing_rollout_keep_the_thread(
+async def test_codex_resume_errors_other_than_a_missing_rollout_keep_the_thread(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -831,8 +865,11 @@ def test_codex_resume_errors_other_than_a_missing_rollout_keep_the_thread(
         turn, answer = await conversation.send("SECOND QUESTION")
 
         assert answer is None
-        assert_not_recreated(conversation, turn, first_session_id, "thread-1")
+        (await assert_not_recreated(conversation, turn, first_session_id, "thread-1"))
         assert _thread_methods(plan) == ["thread/start", "thread/resume"]
         await conversation.service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

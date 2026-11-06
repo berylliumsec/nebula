@@ -8,6 +8,10 @@ Nebula tools.
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import resolve_workspace
+
 import asyncio
 import hashlib
 import hmac
@@ -73,7 +77,13 @@ from .sandbox import (
     SandboxWorkspaceAccess,
     _runtime_environment,
 )
-from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
+from .storage import (
+    ConflictError,
+    CorruptRecordError,
+    NebulaStore,
+    NotFoundError,
+    StoreTransaction,
+)
 from .credentials import CredentialStore
 
 
@@ -860,7 +870,7 @@ class AutomationRuntimeManager:
         store: NebulaStore,
         artifact_store: ArtifactStore,
         data_root: str | Path,
-        workspace_resolver: Callable[[str], Path],
+        workspace_resolver: MaybeAsync[[str], Path],
         runtime_image: str | None = None,
         runtime_resolver: RuntimeResolver | None = None,
         cached_runtime_provider: CachedRuntimeProvider | None = None,
@@ -956,16 +966,19 @@ class AutomationRuntimeManager:
         # Only readable records: one unreadable row must not keep Core from
         # starting and settling the others.
         active_sessions = list(
-            self.store.iter_readable_entities(
-                AutomationSession,
-                {
-                    "status": [
-                        AutomationSessionStatus.STARTING.value,
-                        AutomationSessionStatus.READY.value,
-                        AutomationSessionStatus.CLOSING.value,
-                    ]
-                },
-            )
+            [
+                item
+                async for item in self.store.iter_readable_entities(
+                    AutomationSession,
+                    {
+                        "status": [
+                            AutomationSessionStatus.STARTING.value,
+                            AutomationSessionStatus.READY.value,
+                            AutomationSessionStatus.CLOSING.value,
+                        ]
+                    },
+                )
+            ]
         )
         cleanup_limit = asyncio.Semaphore(8)
 
@@ -979,18 +992,20 @@ class AutomationRuntimeManager:
         for session, cleanup_detail in zip(
             active_sessions, cleanup_details, strict=True
         ):
-            self.store.update(
-                AutomationSession,
-                session.id,
-                {
-                    "status": AutomationSessionStatus.INTERRUPTED,
-                    "completed_at": utc_now(),
-                    "failure_detail": cleanup_detail,
-                },
-                expected_revision=session.revision,
+            (
+                await self.store.update(
+                    AutomationSession,
+                    session.id,
+                    {
+                        "status": AutomationSessionStatus.INTERRUPTED,
+                        "completed_at": utc_now(),
+                        "failure_detail": cleanup_detail,
+                    },
+                    expected_revision=session.revision,
+                )
             )
 
-        for execution in self.store.iter_readable_entities(
+        async for execution in self.store.iter_readable_entities(
             CommandExecution,
             {
                 "status": [
@@ -999,15 +1014,17 @@ class AutomationRuntimeManager:
                 ]
             },
         ):
-            self.store.update(
-                CommandExecution,
-                execution.id,
-                {
-                    "status": CommandExecutionStatus.INTERRUPTED,
-                    "completed_at": utc_now(),
-                    "error": "Core restarted before the process completed",
-                },
-                expected_revision=execution.revision,
+            (
+                await self.store.update(
+                    CommandExecution,
+                    execution.id,
+                    {
+                        "status": CommandExecutionStatus.INTERRUPTED,
+                        "completed_at": utc_now(),
+                        "error": "Core restarted before the process completed",
+                    },
+                    expected_revision=execution.revision,
+                )
             )
         await asyncio.to_thread(self._sweep_stale_captures)
 
@@ -1076,7 +1093,9 @@ class AutomationRuntimeManager:
 
     async def _cleanup_orphan_session(self, session: AutomationSession) -> str:
         try:
-            profile = self.store.get(StoredRunnerProfile, session.runner_profile_id)
+            profile = await self.store.get(
+                StoredRunnerProfile, session.runner_profile_id
+            )
         except NotFoundError:
             # diagnostic-expected: deleted runner state is returned to startup recovery.
             return "Core restarted; runtime teardown skipped because its runner was removed"
@@ -1131,30 +1150,38 @@ class AutomationRuntimeManager:
             return_exceptions=True,
         )
 
-    def project_policy(self, engagement_id: str) -> AutomationProjectPolicy:
-        self.store.get(Engagement, engagement_id)
+    async def project_policy(
+        self, engagement_id: str, *, transaction: StoreTransaction | None = None
+    ) -> AutomationProjectPolicy:
+        if transaction is not None:
+            from .database import EntityRow
+
+            # Serialize first-policy creation with other admissions for this
+            # project, keeping it in the caller's atomic unit of work.
+            await transaction.session.get(
+                EntityRow, engagement_id, with_for_update=True, populate_existing=True
+            )
+        (await self.store.get(Engagement, engagement_id))
         policy_id = str(
             uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")
         )
         try:
-            return self.store.get(AutomationProjectPolicy, policy_id)
+            return await self.store.get(AutomationProjectPolicy, policy_id)
         except NotFoundError:
             # diagnostic-expected: first access creates the deterministic default policy.
-            try:
-                return self.store.create(
-                    AutomationProjectPolicy(
-                        id=policy_id,
-                        engagement_id=engagement_id,
-                    )
+            if transaction is not None:
+                default = AutomationProjectPolicy(
+                    id=policy_id, engagement_id=engagement_id
                 )
-            except ConflictError:
-                # diagnostic-expected: a concurrent creator won; read its durable value.
-                return self.store.get(AutomationProjectPolicy, policy_id)
+                await transaction.add(default)
+                return default
+            async with self.store.transaction(immediate=True) as creation:
+                return await self.project_policy(engagement_id, transaction=creation)
 
-    def notebook_data_directory(self, engagement_id: str) -> Path:
+    async def notebook_data_directory(self, engagement_id: str) -> Path:
         """Private project environment mount for the namespace-mapped container UID."""
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         key = hashlib.sha256(engagement_id.encode("utf-8")).hexdigest()[:32]
         parent = self.data_root / "notebooks" / "envs" / key
         parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1165,7 +1192,7 @@ class AutomationRuntimeManager:
         directory.chmod(0o777)
         return directory
 
-    def update_project_policy(
+    async def update_project_policy(
         self,
         engagement_id: str,
         *,
@@ -1178,7 +1205,7 @@ class AutomationRuntimeManager:
         execution_mode: Literal["docker", "host"] | None = None,
         host_access_acknowledged: bool = False,
     ) -> AutomationProjectPolicy:
-        current = self.project_policy(engagement_id)
+        current = await self.project_policy(engagement_id)
         selected_mode = execution_mode or current.execution_mode
         if selected_mode == "host" and not (
             host_access_acknowledged or current.host_access_acknowledged
@@ -1193,7 +1220,7 @@ class AutomationRuntimeManager:
                 "Host mode requires a POSIX host with /bin/bash"
             )
         if selected_mode == "docker" and runner_profile_id is not None:
-            runner = self.store.get(StoredRunnerProfile, runner_profile_id)
+            runner = await self.store.get(StoredRunnerProfile, runner_profile_id)
             if not runner.enabled or not runner.healthy:
                 raise AutomationRuntimeUnavailable(
                     "selected runner is not verified healthy"
@@ -1203,7 +1230,7 @@ class AutomationRuntimeManager:
                 raise AutomationRuntimeUnavailable(
                     "enable project networking before selecting a VPN profile"
                 )
-            vpn = self.store.get(VpnProfile, vpn_profile_id)
+            vpn = await self.store.get(VpnProfile, vpn_profile_id)
             if (
                 self.credential_store is None
                 or not self.credential_store.status(vpn.secret_ref).available
@@ -1211,7 +1238,7 @@ class AutomationRuntimeManager:
                 raise AutomationRuntimeUnavailable(
                     "selected VPN profile is unavailable"
                 )
-        return self.store.update(
+        return await self.store.update(
             AutomationProjectPolicy,
             current.id,
             {
@@ -1228,8 +1255,8 @@ class AutomationRuntimeManager:
             expected_revision=expected_revision or current.revision,
         )
 
-    def project_runtime_digest(self, engagement_id: str) -> str:
-        if self.project_policy(engagement_id).execution_mode == "host":
+    async def project_runtime_digest(self, engagement_id: str) -> str:
+        if (await self.project_policy(engagement_id)).execution_mode == "host":
             identity = (
                 f"host-v1:{platform.node()}:{platform.system()}:{os.getuid()}:/bin/bash"
             )
@@ -1241,9 +1268,9 @@ class AutomationRuntimeManager:
     ) -> AutomationRuntimeInfo:
         if (
             engagement_id
-            and self.project_policy(engagement_id).execution_mode == "host"
+            and (await self.project_policy(engagement_id)).execution_mode == "host"
         ):
-            policy = self.project_policy(engagement_id)
+            policy = await self.project_policy(engagement_id)
             ready = (
                 policy.host_access_acknowledged
                 and os.name == "posix"
@@ -1252,7 +1279,7 @@ class AutomationRuntimeManager:
             return AutomationRuntimeInfo(
                 configured=True,
                 ready=ready,
-                digest=self.project_runtime_digest(engagement_id),
+                digest=(await self.project_runtime_digest(engagement_id)),
                 runner_profile_id="host",
                 detail=(
                     "Host mode: commands run as the Core OS user with host filesystem and network access"
@@ -1265,7 +1292,9 @@ class AutomationRuntimeManager:
         prepared = self._refresh_cached_runtime()
         profiles = [
             item
-            for item in self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            for item in (
+                await self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            )
             if item.enabled and item.healthy
         ]
         if not profiles:
@@ -1316,7 +1345,7 @@ class AutomationRuntimeManager:
     async def prepare(self) -> AutomationRuntimeInfo:
         if self.runtime_resolver is not None:
             # Only the oldest project is needed to resolve the shared image.
-            engagements = self.store.list_entities(Engagement, limit=1)
+            engagements = await self.store.list_entities(Engagement, limit=1)
             if not engagements:
                 return AutomationRuntimeInfo(
                     configured=True,
@@ -1345,7 +1374,7 @@ class AutomationRuntimeManager:
         info = await self.runtime_info()
         if not info.ready or info.runner_profile_id is None:
             return info
-        profile = self.store.get(StoredRunnerProfile, info.runner_profile_id)
+        profile = await self.store.get(StoredRunnerProfile, info.runner_profile_id)
         runner = self._runner(profile)
         stdout, stderr, code = await runner._capture(
             "image", "inspect", self.runtime_image, "--format", "{{json .}}"
@@ -1487,7 +1516,7 @@ class AutomationRuntimeManager:
         if managed.scope is not None and managed.scope.bypass_permissions:
             needs_approval = False
         if needs_approval:
-            approval = self._authorize_or_request(
+            approval = await self._authorize_or_request(
                 managed,
                 request,
                 approval=approval,
@@ -1505,7 +1534,7 @@ class AutomationRuntimeManager:
             and not managed.entity.network_granted
         ):
             await managed.backend.enable_network()
-            managed.entity = self.store.update(
+            managed.entity = await self.store.update(
                 AutomationSession,
                 managed.entity.id,
                 {"network_granted": True},
@@ -1552,7 +1581,7 @@ class AutomationRuntimeManager:
                 ),
             },
         )
-        execution = self.store.create(execution)
+        execution = await self.store.create(execution)
         extra_env = (
             {
                 "NEBULA_RESULTS_URL": results_url,
@@ -1568,15 +1597,17 @@ class AutomationRuntimeManager:
                 process_id, request.command, request.cwd, extra_env=extra_env
             )
         except Exception as exc:
-            self.store.update(
-                CommandExecution,
-                execution.id,
-                {
-                    "status": CommandExecutionStatus.FAILED,
-                    "completed_at": utc_now(),
-                    "error": str(exc)[:4_000],
-                },
-                expected_revision=execution.revision,
+            (
+                await self.store.update(
+                    CommandExecution,
+                    execution.id,
+                    {
+                        "status": CommandExecutionStatus.FAILED,
+                        "completed_at": utc_now(),
+                        "error": str(exc)[:4_000],
+                    },
+                    expected_revision=execution.revision,
+                )
             )
             raise
         directory = Path(
@@ -1643,12 +1674,14 @@ class AutomationRuntimeManager:
             raise
         return await self._poll(managed, process, MAX_POLL_BYTES)
 
-    def accept_results(
+    async def accept_results(
         self, process_id: str, api_key: str, request: ProcessResultsRequest
     ) -> CommandExecution:
         """Complete a background command from a LAN results webhook."""
 
-        execution = self.store.get(CommandExecution, self._execution_id(process_id))
+        execution = await self.store.get(
+            CommandExecution, self._execution_id(process_id)
+        )
         expected = execution.metadata.get("results_key_sha256")
         provided = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
         if not isinstance(expected, str) or not hmac.compare_digest(expected, provided):
@@ -1689,11 +1722,11 @@ class AutomationRuntimeManager:
             else CommandExecutionStatus.FAILED
         )
         posted = self._callback_artifacts(execution, request)
-        with self.store.transaction() as transaction:
+        async with self.store.transaction() as transaction:
             # The posted output and the execution that points at it commit
             # together, so a receipt never names an artifact that is missing.
-            transaction.add_all([artifact for _, artifact in posted])
-            return transaction.update(
+            (await transaction.add_all([artifact for _, artifact in posted]))
+            return await transaction.update(
                 CommandExecution,
                 execution.id,
                 {
@@ -1790,12 +1823,14 @@ class AutomationRuntimeManager:
     ) -> CommandResult:
         process = self._processes.get(process_id)
         if process is None:
-            execution = self.store.get(CommandExecution, self._execution_id(process_id))
+            execution = await self.store.get(
+                CommandExecution, self._execution_id(process_id)
+            )
             if engagement_id is not None and execution.engagement_id != engagement_id:
                 raise AutomationPolicyDenied("command process is unavailable")
             if owner_id is not None and execution.metadata.get("owner_id") != owner_id:
                 raise AutomationPolicyDenied("command process is unavailable")
-            session = self.store.get(AutomationSession, execution.session_id)
+            session = await self.store.get(AutomationSession, execution.session_id)
             return CommandResult(
                 session_id=session.id,
                 process_id=process_id,
@@ -1839,17 +1874,17 @@ class AutomationRuntimeManager:
                 await asyncio.shield(process.final_task)
         return await self._poll(managed, process, request.max_bytes)
 
-    def list_processes(self, session_id: str) -> list[CommandExecution]:
-        session = self.store.get(AutomationSession, session_id)
+    async def list_processes(self, session_id: str) -> list[CommandExecution]:
+        session = await self.store.get(AutomationSession, session_id)
         # Filtered in SQL within the session's project, oldest first, so the
         # read does not load every command Core has ever run.
-        return self.store.find_entities(
+        return await self.store.find_entities(
             CommandExecution,
             {"session_id": session_id},
             engagement_id=session.engagement_id,
         )
 
-    def native_hook_process_context(
+    async def native_hook_process_context(
         self,
         process_id: str,
         *,
@@ -1859,7 +1894,9 @@ class AutomationRuntimeManager:
         """Return a same-owner process summary for a native tool hook."""
 
         try:
-            execution = self.store.get(CommandExecution, self._execution_id(process_id))
+            execution = await self.store.get(
+                CommandExecution, self._execution_id(process_id)
+            )
         except NotFoundError:
             # diagnostic-expected: the normal process_io path reports this missing process.
             return None
@@ -1877,7 +1914,7 @@ class AutomationRuntimeManager:
     async def close_session(self, session_id: str) -> AutomationSession:
         managed = self._sessions.get(session_id)
         if managed is None:
-            return self.store.get(AutomationSession, session_id)
+            return await self.store.get(AutomationSession, session_id)
         current_task = asyncio.current_task()
         if (
             managed.scope_expiry_task is not None
@@ -1885,7 +1922,7 @@ class AutomationRuntimeManager:
         ):
             managed.scope_expiry_task.cancel()
         if managed.entity.status == AutomationSessionStatus.READY:
-            managed.entity = self.store.update(
+            managed.entity = await self.store.update(
                 AutomationSession,
                 session_id,
                 {"status": AutomationSessionStatus.CLOSING},
@@ -1904,9 +1941,9 @@ class AutomationRuntimeManager:
             return_exceptions=True,
         )
         await managed.backend.close()
-        managed.entity = self.store.get(AutomationSession, session_id)
+        managed.entity = await self.store.get(AutomationSession, session_id)
         if managed.entity.status != AutomationSessionStatus.CLOSED:
-            managed.entity = self.store.update(
+            managed.entity = await self.store.update(
                 AutomationSession,
                 session_id,
                 {
@@ -1949,15 +1986,15 @@ class AutomationRuntimeManager:
             existing_id = self._owner_sessions.get(key)
             if existing_id is not None and existing_id in self._sessions:
                 return self._sessions[existing_id]
-            engagement = self.store.get(Engagement, engagement_id)
-            policy = self.project_policy(engagement_id)
+            engagement = await self.store.get(Engagement, engagement_id)
+            policy = await self.project_policy(engagement_id)
             if policy.execution_mode == "host":
                 if not policy.host_access_acknowledged:
                     raise AutomationPolicyDenied(
                         "Host access has not been acknowledged"
                     )
                 workspace = (
-                    self.workspace_resolver(engagement_id)
+                    (await resolve_workspace(self.workspace_resolver, engagement_id))
                     .expanduser()
                     .resolve(strict=True)
                 )
@@ -1966,7 +2003,7 @@ class AutomationRuntimeManager:
                         "project workspace is unavailable"
                     )
                 scope = (
-                    self.store.get(ScopePolicy, engagement.scope_policy_id)
+                    (await self.store.get(ScopePolicy, engagement.scope_policy_id))
                     if engagement.scope_policy_id
                     else None
                 )
@@ -1977,7 +2014,7 @@ class AutomationRuntimeManager:
                     owner_id=owner_id,
                     execution_mode="host",
                     runtime_image="host:/bin/bash",
-                    runtime_digest=self.project_runtime_digest(engagement_id),
+                    runtime_digest=(await self.project_runtime_digest(engagement_id)),
                     runner_profile_id="host",
                     runner_profile_revision=1,
                     policy_id=policy.id,
@@ -1991,11 +2028,13 @@ class AutomationRuntimeManager:
                         "workspace": str(workspace),
                     },
                 )
-                with self.store.transaction(immediate=True) as transaction:
-                    transaction.assert_project_workspace(
-                        engagement_id, engagement.workspace_path
+                async with self.store.transaction(immediate=True) as transaction:
+                    (
+                        await transaction.assert_project_workspace(
+                            engagement_id, engagement.workspace_path
+                        )
                     )
-                    transaction.add(entity)
+                    (await transaction.add(entity))
                 managed = _ManagedSession(
                     entity=entity,
                     policy=policy,
@@ -2019,7 +2058,7 @@ class AutomationRuntimeManager:
                         failure_message="Scope-expiry supervision stopped unexpectedly.",
                     )
                 return managed
-            profile = self._select_runner(policy)
+            profile = await self._select_runner(policy)
             if not self.runtime_image or not self.runtime_digest:
                 raise AutomationRuntimeUnavailable(
                     "prepare the existing Kali headless runtime before starting an agent session"
@@ -2032,12 +2071,14 @@ class AutomationRuntimeManager:
                     "the selected runner does not own the prepared Kali runtime"
                 )
             workspace = (
-                self.workspace_resolver(engagement_id).expanduser().resolve(strict=True)
+                (await resolve_workspace(self.workspace_resolver, engagement_id))
+                .expanduser()
+                .resolve(strict=True)
             )
             if not workspace.is_dir():
                 raise AutomationRuntimeUnavailable("project workspace is unavailable")
             scope = (
-                self.store.get(ScopePolicy, engagement.scope_policy_id)
+                (await self.store.get(ScopePolicy, engagement.scope_policy_id))
                 if engagement.scope_policy_id is not None
                 else None
             )
@@ -2049,7 +2090,7 @@ class AutomationRuntimeManager:
                     raise AutomationRuntimeUnavailable(
                         "VPN secret storage is unavailable"
                     )
-                vpn = self.store.get(VpnProfile, policy.vpn_profile_id)
+                vpn = await self.store.get(VpnProfile, policy.vpn_profile_id)
                 vpn_config = self.credential_store.resolve(
                     vpn.secret_ref
                 ).get_secret_value()
@@ -2072,11 +2113,13 @@ class AutomationRuntimeManager:
                 # command explicitly asks for project_scope.
                 network_granted=False,
             )
-            with self.store.transaction(immediate=True) as transaction:
-                transaction.assert_project_workspace(
-                    engagement_id, engagement.workspace_path
+            async with self.store.transaction(immediate=True) as transaction:
+                (
+                    await transaction.assert_project_workspace(
+                        engagement_id, engagement.workspace_path
+                    )
                 )
-                transaction.add(session)
+                (await transaction.add(session))
             resolver_file: Path | None = None
             if domains:
                 resolver_directory = self.capture_root / session.id
@@ -2108,25 +2151,27 @@ class AutomationRuntimeManager:
                         network_granted=session.network_granted,
                         vpn_config=vpn_config,
                         notebook_data_directory=(
-                            self.notebook_data_directory(engagement_id)
+                            (await self.notebook_data_directory(engagement_id))
                             if owner_kind == "notebook"
                             else None
                         ),
                     )
                 )
             except Exception as exc:
-                self.store.update(
-                    AutomationSession,
-                    session.id,
-                    {
-                        "status": AutomationSessionStatus.FAILED,
-                        "completed_at": utc_now(),
-                        "failure_detail": str(exc)[:4_000],
-                    },
-                    expected_revision=session.revision,
+                (
+                    await self.store.update(
+                        AutomationSession,
+                        session.id,
+                        {
+                            "status": AutomationSessionStatus.FAILED,
+                            "completed_at": utc_now(),
+                            "failure_detail": str(exc)[:4_000],
+                        },
+                        expected_revision=session.revision,
+                    )
                 )
                 raise
-            session = self.store.update(
+            session = await self.store.update(
                 AutomationSession,
                 session.id,
                 {"status": AutomationSessionStatus.READY},
@@ -2155,9 +2200,13 @@ class AutomationRuntimeManager:
                 )
             return managed
 
-    def _select_runner(self, policy: AutomationProjectPolicy) -> StoredRunnerProfile:
+    async def _select_runner(
+        self, policy: AutomationProjectPolicy
+    ) -> StoredRunnerProfile:
         if policy.runner_profile_id is not None:
-            profile = self.store.get(StoredRunnerProfile, policy.runner_profile_id)
+            profile = await self.store.get(
+                StoredRunnerProfile, policy.runner_profile_id
+            )
             if profile.enabled and profile.healthy:
                 return profile
             raise AutomationRuntimeUnavailable(
@@ -2165,7 +2214,9 @@ class AutomationRuntimeManager:
             )
         profiles = [
             item
-            for item in self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            for item in (
+                await self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            )
             if item.enabled and item.healthy
         ]
         if not profiles:
@@ -2297,7 +2348,7 @@ class AutomationRuntimeManager:
         if managed.backend.network_enabled:
             return
 
-    def _authorize_or_request(
+    async def _authorize_or_request(
         self,
         managed: _ManagedSession,
         request: RunCommandRequest,
@@ -2341,17 +2392,16 @@ class AutomationRuntimeManager:
                 ),
                 requested_by=requested_by,
             )
-            created = self.store.create(created)
+            created = await self.store.create(created)
             raise CommandApprovalRequired(created)
-        durable = self.store.get(Approval, approval.id)
+        durable = await self.store.get(Approval, approval.id)
         if (
             durable.exact_request != exact_request
             or durable.engagement_id != managed.entity.engagement_id
         ):
             raise AutomationPolicyDenied("approval does not match this exact command")
-        if (
-            durable.id in managed.used_approval_ids
-            or self.store.has_entity_with_metadata(
+        if durable.id in managed.used_approval_ids or (
+            await self.store.has_entity_with_metadata(
                 CommandExecution, "approval_id", durable.id
             )
         ):
@@ -2408,12 +2458,12 @@ class AutomationRuntimeManager:
                 kind="stderr",
                 metadata=metadata,
             )
-            current = self.store.get(CommandExecution, process.execution.id)
+            current = await self.store.get(CommandExecution, process.execution.id)
             if current.metadata.get("results_received"):
                 # The callback already settled the outcome and woke the
                 # owner; the process's own output still joins the record so
                 # process_io and receipts find it as for any command.
-                process.execution = self.store.update(
+                process.execution = await self.store.update(
                     CommandExecution,
                     current.id,
                     {
@@ -2429,7 +2479,7 @@ class AutomationRuntimeManager:
                     expected_revision=current.revision,
                 )
                 return process.execution
-            process.execution = self.store.update(
+            process.execution = await self.store.update(
                 CommandExecution,
                 current.id,
                 {
@@ -2507,7 +2557,7 @@ class AutomationRuntimeManager:
             source="automation-runtime",
             metadata={**metadata, "kind": kind, "searchable": not binary},
         )
-        raw = self.store.create(raw)
+        raw = await self.store.create(raw)
         if not binary and hashlib.sha256(visible).hexdigest() == raw.sha256:
             # Redaction found nothing to remove (almost every stream, and every
             # empty one): the captured bytes already are the redacted text, so
@@ -2522,7 +2572,9 @@ class AutomationRuntimeManager:
             parent_artifact_id=raw.id,
             metadata={**metadata, "kind": f"redacted_{kind}", "searchable": True},
         )
-        redacted = self.store.create(redacted.model_copy(update={"redacted": True}))
+        redacted = await self.store.create(
+            redacted.model_copy(update={"redacted": True})
+        )
         return raw, redacted
 
     async def _poll(

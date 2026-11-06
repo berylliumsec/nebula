@@ -1,3 +1,8 @@
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 from pathlib import Path
 
 from nebula.v3.operator_help import (
@@ -233,10 +238,9 @@ def test_a_failed_tool_receipt_is_searched_for_its_recovery_procedure():
     assert observed[0].article.article_id == "diagnostics"
 
 
-def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
+async def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
     tmp_path,
 ):
-    import asyncio
 
     from nebula.v3.chat import ChatCompletionRequest, ChatService
     from nebula.v3.domain import Engagement
@@ -246,11 +250,11 @@ def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
     from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
 
     store = NebulaStore(tmp_path / "status-note.db")
-    engagement = store.create(Engagement(id="eng-notes", name="Status notes"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="eng-notes", name="Status notes"))
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
     note = build_scenario("s1", DEFAULT_SEED).turns[0].content
-    prepared = ChatService(store, provider_factory=lambda _: provider).prepare(
+    prepared = await ChatService(store, provider_factory=lambda _: provider).prepare(
         ChatCompletionRequest(
             engagement_id=engagement.id,
             provider_id=profile.id,
@@ -268,7 +272,7 @@ def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
             self.calls.append(invocation)
             raise RuntimeError("the probe failed")
 
-    _, service, turn, scripted = _prepared(
+    _, service, turn, scripted = await _prepared(
         tmp_path / "failed-step",
         [
             _response(
@@ -281,7 +285,7 @@ def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
         ],
         FailingBroker(),
     )
-    completion = asyncio.run(service.complete(turn))
+    completion = await service.complete(turn)
 
     assert [citation.source_id for citation in completion.citations] == [
         "nebula-help:diagnostics"
@@ -290,7 +294,7 @@ def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
     assert "nebula-help:diagnostics" in (final[-1].instructions or "")
 
 
-def _prepare_with_selection(tmp_path, question: str, selected: str):
+async def _prepare_with_selection(tmp_path, question: str, selected: str):
     import hashlib
 
     from nebula.v3.chat import ChatCompletionRequest, ChatService
@@ -299,10 +303,10 @@ def _prepare_with_selection(tmp_path, question: str, selected: str):
     from tests.v3.test_chat import FakeProvider, _profile
 
     store = NebulaStore(tmp_path / "selection.db")
-    engagement = store.create(Engagement(id="eng-selection", name="Selection"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="eng-selection", name="Selection"))
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
-    return ChatService(store, provider_factory=lambda _: provider).prepare(
+    return await ChatService(store, provider_factory=lambda _: provider).prepare(
         ChatCompletionRequest(
             engagement_id=engagement.id,
             provider_id=profile.id,
@@ -320,7 +324,7 @@ def _prepare_with_selection(tmp_path, question: str, selected: str):
     )
 
 
-def test_selected_context_neither_hides_nor_invents_a_runbook_question(tmp_path):
+async def test_selected_context_neither_hides_nor_invents_a_runbook_question(tmp_path):
     # Whether a turn is about operating Nebula is decided by the operator's
     # own words. A large selection used to dilute a runbook question below
     # the topic share, and a selection that mentions a runner must not turn
@@ -332,7 +336,7 @@ def test_selected_context_neither_hides_nor_invents_a_runbook_question(tmp_path)
         "What should I check first?"
     )
 
-    prepared = _prepare_with_selection(tmp_path / "question", question, selection)
+    prepared = await _prepare_with_selection(tmp_path / "question", question, selection)
 
     assert [item.source_id for item in prepared.citations] == [
         "nebula-help:runner-setup"
@@ -340,7 +344,7 @@ def test_selected_context_neither_hides_nor_invents_a_runbook_question(tmp_path)
     current = prepared.model_request.messages[-1].content
     assert isinstance(current, str) and "BEGIN SELECTED CONTEXT" in current
 
-    ordinary = _prepare_with_selection(
+    ordinary = await _prepare_with_selection(
         tmp_path / "note",
         "Keep this for later.",
         "Runner unavailable: the rootless docker runner was not detected on the "
@@ -401,10 +405,9 @@ def test_a_failure_receipt_is_searched_by_what_it_says_not_its_schema():
     assert failure_receipt_text("nmap: operation not permitted") is None
 
 
-def test_a_failed_step_is_answered_with_its_runbook_and_not_the_mcp_article(
+async def test_a_failed_step_is_answered_with_its_runbook_and_not_the_mcp_article(
     tmp_path,
 ):
-    import asyncio
 
     from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
     from nebula.v3.providers import ToolCall
@@ -415,7 +418,7 @@ def test_a_failed_step_is_answered_with_its_runbook_and_not_the_mcp_article(
             self.calls.append(invocation)
             raise RuntimeError("the probe failed")
 
-    store, service, prepared, scripted = _prepared(
+    store, service, prepared, scripted = await _prepared(
         tmp_path,
         [
             _response(
@@ -443,7 +446,7 @@ def test_a_failed_step_is_answered_with_its_runbook_and_not_the_mcp_article(
         }
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert [citation.source_id for citation in completion.citations] == [
         "nebula-help:diagnostics"
@@ -460,14 +463,14 @@ FAILURE_LOG = "\n".join(
 )
 
 
-def test_a_troubleshooting_question_about_a_selected_nebula_failure_gets_its_runbook(
+async def test_a_troubleshooting_question_about_a_selected_nebula_failure_gets_its_runbook(
     tmp_path,
 ):
     from nebula.v3.operator_help import help_subject
 
     # The operator's words name nothing of Nebula; the failure is in what
     # they selected, and they ask about it.
-    prepared = _prepare_with_selection(
+    prepared = await _prepare_with_selection(
         tmp_path / "log", "why does this fail?", FAILURE_LOG
     )
     assert [item.source_id for item in prepared.citations] == [
@@ -481,7 +484,7 @@ def test_a_troubleshooting_question_about_a_selected_nebula_failure_gets_its_run
         + "\nWorkstation image preparation failed: image pull failed (exit 1).\n"
         + note[4_000:8_000]
     )
-    prepared = _prepare_with_selection(
+    prepared = await _prepare_with_selection(
         tmp_path / "large", "what's wrong here?", selection
     )
     assert [item.source_id for item in prepared.citations] == [
@@ -497,21 +500,23 @@ def test_a_troubleshooting_question_about_a_selected_nebula_failure_gets_its_run
     assert len(help_subject("why?", [many])) == 6
 
 
-def test_a_selection_joins_the_subject_only_for_a_nebula_failure_question(tmp_path):
+async def test_a_selection_joins_the_subject_only_for_a_nebula_failure_question(
+    tmp_path,
+):
     from nebula.v3.operator_help import help_subject
 
     # Not a troubleshooting question: the operator's words alone decide.
     assert help_subject("Summarise this selection.", [FAILURE_LOG]) == [
         "Summarise this selection."
     ]
-    summary = _prepare_with_selection(
+    summary = await _prepare_with_selection(
         tmp_path / "summary", "Summarise this selection.", FAILURE_LOG
     )
     assert summary.citations == []
 
     # A failure of the operator's own project, named without a Nebula
     # surface, stays theirs.
-    build = _prepare_with_selection(
+    build = await _prepare_with_selection(
         tmp_path / "build",
         "why does this fail?",
         "docker build failed: missing base image python:3.12-slim",
@@ -520,7 +525,10 @@ def test_a_selection_joins_the_subject_only_for_a_nebula_failure_question(tmp_pa
 
     # A question about a selection that reports no failure.
     note = build_scenario("s1", DEFAULT_SEED).turns[0].content
-    ordinary = _prepare_with_selection(
+    ordinary = await _prepare_with_selection(
         tmp_path / "ordinary", "why does this fail?", note[:6_000]
     )
     assert ordinary.citations == []
+
+
+pytestmark = pytest.mark.anyio

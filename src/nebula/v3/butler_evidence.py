@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 
 from .domain import Evidence, RiskClass
@@ -54,17 +56,17 @@ class ButlerEvidence:
             "asset_count": len(item.asset_ids),
         }
 
-    def _project_evidence(self, evidence_id: str) -> Evidence:
-        item = self.store.get(Evidence, evidence_id)
+    async def _project_evidence(self, evidence_id: str) -> Evidence:
+        item = await self.store.get(Evidence, evidence_id)
         if item.engagement_id != self.project_id:
             raise ValueError("evidence does not belong to the selected project")
         return item
 
-    def list_items(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def list_items(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 10000:
             raise ValueError("offset must be from 0 to 10000")
-        rows = self.store.list_entities(
+        rows = await self.store.list_entities(
             Evidence, engagement_id=self.project_id, offset=offset, limit=51
         )
         return {
@@ -72,8 +74,8 @@ class ButlerEvidence:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        item = self._project_evidence(arguments["evidence_id"])
+    async def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        item = await self._project_evidence(arguments["evidence_id"])
         return {
             **self._summary(item),
             "description": item.description[:20_000],
@@ -91,8 +93,8 @@ class ButlerEvidence:
             },
         }
 
-    def download(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        item = self._project_evidence(arguments["evidence_id"])
+    async def download(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        item = await self._project_evidence(arguments["evidence_id"])
         if item.revision != arguments["expected_revision"]:
             raise ValueError(
                 "evidence changed; read its current revision before acting"
@@ -153,7 +155,7 @@ class ButlerEvidence:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

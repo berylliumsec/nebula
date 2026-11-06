@@ -1,12 +1,15 @@
 """Butler memory survives restart without crossing project trust boundaries."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.chat as chat_module
 from nebula.v3.api import create_app
@@ -170,15 +173,15 @@ def _service(tmp_path, *, embedding=None):
     )
 
 
-def test_cross_project_generalized_lesson_and_preference_hide_source_and_local_lesson(
+async def test_cross_project_generalized_lesson_and_preference_hide_source_and_local_lesson(
     tmp_path,
 ):
     memory = _service(tmp_path)
-    preference = memory.capture_operator_preference(
+    preference = await memory.capture_operator_preference(
         "project-a", "I prefer concise progress summaries.", source_ref="chat-a"
     )
     assert preference is not None
-    global_lesson = memory.capture_verified_lesson(
+    global_lesson = await memory.capture_verified_lesson(
         "project-a",
         "Check source evidence before escalating a research claim.",
         source_ref="goal-a",
@@ -186,71 +189,77 @@ def test_cross_project_generalized_lesson_and_preference_hide_source_and_local_l
         transferable=True,
         source_project_name="Project A",
     )
-    local_lesson = memory.capture_verified_lesson(
+    local_lesson = await memory.capture_verified_lesson(
         "project-a",
         "Project A scope review requires its saved evidence.",
         source_ref="goal-a",
         verification_state="verified",
     )
-    own = {item.id: item for item in memory.list("project-a").items}
+    own = {item.id: item for item in (await memory.list("project-a")).items}
     assert own[preference.id].source_ref == "chat-a"
     assert own[global_lesson.id].source_ref == "goal-a"
     assert own[local_lesson.id].scope == "project_lesson"
 
-    other = {item.id: item for item in memory.list("project-b").items}
+    other = {item.id: item for item in (await memory.list("project-b")).items}
     assert set(other) == {preference.id, global_lesson.id}
     assert all(item.source_ref is None for item in other.values())
     assert all(item.engagement_id is None for item in other.values())
     assert "project-a" not in str([item.model_dump() for item in other.values()])
-    searched = memory.search("project-b", "evidence").items
+    searched = (await memory.search("project-b", "evidence")).items
     assert [item.id for item in searched] == [global_lesson.id]
-    context = memory.turn_context("project-b", "source evidence")
+    context = await memory.turn_context("project-b", "source evidence")
     assert "I prefer concise progress summaries" in context
     assert "Check source evidence" in context
     assert "Project A scope review" not in context
     assert "goal-a" not in context
 
 
-def test_restart_vector_search_and_delete_cannot_resurrect_a_memory(tmp_path):
+async def test_restart_vector_search_and_delete_cannot_resurrect_a_memory(tmp_path):
     memory = _service(tmp_path, embedding=LocalEmbedding())
-    lesson = memory.capture_verified_lesson(
+    lesson = await memory.capture_verified_lesson(
         "project-a",
         "Check evidence before escalating a result.",
         source_ref="goal-a",
         verification_state="verified",
         transferable=True,
     )
-    assert memory.search("project-b", "proof").items[0].id == lesson.id
-    assert memory.search("project-b", "proof").index_status.state == "vector_ready"
+    assert (await memory.search("project-b", "proof")).items[0].id == lesson.id
+    assert (
+        await memory.search("project-b", "proof")
+    ).index_status.state == "vector_ready"
 
     restarted = _service(tmp_path, embedding=LocalEmbedding())
-    assert restarted.search("project-b", "proof").items[0].id == lesson.id
-    restarted.delete("project-b", lesson.id, expected_revision=1)
-    assert restarted.search("project-b", "proof").items == []
-    assert _service(tmp_path, embedding=LocalEmbedding()).list("project-a").items == []
+    assert (await restarted.search("project-b", "proof")).items[0].id == lesson.id
+    (await restarted.delete("project-b", lesson.id, expected_revision=1))
+    assert (await restarted.search("project-b", "proof")).items == []
+    assert (
+        await _service(tmp_path, embedding=LocalEmbedding()).list("project-a")
+    ).items == []
 
 
-def test_empty_review_does_not_initialize_optional_vector_index(tmp_path, monkeypatch):
+async def test_empty_review_does_not_initialize_optional_vector_index(
+    tmp_path, monkeypatch
+):
     memory = _service(tmp_path, embedding=LocalEmbedding())
 
     def unexpected_index_start():
         pytest.fail("Opening an empty Memory panel should not start Chroma")
 
     monkeypatch.setattr(memory, "_vector_collection", unexpected_index_start)
-    listed = memory.list("project-a")
+    listed = await memory.list("project-a")
     assert listed.items == []
     assert listed.index_status.state == "lexical_fallback"
 
 
-def test_edit_revision_is_authoritative_and_stale_delete_fails(tmp_path):
+async def test_edit_revision_is_authoritative_and_stale_delete_fails(tmp_path):
     memory = _service(tmp_path)
-    lesson = memory.capture_verified_lesson(
+    lesson = await memory.capture_verified_lesson(
         "project-a",
         "Verify result evidence before reporting a finding.",
         source_ref="goal-a",
         verification_state="verified",
     )
-    updated = memory.update(
+    updated = await memory.update(
         "project-a",
         lesson.id,
         "Verify reproducible evidence before reporting a finding.",
@@ -258,86 +267,91 @@ def test_edit_revision_is_authoritative_and_stale_delete_fails(tmp_path):
     )
     assert updated.revision == 2
     with pytest.raises(MemoryConflictError):
-        memory.update(
-            "project-a", lesson.id, "Another safe lesson.", expected_revision=1
+        (
+            await memory.update(
+                "project-a", lesson.id, "Another safe lesson.", expected_revision=1
+            )
         )
     with pytest.raises(MemoryConflictError):
-        memory.delete("project-a", lesson.id, expected_revision=1)
-    assert memory.list("project-a").items[0].content == updated.content
+        (await memory.delete("project-a", lesson.id, expected_revision=1))
+    assert (await memory.list("project-a")).items[0].content == updated.content
 
 
-def test_auto_capture_remembers_stable_status_checkpoint_preference(tmp_path):
+async def test_auto_capture_remembers_stable_status_checkpoint_preference(tmp_path):
     memory = _service(tmp_path)
-    checkpoint = memory.capture_operator_preference(
+    checkpoint = await memory.capture_operator_preference(
         "project-a",
         "I always prefer concise status checkpoints that name the next action.",
     )
     assert checkpoint is not None
     assert checkpoint.scope == "global_preference"
-    assert memory.search("project-b", "status checkpoint").items[0].id == checkpoint.id
+    assert (await memory.search("project-b", "status checkpoint")).items[
+        0
+    ].id == checkpoint.id
 
 
-def test_auto_capture_rejects_secrets_and_unverified_claims(tmp_path):
+async def test_auto_capture_rejects_secrets_and_unverified_claims(tmp_path):
     memory = _service(tmp_path)
-    assert memory.capture_operator_preference("project-a", "A machine is down.") is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference("project-a", "A machine is down.")
+    ) is None
+    assert (
+        await memory.capture_operator_preference(
             "project-a",
             "I prefer Project A reports in a separate folder.",
             source_project_name="Project A",
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             "project-a", "Always use API key sk-test-secret-123456789012345."
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             "project-a", "I prefer my SSN 123-45-6789 in reports."
         )
-        is None
-    )
+    ) is None
     assert (
-        memory.capture_operator_preference(
+        await memory.capture_operator_preference(
             "project-a", "I prefer an account number in replies."
         )
-        is None
-    )
-    lesson = memory.capture_operator_lesson(
+    ) is None
+    lesson = await memory.capture_operator_lesson(
         "project-a",
         "Next time, verify evidence before reporting results.",
         source_ref="chat-a",
     )
     assert lesson is not None
     assert lesson.scope == "global_lesson"
-    assert memory.list("project-b").items[0].content == lesson.content
-    assert memory.list("project-b").items[0].source_ref is None
+    assert (await memory.list("project-b")).items[0].content == lesson.content
+    assert (await memory.list("project-b")).items[0].source_ref is None
     assert (
-        memory.capture_operator_lesson(
+        await memory.capture_operator_lesson(
             "project-a", "Next time, use my SSN 123-45-6789 in reports."
         )
-        is None
-    )
+    ) is None
     with pytest.raises(UnsafeMemoryError):
-        memory.capture_verified_lesson(
-            "project-a",
-            "The target is down.",
-            source_ref="goal-a",
-            verification_state="agent_reported",  # type: ignore[arg-type]
+        (
+            await memory.capture_verified_lesson(
+                "project-a",
+                "The target is down.",
+                source_ref="goal-a",
+                verification_state="agent_reported",  # type: ignore[arg-type]
+            )
         )
     with pytest.raises(UnsafeMemoryError):
-        memory.capture_verified_lesson(
-            "project-a",
-            "Project A's specific path is safe everywhere.",
-            source_ref="goal-a",
-            verification_state="verified",
-            transferable=True,
-            source_project_name="Project A",
+        (
+            await memory.capture_verified_lesson(
+                "project-a",
+                "Project A's specific path is safe everywhere.",
+                source_ref="goal-a",
+                verification_state="verified",
+                transferable=True,
+                source_project_name="Project A",
+            )
         )
-    global_lesson = memory.capture_verified_lesson(
+    global_lesson = await memory.capture_verified_lesson(
         "project-a",
         "Validate evidence before final report sign-off.",
         source_ref="report-a",
@@ -345,30 +359,32 @@ def test_auto_capture_rejects_secrets_and_unverified_claims(tmp_path):
         transferable=True,
     )
     with pytest.raises(UnsafeMemoryError):
-        memory.update(
-            "project-b",
-            global_lesson.id,
-            "Validate project-a evidence before final report sign-off.",
-            expected_revision=1,
+        (
+            await memory.update(
+                "project-b",
+                global_lesson.id,
+                "Validate project-a evidence before final report sign-off.",
+                expected_revision=1,
+            )
         )
-    memory.delete("project-a", global_lesson.id, expected_revision=1)
-    assert [item.id for item in memory.list("project-a").items] == [lesson.id]
+    (await memory.delete("project-a", global_lesson.id, expected_revision=1))
+    assert [item.id for item in (await memory.list("project-a")).items] == [lesson.id]
 
 
-def test_memory_api_requires_auth_and_selected_project_and_supports_review_edit_delete(
+async def test_memory_api_requires_auth_and_selected_project_and_supports_review_edit_delete(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "core.sqlite3")
-    store.create(Engagement(id="project-a", name="Project A"))
-    store.create(Engagement(id="project-b", name="Project B"))
+    (await store.create(Engagement(id="project-a", name="Project A")))
+    (await store.create(Engagement(id="project-b", name="Project B")))
     memory = _service(tmp_path)
-    lesson = memory.capture_verified_lesson(
+    lesson = await memory.capture_verified_lesson(
         "project-a",
         "Project A has a scoped source evidence rule.",
         source_ref="goal-a",
         verification_state="verified",
     )
-    preference = memory.capture_operator_preference(
+    preference = await memory.capture_operator_preference(
         "project-a", "I prefer concise updates.", source_ref="chat-a"
     )
     assert preference is not None
@@ -376,17 +392,17 @@ def test_memory_api_requires_auth_and_selected_project_and_supports_review_edit_
         create_app(store, auth_token="test-token", butler_memory_service=memory)
     )
     assert (
-        client.get("/api/v1/butler/memory?engagement_id=project-a").status_code == 401
-    )
+        await client.get("/api/v1/butler/memory?engagement_id=project-a")
+    ).status_code == 401
     headers = {"Authorization": "Bearer test-token"}
-    listed = client.get(
+    listed = await client.get(
         "/api/v1/butler/memory?engagement_id=project-b", headers=headers
     )
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()["items"]] == [preference.id]
     assert listed.json()["items"][0]["source_ref"] is None
     assert listed.json()["index_status"]["state"] == "lexical_fallback"
-    cross_project = client.patch(
+    cross_project = await client.patch(
         f"/api/v1/butler/memory/{lesson.id}",
         headers=headers,
         json={
@@ -396,7 +412,7 @@ def test_memory_api_requires_auth_and_selected_project_and_supports_review_edit_
         },
     )
     assert cross_project.status_code == 404
-    changed = client.patch(
+    changed = await client.patch(
         f"/api/v1/butler/memory/{preference.id}",
         headers=headers,
         json={
@@ -407,35 +423,38 @@ def test_memory_api_requires_auth_and_selected_project_and_supports_review_edit_
     )
     assert changed.status_code == 200
     assert changed.json()["revision"] == 2
-    stale = client.delete(
+    stale = await client.delete(
         f"/api/v1/butler/memory/{preference.id}?engagement_id=project-b&expected_revision=1",
         headers=headers,
     )
     assert stale.status_code == 409
-    removed = client.delete(
+    removed = await client.delete(
         f"/api/v1/butler/memory/{preference.id}?engagement_id=project-b&expected_revision=2",
         headers=headers,
     )
     assert removed.status_code == 204
     assert (
-        client.post(
+        await client.post(
             "/api/v1/butler/memory/search",
             headers=headers,
             json={"engagement_id": "project-b", "query": "updates", "limit": 20},
-        ).json()["items"]
-        == []
-    )
+        )
+    ).json()["items"] == []
 
 
-def test_signed_report_creates_authoritative_scoped_and_transferable_lessons(tmp_path):
+async def test_signed_report_creates_authoritative_scoped_and_transferable_lessons(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.sqlite3")
-    first = store.create(Engagement(id="project-a", name="Private Project A"))
-    second = store.create(Engagement(id="project-b", name="Project B"))
-    operator = OperatorProfileService(store).create_profile(display_name="Reviewer")
-    evidence = store.create(
+    first = await store.create(Engagement(id="project-a", name="Private Project A"))
+    second = await store.create(Engagement(id="project-b", name="Project B"))
+    operator = await OperatorProfileService(store).create_profile(
+        display_name="Reviewer"
+    )
+    evidence = await store.create(
         Evidence(engagement_id=first.id, evidence_type="test", title="Reviewed proof")
     )
-    finding = store.create(
+    finding = await store.create(
         Finding(
             engagement_id=first.id,
             title="Sensitive finding title",
@@ -446,7 +465,7 @@ def test_signed_report_creates_authoritative_scoped_and_transferable_lessons(tmp
             cwe_ids=["CWE-79"],
         )
     )
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=first.id,
             title="Sensitive report title",
@@ -458,14 +477,14 @@ def test_signed_report_creates_authoritative_scoped_and_transferable_lessons(tmp
     client = TestClient(
         create_app(store, auth_token="test-token", butler_memory_service=memory)
     )
-    response = client.post(
+    response = await client.post(
         f"/api/v1/reports/{report.id}/sign-off",
         headers={"Authorization": "Bearer test-token"},
         json={"expected_revision": report.revision, "operator_id": operator.id},
     )
     assert response.status_code == 200, response.text
-    own = memory.list(first.id).items
-    other = memory.list(second.id).items
+    own = (await memory.list(first.id)).items
+    other = (await memory.list(second.id)).items
     assert {item.scope for item in own} == {"project_lesson", "global_lesson"}
     assert {item.scope for item in other} == {"global_lesson"}
     assert len(other) == 2
@@ -479,19 +498,19 @@ def test_signed_report_creates_authoritative_scoped_and_transferable_lessons(tmp
         item.source_ref == f"report:{report.id}:revision:{response.json()['revision']}"
         for item in own
     )
-    memory.capture_signed_report(store, store.get(Report, report.id))
-    assert len(memory.list(first.id).items) == 4
+    (await memory.capture_signed_report(store, (await store.get(Report, report.id))))
+    assert len((await memory.list(first.id)).items) == 4
 
 
-def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path):
+async def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path):
     store = NebulaStore(tmp_path / "core.sqlite3")
-    first = store.create(Engagement(id="project-a", name="Project A"))
-    second = store.create(Engagement(id="project-b", name="Project B"))
+    first = await store.create(Engagement(id="project-a", name="Project A"))
+    second = await store.create(Engagement(id="project-b", name="Project B"))
     memory = _service(tmp_path)
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(name="Local", provider_type="ollama", is_local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=second.id,
             title="Butler",
@@ -500,7 +519,7 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
             metadata={"control_assistant": True},
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=second.id,
             session_id=session.id,
@@ -508,13 +527,15 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
             model="model-a",
         )
     )
-    memory.capture_verified_lesson(
-        first.id,
-        "This project's approved evidence requires source review.",
-        source_ref="report-a",
-        verification_state="verified",
+    (
+        await memory.capture_verified_lesson(
+            first.id,
+            "This project's approved evidence requires source review.",
+            source_ref="report-a",
+            verification_state="verified",
+        )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         second.id,
@@ -550,7 +571,7 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
         )
         assert saved["item"]["source_ref"] == turn.id
         assert saved["item"]["scope"] == "global_preference"
-        assert saved["item"]["id"] == memory.list(first.id).items[0].id
+        assert saved["item"]["id"] == (await memory.list(first.id)).items[0].id
         searched = await capabilities.invoke(
             {"operation": "nebula.memory.search", "arguments": {"query": "Eastern"}},
             change=False,
@@ -568,7 +589,9 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
             change=True,
         )
         assert edited["item"]["revision"] > saved["item"]["revision"]
-        assert memory.list(second.id).items[0].content == edited["item"]["content"]
+        assert (await memory.list(second.id)).items[0].content == edited["item"][
+            "content"
+        ]
         with pytest.raises(MemoryConflictError):
             await capabilities.invoke(
                 {
@@ -604,18 +627,20 @@ def test_memory_is_discovered_and_controlled_through_four_tool_gateway(tmp_path)
             change=True,
         )
         assert forgotten["deleted"] is True
-        assert memory.list(second.id).items == []
+        assert (await memory.list(second.id)).items == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(tmp_path):
+async def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.sqlite3")
-    project = store.create(Engagement(id="project-a", name="Project A"))
-    profile = store.create(
+    project = await store.create(Engagement(id="project-a", name="Project A"))
+    profile = await store.create(
         ProviderProfile(name="Local", provider_type="ollama", is_local=True)
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Butler",
@@ -624,7 +649,7 @@ def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(tm
             metadata={"control_assistant": True},
         )
     )
-    earlier = store.create(
+    earlier = await store.create(
         ChatMessage(
             engagement_id=project.id,
             session_id=session.id,
@@ -633,7 +658,7 @@ def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(tm
             content="For all updates, show times in Eastern instead of UTC.",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -642,7 +667,7 @@ def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(tm
         )
     )
     memory = _service(tmp_path)
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         project.id,
@@ -650,36 +675,36 @@ def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(tm
         operator_message="That timing detail will matter later.",
         operator_turn_id=turn.id,
     )
-    saved = asyncio.run(
-        capabilities.invoke(
-            {
-                "operation": "nebula.memory.remember",
-                "arguments": {
-                    "scope": "global_preference",
-                    "content": "Show update times in Eastern Time instead of UTC.",
-                    "source_quote": "show times in Eastern instead of UTC",
-                },
+    saved = await capabilities.invoke(
+        {
+            "operation": "nebula.memory.remember",
+            "arguments": {
+                "scope": "global_preference",
+                "content": "Show update times in Eastern Time instead of UTC.",
+                "source_quote": "show times in Eastern instead of UTC",
             },
-            change=True,
-        )
+        },
+        change=True,
     )
     assert saved["item"]["source_ref"] == earlier.id
-    assert saved["item"]["content"] in memory.turn_context(
-        project.id, "What time zone should updates use?"
+    assert saved["item"]["content"] in (
+        await memory.turn_context(project.id, "What time zone should updates use?")
     )
-    store.create(
-        ChatMessage(
-            engagement_id=project.id,
-            session_id=session.id,
-            sequence=2,
-            role=ChatRole.USER,
-            content="Use Pacific Time for every update.",
-            metadata={"retracted_at": utc_now().isoformat()},
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=project.id,
+                session_id=session.id,
+                sequence=2,
+                role=ChatRole.USER,
+                content="Use Pacific Time for every update.",
+                metadata={"retracted_at": utc_now().isoformat()},
+            )
         )
     )
     with pytest.raises(UnsafeMemoryError):
-        asyncio.run(
-            capabilities.invoke(
+        (
+            await capabilities.invoke(
                 {
                     "operation": "nebula.memory.remember",
                     "arguments": {
@@ -693,28 +718,34 @@ def test_model_can_save_a_relevant_prior_operator_detail_without_phrase_rules(tm
         )
 
 
-def test_harness_butler_turn_reads_scoped_memory_without_foreign_source(tmp_path):
+async def test_harness_butler_turn_reads_scoped_memory_without_foreign_source(tmp_path):
     store = NebulaStore(tmp_path / "core.sqlite3")
-    first = store.create(Engagement(id="project-a", name="Project A"))
-    second = store.create(Engagement(id="project-b", name="Project B"))
+    first = await store.create(Engagement(id="project-a", name="Project A"))
+    second = await store.create(Engagement(id="project-b", name="Project B"))
     memory = _service(tmp_path)
-    memory.capture_operator_preference(
-        first.id, "I prefer concise progress summaries.", source_ref="chat-a"
+    (
+        await memory.capture_operator_preference(
+            first.id, "I prefer concise progress summaries.", source_ref="chat-a"
+        )
     )
-    memory.capture_verified_lesson(
-        first.id,
-        "Check source evidence before escalating a research claim.",
-        source_ref="report-a",
-        verification_state="verified",
-        transferable=True,
+    (
+        await memory.capture_verified_lesson(
+            first.id,
+            "Check source evidence before escalating a research claim.",
+            source_ref="report-a",
+            verification_state="verified",
+            transferable=True,
+        )
     )
-    memory.capture_verified_lesson(
-        first.id,
-        "Project A scope review requires its saved evidence.",
-        source_ref="report-a",
-        verification_state="verified",
+    (
+        await memory.capture_verified_lesson(
+            first.id,
+            "Project A scope review requires its saved evidence.",
+            source_ref="report-a",
+            verification_state="verified",
+        )
     )
-    profile = store.create(
+    profile = await store.create(
         HarnessProfile(
             name="Codex fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -729,7 +760,7 @@ def test_harness_butler_turn_reads_scoped_memory_without_foreign_source(tmp_path
         workspace_resolver=lambda _: tmp_path,
     )
     runtime.bind_butler_memory(memory)
-    _, _, turn = runtime.prepare_chat(
+    _, _, turn = await runtime.prepare_chat(
         engagement_id=second.id,
         profile_id=profile.id,
         model=None,
@@ -745,28 +776,36 @@ def test_harness_butler_turn_reads_scoped_memory_without_foreign_source(tmp_path
     assert "report-a" not in turn.prompt
 
 
-def test_provider_butler_turn_reads_scoped_memory_without_foreign_source(tmp_path):
+async def test_provider_butler_turn_reads_scoped_memory_without_foreign_source(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.sqlite3")
-    first = store.create(Engagement(id="project-a", name="Project A"))
-    second = store.create(Engagement(id="project-b", name="Project B"))
+    first = await store.create(Engagement(id="project-a", name="Project A"))
+    second = await store.create(Engagement(id="project-b", name="Project B"))
     memory = _service(tmp_path)
-    memory.capture_operator_preference(
-        first.id, "I prefer concise progress summaries.", source_ref="chat-a"
+    (
+        await memory.capture_operator_preference(
+            first.id, "I prefer concise progress summaries.", source_ref="chat-a"
+        )
     )
-    memory.capture_verified_lesson(
-        first.id,
-        "Check source evidence before escalating a research claim.",
-        source_ref="report-a",
-        verification_state="verified",
-        transferable=True,
+    (
+        await memory.capture_verified_lesson(
+            first.id,
+            "Check source evidence before escalating a research claim.",
+            source_ref="report-a",
+            verification_state="verified",
+            transferable=True,
+        )
     )
-    memory.capture_verified_lesson(
-        first.id,
-        "Project A scope review requires its saved evidence.",
-        source_ref="report-a",
-        verification_state="verified",
+    (
+        await memory.capture_verified_lesson(
+            first.id,
+            "Project A scope review requires its saved evidence.",
+            source_ref="report-a",
+            verification_state="verified",
+        )
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -779,20 +818,18 @@ def test_provider_butler_turn_reads_scoped_memory_without_foreign_source(tmp_pat
         provider_factory=lambda selected: PreparationProvider(selected.id),
     )
     service.butler_memory = memory
-    prepared = asyncio.run(
-        service.prepare_async(
-            ChatCompletionRequest(
-                provider_id=profile.id,
-                engagement_id=second.id,
-                model="model-a",
-                control_assistant=True,
-                messages=[
-                    ChatRequestMessage(
-                        role=ChatRole.USER,
-                        content="What source evidence should I check?",
-                    )
-                ],
-            )
+    prepared = await service.prepare_async(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=second.id,
+            model="model-a",
+            control_assistant=True,
+            messages=[
+                ChatRequestMessage(
+                    role=ChatRole.USER,
+                    content="What source evidence should I check?",
+                )
+            ],
         )
     )
     instructions = prepared.model_request.instructions
@@ -802,12 +839,12 @@ def test_provider_butler_turn_reads_scoped_memory_without_foreign_source(tmp_pat
     assert "report-a" not in instructions
 
 
-def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_turn(
+async def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_turn(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "core.sqlite3")
-    project = store.create(Engagement(id="project-a", name="Project A"))
-    provider_profile = store.create(
+    project = await store.create(Engagement(id="project-a", name="Project A"))
+    provider_profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -835,7 +872,7 @@ def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_turn(
         )
     )
     headers = {"Authorization": "Bearer test-token"}
-    first = client.post(
+    first = await client.post(
         "/api/v1/chat/completions",
         headers=headers,
         json={
@@ -852,11 +889,11 @@ def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_turn(
         },
     )
     assert first.status_code == 200, first.text
-    saved = memory.list(project.id).items
+    saved = (await memory.list(project.id)).items
     assert len(saved) == 1
     assert saved[0].content == "The operator prefers times in Eastern Time, not UTC."
     assert saved[0].source_ref is not None
-    second = client.post(
+    second = await client.post(
         "/api/v1/chat/completions",
         headers=headers,
         json={
@@ -874,10 +911,13 @@ def test_api_butler_turn_model_saves_eastern_preference_and_reads_it_next_turn(
         and "times in Eastern Time, not UTC" in request.instructions
         for request in provider.requests
     )
-    another_project = store.create(Engagement(id="project-b", name="Project B"))
-    cross_project = memory.list(another_project.id).items
+    another_project = await store.create(Engagement(id="project-b", name="Project B"))
+    cross_project = (await memory.list(another_project.id)).items
     assert any(
         item.scope == "global_preference" and "Eastern Time" in item.content
         for item in cross_project
     )
     assert all(item.source_ref is None for item in cross_project)
+
+
+pytestmark = pytest.mark.anyio

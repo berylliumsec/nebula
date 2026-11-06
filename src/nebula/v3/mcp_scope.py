@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from typing import AsyncIterator
+
 from typing import Any
 
 from .domain import McpServerProfile
@@ -14,14 +15,14 @@ def mcp_metadata_is_visible(metadata: dict[str, Any], project_id: str) -> bool:
     return not owner or owner == project_id
 
 
-def project_mcp_profiles(
+async def project_mcp_profiles(
     store: NebulaStore, project_id: str, *, offset: int = 0
-) -> Iterator[tuple[int, McpServerProfile]]:
+) -> AsyncIterator[tuple[int, McpServerProfile]]:
     """Yield visible profiles with their raw store offsets, including past hidden pages."""
 
     cursor = offset
     while True:
-        rows = store.list_entities(McpServerProfile, offset=cursor, limit=100)
+        rows = await store.list_entities(McpServerProfile, offset=cursor, limit=100)
         for profile in rows:
             row_offset = cursor
             cursor += 1

@@ -1,12 +1,16 @@
 """Butler report actions keep Core references and operator device boundaries."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -25,18 +29,18 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError
 
 
-def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tmp_path):
+async def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Foreign"))
-    finding = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Foreign"))
+    finding = await store.create(
         Finding(
             engagement_id=selected.id,
             title="Verified service",
             status=FindingStatus.VALIDATED,
         )
     )
-    note = store.create(
+    note = await store.create(
         Observation(
             engagement_id=selected.id,
             observation_type="manual",
@@ -44,23 +48,25 @@ def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tmp_path
             body="Private note body",
         )
     )
-    foreign_finding = store.create(
+    foreign_finding = await store.create(
         Finding(engagement_id=foreign.id, title="Foreign finding")
     )
-    foreign_report = store.create(
+    foreign_report = await store.create(
         Report(engagement_id=foreign.id, title="Foreign report")
     )
     reports = [
-        store.create(
-            Report(
-                engagement_id=selected.id,
-                title=f"Report {index}",
-                executive_summary="A" * 9000 if index == 0 else "",
+        (
+            await store.create(
+                Report(
+                    engagement_id=selected.id,
+                    title=f"Report {index}",
+                    executive_summary="A" * 9000 if index == 0 else "",
+                )
             )
         )
         for index in range(52)
     ]
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 
@@ -128,7 +134,7 @@ def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tmp_path
                 {"title": "Bad", "finding_ids": [foreign_finding.id]},
                 change=True,
             )
-        before = store.get(Report, reports[0].id)
+        before = await store.get(Report, reports[0].id)
         edit = await invoke(
             "update",
             {
@@ -139,7 +145,7 @@ def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tmp_path
             change=True,
         )
         assert edit["client_action"]["executive_summary"] == "Reviewed"
-        assert store.get(Report, before.id).revision == before.revision
+        assert (await store.get(Report, before.id)).revision == before.revision
         with pytest.raises(ValueError, match="changed"):
             await invoke(
                 "update",
@@ -175,13 +181,15 @@ def test_butler_reports_page_sources_and_prepare_exact_project_handoffs(tmp_path
             "expected_project_revision": selected.revision,
         }
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_report_note_transform_tracks_authoritative_relation_changes(tmp_path):
+async def test_butler_report_note_transform_tracks_authoritative_relation_changes(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    note = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    note = await store.create(
         Observation(
             engagement_id=selected.id,
             observation_type="manual",
@@ -189,8 +197,8 @@ def test_butler_report_note_transform_tracks_authoritative_relation_changes(tmp_
             body="Port 443 was observed.",
         )
     )
-    report = store.create(Report(engagement_id=selected.id, title="Assessment"))
-    capabilities = ButlerCapabilities(
+    report = await store.create(Report(engagement_id=selected.id, title="Assessment"))
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
     client = TestClient(
@@ -217,7 +225,7 @@ def test_butler_report_note_transform_tracks_authoritative_relation_changes(tmp_
             )
         )
 
-    relation = client.post(
+    relation = await client.post(
         f"/api/v1/projects/{selected.id}/relations",
         headers=auth,
         json={
@@ -227,7 +235,7 @@ def test_butler_report_note_transform_tracks_authoritative_relation_changes(tmp_
         },
     )
     assert relation.status_code == 201, relation.text
-    assert client.get(f"/api/v1/reports/{report.id}", headers=auth).json()[
+    assert (await client.get(f"/api/v1/reports/{report.id}", headers=auth)).json()[
         "observation_ids"
     ] == [note.id]
     assert invoke("detail", {"report_id": report.id})["observation_ids"] == [note.id]
@@ -237,13 +245,13 @@ def test_butler_report_note_transform_tracks_authoritative_relation_changes(tmp_
         == note.id
     )
 
-    removed = client.delete(
+    removed = await client.delete(
         f"/api/v1/projects/{selected.id}/relations/{relation.json()['id']}",
         headers=auth,
         params={"expected_revision": relation.json()["revision"]},
     )
     assert removed.status_code == 204, removed.text
-    current = client.get(f"/api/v1/reports/{report.id}", headers=auth).json()
+    current = (await client.get(f"/api/v1/reports/{report.id}", headers=auth)).json()
     assert current["revision"] == report.revision
     assert current["observation_ids"] == []
     assert invoke("detail", {"report_id": report.id})["observation_ids"] == []
@@ -252,13 +260,13 @@ def test_butler_report_note_transform_tracks_authoritative_relation_changes(tmp_
         invoke("transform_note", arguments)
 
 
-def test_butler_report_note_transform_requires_linked_current_source_and_review(
+async def test_butler_report_note_transform_requires_linked_current_source_and_review(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Foreign"))
-    note = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Foreign"))
+    note = await store.create(
         Observation(
             engagement_id=selected.id,
             observation_type="manual",
@@ -266,7 +274,7 @@ def test_butler_report_note_transform_requires_linked_current_source_and_review(
             body="port 443 observed; certificate review pending. " * 250,
         )
     )
-    unlinked = store.create(
+    unlinked = await store.create(
         Observation(
             engagement_id=selected.id,
             observation_type="manual",
@@ -274,7 +282,7 @@ def test_butler_report_note_transform_requires_linked_current_source_and_review(
             body="Unlinked source",
         )
     )
-    foreign_note = store.create(
+    foreign_note = await store.create(
         Observation(
             engagement_id=foreign.id,
             observation_type="manual",
@@ -282,11 +290,11 @@ def test_butler_report_note_transform_requires_linked_current_source_and_review(
             body="Foreign private body",
         )
     )
-    report = ResourceRelationService(store).create_legacy_entity(
+    report = await ResourceRelationService(store).create_legacy_entity(
         Report(engagement_id=selected.id, title="Assessment", observation_ids=[note.id])
     )
     assert isinstance(report, Report)
-    final = store.create(
+    final = await store.create(
         Report(
             engagement_id=selected.id,
             title="Signed",
@@ -296,7 +304,7 @@ def test_butler_report_note_transform_requires_linked_current_source_and_review(
             signed_off_at=datetime.now(timezone.utc),
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 
@@ -351,7 +359,7 @@ def test_butler_report_note_transform_requires_linked_current_source_and_review(
             },
         }
         assert note.body[:100] not in str(pending)
-        assert store.get(Report, report.id).revision == report.revision
+        assert (await store.get(Report, report.id)).revision == report.revision
         with pytest.raises(ValueError, match="report changed"):
             await invoke(
                 "transform_note",
@@ -391,15 +399,17 @@ def test_butler_report_note_transform_requires_linked_current_source_and_review(
                 "transform_note", {**arguments, "instruction": "  "}, change=True
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
+async def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Foreign"))
-    finding = store.create(Finding(engagement_id=selected.id, title="Selected finding"))
-    note = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Foreign"))
+    finding = await store.create(
+        Finding(engagement_id=selected.id, title="Selected finding")
+    )
+    note = await store.create(
         Observation(
             engagement_id=selected.id,
             observation_type="manual",
@@ -407,7 +417,7 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
             body="Observed",
         )
     )
-    foreign_finding = store.create(
+    foreign_finding = await store.create(
         Finding(engagement_id=foreign.id, title="Foreign finding")
     )
     client = TestClient(
@@ -418,7 +428,7 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
         )
     )
     auth = {"Authorization": "Bearer test-token"}
-    refused = client.post(
+    refused = await client.post(
         "/api/v1/reports",
         headers=auth,
         json={
@@ -428,11 +438,11 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
         },
     )
     assert refused.status_code in {400, 422}, refused.text
-    prepared = ButlerCapabilities(
+    prepared = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
-    action = asyncio.run(
-        prepared.invoke(
+    action = (
+        await prepared.invoke(
             {
                 "operation": "nebula.reports.create",
                 "arguments": {
@@ -445,7 +455,7 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
         )
     )["client_action"]
     assert (
-        client.post(
+        await client.post(
             "/api/v1/reports",
             headers=auth,
             json={
@@ -453,21 +463,22 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
                 "engagement_id": selected.id,
                 "title": "Generic route stays guarded",
             },
-        ).status_code
-        == 422
-    )
-    assert client.post(
-        "/api/v1/reports/butler-drafts",
-        headers=auth,
-        json={
-            "report_id": action["report_id"],
-            "engagement_id": selected.id,
-            "title": "Foreign reference",
-            "finding_ids": [foreign_finding.id],
-        },
+        )
+    ).status_code == 422
+    assert (
+        await client.post(
+            "/api/v1/reports/butler-drafts",
+            headers=auth,
+            json={
+                "report_id": action["report_id"],
+                "engagement_id": selected.id,
+                "title": "Foreign reference",
+                "finding_ids": [foreign_finding.id],
+            },
+        )
     ).status_code in {400, 422}
     assert (
-        client.post(
+        await client.post(
             "/api/v1/reports/butler-drafts",
             headers=auth,
             json={
@@ -475,11 +486,10 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
                 "engagement_id": selected.id,
                 "title": "Invalid ID",
             },
-        ).status_code
-        == 422
-    )
+        )
+    ).status_code == 422
     assert (
-        client.post(
+        await client.post(
             "/api/v1/reports/butler-drafts",
             headers=auth,
             json={
@@ -488,10 +498,9 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
                 "title": "Cannot sign off",
                 "status": "final",
             },
-        ).status_code
-        == 422
-    )
-    created = client.post(
+        )
+    ).status_code == 422
+    created = await client.post(
         "/api/v1/reports/butler-drafts",
         headers=auth,
         json={
@@ -504,16 +513,16 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
     )
     assert created.status_code == 201, created.text
     assert created.json()["id"] == action["report_id"]
-    current = client.get(f"/api/v1/reports/{action['report_id']}", headers=auth)
+    current = await client.get(f"/api/v1/reports/{action['report_id']}", headers=auth)
     assert current.status_code == 200, current.text
     assert current.json()["finding_ids"] == [finding.id]
     assert current.json()["observation_ids"] == [note.id]
-    listed = client.get(
+    listed = await client.get(
         "/api/v1/reports", headers=auth, params={"engagement_id": selected.id}
     )
     assert listed.status_code == 200, listed.text
     assert listed.json()[0]["observation_ids"] == [note.id]
-    edges = client.get(
+    edges = await client.get(
         f"/api/v1/projects/{selected.id}/relations",
         headers=auth,
         params={"resource_kind": "report", "resource_id": action["report_id"]},
@@ -527,7 +536,7 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
         ("includes", "note", note.id),
     }
     assert (
-        client.post(
+        await client.post(
             "/api/v1/reports/butler-drafts",
             headers=auth,
             json={
@@ -535,10 +544,9 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
                 "engagement_id": selected.id,
                 "title": "Stable draft",
             },
-        ).status_code
-        == 409
-    )
-    stale = client.patch(
+        )
+    ).status_code == 409
+    stale = await client.patch(
         f"/api/v1/reports/{action['report_id']}",
         headers=auth,
         json={
@@ -547,7 +555,7 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
         },
     )
     assert stale.status_code == 409
-    saved = client.patch(
+    saved = await client.patch(
         f"/api/v1/reports/{action['report_id']}",
         headers=auth,
         json={
@@ -556,58 +564,68 @@ def test_report_core_api_checks_references_revision_and_finalization(tmp_path):
         },
     )
     assert saved.status_code == 200, saved.text
-    report = client.get(f"/api/v1/reports/{action['report_id']}", headers=auth).json()
+    report = (
+        await client.get(f"/api/v1/reports/{action['report_id']}", headers=auth)
+    ).json()
     assert report["revision"] == saved.json()["revision"]
     assert report["status"] == "review"
     assert report["finding_ids"] == [finding.id]
     assert report["observation_ids"] == [note.id]
-    signoff = asyncio.run(
-        prepared.invoke(
-            {
-                "operation": "nebula.reports.signoff",
-                "arguments": {
-                    "report_id": report["id"],
-                    "expected_revision": report["revision"],
-                },
+    signoff = await prepared.invoke(
+        {
+            "operation": "nebula.reports.signoff",
+            "arguments": {
+                "report_id": report["id"],
+                "expected_revision": report["revision"],
             },
-            change=True,
-        )
+        },
+        change=True,
     )
     assert signoff["client_action"]["kind"] == "report_signoff"
-    assert client.patch(
-        f"/api/v1/reports/{action['report_id']}",
-        headers=auth,
-        json={
-            "expected_revision": report["revision"],
-            "changes": {"status": "final"},
-        },
+    assert (
+        await client.patch(
+            f"/api/v1/reports/{action['report_id']}",
+            headers=auth,
+            json={
+                "expected_revision": report["revision"],
+                "changes": {"status": "final"},
+            },
+        )
     ).status_code in {400, 422}
 
 
-def test_butler_report_delete_requires_current_project_and_core_confirmation(tmp_path):
+async def test_butler_report_delete_requires_current_project_and_core_confirmation(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    selected = store.create(Engagement(name="Selected"))
-    foreign = store.create(Engagement(name="Foreign"))
-    finding = store.create(Finding(engagement_id=selected.id, title="Source finding"))
-    draft = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    foreign = await store.create(Engagement(name="Foreign"))
+    finding = await store.create(
+        Finding(engagement_id=selected.id, title="Source finding")
+    )
+    draft = await store.create(
         Report(
             engagement_id=selected.id,
             title="Disposable draft",
             finding_ids=[finding.id],
         )
     )
-    rendered = store.create(Report(engagement_id=selected.id, title="Rendered draft"))
-    store.create(
-        ReportRender(
-            engagement_id=selected.id,
-            report_id=rendered.id,
-            report_revision=rendered.revision,
-            input_fingerprint="0" * 64,
-            template_version="test",
-            renderer_version="test",
+    rendered = await store.create(
+        Report(engagement_id=selected.id, title="Rendered draft")
+    )
+    (
+        await store.create(
+            ReportRender(
+                engagement_id=selected.id,
+                report_id=rendered.id,
+                report_revision=rendered.revision,
+                input_fingerprint="0" * 64,
+                template_version="test",
+                renderer_version="test",
+            )
         )
     )
-    final = store.create(
+    final = await store.create(
         Report(
             engagement_id=selected.id,
             title="Signed",
@@ -616,8 +634,10 @@ def test_butler_report_delete_requires_current_project_and_core_confirmation(tmp
             signed_off_at=datetime.now(timezone.utc),
         )
     )
-    foreign_draft = store.create(Report(engagement_id=foreign.id, title="Foreign"))
-    capabilities = ButlerCapabilities(
+    foreign_draft = await store.create(
+        Report(engagement_id=foreign.id, title="Foreign")
+    )
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), selected.id
     )
 
@@ -688,9 +708,9 @@ def test_butler_report_delete_requires_current_project_and_core_confirmation(tmp
             "expected_revision": draft.revision,
             "title": draft.title,
         }
-        assert store.get(Report, draft.id).id == draft.id
+        assert (await store.get(Report, draft.id)).id == draft.id
 
-    asyncio.run(scenario())
+    (await scenario())
 
     client = TestClient(
         create_app(
@@ -701,25 +721,34 @@ def test_butler_report_delete_requires_current_project_and_core_confirmation(tmp
     )
     auth = {"Authorization": "Bearer test-token"}
     route = f"/api/v1/reports/{draft.id}"
-    stale = client.delete(route, headers={**auth, "If-Match": str(draft.revision + 1)})
+    stale = await client.delete(
+        route, headers={**auth, "If-Match": str(draft.revision + 1)}
+    )
     assert stale.status_code == 409, stale.text
-    assert client.get(route, headers=auth).status_code == 200
-    removed = client.delete(route, headers={**auth, "If-Match": str(draft.revision)})
+    assert (await client.get(route, headers=auth)).status_code == 200
+    removed = await client.delete(
+        route, headers={**auth, "If-Match": str(draft.revision)}
+    )
     assert removed.status_code == 204, removed.text
-    assert client.get(route, headers=auth).status_code == 404
-    assert client.get(f"/api/v1/findings/{finding.id}", headers=auth).status_code == 200
+    assert (await client.get(route, headers=auth)).status_code == 404
     assert (
-        client.delete(
+        await client.get(f"/api/v1/findings/{finding.id}", headers=auth)
+    ).status_code == 200
+    assert (
+        await client.delete(
             f"/api/v1/reports/{final.id}",
             headers={**auth, "If-Match": str(final.revision)},
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
     assert (
-        client.delete(
+        await client.delete(
             f"/api/v1/reports/{rendered.id}",
             headers={**auth, "If-Match": str(rendered.revision)},
-        ).status_code
-        == 409
-    )
-    assert client.get(f"/api/v1/reports/{rendered.id}", headers=auth).status_code == 200
+        )
+    ).status_code == 409
+    assert (
+        await client.get(f"/api/v1/reports/{rendered.id}", headers=auth)
+    ).status_code == 200
+
+
+pytestmark = pytest.mark.anyio

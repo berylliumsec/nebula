@@ -84,8 +84,8 @@ KALI_RUNTIME_METADATA_SCHEMA = "nebula.kali-runtime/v1"
 DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE = DEFAULT_KALI_SOURCE_IMAGE
 
 
-def project_auto_approves_tools(store: NebulaStore, engagement_id: str) -> bool:
-    policies = store.list_entities(
+async def project_auto_approves_tools(store: NebulaStore, engagement_id: str) -> bool:
+    policies = await store.list_entities(
         AutomationProjectPolicy, engagement_id=engagement_id, limit=1
     )
     return bool(
@@ -395,7 +395,7 @@ class RuntimePlatform:
             raise ValueError("MCP service must use the runtime platform store")
         self.mcp_service = service
 
-    def chat_components(
+    async def chat_components(
         self,
         *,
         engagement_id: str,
@@ -418,9 +418,9 @@ class RuntimePlatform:
             raise RuntimePlatformError(
                 "OCI capabilities are available only through run_command"
             )
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
@@ -437,21 +437,23 @@ class RuntimePlatform:
         if settings_assistant:
             from .butler_capabilities import ButlerCapabilities
 
-            for plugin in ButlerCapabilities(
-                self.store,
-                self.artifact_store,
-                engagement_id,
-                settings_api=self.settings_assistant_api,
-                work=self.control_assistant_work,
-                memory=self.butler_memory,
-                operator_message=operator_message,
-                operator_turn_id=operator_turn_id,
-                notebooks=self.mcp_service.notebook_tools.notebooks
-                if self.mcp_service is not None
-                and self.mcp_service.notebook_tools is not None
-                else None,
-                workspace=self.workspace_service,
-                container_terminals=self.container_terminal_service,
+            for plugin in (
+                await ButlerCapabilities.create(
+                    self.store,
+                    self.artifact_store,
+                    engagement_id,
+                    settings_api=self.settings_assistant_api,
+                    work=self.control_assistant_work,
+                    memory=self.butler_memory,
+                    operator_message=operator_message,
+                    operator_turn_id=operator_turn_id,
+                    notebooks=self.mcp_service.notebook_tools.notebooks
+                    if self.mcp_service is not None
+                    and self.mcp_service.notebook_tools is not None
+                    else None,
+                    workspace=self.workspace_service,
+                    container_terminals=self.container_terminal_service,
+                )
             ).plugins():
                 registry.register(plugin)
                 privileged_names.add(plugin.spec.name)
@@ -461,7 +463,7 @@ class RuntimePlatform:
             if self.mcp_service is None:
                 raise RuntimePlatformError("Core MCP execution service is unavailable")
             try:
-                for plugin in build_mcp_tool_plugins(
+                for plugin in await build_mcp_tool_plugins(
                     self.mcp_service,
                     mcp_profiles,
                     engagement_id=engagement_id,
@@ -487,7 +489,7 @@ class RuntimePlatform:
             evidence_recorder=StoreToolEvidenceRecorder(
                 self.store, self.artifact_store
             ),
-            auto_approve=project_auto_approves_tools(self.store, engagement_id),
+            auto_approve=(await project_auto_approves_tools(self.store, engagement_id)),
         )
         return RuntimeToolComponents(
             broker=_ControlAssistantScopeBroker(broker, privileged_names)
@@ -496,12 +498,12 @@ class RuntimePlatform:
             # Only product-control tools bypass project policy. General tools
             # retain the saved scope and their ordinary approval requirements.
             scope=scope,
-            workspace=self.workspace_for(engagement_id),
+            workspace=(await self.workspace_for(engagement_id)),
             specs={spec.name: spec for spec in registry.specs()},
         )
 
-    def workspace_for(self, engagement_id: str) -> Path:
-        engagement = self.store.get(Engagement, engagement_id)
+    async def workspace_for(self, engagement_id: str) -> Path:
+        engagement = await self.store.get(Engagement, engagement_id)
         if engagement.workspace_path:
             workspace = (
                 Path(engagement.workspace_path).expanduser().resolve(strict=True)
@@ -520,9 +522,9 @@ class RuntimePlatform:
         return workspace
 
     async def verify_runner(self, profile_id: str) -> StoredRunnerProfile:
-        stored = self.store.get(StoredRunnerProfile, profile_id)
+        stored = await self.store.get(StoredRunnerProfile, profile_id)
         healthy, detail = await self._runner(stored).available()
-        return self.store.update(
+        return await self.store.update(
             StoredRunnerProfile,
             stored.id,
             {
@@ -541,8 +543,8 @@ class RuntimePlatform:
     ) -> HumanTerminalRuntimeResolution:
         """Prepare and return the one Kali image shared with agent automation."""
 
-        profile = self.resolve_human_terminal_profile(engagement_id)
-        workspace = self.workspace_for(engagement_id)
+        profile = await self.resolve_human_terminal_profile(engagement_id)
+        workspace = await self.workspace_for(engagement_id)
         key = (profile.id, profile.revision)
         image = self._prepared_images.get(key)
         if image is None:
@@ -712,13 +714,17 @@ class RuntimePlatform:
             "detail": "using the verified prepared Kali headless image",
         }
 
-    def resolve_human_terminal_profile(self, engagement_id: str) -> StoredRunnerProfile:
+    async def resolve_human_terminal_profile(
+        self, engagement_id: str
+    ) -> StoredRunnerProfile:
         if not self.execution_enabled:
             raise RuntimePlatformError("operator execution is disabled in this Core")
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         profiles = [
             profile
-            for profile in self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            for profile in (
+                await self.store.list_entities(StoredRunnerProfile, limit=1_000)
+            )
             if profile.enabled and profile.healthy
         ]
         local = next((profile for profile in profiles if profile.id == "local"), None)
@@ -739,7 +745,7 @@ class RuntimePlatform:
         profiles = self.store.iter_readable_entities(StoredRunnerProfile)
         seen: set[tuple[str, str | None, str, str, str | None]] = set()
         runners: list[ContainerSandboxRunner] = []
-        for profile in profiles:
+        async for profile in profiles:
             if (
                 not profile.enabled
                 or not profile.healthy
@@ -783,16 +789,18 @@ class RuntimePlatform:
                 stage="orphan-cleanup",
             )
 
-    def resolve_operator_runtime(
+    async def resolve_operator_runtime(
         self, engagement_id: str, language: str, *, network: bool
     ) -> OperatorRuntimeResolution:
         if not self.execution_enabled:
             raise RuntimePlatformError("operator execution is disabled in this Core")
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         metadata = self.last_automation_runtime_metadata()
         if metadata is None:
             raise RuntimePlatformError("prepare the Kali automation runtime first")
-        profile = self.store.get(StoredRunnerProfile, metadata["runner_profile_id"])
+        profile = await self.store.get(
+            StoredRunnerProfile, metadata["runner_profile_id"]
+        )
         prepared_fingerprint = metadata.get("runner_profile_fingerprint")
         runner_changed = (
             _runner_profile_fingerprint(profile) != prepared_fingerprint
@@ -820,7 +828,7 @@ class RuntimePlatform:
         if runtime is None:
             raise RuntimePlatformError(f"Kali does not expose runtime {language!r}")
         image = metadata["image"]
-        workspace = self.workspace_for(engagement_id)
+        workspace = await self.workspace_for(engagement_id)
         return OperatorRuntimeResolution(
             canonical_language=canonical,
             runtime=runtime,

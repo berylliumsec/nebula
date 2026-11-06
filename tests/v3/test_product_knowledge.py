@@ -932,3 +932,20 @@ def test_product_search_finds_butler_fixed_setup_and_terminal_egress(monkeypatch
     assert "candidate_id" in text
     assert "operation_id" in text
     assert "terminal_public_ip" in text
+
+
+def test_product_guidance_finds_bounded_pool_and_pending_runtime_switch(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    budget = search_product_knowledge(
+        "NEBULA_V3_DB_OTHER_CONNECTIONS PEAK_PROCESSES PostgreSQL connection budget"
+    )
+    text = "\n".join(str(item["text"]) for item in budget)
+    assert "NEBULA_V3_DB_OTHER_CONNECTIONS" in text
+    assert "rolling" in text.lower()
+    switching = search_product_knowledge(
+        "Core goal change harness provider pending runtime same chat resume"
+    )
+    text = "\n".join(str(item["text"]) for item in switching)
+    assert "pending" in text.lower()
+    assert "resume" in text.lower()
+    assert "same chat" in text.lower() or "same conversation" in text.lower()

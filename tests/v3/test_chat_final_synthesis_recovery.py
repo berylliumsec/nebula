@@ -6,6 +6,11 @@ a turn: the request allows no call, so every call it makes is one it was not
 allowed to make. These tests pin what the turn does instead of failing.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -136,7 +141,7 @@ def _refusal_frame(code: int | None) -> dict:
     }
 
 
-def _wire_turn(tmp_path, script: list):
+async def _wire_turn(tmp_path, script: list):
     """A tool turn whose provider is the real OpenRouter adapter."""
 
     seen: list[dict] = []
@@ -165,12 +170,12 @@ def _wire_turn(tmp_path, script: list):
         transport=httpx.MockTransport(handler),
     )
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     prepared.provider = provider
     return store, service, prepared, broker, seen
 
 
-def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_path):
+async def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_path):
     """Live DeepSeek via OpenRouter: a nameless call with two argument bytes."""
 
     fragment = _sse(
@@ -179,7 +184,7 @@ def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_path):
             _chunk({}, "tool_calls"),
         ]
     )
-    store, service, prepared, broker, seen = _wire_turn(
+    store, service, prepared, broker, seen = await _wire_turn(
         tmp_path,
         [_ROUTE_READ, _ROUTE_FINISH, fragment, _text_stream("Recovered answer.")],
     )
@@ -203,7 +208,7 @@ def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_path):
         (declared(seen[0]), "none"),
         (declared(seen[0]), "none"),
     ]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"
     assert turn.request_snapshot["final_answer_recovery"]["attempts"] == 1
@@ -218,13 +223,13 @@ def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_path):
         ([_chunk({"reasoning": "Let me call the tool again."})], 502),
     ],
 )
-def test_final_synthesis_recovers_when_the_upstream_refuses_a_function_call(
+async def test_final_synthesis_recovers_when_the_upstream_refuses_a_function_call(
     tmp_path, lead, code
 ):
     """Live Sail Research via OpenRouter: every function is undeclared here."""
 
     refusal = _sse([*lead, _refusal_frame(code)])
-    store, service, prepared, broker, seen = _wire_turn(
+    store, service, prepared, broker, seen = await _wire_turn(
         tmp_path,
         [_ROUTE_READ, _ROUTE_FINISH, refusal, _text_stream("Recovered answer.")],
     )
@@ -234,12 +239,12 @@ def test_final_synthesis_recovers_when_the_upstream_refuses_a_function_call(
     done = [payload for name, payload in events if name == "done"]
     assert done[-1]["message"]["content"] == "Recovered answer."
     assert len(seen) == 4
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"
 
 
-def test_answer_text_before_a_refused_call_completes_the_turn_when_recovery_is_spent(
+async def test_answer_text_before_a_refused_call_completes_the_turn_when_recovery_is_spent(
     tmp_path,
 ):
     """An answer the model wrote before its refused call beats a failed turn."""
@@ -247,7 +252,7 @@ def test_answer_text_before_a_refused_call_completes_the_turn_when_recovery_is_s
     def answer_then_refusal() -> httpx.Response:
         return _sse([_chunk({"content": ANSWER}), _refusal_frame(400)])
 
-    store, service, prepared, broker, seen = _wire_turn(
+    store, service, prepared, broker, seen = await _wire_turn(
         tmp_path,
         [_ROUTE_READ, _ROUTE_FINISH, answer_then_refusal(), answer_then_refusal()],
     )
@@ -258,13 +263,13 @@ def test_answer_text_before_a_refused_call_completes_the_turn_when_recovery_is_s
     assert done[-1]["message"]["content"] == ANSWER
     assert _visible(events) == ANSWER
     assert len(seen) == 4
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.request_snapshot["final_answer_recovery"]["attempts"] == 2
     assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"
 
 
-def test_final_synthesis_recovers_from_a_rejected_tool_call_event(tmp_path):
+async def test_final_synthesis_recovers_from_a_rejected_tool_call_event(tmp_path):
     """Any adapter that reports a rejected call gets the same recovery."""
 
     class RejectingSynthesisProvider(ScriptedProvider):
@@ -284,7 +289,7 @@ def test_final_synthesis_recovers_from_a_rejected_tool_call_event(tmp_path):
             )
 
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -299,7 +304,7 @@ def test_final_synthesis_recovers_from_a_rejected_tool_call_event(tmp_path):
     events = _stream(service, prepared)
 
     assert _visible(events) == "Recovered answer."
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"
     assert _turn_requests(provider)[-1].metadata["final_answer_recovery"] == (
@@ -331,9 +336,11 @@ def test_final_synthesis_recovers_from_a_rejected_tool_call_event(tmp_path):
     ],
     ids=["structured-call", "dsml-calls", "dsml-function-calls"],
 )
-def test_final_synthesis_keeps_answer_text_beside_a_tool_call(tmp_path, synthesis):
+async def test_final_synthesis_keeps_answer_text_beside_a_tool_call(
+    tmp_path, synthesis
+):
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -350,7 +357,7 @@ def test_final_synthesis_keeps_answer_text_beside_a_tool_call(tmp_path, synthesi
     # The answer was already there: no recovery request, no second tool run.
     assert len(_turn_requests(provider)) == 3
     assert [call.arguments for call in broker.calls] == [{"value": "a"}]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert "final_answer_recovery" not in turn.request_snapshot
 
@@ -364,9 +371,9 @@ def test_final_synthesis_keeps_answer_text_beside_a_tool_call(tmp_path, synthesi
     ],
     ids=["unreadable", "unknown-spelling"],
 )
-def test_final_synthesis_strips_a_trailing_unparsed_frame(tmp_path, frame):
+async def test_final_synthesis_strips_a_trailing_unparsed_frame(tmp_path, frame):
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -383,14 +390,14 @@ def test_final_synthesis_strips_a_trailing_unparsed_frame(tmp_path, frame):
     assert done[-1]["message"]["content"] == ANSWER
     assert "DSML" not in json.dumps(events, ensure_ascii=False)
     assert len(_turn_requests(provider)) == 3
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
-def test_final_synthesis_tool_call_with_budget_routes_again(tmp_path):
+async def test_final_synthesis_tool_call_with_budget_routes_again(tmp_path):
     """A model that still wants data gets its tool while the turn can afford it."""
 
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -422,15 +429,15 @@ def test_final_synthesis_tool_call_with_budget_routes_again(tmp_path):
     assert not any(
         request.metadata.get("final_answer_recovery") for request in requests
     )
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.execution_tool_calls == 2
     assert turn.request_snapshot["final_answer_rerouted"] is True
 
 
-def test_final_synthesis_routes_again_only_once_per_turn(tmp_path):
+async def test_final_synthesis_routes_again_only_once_per_turn(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -458,12 +465,12 @@ def test_final_synthesis_routes_again_only_once_per_turn(tmp_path):
         False,
     ]
     assert requests[-1].metadata["final_answer_recovery"] == "tool_call"
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
-def test_final_synthesis_tool_call_without_budget_is_re_asked(tmp_path):
+async def test_final_synthesis_tool_call_without_budget_is_re_asked(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -486,14 +493,14 @@ def test_final_synthesis_tool_call_without_budget_is_re_asked(tmp_path):
         False,
     ]
     assert requests[-1].metadata["final_answer_recovery"] == "tool_call"
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert "final_answer_rerouted" not in turn.request_snapshot
 
 
-def test_reasoning_only_synthesis_fails_saying_the_model_never_answered(tmp_path):
+async def test_reasoning_only_synthesis_fails_saying_the_model_never_answered(tmp_path):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path,
         [
             _response(calls=[_call("call-1", "a")]),
@@ -507,6 +514,9 @@ def test_reasoning_only_synthesis_fails_saying_the_model_never_answered(tmp_path
     with pytest.raises(ProviderResponseError, match="only reasoning"):
         _stream(service, prepared)
 
-    failed = store.get(ChatTurn, "turn")
+    failed = await store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert "only reasoning" in (failed.error or "")
+
+
+pytestmark = pytest.mark.anyio

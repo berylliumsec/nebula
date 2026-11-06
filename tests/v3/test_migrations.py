@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import os
 from collections.abc import Callable
@@ -172,7 +176,7 @@ def _exercise_chat_session_lookup_cycle(database_url: str) -> None:
         engine.dispose()
 
 
-def _exercise_event_owner_retention_cycle(database_url: str) -> None:
+async def _exercise_event_owner_retention_cycle(database_url: str) -> None:
     """Event history can be deleted once its owner is gone, never before."""
 
     engine = create_engine(database_url, future=True)
@@ -302,11 +306,11 @@ def _exercise_event_owner_retention_cycle(database_url: str) -> None:
             )
         database = Database(database_url, bootstrap=False)
         try:
-            report = prune_orphaned_event_history(
+            report = await prune_orphaned_event_history(
                 database, batch_size=1, min_age=timedelta(0)
             )
         finally:
-            database.dispose()
+            (await database.dispose())
         assert (report.operation_events, report.run_events, report.batches) == (2, 1, 3)
         with engine.connect() as connection:
             assert sorted(connection.execute(select(operations.c.id)).scalars()) == [
@@ -332,9 +336,11 @@ def test_sqlite_upgrade_downgrade_and_immutable_operation_events(tmp_path):
     _exercise_migration_cycle(f"sqlite+pysqlite:///{tmp_path / 'migrations.db'}")
 
 
-def test_sqlite_event_history_is_deletable_only_once_its_owner_is_gone(tmp_path):
-    _exercise_event_owner_retention_cycle(
-        f"sqlite+pysqlite:///{tmp_path / 'retention.db'}"
+async def test_sqlite_event_history_is_deletable_only_once_its_owner_is_gone(tmp_path):
+    (
+        await _exercise_event_owner_retention_cycle(
+            f"sqlite+pysqlite:///{tmp_path / 'retention.db'}"
+        )
     )
 
 
@@ -463,11 +469,11 @@ def test_sqlite_migration_failure_leaves_no_partial_schema_and_can_retry(tmp_pat
     not os.getenv("NEBULA_TEST_POSTGRES_URL"),
     reason="NEBULA_TEST_POSTGRES_URL is required for PostgreSQL migration coverage",
 )
-def test_postgresql_upgrade_downgrade_and_immutable_operation_events():
+async def test_postgresql_upgrade_downgrade_and_immutable_operation_events():
     database_url = os.environ["NEBULA_TEST_POSTGRES_URL"]
     _exercise_migration_cycle(database_url)
     _exercise_chat_session_lookup_cycle(database_url)
-    _exercise_event_owner_retention_cycle(database_url)
+    (await _exercise_event_owner_retention_cycle(database_url))
 
 
 @pytest.mark.skipif(
@@ -552,3 +558,6 @@ def test_postgresql_harness_session_title_lookup_backfills_legacy_links():
         }
     finally:
         engine.dispose()
+
+
+pytestmark = pytest.mark.anyio

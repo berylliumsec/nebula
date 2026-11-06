@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 from uuid import uuid4
 
@@ -39,15 +41,15 @@ class ButlerNotes:
         self.project_id = project_id
         self.relations = ResourceRelationService(store)
 
-    def _note(self, note_id: str) -> Observation:
-        note = self.store.get(Observation, note_id)
+    async def _note(self, note_id: str) -> Observation:
+        note = await self.store.get(Observation, note_id)
         if note.engagement_id != self.project_id or note.observation_type not in {
             "note",
             "ai_tool_note",
             "ai_execution_note",
         }:
             raise ValueError("choose an editable note from the selected project")
-        projected = self.relations.project_legacy(note)
+        projected = await self.relations.project_legacy(note)
         assert isinstance(projected, Observation)
         return projected
 
@@ -61,9 +63,9 @@ class ButlerNotes:
             "body_length": len(note.body),
         }
 
-    def notes(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def notes(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             Observation,
             {"observation_type": ["note", "ai_tool_note", "ai_execution_note"]},
             engagement_id=self.project_id,
@@ -75,8 +77,8 @@ class ButlerNotes:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        note = self._note(arguments["note_id"])
+    async def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        note = await self._note(arguments["note_id"])
         offset = arguments.get("body_offset", 0)
         end = min(offset + 8000, len(note.body))
         return {
@@ -88,19 +90,23 @@ class ButlerNotes:
             "evidence_ids": note.evidence_ids,
         }
 
-    def targets(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def targets(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
         rows: list[Asset | Evidence] = []
         if arguments["kind"] == "asset":
             rows.extend(
-                self.store.list_entities(
-                    Asset, engagement_id=self.project_id, offset=offset, limit=51
+                (
+                    await self.store.list_entities(
+                        Asset, engagement_id=self.project_id, offset=offset, limit=51
+                    )
                 )
             )
         else:
             rows.extend(
-                self.store.list_entities(
-                    Evidence, engagement_id=self.project_id, offset=offset, limit=51
+                (
+                    await self.store.list_entities(
+                        Evidence, engagement_id=self.project_id, offset=offset, limit=51
+                    )
                 )
             )
         return {
@@ -116,7 +122,7 @@ class ButlerNotes:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def _changes(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _changes(self, arguments: dict[str, Any]) -> dict[str, Any]:
         changes = {key: arguments[key] for key in _FIELDS if key in arguments}
         if "title" in changes:
             changes["title"] = changes["title"].strip()
@@ -125,15 +131,15 @@ class ButlerNotes:
         for field in ("asset_ids", "evidence_ids"):
             for item_id in changes.get(field, []):
                 item: Asset | Evidence = (
-                    self.store.get(Asset, item_id)
+                    (await self.store.get(Asset, item_id))
                     if field == "asset_ids"
-                    else self.store.get(Evidence, item_id)
+                    else (await self.store.get(Evidence, item_id))
                 )
                 if item.engagement_id != self.project_id:
                     raise ValueError("note links must belong to the selected project")
         return changes
 
-    def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return {
             "state": "pending_browser_apply",
             "client_action": {
@@ -143,17 +149,17 @@ class ButlerNotes:
                 "body": "",
                 "asset_ids": [],
                 "evidence_ids": [],
-                **self._changes(arguments),
+                **(await self._changes(arguments)),
             },
         }
 
-    def change(
+    async def change(
         self, arguments: dict[str, Any], *, delete: bool = False
     ) -> dict[str, Any]:
-        note = self._note(arguments["note_id"])
+        note = await self._note(arguments["note_id"])
         if note.revision != arguments["expected_revision"]:
             raise ValueError("note changed; read its current revision")
-        changes = {} if delete else self._changes(arguments)
+        changes = {} if delete else (await self._changes(arguments))
         if not delete and not changes:
             raise ValueError("provide a note field to change")
         return {
@@ -168,11 +174,11 @@ class ButlerNotes:
             },
         }
 
-    def update(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self.change(arguments)
+    async def update(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.change(arguments)
 
-    def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self.change(arguments, delete=True)
+    async def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self.change(arguments, delete=True)
 
     def actions(self) -> list[AnalysisTool]:
         current = {"note_id": _ID, "expected_revision": _REVISION}
@@ -237,7 +243,7 @@ class ButlerNotes:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             result.append(
                 AnalysisTool(

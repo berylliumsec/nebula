@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 from pathlib import Path
@@ -137,7 +141,7 @@ def _response(
     )
 
 
-def _prepared(
+async def _prepared(
     tmp_path: Path,
     responses: list[ModelResponse],
     broker: RecordingBroker,
@@ -147,8 +151,8 @@ def _prepared(
     parallel_safe: bool = False,
 ):
     store = NebulaStore(tmp_path / "tool-loop.db")
-    project = store.create(Engagement(id="project", name="Tool loop"))
-    profile = store.create(
+    project = await store.create(Engagement(id="project", name="Tool loop"))
+    profile = await store.create(
         ProviderProfile(
             id="provider",
             name="Provider",
@@ -158,7 +162,7 @@ def _prepared(
             capabilities={"streaming": True, "tool_calling": True},
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id=project.id,
@@ -172,7 +176,7 @@ def _prepared(
             },
         )
     )
-    user = store.create(
+    user = await store.create(
         ChatMessage(
             id="user-message",
             engagement_id=project.id,
@@ -182,7 +186,7 @@ def _prepared(
             content="Use the safe tool once.",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id=project.id,
@@ -256,7 +260,9 @@ def _prepared(
         ),
     ],
 )
-def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, detail):
+async def test_malformed_routing_never_reaches_the_tool_broker(
+    tmp_path, routing, detail
+):
     broker = RecordingBroker()
     responses = [
         routing,
@@ -265,14 +271,14 @@ def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, deta
         ),
         _response(text="Nothing ran."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # Core answers the call itself, and the model routes again.
     assert completion.message.content == "Nothing ran."
     assert broker.calls == []
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.execution_claim_id is None
     assert turn.execution_tool_calls == 0
@@ -289,7 +295,9 @@ def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, deta
         assert refused.output["effective_input_schema"] is None
 
 
-def test_routing_prose_stays_visible_and_separate_from_reasoning(tmp_path, monkeypatch):
+async def test_routing_prose_stays_visible_and_separate_from_reasoning(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(diagnostic_sensitive.keyring, "get_keyring", lambda: None)
     diagnostic_dir = tmp_path / "diagnostics"
     diagnostic_dir.mkdir()
@@ -340,13 +348,13 @@ def test_routing_prose_stays_visible_and_separate_from_reasoning(tmp_path, monke
         routing,
         _response(text="The safe tool returned a.", reasoning="The read succeeded."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
     try:
 
         async def scenario():
             return [event async for event in service.stream(prepared)]
 
-        events = asyncio.run(scenario())
+        events = await scenario()
         completion = next(payload for name, payload in events if name == "done")
         visible = "private routing text\n\nThe safe tool returned a."
         assert completion["message"]["content"] == visible
@@ -382,7 +390,7 @@ def test_routing_prose_stays_visible_and_separate_from_reasoning(tmp_path, monke
             for item in records
         )
         assert [call.arguments for call in broker.calls] == [{"value": "a"}]
-        assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+        assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
         [stored] = [
             item
             for item in service.session_messages("session")
@@ -394,7 +402,7 @@ def test_routing_prose_stays_visible_and_separate_from_reasoning(tmp_path, monke
         manager.close()
 
 
-def test_tool_turn_prompts_never_claim_the_turn_has_no_tools(tmp_path):
+async def test_tool_turn_prompts_never_claim_the_turn_has_no_tools(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -405,12 +413,12 @@ def test_tool_turn_prompts_never_claim_the_turn_has_no_tools(tmp_path):
         ),
         _response(text="The safe tool returned a."),
     ]
-    _, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    _, service, prepared, provider = await _prepared(tmp_path, responses, broker)
     prepared.model_request = prepared.model_request.model_copy(
         update={"instructions": _CHAT_BASE_INSTRUCTIONS}
     )
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     turn_requests = [
         request
@@ -427,7 +435,7 @@ def test_tool_turn_prompts_never_claim_the_turn_has_no_tools(tmp_path):
     assert turn_requests[-1].tool_choice == ToolChoice.NONE
 
 
-def test_denied_tool_is_returned_as_error_context_without_reexecution(tmp_path):
+async def test_denied_tool_is_returned_as_error_context_without_reexecution(tmp_path):
     broker = RecordingBroker(deny=True)
     responses = [
         _response(
@@ -438,22 +446,22 @@ def test_denied_tool_is_returned_as_error_context_without_reexecution(tmp_path):
         ),
         _response(text="The operation was denied by project policy."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "The operation was denied by project policy."
     assert len(broker.calls) == 1
-    completed = store.get(ChatTurn, "turn")
+    completed = await store.get(ChatTurn, "turn")
     assert completed.status == ChatTurnStatus.COMPLETE
     assert completed.tool_history[0]["status"] == "denied"
     assert provider.requests[1].tool_results[0].is_error is True
 
 
-def test_repeated_provider_call_id_cannot_duplicate_a_tool_effect(tmp_path):
+async def test_repeated_provider_call_id_cannot_duplicate_a_tool_effect(tmp_path):
     broker = RecordingBroker()
     repeated = ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path,
         [
             _response(calls=[repeated]),
@@ -466,12 +474,12 @@ def test_repeated_provider_call_id_cannot_duplicate_a_tool_effect(tmp_path):
         broker,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # The replayed call is answered from history instead of running again.
     assert completion.message.content == "Read a."
     assert len(broker.calls) == 1
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == ["complete", "failed"]
     assert turn.tool_history[0]["model_call_id"] == "call-1"
@@ -482,7 +490,7 @@ def test_repeated_provider_call_id_cannot_duplicate_a_tool_effect(tmp_path):
     assert "already ran" in str(replayed.output)
 
 
-def test_goal_exhaustion_after_routing_stops_before_tool_effect(tmp_path):
+async def test_goal_exhaustion_after_routing_stops_before_tool_effect(tmp_path):
     broker = RecordingBroker()
     routing = _response(
         calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
@@ -491,8 +499,8 @@ def test_goal_exhaustion_after_routing_stops_before_tool_effect(tmp_path):
             "usage": ModelUsage(input_tokens=999, output_tokens=1, total_tokens=1_000)
         }
     )
-    store, service, prepared, _ = _prepared(tmp_path, [routing], broker)
-    goal = store.create(
+    store, service, prepared, _ = await _prepared(tmp_path, [routing], broker)
+    goal = await store.create(
         ChatGoal(
             id="goal",
             engagement_id="project",
@@ -503,7 +511,7 @@ def test_goal_exhaustion_after_routing_stops_before_tool_effect(tmp_path):
             token_budget=1_000,
         )
     )
-    prepared.turn = store.update(
+    prepared.turn = await store.update(
         ChatTurn,
         "turn",
         {"goal_id": goal.id},
@@ -511,14 +519,14 @@ def test_goal_exhaustion_after_routing_stops_before_tool_effect(tmp_path):
     )
 
     with pytest.raises(ChatError, match="before tool execution"):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     assert broker.calls == []
-    assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.FAILED
+    assert (await store.get(ChatGoal, goal.id)).status == ChatGoalStatus.PAUSED
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.FAILED
 
 
-def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_path):
+async def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_path):
     class BlockingBroker(RecordingBroker):
         def __init__(self) -> None:
             super().__init__()
@@ -536,7 +544,7 @@ def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_path):
         routing = _response(
             calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
         )
-        store, service, prepared, _ = _prepared(tmp_path, [routing], broker)
+        store, service, prepared, _ = await _prepared(tmp_path, [routing], broker)
         service.start_provider_turn(prepared)
         await asyncio.wait_for(broker.started.wait(), 2)
 
@@ -547,10 +555,10 @@ def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_path):
         assert len(broker.calls) == 1
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_batched_safe_reads_overlap_and_commit_in_provider_order(tmp_path):
+async def test_batched_safe_reads_overlap_and_commit_in_provider_order(tmp_path):
     broker = OverlappingBroker()
     responses = [
         _response(
@@ -564,16 +572,16 @@ def test_batched_safe_reads_overlap_and_commit_in_provider_order(tmp_path):
         ),
         _response(text="Read a and b."),
     ]
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path, responses, broker, parallel_safe=True
     )
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     # One routing response, both calls executed, in the requested order.
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
     assert broker.peak == 2
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["step"] for entry in turn.tool_history] == [0, 1]
     assert [entry["model_call_id"] for entry in turn.tool_history] == [
@@ -590,7 +598,7 @@ def test_batched_safe_reads_overlap_and_commit_in_provider_order(tmp_path):
     ]
 
 
-def test_batch_queued_behind_finish_response_never_runs(tmp_path):
+async def test_batch_queued_behind_finish_response_never_runs(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -602,17 +610,17 @@ def test_batch_queued_behind_finish_response_never_runs(tmp_path):
         ),
         _response(text="Read a."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
 
 
-def test_batch_beyond_the_execution_budget_routes_again_instead_of_overspending(
+async def test_batch_beyond_the_execution_budget_routes_again_instead_of_overspending(
     tmp_path,
 ):
     broker = RecordingBroker()
@@ -642,16 +650,16 @@ def test_batch_beyond_the_execution_budget_routes_again_instead_of_overspending(
         ),
         _response(text="Read a."),
     ]
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path, responses, broker, max_tool_calls=1, extra_specs=[query_spec]
     )
 
-    asyncio.run(service.complete(prepared))
+    (await service.complete(prepared))
 
     # The second execution call exhausts the turn budget, so the rest of the
     # batch is dropped rather than spent, and routing runs again.
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
     assert [tool.name for tool in provider.requests[1].tools] == [
@@ -659,7 +667,9 @@ def test_batch_beyond_the_execution_budget_routes_again_instead_of_overspending(
     ]
 
 
-def test_routing_response_without_a_tool_call_answers_from_existing_results(tmp_path):
+async def test_routing_response_without_a_tool_call_answers_from_existing_results(
+    tmp_path,
+):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -669,18 +679,18 @@ def test_routing_response_without_a_tool_call_answers_from_existing_results(tmp_
         _response(),
         _response(text="Read a."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read a."
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
 
 
-def test_approval_inside_a_batch_pauses_and_drops_the_queued_calls(tmp_path):
+async def test_approval_inside_a_batch_pauses_and_drops_the_queued_calls(tmp_path):
     class ApprovingBroker(RecordingBroker):
         def __init__(self) -> None:
             super().__init__()
@@ -704,8 +714,8 @@ def test_approval_inside_a_batch_pauses_and_drops_the_queued_calls(tmp_path):
             ]
         )
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
-    broker.approval = store.create(
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
+    broker.approval = await store.create(
         Approval(
             id="approval-1",
             engagement_id="project",
@@ -720,11 +730,11 @@ def test_approval_inside_a_batch_pauses_and_drops_the_queued_calls(tmp_path):
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     assert [name for name, _ in events][-1] == "approval_required"
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
-    paused = store.get(ChatTurn, "turn")
+    paused = await store.get(ChatTurn, "turn")
     assert paused.status == ChatTurnStatus.WAITING_APPROVAL
     assert paused.approval_id == "approval-1"
     # The checkpoint the resume path reads is the last entry, and the call the
@@ -739,7 +749,7 @@ def test_approval_inside_a_batch_pauses_and_drops_the_queued_calls(tmp_path):
     ]
 
 
-def test_routing_thoughts_reach_the_transcript(tmp_path):
+async def test_routing_thoughts_reach_the_transcript(tmp_path):
     """A reasoning model thinks before each tool call, not only as it answers."""
 
     broker = RecordingBroker()
@@ -754,12 +764,12 @@ def test_routing_thoughts_reach_the_transcript(tmp_path):
         ),
         _response(text="Tool result", reasoning="Report the value plainly."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     episode = (
         "The read is bounded, so run it first."
@@ -778,10 +788,10 @@ def test_routing_thoughts_reach_the_transcript(tmp_path):
     ]
     assert stored[-1].reasoning == episode
     assert stored[-1].content == "Tool result"
-    assert store.get(ChatTurn, "turn").reasoning == episode
+    assert (await store.get(ChatTurn, "turn")).reasoning == episode
 
 
-def test_a_wordless_routing_step_adds_no_thinking(tmp_path):
+async def test_a_wordless_routing_step_adds_no_thinking(tmp_path):
     """Models that only think sometimes leave no blank gap in the episode."""
 
     broker = RecordingBroker()
@@ -795,21 +805,23 @@ def test_a_wordless_routing_step_adds_no_thinking(tmp_path):
         ),
         _response(text="Tool result", reasoning="Only the answer needed thought."),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     streamed = "".join(
         payload["delta"] for name, payload in events if name == "reasoning_delta"
     )
     assert streamed == "Only the answer needed thought."
-    assert store.get(ChatTurn, "turn").reasoning == "Only the answer needed thought."
+    assert (
+        await store.get(ChatTurn, "turn")
+    ).reasoning == "Only the answer needed thought."
 
 
-def test_serialized_dsml_calls_run_like_any_other_tool_call(tmp_path):
+async def test_serialized_dsml_calls_run_like_any_other_tool_call(tmp_path):
     """A route that puts calls in ``content`` still gets its tools run."""
 
     broker = RecordingBroker()
@@ -827,16 +839,16 @@ def test_serialized_dsml_calls_run_like_any_other_tool_call(tmp_path):
         ),
         _response(text="The safe tool returned a."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "The safe tool returned a."
     # The broker saw an ordinary invocation: the frame never reached it, and
     # the recovered call carried the arguments the model wrote.
     assert [call.tool_name for call in broker.calls] == ["safe_read"]
     assert broker.calls[0].arguments == {"value": "a"}
-    completed = store.get(ChatTurn, "turn")
+    completed = await store.get(ChatTurn, "turn")
     assert completed.status == ChatTurnStatus.COMPLETE
     assert completed.tool_history[0]["status"] == "complete"
     # The turn's own record of the step is the recovered call, not the frame.
@@ -844,7 +856,7 @@ def test_serialized_dsml_calls_run_like_any_other_tool_call(tmp_path):
     assert provider.requests[1].tool_results[0].is_error is False
 
 
-def test_final_synthesis_reads_serialized_tool_calls_as_tool_calls(tmp_path):
+async def test_final_synthesis_reads_serialized_tool_calls_as_tool_calls(tmp_path):
     """A readable DSML frame is a tool call, whichever field carried it."""
 
     broker = RecordingBroker()
@@ -863,12 +875,12 @@ def test_final_synthesis_reads_serialized_tool_calls_as_tool_calls(tmp_path):
         _response(text=serialized),
         _response(text="The safe tool returned a."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     visible = "".join(payload["delta"] for name, payload in events if name == "delta")
     assert visible == "The safe tool returned a."
@@ -882,7 +894,7 @@ def test_final_synthesis_reads_serialized_tool_calls_as_tool_calls(tmp_path):
     # The frame was asking for a tool after the turn finished routing, so the
     # turn recovers the way it does from any late tool call.
     assert turn_requests[-1].metadata["final_answer_recovery"] == "tool_call"
-    completed = store.get(ChatTurn, "turn")
+    completed = await store.get(ChatTurn, "turn")
     assert completed.status == ChatTurnStatus.COMPLETE
     assert completed.request_snapshot["final_answer_recovery"] == {
         "attempts": 1,
@@ -902,7 +914,7 @@ def test_final_synthesis_reads_serialized_tool_calls_as_tool_calls(tmp_path):
     assert completed.usage.total_tokens == 12
 
 
-def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
+async def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
     """A frame Core cannot read completely is still refused, not guessed at."""
 
     broker = RecordingBroker()
@@ -921,12 +933,12 @@ def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
         _response(text=control_frame),
         _response(text="The safe tool returned a."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
 
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     visible = "".join(payload["delta"] for name, payload in events if name == "delta")
     assert visible == "The safe tool returned a."
@@ -940,7 +952,7 @@ def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
     assert turn_requests[-1].metadata["final_answer_recovery"] == (
         "provider_control_frame"
     )
-    completed = store.get(ChatTurn, "turn")
+    completed = await store.get(ChatTurn, "turn")
     assert completed.status == ChatTurnStatus.COMPLETE
     assert completed.request_snapshot["final_answer_recovery"] == {
         "attempts": 1,
@@ -960,7 +972,7 @@ def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
     assert completed.usage.total_tokens == 12
 
 
-def test_final_synthesis_retries_reasoning_exhaustion_with_more_room(tmp_path):
+async def test_final_synthesis_retries_reasoning_exhaustion_with_more_room(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -972,12 +984,12 @@ def test_final_synthesis_retries_reasoning_exhaustion_with_more_room(tmp_path):
         _response(reasoning="Still working it out.", finish_reason="length"),
         _response(text="The safe tool returned a."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
     prepared.model_request = prepared.model_request.model_copy(
         update={"max_output_tokens": 2_048}
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "The safe tool returned a."
     turn_requests = [
@@ -988,13 +1000,13 @@ def test_final_synthesis_retries_reasoning_exhaustion_with_more_room(tmp_path):
     assert turn_requests[-2].max_output_tokens == 2_048
     assert turn_requests[-1].max_output_tokens == 4_096
     assert turn_requests[-1].metadata["final_answer_recovery"] == "output_limit"
-    completed = store.get(ChatTurn, "turn")
+    completed = await store.get(ChatTurn, "turn")
     assert completed.request_snapshot["final_answer_recovery"]["reason"] == (
         "output_limit"
     )
 
 
-def test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_failure(
+async def test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_failure(
     tmp_path,
 ):
     broker = RecordingBroker()
@@ -1008,7 +1020,7 @@ def test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_fa
         _response(reasoning="Still planning.", finish_reason="stop"),
         _response(reasoning="Still planning again.", finish_reason="stop"),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
     prepared.model_request = prepared.model_request.model_copy(
         update={"max_output_tokens": 2_048}
     )
@@ -1020,10 +1032,10 @@ def test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_fa
             "returned only reasoning"
         ),
     ):
-        asyncio.run(service.complete(prepared))
+        (await service.complete(prepared))
 
     assert len(broker.calls) == 1
-    failed = store.get(ChatTurn, "turn")
+    failed = await store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert len(failed.tool_history) == 1
     turn_requests = [
@@ -1044,7 +1056,7 @@ def test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_fa
     )
 
 
-def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):
+async def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):
     """An MCP tool routes under a digest; a conversation shows server and tool."""
 
     broker = RecordingBroker()
@@ -1077,14 +1089,14 @@ def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):
         ),
         _response(text="Filed."),
     ]
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, _ = await _prepared(
         tmp_path, responses, broker, extra_specs=[mcp_spec]
     )
 
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     lifecycle = [
         payload
@@ -1109,11 +1121,11 @@ def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):
     [result] = stored[-1].metadata["tool_results"]
     assert result["capability"] == "mcp.9a4c1f0b77de.create_issue"
     assert result["display_name"] == "GitHub · create_issue"
-    [step] = store.get(ChatTurn, "turn").tool_history
+    [step] = (await store.get(ChatTurn, "turn")).tool_history
     assert step["display_name"] == "GitHub · create_issue"
 
 
-def test_a_fixed_capability_carries_no_display_name(tmp_path):
+async def test_a_fixed_capability_carries_no_display_name(tmp_path):
     """Only tools whose runtime name is unreadable carry a second name."""
 
     broker = RecordingBroker()
@@ -1126,14 +1138,17 @@ def test_a_fixed_capability_carries_no_display_name(tmp_path):
         ),
         _response(text="Tool result"),
     ]
-    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    store, service, prepared, _ = await _prepared(tmp_path, responses, broker)
 
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     started = [payload for name, payload in events if name == "tool_started"]
     assert [item["display_name"] for item in started] == [None]
-    [step] = store.get(ChatTurn, "turn").tool_history
+    [step] = (await store.get(ChatTurn, "turn")).tool_history
     assert "display_name" not in step
+
+
+pytestmark = pytest.mark.anyio

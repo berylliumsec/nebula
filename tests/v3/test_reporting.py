@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import time
@@ -6,7 +10,7 @@ import zipfile
 from functools import wraps
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from pypdf import PdfReader
 
 from nebula.v3.api import create_app
@@ -36,8 +40,8 @@ def async_test(function):
 async def test_pdf_is_valid_cached_and_warns_without_interpreting_content(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="PDF engagement"))
-    observation = store.create(
+    engagement = await store.create(Engagement(name="PDF engagement"))
+    observation = await store.create(
         Observation(
             engagement_id=engagement.id,
             observation_type="operator_note",
@@ -48,7 +52,7 @@ async def test_pdf_is_valid_cached_and_warns_without_interpreting_content(tmp_pa
             ),
         )
     )
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Server-rendered report",
@@ -60,11 +64,11 @@ async def test_pdf_is_valid_cached_and_warns_without_interpreting_content(tmp_pa
 
     queued = await service.request_render(report.id, report_revision=report.revision)
     await service._tasks[queued.id]
-    completed = store.get(ReportRender, queued.id)
+    completed = await store.get(ReportRender, queued.id)
 
     assert completed.status == ReportRenderStatus.COMPLETED
     assert any("U+1F4A5" in warning for warning in completed.warnings)
-    artifact, path = service.pdf(completed.id)
+    artifact, path = await service.pdf(completed.id)
     assert artifacts.verify(artifact)
     reader = PdfReader(path)
     assert len(reader.pages) >= 2
@@ -76,15 +80,15 @@ async def test_pdf_is_valid_cached_and_warns_without_interpreting_content(tmp_pa
 
     cached = await service.request_render(report.id, report_revision=report.revision)
     assert cached.id == completed.id
-    assert service.pdf(cached.id)[1].read_bytes() == path.read_bytes()
+    assert (await service.pdf(cached.id))[1].read_bytes() == path.read_bytes()
 
 
 @async_test
 async def test_pdf_requires_exact_saved_revision_and_valid_artifacts(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Revision checks"))
-    report = store.create(
+    engagement = await store.create(Engagement(name="Revision checks"))
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Broken references",
@@ -103,8 +107,8 @@ async def test_pdf_requires_exact_saved_revision_and_valid_artifacts(tmp_path):
 async def test_pdf_uses_saved_report_local_note_transform(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Transformed notes"))
-    observation = store.create(
+    engagement = await store.create(Engagement(name="Transformed notes"))
+    observation = await store.create(
         Observation(
             engagement_id=engagement.id,
             observation_type="note",
@@ -112,7 +116,7 @@ async def test_pdf_uses_saved_report_local_note_transform(tmp_path):
             body="Raw shorthand that should not be rendered.",
         )
     )
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Transformed report",
@@ -138,7 +142,7 @@ async def test_pdf_uses_saved_report_local_note_transform(tmp_path):
 
     queued = await service.request_render(report.id, report_revision=report.revision)
     await service._tasks[queued.id]
-    _artifact, path = service.pdf(queued.id)
+    _artifact, path = await service.pdf(queued.id)
     text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
 
     assert "Reviewed note section" in text
@@ -146,20 +150,22 @@ async def test_pdf_uses_saved_report_local_note_transform(tmp_path):
     assert "Raw shorthand that should not be rendered." not in text
 
 
-def test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_explicit(
+async def test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_explicit(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="API report"))
-    report = store.create(Report(engagement_id=engagement.id, title="API PDF"))
+    engagement = await store.create(Engagement(name="API report"))
+    report = await store.create(Report(engagement_id=engagement.id, title="API PDF"))
     headers = {"Authorization": "Bearer test-token"}
 
-    with TestClient(
+    async with TestClient(
         create_app(store, artifact_store=artifacts, auth_token="test-token")
     ) as client:
-        assert client.post(f"/api/v1/reports/{report.id}/renders").status_code == 401
-        queued_response = client.post(
+        assert (
+            await client.post(f"/api/v1/reports/{report.id}/renders")
+        ).status_code == 401
+        queued_response = await client.post(
             f"/api/v1/reports/{report.id}/renders",
             headers=headers,
             json={"report_revision": report.revision},
@@ -168,20 +174,24 @@ def test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_explici
         render_id = queued_response.json()["id"]
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            detail = client.get(f"/api/v1/report-renders/{render_id}", headers=headers)
+            detail = await client.get(
+                f"/api/v1/report-renders/{render_id}", headers=headers
+            )
             if detail.json()["status"] in {"completed", "failed", "interrupted"}:
                 break
-            time.sleep(0.02)
+            await asyncio.sleep(0.02)
         assert detail.json()["status"] == "completed"
-        pdf = client.get(f"/api/v1/report-renders/{render_id}/pdf", headers=headers)
+        pdf = await client.get(
+            f"/api/v1/report-renders/{render_id}/pdf", headers=headers
+        )
         assert pdf.status_code == 200
         assert pdf.content.startswith(b"%PDF-")
 
-        refused = client.post(
+        refused = await client.post(
             f"/api/v1/engagements/{engagement.id}/export-bundle", headers=headers
         )
         assert refused.status_code == 428
-        bundle = client.post(
+        bundle = await client.post(
             f"/api/v1/engagements/{engagement.id}/export-bundle",
             headers={
                 **headers,
@@ -220,13 +230,13 @@ def _probe_verify(artifacts: ArtifactStore, monkeypatch) -> list[bool]:
 async def test_pdf_export_hashes_artifacts_off_the_event_loop(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Off-loop hashing"))
-    attachment = store.create(
+    engagement = await store.create(Engagement(name="Off-loop hashing"))
+    attachment = await store.create(
         artifacts.put_bytes(
             b"capture bytes", engagement_id=engagement.id, filename="capture.bin"
         )
     )
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Hashed off the loop",
@@ -238,7 +248,9 @@ async def test_pdf_export_hashes_artifacts_off_the_event_loop(tmp_path, monkeypa
 
     queued = await service.request_render(report.id, report_revision=report.revision)
     await service._tasks[queued.id]
-    assert store.get(ReportRender, queued.id).status == ReportRenderStatus.COMPLETED
+    assert (
+        await store.get(ReportRender, queued.id)
+    ).status == ReportRenderStatus.COMPLETED
     cached = await service.request_render(report.id, report_revision=report.revision)
     assert cached.id == queued.id
 
@@ -247,18 +259,18 @@ async def test_pdf_export_hashes_artifacts_off_the_event_loop(tmp_path, monkeypa
     assert not any(on_loop)
 
 
-def test_pdf_download_route_verifies_off_the_event_loop(tmp_path, monkeypatch):
+async def test_pdf_download_route_verifies_off_the_event_loop(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Off-loop download"))
-    report = store.create(Report(engagement_id=engagement.id, title="Downloaded"))
+    engagement = await store.create(Engagement(name="Off-loop download"))
+    report = await store.create(Report(engagement_id=engagement.id, title="Downloaded"))
     on_loop = _probe_verify(artifacts, monkeypatch)
     headers = {"Authorization": "Bearer test-token"}
 
-    with TestClient(
+    async with TestClient(
         create_app(store, artifact_store=artifacts, auth_token="test-token")
     ) as client:
-        queued = client.post(
+        queued = await client.post(
             f"/api/v1/reports/{report.id}/renders",
             headers=headers,
             json={"report_revision": report.revision},
@@ -267,12 +279,16 @@ def test_pdf_download_route_verifies_off_the_event_loop(tmp_path, monkeypatch):
         render_id = queued.json()["id"]
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            detail = client.get(f"/api/v1/report-renders/{render_id}", headers=headers)
+            detail = await client.get(
+                f"/api/v1/report-renders/{render_id}", headers=headers
+            )
             if detail.json()["status"] in {"completed", "failed", "interrupted"}:
                 break
-            time.sleep(0.02)
+            await asyncio.sleep(0.02)
         assert detail.json()["status"] == "completed"
-        pdf = client.get(f"/api/v1/report-renders/{render_id}/pdf", headers=headers)
+        pdf = await client.get(
+            f"/api/v1/report-renders/{render_id}/pdf", headers=headers
+        )
         assert pdf.status_code == 200
 
     assert len(on_loop) >= 1
@@ -283,13 +299,13 @@ def test_pdf_download_route_verifies_off_the_event_loop(tmp_path, monkeypatch):
 async def test_glyph_warnings_are_aggregated_into_one_bounded_warning(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Glyph warnings"))
+    engagement = await store.create(Engagement(name="Glyph warnings"))
     service = ReportRenderService(store=store, artifact_store=artifacts)
     emoji = ["💥", "🚀", "🧪"]
     dense_text = "".join(chr(0x4E00 + offset) for offset in range(300))
     observation_ids = []
     for symbol in emoji:
-        note = store.create(
+        note = await store.create(
             Observation(
                 engagement_id=engagement.id,
                 observation_type="note",
@@ -298,7 +314,7 @@ async def test_glyph_warnings_are_aggregated_into_one_bounded_warning(tmp_path):
             )
         )
         observation_ids.append(note.id)
-    dense = store.create(
+    dense = await store.create(
         Observation(
             engagement_id=engagement.id,
             observation_type="note",
@@ -307,7 +323,7 @@ async def test_glyph_warnings_are_aggregated_into_one_bounded_warning(tmp_path):
         )
     )
     observation_ids.append(dense.id)
-    report = store.create(
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Many unsupported glyphs",
@@ -321,7 +337,7 @@ async def test_glyph_warnings_are_aggregated_into_one_bounded_warning(tmp_path):
 
     queued = await service.request_render(report.id, report_revision=report.revision)
     await service._tasks[queued.id]
-    completed = store.get(ReportRender, queued.id)
+    completed = await store.get(ReportRender, queued.id)
 
     assert completed.status == ReportRenderStatus.COMPLETED
     glyph_warnings = [
@@ -342,12 +358,14 @@ async def test_render_reports_a_corrupt_artifact_row_as_an_integrity_conflict(
 ):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="Corrupt artifact row"))
+    engagement = await store.create(Engagement(name="Corrupt artifact row"))
     stored = artifacts.put_bytes(
         b"attached", engagement_id=engagement.id, filename="attached.txt"
     )
-    corrupt = store.create(stored.model_copy(update={"storage_path": "../outside"}))
-    report = store.create(
+    corrupt = await store.create(
+        stored.model_copy(update={"storage_path": "../outside"})
+    )
+    report = await store.create(
         Report(
             engagement_id=engagement.id,
             title="Corrupt attachment",
@@ -361,3 +379,6 @@ async def test_render_reports_a_corrupt_artifact_row_as_an_integrity_conflict(
 
     assert excinfo.value.code == "artifact_integrity"
     assert excinfo.value.status_code == 409
+
+
+pytestmark = pytest.mark.anyio

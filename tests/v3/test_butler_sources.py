@@ -1,10 +1,13 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import base64
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -13,29 +16,31 @@ from nebula.v3.domain import Artifact, Engagement, KnowledgeSource
 from nebula.v3.storage import NebulaStore
 
 
-def test_butler_sources_page_metadata_and_prepare_only_owned_revisions(tmp_path):
+async def test_butler_sources_page_metadata_and_prepare_only_owned_revisions(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
     for i in range(51):
-        store.create(
-            KnowledgeSource(
-                engagement_id=project.id,
-                name=f"source-{i}",
-                source_type="text",
-                artifact_id="artifact",
-                metadata={
-                    "chunks": ["PRIVATE_BYTES"],
-                    "source_url": "https://private.invalid/secret",
-                },
+        (
+            await store.create(
+                KnowledgeSource(
+                    engagement_id=project.id,
+                    name=f"source-{i}",
+                    source_type="text",
+                    artifact_id="artifact",
+                    metadata={
+                        "chunks": ["PRIVATE_BYTES"],
+                        "source_url": "https://private.invalid/secret",
+                    },
+                )
             )
         )
-    foreign = store.create(
+    foreign = await store.create(
         KnowledgeSource(
             engagement_id=other.id, name="foreign-private", source_type="text"
         )
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), project.id
     )
 
@@ -88,35 +93,36 @@ def test_butler_sources_page_metadata_and_prepare_only_owned_revisions(tmp_path)
         assert prepared["state"] == "pending_browser_apply"
         assert prepared["client_action"]["kind"] == "source_reindex"
         assert (
-            store.get(KnowledgeSource, source["source_id"]).revision
-            == source["revision"]
-        )
+            await store.get(KnowledgeSource, source["source_id"])
+        ).revision == source["revision"]
         assert (await call("add", {"input_kind": "url"}, change=True))[
             "client_action"
         ] == {"kind": "source_add", "project_id": project.id, "input_kind": "url"}
-        current = store.get(Engagement, project.id)
-        store.update(
-            Engagement,
-            project.id,
-            {"status": "archived"},
-            expected_revision=current.revision,
+        current = await store.get(Engagement, project.id)
+        (
+            await store.update(
+                Engagement,
+                project.id,
+                {"status": "archived"},
+                expected_revision=current.revision,
+            )
         )
         with pytest.raises(ValueError, match="restore"):
             await call("add", change=True)
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_source_reindex_and_remove_fence_project_and_revision_and_retain_original(
+async def test_source_reindex_and_remove_fence_project_and_revision_and_retain_original(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
     app = create_app(store, auth_token="test-token", artifact_store=artifacts)
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
     client = TestClient(app, headers={"Authorization": "Bearer test-token"})
-    created = client.post(
+    created = await client.post(
         "/api/v1/knowledge/ingest",
         json={
             "engagement_id": project.id,
@@ -126,14 +132,14 @@ def test_source_reindex_and_remove_fence_project_and_revision_and_retain_origina
     )
     assert created.status_code == 201, created.text
     source = created.json()
-    original = store.get(Artifact, source["artifact_id"])
+    original = await store.get(Artifact, source["artifact_id"])
     path = f"/api/v1/knowledge/{source['id']}"
-    foreign = client.post(
+    foreign = await client.post(
         f"{path}/reindex?engagement_id={other.id}",
         headers={"If-Match": str(source["revision"])},
     )
     assert foreign.status_code == 422
-    source = store.update(
+    source = await store.update(
         KnowledgeSource,
         source["id"],
         {"name": "renamed-source"},
@@ -141,16 +147,12 @@ def test_source_reindex_and_remove_fence_project_and_revision_and_retain_origina
     )
     stale = {"If-Match": str(source.revision - 1)}
     assert (
-        client.post(
-            f"{path}/reindex?engagement_id={project.id}", headers=stale
-        ).status_code
-        == 409
-    )
+        await client.post(f"{path}/reindex?engagement_id={project.id}", headers=stale)
+    ).status_code == 409
     assert (
-        client.delete(f"{path}?engagement_id={project.id}", headers=stale).status_code
-        == 409
-    )
-    saved = client.post(
+        await client.delete(f"{path}?engagement_id={project.id}", headers=stale)
+    ).status_code == 409
+    saved = await client.post(
         f"{path}/reindex?engagement_id={project.id}",
         headers={"If-Match": str(source.revision)},
     )
@@ -160,13 +162,14 @@ def test_source_reindex_and_remove_fence_project_and_revision_and_retain_origina
     assert observed["artifact_id"] == original.id
     current = {"If-Match": str(observed["revision"])}
     assert (
-        client.delete(f"{path}?engagement_id={other.id}", headers=current).status_code
-        == 404
-    )
+        await client.delete(f"{path}?engagement_id={other.id}", headers=current)
+    ).status_code == 404
     assert (
-        client.delete(f"{path}?engagement_id={project.id}", headers=current).status_code
-        == 204
-    )
-    assert client.get(path).status_code == 404
-    assert store.get(Artifact, original.id) == original
+        await client.delete(f"{path}?engagement_id={project.id}", headers=current)
+    ).status_code == 204
+    assert (await client.get(path)).status_code == 404
+    assert (await store.get(Artifact, original.id)) == original
     assert artifacts.verify(original)
+
+
+pytestmark = pytest.mark.anyio

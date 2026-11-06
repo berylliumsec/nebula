@@ -6,6 +6,8 @@ project-scoped tools; it cannot turn an untrusted report into authority.
 
 from __future__ import annotations
 
+from .async_utils import async_any
+
 import asyncio
 import hashlib
 import json
@@ -210,7 +212,7 @@ def _applied_change(steps: list[dict[str, Any]]) -> bool:
     )
 
 
-def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
+async def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
     """Match the vendor's exact load code on this case's failed analysis turn."""
 
     if (
@@ -223,7 +225,7 @@ def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
     ):
         return False
     try:
-        turn = store.get(HarnessTurn, case.model_turn_id)
+        turn = await store.get(HarnessTurn, case.model_turn_id)
     except NotFoundError:
         # diagnostic-expected: an absent analysis turn cannot authorize a retry.
         return False
@@ -234,7 +236,7 @@ def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
         or turn.status not in {HarnessTurnStatus.FAILED, HarnessTurnStatus.INTERRUPTED}
     ):
         return False
-    events = store.replay_operation_events(turn.id, limit=10_000)
+    events = await store.replay_operation_events(turn.id, limit=10_000)
     for event in reversed(events):
         payload = event.payload
         nested = payload.get("payload")
@@ -271,7 +273,7 @@ def _failure_category(error: BaseException) -> tuple[str, str | None]:
     return "execution_failed", None
 
 
-def record_subagent_start_failure(
+async def record_subagent_start_failure(
     transaction: StoreTransaction, call: ToolCall, error: BaseException
 ) -> None:
     """Save the exact Core-observed refusal beside the failed tool receipt."""
@@ -282,8 +284,10 @@ def record_subagent_start_failure(
         or not call.chat_session_id
     ):
         return
-    turn = _entity_in_transaction(transaction, ChatTurn, call.chat_turn_id)
-    session = _entity_in_transaction(transaction, ChatSession, call.chat_session_id)
+    turn = await _entity_in_transaction(transaction, ChatTurn, call.chat_turn_id)
+    session = await _entity_in_transaction(
+        transaction, ChatSession, call.chat_session_id
+    )
     if (
         turn is None
         or session is None
@@ -293,7 +297,7 @@ def record_subagent_start_failure(
     ):
         return
     goal = (
-        _entity_in_transaction(transaction, ChatGoal, turn.goal_id)
+        (await _entity_in_transaction(transaction, ChatGoal, turn.goal_id))
         if turn.goal_id
         else None
     )
@@ -307,30 +311,32 @@ def record_subagent_start_failure(
             0,
             ButlerEvidenceRef(kind="goal", id=goal.id, project_id=call.engagement_id),
         )
-    _append_project_event(
-        transaction,
-        engagement_id=call.engagement_id,
-        event_type="agent.subagent_start_failed",
-        payload=ButlerEventPayload(
-            project_id=call.engagement_id,
-            goal_id=goal.id if goal else None,
-            session_id=session.id,
-            source="core",
-            actor_role="subagent" if session.parent_session_id else "main_agent",
-            parent_goal_id=goal.parent_goal_id if goal else None,
-            summary="Core recorded a failed subagent start for this chat turn.",
-            metrics={
-                "category": category,
-                "rule": rule,
-                "side_effects": "none"
-                if getattr(error, "_nebula_before_execution", False)
-                else "unknown",
-            },
-            verification_state="core_observed",
-            evidence_refs=refs,
-        ),
-        idempotency_key=f"subagent-start-failed:{call.id}",
-        now=utc_now(),
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=call.engagement_id,
+            event_type="agent.subagent_start_failed",
+            payload=ButlerEventPayload(
+                project_id=call.engagement_id,
+                goal_id=goal.id if goal else None,
+                session_id=session.id,
+                source="core",
+                actor_role="subagent" if session.parent_session_id else "main_agent",
+                parent_goal_id=goal.parent_goal_id if goal else None,
+                summary="Core recorded a failed subagent start for this chat turn.",
+                metrics={
+                    "category": category,
+                    "rule": rule,
+                    "side_effects": "none"
+                    if getattr(error, "_nebula_before_execution", False)
+                    else "unknown",
+                },
+                verification_state="core_observed",
+                evidence_refs=refs,
+            ),
+            idempotency_key=f"subagent-start-failed:{call.id}",
+            now=utc_now(),
+        )
     )
 
 
@@ -360,7 +366,7 @@ class ButlerRecoveryAgent:
         self.notebooks = notebooks
         self.instructions_root = instructions_root
 
-    def _global_instructions(self, case: ButlerRecoveryCase) -> str | None:
+    async def _global_instructions(self, case: ButlerRecoveryCase) -> str | None:
         if case.signal != "butler.global_periodic_check":
             return None
         if self.instructions_root is None:
@@ -368,7 +374,7 @@ class ButlerRecoveryAgent:
         loaded = read_butler_instructions(self.instructions_root)
         if loaded is None:
             raise ButlerInstructionsError("Nebula-wide BUTLER.md was removed")
-        event = ButlerRecoveryService(self.store).source_event(case)
+        event = await ButlerRecoveryService(self.store).source_event(case)
         expected = ButlerEventPayload.model_validate(event.payload).metrics.get(
             "instructions_sha256"
         )
@@ -383,17 +389,21 @@ class ButlerRecoveryAgent:
             + "\n</operator_butler_md>"
         )
 
-    def _butler_session(self, project_id: str) -> ChatSession:
+    async def _butler_session(self, project_id: str) -> ChatSession:
         sessions = (
             session
-            for session in self.store.iter_readable_entities(
+            async for session in self.store.iter_readable_entities(
                 ChatSession, engagement_id=project_id
             )
             if session.metadata.get("control_assistant") is True
             and not session.metadata.get("archived_at")
             and not session.parent_session_id
         )
-        session = max(sessions, key=lambda item: item.created_at, default=None)
+        session = max(
+            [item async for item in sessions],
+            key=lambda item: item.created_at,
+            default=None,
+        )
         if session is None:
             raise ValueError("Butler has no configured chat in this project")
         return session
@@ -411,7 +421,7 @@ class ButlerRecoveryAgent:
         if preferred.kind != HarnessKind.CODEX_APP_SERVER:
             return preferred
         available: list[tuple[tuple[int, float], bool, HarnessProfile]] = []
-        for profile in self.store.iter_readable_entities(HarnessProfile):
+        async for profile in self.store.iter_readable_entities(HarnessProfile):
             if (
                 not profile.enabled
                 or profile.kind != preferred.kind
@@ -443,12 +453,14 @@ class ButlerRecoveryAgent:
             ):
                 continue
             try:
-                self.harness_runtime._validate_harness_privacy(
-                    project_id,
-                    profile,
-                    [],
-                    allow_remote_mcp=profile.privacy.auto_share_tool_results,
-                    uses_gateway_tools=True,
+                (
+                    await self.harness_runtime._validate_harness_privacy(
+                        project_id,
+                        profile,
+                        [],
+                        allow_remote_mcp=profile.privacy.auto_share_tool_results,
+                        uses_gateway_tools=True,
+                    )
                 )
             except HarnessConfigurationError:
                 # diagnostic-expected: this account cannot read project tools.
@@ -468,7 +480,7 @@ class ButlerRecoveryAgent:
             f"Butler's scheduled {model} check."
         )
 
-    def _record_model_turn(
+    async def _record_model_turn(
         self,
         case_id: str,
         backend: ChatBackend,
@@ -478,30 +490,32 @@ class ButlerRecoveryAgent:
     ) -> None:
         """Keep the scheduled check's transcript link as soon as its turn exists."""
 
-        current = self.store.get(ButlerRecoveryCase, case_id)
+        current = await self.store.get(ButlerRecoveryCase, case_id)
         turn_ids = list(current.model_turn_ids)
         if current.model_turn_id and current.model_turn_id not in turn_ids:
             turn_ids.append(current.model_turn_id)
         if turn_id not in turn_ids:
             turn_ids.append(turn_id)
-        self.store.update(
-            ButlerRecoveryCase,
-            case_id,
-            {
-                "model_backend": backend,
-                "model_profile_id": profile_id,
-                "model": model,
-                "model_turn_id": turn_id,
-                "model_turn_ids": turn_ids,
-            },
-            expected_revision=current.revision,
+        (
+            await self.store.update(
+                ButlerRecoveryCase,
+                case_id,
+                {
+                    "model_backend": backend,
+                    "model_profile_id": profile_id,
+                    "model": model,
+                    "model_turn_id": turn_id,
+                    "model_turn_ids": turn_ids,
+                },
+                expected_revision=current.revision,
+            )
         )
 
-    def _packet(self, case: ButlerRecoveryCase) -> str:
-        event = ButlerRecoveryService(self.store).source_event(case)
+    async def _packet(self, case: ButlerRecoveryCase) -> str:
+        event = await ButlerRecoveryService(self.store).source_event(case)
         payload = ButlerEventPayload.model_validate(event.payload)
         session = (
-            self.store.get(ChatSession, case.source_session_id)
+            (await self.store.get(ChatSession, case.source_session_id))
             if case.source_session_id
             else None
         )
@@ -509,17 +523,17 @@ class ButlerRecoveryAgent:
             raise ValueError("recovery source chat belongs to another project")
         parent_id = session.parent_session_id or session.id if session else None
         call = (
-            self.store.get(ToolCall, case.source_tool_call_id)
+            (await self.store.get(ToolCall, case.source_tool_call_id))
             if case.source_tool_call_id
             else None
         )
         if call is not None and call.engagement_id != case.engagement_id:
             raise ValueError("recovery tool receipt belongs to another project")
-        goal = self.store.get(ChatGoal, case.goal_id) if case.goal_id else None
+        goal = (await self.store.get(ChatGoal, case.goal_id)) if case.goal_id else None
         if goal is not None and goal.engagement_id != case.engagement_id:
             raise ValueError("recovery goal belongs to another project")
         precedent = (
-            read_precedents(self.memory, case.engagement_id, case.signal)
+            (await read_precedents(self.memory, case.engagement_id, case.signal))
             if self.memory is not None and case.signal != "butler.global_periodic_check"
             else None
         )
@@ -559,7 +573,7 @@ class ButlerRecoveryAgent:
             "precedents": precedent.model_dump(mode="json") if precedent else None,
         }
         if case.signal == "butler.global_periodic_check":
-            recent_cases = self.store.find_entities(
+            recent_cases = await self.store.find_entities(
                 ButlerRecoveryCase,
                 {"signal": "butler.global_periodic_check"},
                 engagement_id=case.engagement_id,
@@ -569,7 +583,7 @@ class ButlerRecoveryAgent:
             reports: list[dict[str, Any]] = []
             for prior in recent_cases:
                 for goal_id in prior.recovery_goal_ids:
-                    goal = self.store.find_entity(ChatGoal, "id", goal_id)
+                    goal = await self.store.find_entity(ChatGoal, "id", goal_id)
                     if goal is None:
                         continue
                     reports.append(
@@ -618,18 +632,18 @@ class ButlerRecoveryAgent:
     async def run(
         self, case: ButlerRecoveryCase
     ) -> tuple[str, ChatBackend, str, str, str | None]:
-        session = self._butler_session(case.engagement_id)
-        config = chat_assistant_config(self.store, session)
+        session = await self._butler_session(case.engagement_id)
+        config = await chat_assistant_config(self.store, session)
         profile_id = config["profile_id"]
         model = config["model"]
         backend = ChatBackend(config["backend"])
         if not isinstance(profile_id, str) or not isinstance(model, str):
             raise ValueError("Butler needs an enabled model in Assistant settings")
-        packet = self._packet(case)
-        instructions = self._global_instructions(case) or _INSTRUCTIONS
+        packet = await self._packet(case)
+        instructions = (await self._global_instructions(case)) or _INSTRUCTIONS
         global_check = case.signal == "butler.global_periodic_check"
         if backend == ChatBackend.HARNESS:
-            harness_profile = self.store.get(HarnessProfile, profile_id)
+            harness_profile = await self.store.get(HarnessProfile, profile_id)
             if (
                 not harness_profile.enabled
                 or model not in harness_profile.capabilities.models
@@ -671,7 +685,7 @@ class ButlerRecoveryAgent:
             return (turn.response or "")[:1000], backend, profile_id, model, turn.id
         if backend != ChatBackend.PROVIDER:
             raise ValueError("Butler's configured runtime is unsupported")
-        provider_profile = self.store.get(ProviderProfile, profile_id)
+        provider_profile = await self.store.get(ProviderProfile, profile_id)
         if not provider_profile.enabled or not provider_profile.tools_verified_for(
             model
         ):
@@ -684,10 +698,14 @@ class ButlerRecoveryAgent:
                 "Butler's provider is not authorized for unattended project tool results"
             )
         provider = self.provider_factory(provider_profile)
-        validate_engagement_provider_privacy(
-            self.store, self.store.get(Engagement, case.engagement_id), provider
+        (
+            await validate_engagement_provider_privacy(
+                self.store,
+                (await self.store.get(Engagement, case.engagement_id)),
+                provider,
+            )
         )
-        capabilities = ButlerCapabilities(
+        capabilities = await ButlerCapabilities.create(
             self.store,
             self.artifact_store,
             case.engagement_id,
@@ -775,17 +793,19 @@ class ButlerRecoveryService:
         self.agent = agent
         self.instructions_root = instructions_root
 
-    def _global_idle_goal_count(self) -> int:
+    async def _global_idle_goal_count(self) -> int:
         """Count unresolved main goals when no Act project has a running one."""
 
         project_ids = {
             project.id
-            for project in self.store.iter_readable_entities(Engagement)
+            async for project in self.store.iter_readable_entities(Engagement)
             if project.status != EngagementStatus.ARCHIVED
             and project.work_enabled
             and (
-                policy := self.store.find_entity(
-                    ButlerAuthorityPolicy, "engagement_id", project.id
+                policy := (
+                    await self.store.find_entity(
+                        ButlerAuthorityPolicy, "engagement_id", project.id
+                    )
                 )
             )
             is not None
@@ -793,7 +813,7 @@ class ButlerRecoveryService:
         }
         running = 0
         waiting = 0
-        for goal in self.store.iter_readable_entities(ChatGoal):
+        async for goal in self.store.iter_readable_entities(ChatGoal):
             if goal.engagement_id not in project_ids or goal.parent_goal_id:
                 continue
             if goal.status == ChatGoalStatus.RUNNING:
@@ -802,7 +822,7 @@ class ButlerRecoveryService:
                 waiting += 1
         return waiting if running == 0 else 0
 
-    def _dialogue_blocked_goal_count(self, case: ButlerRecoveryCase) -> int:
+    async def _dialogue_blocked_goal_count(self, case: ButlerRecoveryCase) -> int:
         """Count replied-to main chats whose latest Core goal remains blocked."""
 
         targets = {
@@ -810,13 +830,13 @@ class ButlerRecoveryService:
         }
         blocked = 0
         for project_id, session_id in targets:
-            policy = self.store.find_entity(
+            policy = await self.store.find_entity(
                 ButlerAuthorityPolicy, "engagement_id", project_id
             )
             if policy is None or policy.authority != "act":
                 blocked += 1
                 continue
-            goals = self.store.find_entities(
+            goals = await self.store.find_entities(
                 ChatGoal,
                 {"session_id": session_id},
                 engagement_id=project_id,
@@ -827,11 +847,11 @@ class ButlerRecoveryService:
                 blocked += 1
         return blocked
 
-    def global_status(self) -> dict[str, Any]:
+    async def global_status(self) -> dict[str, Any]:
         root = self.instructions_root
         if root is None:
             return {"status": "unavailable", "path": None}
-        state = self.store.find_entity(ButlerGlobalState, "id", GLOBAL_STATE_ID)
+        state = await self.store.find_entity(ButlerGlobalState, "id", GLOBAL_STATE_ID)
         interval = check_interval(state)
         result: dict[str, Any] = {
             "path": str(root / ".butler" / "BUTLER.md"),
@@ -851,17 +871,19 @@ class ButlerRecoveryService:
             return {**result, "status": "invalid", "detail": str(exc)}
         if loaded is None:
             return {**result, "status": "missing"}
-        anchor = self._global_anchor()
+        anchor = await self._global_anchor()
         return {
             **result,
             "status": "ready" if anchor else "needs_act_host",
             "host_project_id": anchor,
         }
 
-    def _current_act(
+    async def _current_act(
         self, project_id: str, worker_id: str
     ) -> ButlerAuthorityPolicy | None:
-        state = self.store.find_entity(ButlerProjectState, "engagement_id", project_id)
+        state = await self.store.find_entity(
+            ButlerProjectState, "engagement_id", project_id
+        )
         if (
             state is None
             or state.lease_owner != worker_id
@@ -869,32 +891,34 @@ class ButlerRecoveryService:
             or state.lease_expires_at <= utc_now()
         ):
             return None
-        project = self.store.get(Engagement, project_id)
+        project = await self.store.get(Engagement, project_id)
         if project.status == EngagementStatus.ARCHIVED or not project.work_enabled:
             return None
-        policy = self.store.find_entity(
+        policy = await self.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", project_id
         )
         return policy if policy and policy.authority == "act" else None
 
-    def _global_anchor(self) -> str | None:
+    async def _global_anchor(self) -> str | None:
         """Use one stable Act project with a configured Butler runtime as host."""
 
         candidates: list[Engagement] = []
-        for project in self.store.iter_readable_entities(Engagement):
+        async for project in self.store.iter_readable_entities(Engagement):
             if project.status == EngagementStatus.ARCHIVED or not project.work_enabled:
                 continue
-            policy = self.store.find_entity(
+            policy = await self.store.find_entity(
                 ButlerAuthorityPolicy, "engagement_id", project.id
             )
             if policy is None or policy.authority != "act":
                 continue
-            if not any(
-                session.metadata.get("control_assistant") is True
-                and not session.metadata.get("archived_at")
-                and not session.parent_session_id
-                for session in self.store.iter_readable_entities(
-                    ChatSession, engagement_id=project.id
+            if not (
+                await async_any(
+                    session.metadata.get("control_assistant") is True
+                    and not session.metadata.get("archived_at")
+                    and not session.parent_session_id
+                    async for session in self.store.iter_readable_entities(
+                        ChatSession, engagement_id=project.id
+                    )
                 )
             ):
                 continue
@@ -905,18 +929,18 @@ class ButlerRecoveryService:
             else None
         )
 
-    def fire_global_periodic_check(self, project_id: str, worker_id: str) -> bool:
+    async def fire_global_periodic_check(self, project_id: str, worker_id: str) -> bool:
         if self.instructions_root is None:
             return False
         loaded = read_butler_instructions(self.instructions_root)
-        if loaded is None or self._global_anchor() != project_id:
+        if loaded is None or (await self._global_anchor()) != project_id:
             return False
-        policy = self._current_act(project_id, worker_id)
+        policy = await self._current_act(project_id, worker_id)
         if policy is None:
             return False
         now = utc_now()
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity_in_transaction(
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity_in_transaction(
                 transaction, ButlerGlobalState, GLOBAL_STATE_ID
             )
             interval = check_interval(current)
@@ -926,10 +950,10 @@ class ButlerRecoveryService:
                 and now - current.last_periodic_at < interval
             ):
                 return False
-            state = _entity_in_transaction(
+            state = await _entity_in_transaction(
                 transaction, ButlerProjectState, project_state_id(project_id)
             )
-            current_policy = _entity_in_transaction(
+            current_policy = await _entity_in_transaction(
                 transaction, ButlerAuthorityPolicy, policy.id
             )
             if (
@@ -943,42 +967,48 @@ class ButlerRecoveryService:
             ):
                 return False
             generation = int(now.timestamp()) // int(interval.total_seconds())
-            _append_project_event(
-                transaction,
-                engagement_id=project_id,
-                event_type="butler.global_periodic_check",
-                payload=ButlerEventPayload(
-                    project_id=project_id,
-                    source="core",
-                    actor_role="core",
-                    summary="Nebula-wide Butler work check is due.",
-                    metrics={
-                        "generation": generation,
-                        "instructions_sha256": loaded.sha256,
-                    },
-                    verification_state="core_observed",
-                ),
-                idempotency_key=f"global-periodic:{generation}:{loaded.sha256}",
-                now=now,
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=project_id,
+                    event_type="butler.global_periodic_check",
+                    payload=ButlerEventPayload(
+                        project_id=project_id,
+                        source="core",
+                        actor_role="core",
+                        summary="Nebula-wide Butler work check is due.",
+                        metrics={
+                            "generation": generation,
+                            "instructions_sha256": loaded.sha256,
+                        },
+                        verification_state="core_observed",
+                    ),
+                    idempotency_key=f"global-periodic:{generation}:{loaded.sha256}",
+                    now=now,
+                )
             )
             if current is None:
-                transaction.add(
-                    ButlerGlobalState(
-                        id=GLOBAL_STATE_ID,
-                        last_periodic_at=now,
-                        last_project_id=project_id,
+                (
+                    await transaction.add(
+                        ButlerGlobalState(
+                            id=GLOBAL_STATE_ID,
+                            last_periodic_at=now,
+                            last_project_id=project_id,
+                        )
                     )
                 )
             else:
-                transaction.update(
-                    ButlerGlobalState,
-                    current.id,
-                    {"last_periodic_at": now, "last_project_id": project_id},
-                    expected_revision=current.revision,
+                (
+                    await transaction.update(
+                        ButlerGlobalState,
+                        current.id,
+                        {"last_periodic_at": now, "last_project_id": project_id},
+                        expected_revision=current.revision,
+                    )
                 )
         return True
 
-    def fire_periodic_check(self, project_id: str, worker_id: str) -> bool:
+    async def fire_periodic_check(self, project_id: str, worker_id: str) -> bool:
         if self.instructions_root is not None:
             try:
                 if read_butler_instructions(self.instructions_root) is not None:
@@ -988,10 +1018,10 @@ class ButlerRecoveryService:
                 # Existing goal recovery remains available while the operator
                 # repairs the Nebula-wide instruction file.
                 pass
-        policy = self._current_act(project_id, worker_id)
+        policy = await self._current_act(project_id, worker_id)
         if policy is None:
             return False
-        running = self.store.find_entities(
+        running = await self.store.find_entities(
             ButlerGoalWatch,
             {"status": "running"},
             engagement_id=project_id,
@@ -1000,14 +1030,18 @@ class ButlerRecoveryService:
         if not running:
             return False
         now = utc_now()
-        with self.store.transaction(immediate=True) as transaction:
-            state = _entity_in_transaction(
+        async with self.store.transaction(immediate=True) as transaction:
+            state = await _entity_in_transaction(
                 transaction, ButlerProjectState, project_state_id(project_id)
             )
             interval = check_interval(
-                _entity_in_transaction(transaction, ButlerGlobalState, GLOBAL_STATE_ID)
+                (
+                    await _entity_in_transaction(
+                        transaction, ButlerGlobalState, GLOBAL_STATE_ID
+                    )
+                )
             )
-            current_policy = _entity_in_transaction(
+            current_policy = await _entity_in_transaction(
                 transaction, ButlerAuthorityPolicy, policy.id
             )
             if (
@@ -1023,30 +1057,34 @@ class ButlerRecoveryService:
             ):
                 return False
             generation = int(now.timestamp()) // int(interval.total_seconds())
-            _append_project_event(
-                transaction,
-                engagement_id=project_id,
-                event_type="butler.periodic_check",
-                payload=ButlerEventPayload(
-                    project_id=project_id,
-                    source="core",
-                    actor_role="core",
-                    summary="Butler's scheduled project work check is due.",
-                    metrics={"generation": generation, "has_running_goal": True},
-                    verification_state="core_observed",
-                ),
-                idempotency_key=f"periodic:{project_id}:{generation}",
-                now=now,
+            (
+                await _append_project_event(
+                    transaction,
+                    engagement_id=project_id,
+                    event_type="butler.periodic_check",
+                    payload=ButlerEventPayload(
+                        project_id=project_id,
+                        source="core",
+                        actor_role="core",
+                        summary="Butler's scheduled project work check is due.",
+                        metrics={"generation": generation, "has_running_goal": True},
+                        verification_state="core_observed",
+                    ),
+                    idempotency_key=f"periodic:{project_id}:{generation}",
+                    now=now,
+                )
             )
-            transaction.update(
-                ButlerProjectState,
-                state.id,
-                {"last_periodic_recovery_at": now},
-                expected_revision=state.revision,
+            (
+                await transaction.update(
+                    ButlerProjectState,
+                    state.id,
+                    {"last_periodic_recovery_at": now},
+                    expected_revision=state.revision,
+                )
             )
         return True
 
-    def _case_for_event(
+    async def _case_for_event(
         self, project_id: str, event: OperationEvent, policy: ButlerAuthorityPolicy
     ) -> ButlerRecoveryCase | None:
         decision_case = event.event_type == "butler.decision_recorded"
@@ -1065,7 +1103,7 @@ class ButlerRecoveryService:
             refs = [ref for ref in payload.evidence_refs if ref.kind == "decision"]
             if len(refs) != 1:
                 return None
-            decision = self.store.get(ButlerDecision, refs[0].id)
+            decision = await self.store.get(ButlerDecision, refs[0].id)
             if (
                 decision.engagement_id != project_id
                 or decision.status != "reviewed"
@@ -1096,12 +1134,14 @@ class ButlerRecoveryService:
             summary=payload.summary,
         )
 
-    def capture_events(self, project_id: str, worker_id: str) -> int:
-        policy = self._current_act(project_id, worker_id)
-        state = self.store.find_entity(ButlerProjectState, "engagement_id", project_id)
+    async def capture_events(self, project_id: str, worker_id: str) -> int:
+        policy = await self._current_act(project_id, worker_id)
+        state = await self.store.find_entity(
+            ButlerProjectState, "engagement_id", project_id
+        )
         if state is None:
             return 0
-        events = self.store.replay_operation_events(
+        events = await self.store.replay_operation_events(
             project_stream_id(project_id),
             after_sequence=state.last_recovery_event_sequence,
             limit=100,
@@ -1112,10 +1152,11 @@ class ButlerRecoveryService:
             case
             for event in events
             if policy is not None
-            if (case := self._case_for_event(project_id, event, policy)) is not None
+            if (case := (await self._case_for_event(project_id, event, policy)))
+            is not None
         ]
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity_in_transaction(
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity_in_transaction(
                 transaction, ButlerProjectState, project_state_id(project_id)
             )
             if (
@@ -1128,7 +1169,11 @@ class ButlerRecoveryService:
             ):
                 return 0
             current_policy = (
-                _entity_in_transaction(transaction, ButlerAuthorityPolicy, policy.id)
+                (
+                    await _entity_in_transaction(
+                        transaction, ButlerAuthorityPolicy, policy.id
+                    )
+                )
                 if policy is not None
                 else None
             )
@@ -1140,20 +1185,23 @@ class ButlerRecoveryService:
                 return 0
             for case in candidates:
                 if (
-                    _entity_in_transaction(transaction, ButlerRecoveryCase, case.id)
-                    is None
-                ):
-                    transaction.add(case)
-            transaction.update(
-                ButlerProjectState,
-                current.id,
-                {"last_recovery_event_sequence": events[-1].sequence},
-                expected_revision=current.revision,
+                    await _entity_in_transaction(
+                        transaction, ButlerRecoveryCase, case.id
+                    )
+                ) is None:
+                    (await transaction.add(case))
+            (
+                await transaction.update(
+                    ButlerProjectState,
+                    current.id,
+                    {"last_recovery_event_sequence": events[-1].sequence},
+                    expected_revision=current.revision,
+                )
             )
         return len(events)
 
-    def source_event(self, case: ButlerRecoveryCase) -> OperationEvent:
-        events = self.store.replay_operation_events(
+    async def source_event(self, case: ButlerRecoveryCase) -> OperationEvent:
+        events = await self.store.replay_operation_events(
             project_stream_id(case.engagement_id),
             after_sequence=case.source_event_sequence - 1,
             through_sequence=case.source_event_sequence,
@@ -1164,21 +1212,23 @@ class ButlerRecoveryService:
             raise NotFoundError("Butler recovery source event is unavailable")
         return event
 
-    def _update_case(
+    async def _update_case(
         self, case: ButlerRecoveryCase, **changes: Any
     ) -> ButlerRecoveryCase:
-        return self.store.update(
+        return await self.store.update(
             ButlerRecoveryCase,
             case.id,
             changes,
             expected_revision=case.revision,
         )
 
-    def _claim_case(self, project_id: str, worker_id: str) -> ButlerRecoveryCase | None:
-        policy = self._current_act(project_id, worker_id)
+    async def _claim_case(
+        self, project_id: str, worker_id: str
+    ) -> ButlerRecoveryCase | None:
+        policy = await self._current_act(project_id, worker_id)
         if policy is None:
             return None
-        candidates = self.store.find_entities(
+        candidates = await self.store.find_entities(
             ButlerRecoveryCase,
             {"status": "observed"},
             engagement_id=project_id,
@@ -1197,20 +1247,24 @@ class ButlerRecoveryService:
         )
         for stale in candidates:
             if stale.authority_revision != policy.revision:
-                self._update_case(
-                    stale,
-                    status="cancelled",
-                    outcome="Act authority changed before this case was investigated.",
-                    finished_at=utc_now(),
+                (
+                    await self._update_case(
+                        stale,
+                        status="cancelled",
+                        outcome="Act authority changed before this case was investigated.",
+                        finished_at=utc_now(),
+                    )
                 )
         if case is None:
             return None
-        with self.store.transaction(immediate=True) as transaction:
-            current = _entity_in_transaction(transaction, ButlerRecoveryCase, case.id)
-            current_policy = _entity_in_transaction(
+        async with self.store.transaction(immediate=True) as transaction:
+            current = await _entity_in_transaction(
+                transaction, ButlerRecoveryCase, case.id
+            )
+            current_policy = await _entity_in_transaction(
                 transaction, ButlerAuthorityPolicy, policy.id
             )
-            state = _entity_in_transaction(
+            state = await _entity_in_transaction(
                 transaction, ButlerProjectState, project_state_id(project_id)
             )
             if (
@@ -1231,18 +1285,18 @@ class ButlerRecoveryService:
                 or state.lease_expires_at <= utc_now()
             ):
                 return None
-            return transaction.update(
+            return await transaction.update(
                 ButlerRecoveryCase,
                 case.id,
                 {"status": "investigating", "started_at": utc_now()},
                 expected_revision=case.revision,
             )
 
-    def _renew_project_lease(self, project_id: str, worker_id: str) -> bool:
+    async def _renew_project_lease(self, project_id: str, worker_id: str) -> bool:
         """Keep one owned investigation valid without claiming another worker's lease."""
 
-        with self.store.transaction(immediate=True) as transaction:
-            state = _entity_in_transaction(
+        async with self.store.transaction(immediate=True) as transaction:
+            state = await _entity_in_transaction(
                 transaction, ButlerProjectState, project_state_id(project_id)
             )
             now = utc_now()
@@ -1253,20 +1307,20 @@ class ButlerRecoveryService:
                 or state.lease_expires_at <= now
             ):
                 return False
-            transaction.update(
-                ButlerProjectState,
-                state.id,
-                {"lease_expires_at": now + LEASE_DURATION},
-                expected_revision=state.revision,
+            (
+                await transaction.update(
+                    ButlerProjectState,
+                    state.id,
+                    {"lease_expires_at": now + LEASE_DURATION},
+                    expected_revision=state.revision,
+                )
             )
         return True
 
     async def _hold_project_lease(self, project_id: str, worker_id: str) -> None:
         while True:
             await asyncio.sleep(LEASE_RENEW_INTERVAL_SECONDS)
-            if not await asyncio.to_thread(
-                self._renew_project_lease, project_id, worker_id
-            ):
+            if not await self._renew_project_lease(project_id, worker_id):
                 raise RuntimeError("Butler lost the project lease during investigation")
 
     async def _run_with_lease(
@@ -1302,12 +1356,12 @@ class ButlerRecoveryService:
                 # diagnostic-expected: cancellation of the owned lease task is drained.
                 await lease
 
-    def recover_interrupted_cases(self, project_id: str) -> int:
+    async def recover_interrupted_cases(self, project_id: str) -> int:
         """A crashed worker cannot replay an action whose side effect is unclear."""
 
         expired = utc_now() - timedelta(seconds=90)
         recovered = 0
-        for case in self.store.find_entities(
+        for case in await self.store.find_entities(
             ButlerRecoveryCase,
             {"status": "investigating"},
             engagement_id=project_id,
@@ -1320,16 +1374,22 @@ class ButlerRecoveryService:
                 or case.queued_item_id
                 or case.delivered_turn_id
             ):
-                self._update_case(case, status="verifying", next_check_at=utc_now())
+                (
+                    await self._update_case(
+                        case, status="verifying", next_check_at=utc_now()
+                    )
+                )
             elif _possible_change(case.steps) or _applied_change(case.steps):
-                self._update_case(
-                    case,
-                    status="uncertain",
-                    outcome="Core restarted during a Butler action. Its effect needs review before retry.",
-                    finished_at=utc_now(),
+                (
+                    await self._update_case(
+                        case,
+                        status="uncertain",
+                        outcome="Core restarted during a Butler action. Its effect needs review before retry.",
+                        finished_at=utc_now(),
+                    )
                 )
             else:
-                policy = self.store.find_entity(
+                policy = await self.store.find_entity(
                     ButlerAuthorityPolicy, "engagement_id", project_id
                 )
                 if (
@@ -1337,25 +1397,27 @@ class ButlerRecoveryService:
                     and policy.authority == "act"
                     and policy.revision == case.authority_revision
                 ):
-                    self._update_case(case, status="observed", started_at=None)
+                    (await self._update_case(case, status="observed", started_at=None))
                 else:
-                    self._update_case(
-                        case,
-                        status="cancelled",
-                        outcome="Act authority was revoked before this investigation restarted.",
-                        finished_at=utc_now(),
+                    (
+                        await self._update_case(
+                            case,
+                            status="cancelled",
+                            outcome="Act authority was revoked before this investigation restarted.",
+                            finished_at=utc_now(),
+                        )
                     )
             recovered += 1
         return recovered
 
-    def retry_overloaded_cases(self, project_id: str, worker_id: str) -> int:
+    async def retry_overloaded_cases(self, project_id: str, worker_id: str) -> int:
         """Reopen recent legacy load failures once, preserving their case and turn."""
 
-        policy = self._current_act(project_id, worker_id)
+        policy = await self._current_act(project_id, worker_id)
         if policy is None or self.agent is None:
             return 0
         reopened = 0
-        for case in self.store.find_entities(
+        for case in await self.store.find_entities(
             ButlerRecoveryCase,
             {"status": "needs_attention"},
             engagement_id=project_id,
@@ -1367,7 +1429,7 @@ class ButlerRecoveryService:
                 or case.authority_revision != policy.revision
                 or case.finished_at is None
                 or utc_now() - case.finished_at > timedelta(hours=4)
-                or not _server_overloaded(self.store, case)
+                or not (await _server_overloaded(self.store, case))
             ):
                 continue
             try:
@@ -1375,14 +1437,14 @@ class ButlerRecoveryService:
             except (ButlerInstructionsError, NotFoundError):
                 # diagnostic-expected: a changed or missing mandate belongs to a new check.
                 continue
-            with self.store.transaction(immediate=True) as transaction:
-                current = _entity_in_transaction(
+            async with self.store.transaction(immediate=True) as transaction:
+                current = await _entity_in_transaction(
                     transaction, ButlerRecoveryCase, case.id
                 )
-                current_policy = _entity_in_transaction(
+                current_policy = await _entity_in_transaction(
                     transaction, ButlerAuthorityPolicy, policy.id
                 )
-                state = _entity_in_transaction(
+                state = await _entity_in_transaction(
                     transaction, ButlerProjectState, project_state_id(project_id)
                 )
                 if (
@@ -1399,22 +1461,24 @@ class ButlerRecoveryService:
                     or state.lease_expires_at <= utc_now()
                 ):
                     continue
-                transaction.update(
-                    ButlerRecoveryCase,
-                    case.id,
-                    {
-                        "status": "observed",
-                        "outcome": "Codex reported server load; Butler is retrying this check once.",
-                        "capacity_retry_count": 1,
-                        "next_check_at": utc_now(),
-                        "finished_at": None,
-                    },
-                    expected_revision=case.revision,
+                (
+                    await transaction.update(
+                        ButlerRecoveryCase,
+                        case.id,
+                        {
+                            "status": "observed",
+                            "outcome": "Codex reported server load; Butler is retrying this check once.",
+                            "capacity_retry_count": 1,
+                            "next_check_at": utc_now(),
+                            "finished_at": None,
+                        },
+                        expected_revision=case.revision,
+                    )
                 )
                 reopened += 1
         return reopened
 
-    def verify_follow_up(self, case: ButlerRecoveryCase) -> ButlerRecoveryCase:
+    async def verify_follow_up(self, case: ButlerRecoveryCase) -> ButlerRecoveryCase:
         """Verify scheduled guidance or the child result of an immediate retry."""
 
         if case.status == "verifying" and case.dialogue_pending_turns:
@@ -1425,30 +1489,34 @@ class ButlerRecoveryService:
                 session_id = target["session_id"]
                 dialogue_turn_id = target["turn_id"]
                 try:
-                    turn = self.store.get(ChatTurn, dialogue_turn_id)
+                    turn = await self.store.get(ChatTurn, dialogue_turn_id)
                 except NotFoundError:
                     # diagnostic-expected: record a missing accepted turn for Butler review, never resend it.
                     results.append({**target, "status": "unavailable"})
                     continue
                 if turn.engagement_id != project_id or turn.session_id != session_id:
                     raise ValueError("Butler dialogue turn belongs to another chat")
-                if turn.status == ChatTurnStatus.COMPLETE and not any(
-                    self.store.find_entities(
-                        ChatMessage,
-                        {
-                            "role": ChatRole.ASSISTANT.value,
-                            field: value,
-                            "metadata.kind": None,
-                        },
-                        engagement_id=project_id,
-                        session_id=session_id,
-                        limit=1,
+                if turn.status == ChatTurnStatus.COMPLETE and not (
+                    await async_any(
+                        (
+                            await self.store.find_entities(
+                                ChatMessage,
+                                {
+                                    "role": ChatRole.ASSISTANT.value,
+                                    field: value,
+                                    "metadata.kind": None,
+                                },
+                                engagement_id=project_id,
+                                session_id=session_id,
+                                limit=1,
+                            )
+                        )
+                        for field, value in (
+                            ("metadata.chat_turn_id", turn.id),
+                            ("metadata.harness_turn_id", turn.harness_turn_id),
+                        )
+                        if isinstance(value, str)
                     )
-                    for field, value in (
-                        ("metadata.chat_turn_id", turn.id),
-                        ("metadata.harness_turn_id", turn.harness_turn_id),
-                    )
-                    if isinstance(value, str)
                 ):
                     # Wait for the answer's durable save before reentering Butler.
                     pending.append(target)
@@ -1468,13 +1536,13 @@ class ButlerRecoveryService:
                     len(case.model_turn_ids) >= MAX_DIALOGUE_TURNS
                     or len(case.dialogue_results) + len(results) > MAX_DIALOGUE_TURNS
                 ):
-                    return self._update_case(
+                    return await self._update_case(
                         case,
                         status="needs_attention",
                         outcome="A main agent replied, but this check-in reached its bounded Butler dialogue limit.",
                         finished_at=utc_now(),
                     )
-                return self._update_case(
+                return await self._update_case(
                     case,
                     status="observed",
                     dialogue_pending_turns=pending,
@@ -1487,13 +1555,13 @@ class ButlerRecoveryService:
                     outcome="Main agent response recorded; Butler will continue this check-in.",
                 )
             if case.started_at and utc_now() - case.started_at >= timedelta(minutes=20):
-                return self._update_case(
+                return await self._update_case(
                     case,
                     status="needs_attention",
                     outcome="The main-agent turn did not produce a saved reply within 20 minutes.",
                     finished_at=utc_now(),
                 )
-            return self._update_case(
+            return await self._update_case(
                 case, next_check_at=utc_now() + timedelta(seconds=30)
             )
         if (
@@ -1505,10 +1573,10 @@ class ButlerRecoveryService:
         turn_id: str | None
         if case.delivered_turn_id:
             try:
-                delivered = self.store.get(ChatTurn, case.delivered_turn_id)
+                delivered = await self.store.get(ChatTurn, case.delivered_turn_id)
             except NotFoundError:
                 # diagnostic-expected: the durable case records the missing turn as uncertain.
-                return self._update_case(
+                return await self._update_case(
                     case,
                     status="uncertain",
                     outcome="The accepted parent turn is unavailable; retry outcome is unknown.",
@@ -1524,12 +1592,12 @@ class ButlerRecoveryService:
         else:
             # Legacy queued cases remain readable; they are never replayed here.
             try:
-                queue = self.store.get(
+                queue = await self.store.get(
                     ChatQueue, "chat-queue-" + case.target_session_id
                 )
             except NotFoundError:
                 # diagnostic-expected: legacy cases retain an uncertain receipt if the queue is gone.
-                return self._update_case(
+                return await self._update_case(
                     case,
                     status="uncertain",
                     outcome="The parent follow-up queue is unavailable; retry outcome is unknown.",
@@ -1542,7 +1610,7 @@ class ButlerRecoveryService:
                 None,
             )
             if item is None:
-                return self._update_case(
+                return await self._update_case(
                     case,
                     status="uncertain",
                     outcome="The parent follow-up receipt was retired before verification.",
@@ -1552,7 +1620,7 @@ class ButlerRecoveryService:
             queued_turn_id = item.get("turn_id")
             turn_id = queued_turn_id if isinstance(queued_turn_id, str) else None
         if status in {"failed", "cancelled", "needs_review"}:
-            return self._update_case(
+            return await self._update_case(
                 case,
                 status="needs_attention",
                 outcome=f"The parent follow-up is {status.replace('_', ' ')}; no repair was verified.",
@@ -1563,8 +1631,8 @@ class ButlerRecoveryService:
             and status == "complete"
             and isinstance(turn_id, str)
         ):
-            idle_goals = self._global_idle_goal_count()
-            return self._update_case(
+            idle_goals = await self._global_idle_goal_count()
+            return await self._update_case(
                 case,
                 status="needs_attention" if idle_goals else "resolved",
                 outcome=(
@@ -1578,7 +1646,7 @@ class ButlerRecoveryService:
                 finished_at=utc_now(),
             )
         if isinstance(turn_id, str):
-            children = self.store.find_entities(
+            children = await self.store.find_entities(
                 ChatSubagent,
                 {"parent_turn_id": turn_id},
                 engagement_id=case.engagement_id,
@@ -1587,10 +1655,10 @@ class ButlerRecoveryService:
             original_task: str | None = None
             if case.source_tool_call_id:
                 try:
-                    original = self.store.get(ToolCall, case.source_tool_call_id)
+                    original = await self.store.get(ToolCall, case.source_tool_call_id)
                 except NotFoundError:
                     # diagnostic-expected: the case records missing retry evidence as uncertain.
-                    return self._update_case(
+                    return await self._update_case(
                         case,
                         status="uncertain",
                         outcome="The original subagent request is unavailable; its retry cannot be verified.",
@@ -1613,7 +1681,7 @@ class ButlerRecoveryService:
                 if any(
                     child.status == ChatSubagentStatus.COMPLETED for child in children
                 ):
-                    return self._update_case(
+                    return await self._update_case(
                         case,
                         status="resolved",
                         outcome="Core confirmed the parent retry started and completed a subagent.",
@@ -1622,44 +1690,46 @@ class ButlerRecoveryService:
                 if all(
                     child.status != ChatSubagentStatus.RUNNING for child in children
                 ):
-                    return self._update_case(
+                    return await self._update_case(
                         case,
                         status="needs_attention",
                         outcome="The parent retry started a subagent, but it did not complete successfully.",
                         finished_at=utc_now(),
                     )
             elif status == "complete":
-                return self._update_case(
+                return await self._update_case(
                     case,
                     status="needs_attention",
                     outcome="The parent follow-up completed without a confirmed retry of the original subagent task.",
                     finished_at=utc_now(),
                 )
         if case.started_at and utc_now() - case.started_at >= timedelta(minutes=20):
-            return self._update_case(
+            return await self._update_case(
                 case,
                 status="needs_attention",
                 outcome="The parent retry did not produce a confirmed result within 20 minutes.",
                 finished_at=utc_now(),
             )
-        return self._update_case(case, next_check_at=utc_now() + timedelta(seconds=30))
+        return await self._update_case(
+            case, next_check_at=utc_now() + timedelta(seconds=30)
+        )
 
     async def process_project(self, project_id: str, worker_id: str) -> None:
-        self.recover_interrupted_cases(project_id)
-        self.retry_overloaded_cases(project_id, worker_id)
+        (await self.recover_interrupted_cases(project_id))
+        (await self.retry_overloaded_cases(project_id, worker_id))
         try:
-            self.fire_global_periodic_check(project_id, worker_id)
+            (await self.fire_global_periodic_check(project_id, worker_id))
         except ButlerInstructionsError:
             # diagnostic-expected: overview exposes invalid global instructions.
             # The operator can repair the file; the existing project recovery
             # path continues and the invalid state is visible in overview.
             pass
-        self.fire_periodic_check(project_id, worker_id)
+        (await self.fire_periodic_check(project_id, worker_id))
         for _ in range(5):
-            consumed = self.capture_events(project_id, worker_id)
+            consumed = await self.capture_events(project_id, worker_id)
             if consumed < 100:
                 break
-        for verifying_case in self.store.find_entities(
+        for verifying_case in await self.store.find_entities(
             ButlerRecoveryCase,
             {"status": "verifying"},
             engagement_id=project_id,
@@ -1669,10 +1739,10 @@ class ButlerRecoveryService:
                 verifying_case.next_check_at is None
                 or verifying_case.next_check_at <= utc_now()
             ):
-                self.verify_follow_up(verifying_case)
+                (await self.verify_follow_up(verifying_case))
         if self.agent is None:
             return
-        case = self._claim_case(project_id, worker_id)
+        case = await self._claim_case(project_id, worker_id)
         if case is None:
             return
         try:
@@ -1681,9 +1751,9 @@ class ButlerRecoveryService:
             )
         except Exception as exc:
             # diagnostic-expected: the case records the investigation failure for operator review.
-            current = self.store.get(ButlerRecoveryCase, case.id)
-            overloaded = current.capacity_retry_count == 0 and _server_overloaded(
-                self.store, current
+            current = await self.store.get(ButlerRecoveryCase, case.id)
+            overloaded = current.capacity_retry_count == 0 and (
+                await _server_overloaded(self.store, current)
             )
             uncertain = _possible_change(current.steps)
             if overloaded:
@@ -1700,28 +1770,34 @@ class ButlerRecoveryService:
                 outcome = (
                     f"Butler could not finish the investigation ({type(exc).__name__})."
                 )
-            self._update_case(
-                current,
-                status=(
-                    "observed"
+            (
+                await self._update_case(
+                    current,
+                    status=(
+                        "observed"
+                        if overloaded
+                        else "uncertain"
+                        if uncertain
+                        else "needs_attention"
+                    ),
+                    outcome=outcome,
+                    capacity_retry_count=1
                     if overloaded
-                    else "uncertain"
-                    if uncertain
-                    else "needs_attention"
-                ),
-                outcome=outcome,
-                capacity_retry_count=1 if overloaded else current.capacity_retry_count,
-                next_check_at=utc_now() + timedelta(seconds=30) if overloaded else None,
-                finished_at=None if overloaded else utc_now(),
+                    else current.capacity_retry_count,
+                    next_check_at=utc_now() + timedelta(seconds=30)
+                    if overloaded
+                    else None,
+                    finished_at=None if overloaded else utc_now(),
+                )
             )
             return
-        current = self.store.get(ButlerRecoveryCase, case.id)
+        current = await self.store.get(ButlerRecoveryCase, case.id)
         idle_goals = (
-            self._global_idle_goal_count()
+            (await self._global_idle_goal_count())
             if case.signal == "butler.global_periodic_check"
             else 0
         )
-        policy = self.store.find_entity(
+        policy = await self.store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", project_id
         )
         unread_replies = [
@@ -1784,7 +1860,7 @@ class ButlerRecoveryService:
             outcome = "Act authority changed during the investigation."
             next_check = None
         elif current.dialogue_results:
-            blocked_goals = self._dialogue_blocked_goal_count(current)
+            blocked_goals = await self._dialogue_blocked_goal_count(current)
             failed_turns = sum(
                 item["status"] != "complete" for item in current.dialogue_results
             )
@@ -1836,15 +1912,19 @@ class ButlerRecoveryService:
                 )
             )
             next_check = None
-        self._update_case(
-            current,
-            status=status,
-            outcome=outcome[:1000],
-            model_backend=backend,
-            model_profile_id=profile_id,
-            model=model,
-            dialogue_review_retries=dialogue_review_retries,
-            model_turn_id=turn_id,
-            next_check_at=next_check,
-            finished_at=utc_now() if status not in {"verifying", "observed"} else None,
+        (
+            await self._update_case(
+                current,
+                status=status,
+                outcome=outcome[:1000],
+                model_backend=backend,
+                model_profile_id=profile_id,
+                model=model,
+                dialogue_review_retries=dialogue_review_retries,
+                model_turn_id=turn_id,
+                next_check_at=next_check,
+                finished_at=utc_now()
+                if status not in {"verifying", "observed"}
+                else None,
+            )
         )

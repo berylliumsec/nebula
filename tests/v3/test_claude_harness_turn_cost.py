@@ -13,6 +13,10 @@ transports of the other Claude harness tests; only the subprocess is replaced.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 from collections.abc import Callable
@@ -96,7 +100,9 @@ def turn_cost(events: list[HarnessEvent]) -> float | None:
     return turn_usage(events).cost_usd
 
 
-def test_claude_turn_cost_is_the_growth_of_the_session_total(tmp_path: Path) -> None:
+async def test_claude_turn_cost_is_the_growth_of_the_session_total(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> list[list[HarnessEvent]]:
         cli = ScriptedCli(
             [
@@ -112,7 +118,7 @@ def test_claude_turn_cost_is_the_growth_of_the_session_total(tmp_path: Path) -> 
         await connection.close()
         return turns
 
-    turns = asyncio.run(scenario())
+    turns = await scenario()
 
     assert [turn_cost(events) for events in turns] == pytest.approx([0.000105] * 3)
     # The running total stays visible next to the turn's own cost.
@@ -128,7 +134,7 @@ def test_claude_turn_cost_is_the_growth_of_the_session_total(tmp_path: Path) -> 
     ] * 3
 
 
-def test_claude_mission_spend_is_the_cli_session_total(tmp_path: Path) -> None:
+async def test_claude_mission_spend_is_the_cli_session_total(tmp_path: Path) -> None:
     async def scenario() -> tuple[AgentRun, int]:
         cli = ScriptedCli(
             [
@@ -153,12 +159,12 @@ def test_claude_mission_spend_is_the_cli_session_total(tmp_path: Path) -> None:
         await asyncio.wait_for(
             chat.service._mission_tasks[run.id], TURN_DEADLINE_SECONDS
         )
-        finished = chat.store.get(AgentRun, run.id)
+        finished = await chat.store.get(AgentRun, run.id)
         opened = len(chat.adapter.opened)
         await chat.service.shutdown()
         return finished, opened
 
-    finished, opened = asyncio.run(scenario())
+    finished, opened = await scenario()
 
     assert finished.status == RunStatus.COMPLETE
     assert opened == 1  # One CLI session answered every stage.
@@ -199,7 +205,7 @@ class ResumingAdapter(HarnessAdapter):
         )
 
 
-def test_claude_resumed_session_does_not_bill_its_earlier_spend(
+async def test_claude_resumed_session_does_not_bill_its_earlier_spend(
     tmp_path: Path,
 ) -> None:
     clis = [
@@ -221,11 +227,13 @@ def test_claude_resumed_session_does_not_bill_its_earlier_spend(
         for prompt in ("second", "third"):
             turn, _ = await chat.send(prompt)
             turns.append(turn)
-        events = [chat.service.activity_events(turn.id).events for turn in turns]
+        events = [
+            (await chat.service.activity_events(turn.id)).events for turn in turns
+        ]
         await chat.service.shutdown()
         return events, adapter.resumed
 
-    events, resumed = asyncio.run(scenario())
+    events, resumed = await scenario()
 
     assert resumed == [None, SESSION]
     first, second, third = (turn_cost(turn_events) for turn_events in events)
@@ -239,7 +247,7 @@ def test_claude_resumed_session_does_not_bill_its_earlier_spend(
     assert third == pytest.approx(0.03)
 
 
-def test_claude_session_total_that_drops_starts_a_new_baseline(
+async def test_claude_session_total_that_drops_starts_a_new_baseline(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> list[list[HarnessEvent]]:
@@ -259,12 +267,12 @@ def test_claude_session_total_that_drops_starts_a_new_baseline(
         await connection.close()
         return turns
 
-    turns = asyncio.run(scenario())
+    turns = await scenario()
 
     assert [turn_cost(events) for events in turns] == pytest.approx([0.3, 0.02, 0.03])
 
 
-def test_claude_steered_turn_cost_covers_both_cli_turns(tmp_path: Path) -> None:
+async def test_claude_steered_turn_cost_covers_both_cli_turns(tmp_path: Path) -> None:
     async def scenario() -> list[list[HarnessEvent]]:
         cli = QueueingCli(
             {
@@ -294,7 +302,7 @@ def test_claude_steered_turn_cost_covers_both_cli_turns(tmp_path: Path) -> None:
         await connection.close()
         return [first, steered, following]
 
-    first, steered, following = asyncio.run(scenario())
+    first, steered, following = await scenario()
 
     assert steered[-1].message == "Two hosts are up.\n\nPorts 22 and 443 are open."
     # Both CLI turns that answered the steered turn, and nothing before it.
@@ -324,7 +332,7 @@ BACKGROUND_TURN = [
 
 
 @pytest.mark.parametrize("out_of_band", ["stopped_turn", "background_turn"])
-def test_claude_turn_is_not_billed_for_spend_before_its_prompt(
+async def test_claude_turn_is_not_billed_for_spend_before_its_prompt(
     tmp_path: Path, out_of_band: str
 ) -> None:
     async def scenario() -> list[HarnessEvent]:
@@ -368,7 +376,10 @@ def test_claude_turn_is_not_billed_for_spend_before_its_prompt(
         await connection.close()
         return following
 
-    following = asyncio.run(scenario())
+    following = await scenario()
 
     assert following[-1].message == "next answer"
     assert turn_cost(following) == pytest.approx(0.02)
+
+
+pytestmark = pytest.mark.anyio

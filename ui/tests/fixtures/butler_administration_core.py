@@ -12,12 +12,12 @@ else:
     from butler_runtime_settings_core import create_fixture_app as _create
 
 
-def create_fixture_app(*args: Any, **kwargs: Any):
+async def create_fixture_app(*args: Any, **kwargs: Any):
     app = _create(*args, **kwargs)
     store = app.state.store
     project = next(
         row
-        for row in store.list_entities(Engagement, limit=100)
+        for row in (await store.list_entities(Engagement, limit=100))
         if row.name == "Runtime administration fixture"
     )
     workspace = kwargs["tool_platform"].workspace_for(project.id)
@@ -45,29 +45,35 @@ def create_fixture_app(*args: Any, **kwargs: Any):
     ):
         subprocess.run(command, check=True, capture_output=True, timeout=15)
     (workspace / "fixture.txt").write_text("Changed fixture\n")
-    store.create(
-        Observation(
-            observation_type="note",
-            engagement_id=project.id,
-            title="Selected metadata note",
-            body="Synthetic saved note.",
+    (
+        await store.create(
+            Observation(
+                observation_type="note",
+                engagement_id=project.id,
+                title="Selected metadata note",
+                body="Synthetic saved note.",
+            )
         )
     )
-    store.create(
-        ChatSession(
-            provider_profile_id="fixture-provider",
-            engagement_id=project.id,
-            title="Selected metadata conversation",
-            model="fixture",
+    (
+        await store.create(
+            ChatSession(
+                provider_profile_id="fixture-provider",
+                engagement_id=project.id,
+                title="Selected metadata conversation",
+                model="fixture",
+            )
         )
     )
-    store.create(
-        ChatSession(
-            provider_profile_id="fixture-provider",
-            engagement_id=project.id,
-            title="Selected metadata private Butler",
-            model="fixture",
-            metadata={"control_assistant": True},
+    (
+        await store.create(
+            ChatSession(
+                provider_profile_id="fixture-provider",
+                engagement_id=project.id,
+                title="Selected metadata private Butler",
+                model="fixture",
+                metadata={"control_assistant": True},
+            )
         )
     )
     return app

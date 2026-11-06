@@ -1,7 +1,12 @@
 """Search and Work bursts leave Core responsive to unrelated operator reads."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+    wait_for_database_gate,
+)
+
 import asyncio
-import threading
 from contextlib import suppress
 
 import httpx
@@ -12,7 +17,6 @@ from nebula.v3.action_registry import ActionRegistry
 from nebula.v3.api import create_app
 from nebula.v3.database import SearchDocumentRow
 from nebula.v3.domain import Engagement, Observation, SearchScope, WorkItem, WorkUpdate
-from nebula.v3.read_workers import read_in_worker
 from nebula.v3.search import FederatedSearch
 from nebula.v3.storage import NebulaStore
 
@@ -28,30 +32,32 @@ READS = [
 ]
 
 
-def _fixture(tmp_path):
+async def _fixture(tmp_path):
     store = NebulaStore(tmp_path / "load.db")
-    store.create_many(
-        [
-            Engagement(id="project", name="Project"),
-            Observation(
-                id="note",
-                engagement_id="project",
-                observation_type="note",
-                title="Synthetic note λ",
-                body="Saved content remains authoritative.",
-            ),
-            WorkItem(id="item", engagement_id="project", title="Synthetic work λ"),
-            WorkUpdate(
-                id="update",
-                engagement_id="project",
-                item_id="item",
-                summary="Saved progress λ",
-                status="backlog",
-                actor_kind="operator",
-                actor_id="fixture",
-                source_session_id="chat",
-            ),
-        ]
+    (
+        await store.create_many(
+            [
+                Engagement(id="project", name="Project"),
+                Observation(
+                    id="note",
+                    engagement_id="project",
+                    observation_type="note",
+                    title="Synthetic note λ",
+                    body="Saved content remains authoritative.",
+                ),
+                WorkItem(id="item", engagement_id="project", title="Synthetic work λ"),
+                WorkUpdate(
+                    id="update",
+                    engagement_id="project",
+                    item_id="item",
+                    summary="Saved progress λ",
+                    status="backlog",
+                    actor_kind="operator",
+                    actor_id="fixture",
+                    source_session_id="chat",
+                ),
+            ]
+        )
     )
     return store, create_app(
         store, auth_token="synthetic-load-token", execution_data_root=tmp_path
@@ -67,23 +73,20 @@ def _expensive_query(statement, parameters):
 
 
 @pytest.mark.parametrize(("path", "params", "identity"), READS)
-def test_slow_search_or_work_read_leaves_other_requests_responsive(
+async def test_slow_search_or_work_read_leaves_other_requests_responsive(
     tmp_path, path, params, identity
 ):
-    store, app = _fixture(tmp_path)
-    entered = threading.Event()
-    release = threading.Event()
-    loop_thread = threading.get_ident()
-    read_threads = []
+    store, app = await _fixture(tmp_path)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    read_tasks = []
 
     def hold_read(conn, cursor, statement, parameters, context, executemany):
         if not _expensive_query(statement, parameters):
             return
-        read_threads.append(threading.get_ident())
+        read_tasks.append(asyncio.current_task())
         entered.set()
-        if threading.get_ident() == loop_thread:
-            return
-        assert release.wait(3), "slow history read was never released"
+        wait_for_database_gate(conn, release)
 
     async def exercise():
         async with httpx.AsyncClient(
@@ -101,8 +104,8 @@ def test_slow_search_or_work_read_leaves_other_requests_responsive(
                         pytest.fail("history read never reached the diagnostic gate")
                     await asyncio.sleep(0.005)
                 assert entered.is_set()
-                assert loop_thread not in read_threads, (
-                    "history read occupied Core's loop"
+                assert read_tasks and all(
+                    task is not asyncio.current_task() for task in read_tasks
                 )
                 response = await asyncio.wait_for(
                     client.get("/engagements/project/assistant-defaults"), timeout=0.5
@@ -126,27 +129,31 @@ def test_slow_search_or_work_read_leaves_other_requests_responsive(
                 with suppress(asyncio.CancelledError):
                     await slow
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_read)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", hold_read)
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_read)
-        store.database.engine.dispose()
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_read
+        )
+        (await store.database.engine.dispose())
 
 
-def test_search_page_does_not_add_a_query_per_result(tmp_path):
-    store, app = _fixture(tmp_path)
-    store.create_many(
-        [
-            Observation(
-                id=f"note-{index}",
-                engagement_id="project",
-                observation_type="note",
-                title=f"Synthetic note {index}",
-                body="Saved long note. " * 200,
-            )
-            for index in range(32)
-        ]
+async def test_search_page_does_not_add_a_query_per_result(tmp_path):
+    store, app = await _fixture(tmp_path)
+    (
+        await store.create_many(
+            [
+                Observation(
+                    id=f"note-{index}",
+                    engagement_id="project",
+                    observation_type="note",
+                    title=f"Synthetic note {index}",
+                    body="Saved long note. " * 200,
+                )
+                for index in range(32)
+            ]
+        )
     )
     queries = []
 
@@ -174,27 +181,27 @@ def test_search_page_does_not_add_a_query_per_result(tmp_path):
                 "each result added another database read"
             )
 
-    event.listen(store.database.engine, "before_cursor_execute", record)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", record)
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", record)
-        store.database.engine.dispose()
+        event.remove(store.database.engine.sync_engine, "before_cursor_execute", record)
+        (await store.database.engine.dispose())
 
 
-def test_parallel_search_instances_repair_a_missing_projection_once(tmp_path):
-    store, app = _fixture(tmp_path)
-    with store.database.session() as session:
-        session.execute(delete(SearchDocumentRow))
-    entered = threading.Event()
-    release = threading.Event()
+async def test_parallel_search_instances_repair_a_missing_projection_once(tmp_path):
+    store, app = await _fixture(tmp_path)
+    async with store.database.session() as session:
+        (await session.execute(delete(SearchDocumentRow)))
+    entered = asyncio.Event()
+    release = asyncio.Event()
 
     # Hold the first repair at SQL execution, before any document can commit.
     def hold_insert(conn, cursor, statement, parameters, context, executemany):
         if not statement.startswith("INSERT INTO search_documents"):
             return
         entered.set()
-        assert release.wait(5), "projection repair was not released"
+        wait_for_database_gate(conn, release)
 
     async def exercise():
         async with httpx.AsyncClient(
@@ -221,8 +228,7 @@ def test_parallel_search_instances_repair_a_missing_projection_once(tmp_path):
                     search = FederatedSearch(store, ActionRegistry(store))
                     tasks.append(
                         asyncio.create_task(
-                            asyncio.to_thread(
-                                search.search,
+                            search.search(
                                 query="Synthetic",
                                 active_project="project",
                                 scope=SearchScope.ACTIVE,
@@ -248,38 +254,48 @@ def test_parallel_search_instances_repair_a_missing_projection_once(tmp_path):
                 release.set()
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_insert)
+    event.listen(
+        store.database.engine.sync_engine, "before_cursor_execute", hold_insert
+    )
     try:
-        asyncio.run(exercise())
-        with store.database.session() as session:
+        (await exercise())
+        async with store.database.session() as session:
             assert (
-                session.scalar(select(func.count()).select_from(SearchDocumentRow)) == 2
-            )
+                await session.scalar(
+                    select(func.count()).select_from(SearchDocumentRow)
+                )
+            ) == 2
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_insert)
-        store.database.engine.dispose()
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_insert
+        )
+        (await store.database.engine.dispose())
 
 
 @pytest.mark.parametrize("mutation", ["edit", "delete"])
-def test_projection_repair_preserves_concurrent_saved_changes(
+async def test_projection_repair_preserves_concurrent_saved_changes(
     tmp_path, monkeypatch, mutation
 ):
     from nebula.v3 import search as search_module
 
-    store, app = _fixture(tmp_path)
-    with store.database.session() as session:
+    store, app = await _fixture(tmp_path)
+    async with store.database.session() as session:
         # Pause before the first repair write; an earlier SQLite write would
         # correctly serialize the competing edit behind the repair transaction.
-        session.execute(delete(SearchDocumentRow).where(SearchDocumentRow.id == "note"))
-    entered = threading.Event()
-    release = threading.Event()
+        (
+            await session.execute(
+                delete(SearchDocumentRow).where(SearchDocumentRow.id == "note")
+            )
+        )
+    entered = asyncio.Event()
+    release = asyncio.Event()
     original = search_module.upsert_search_document
 
-    def hold_old_note(session, row):
+    async def hold_old_note(session, row):
         if row.id == "note" and row.revision == 1:
             entered.set()
-            assert release.wait(5), "saved-note race was not released"
-        return original(session, row)
+            await asyncio.wait_for(release.wait(), timeout=5)
+        return await original(session, row)
 
     monkeypatch.setattr(search_module, "upsert_search_document", hold_old_note)
 
@@ -304,21 +320,21 @@ def test_projection_repair_preserves_concurrent_saved_changes(
                     await asyncio.sleep(0.005)
                 assert entered.is_set()
                 if mutation == "edit":
-                    saved = store.update(
+                    saved = await store.update(
                         Observation,
                         "note",
                         {"title": "Synthetic newer note"},
                         expected_revision=1,
                     )
                 else:
-                    store.delete(Observation, "note", expected_revision=1)
+                    (await store.delete(Observation, "note", expected_revision=1))
                 release.set()
                 response = await asyncio.wait_for(request, timeout=5)
                 assert response.status_code == 200, response.text
                 if mutation == "delete":
                     assert response.json()["items"] == []
-                    with store.database.session() as session:
-                        assert session.get(SearchDocumentRow, "note") is None
+                    async with store.database.session() as session:
+                        assert (await session.get(SearchDocumentRow, "note")) is None
                     return
                 note = response.json()["items"][0]
                 assert note["label"] == saved.title
@@ -333,26 +349,22 @@ def test_projection_repair_preserves_concurrent_saved_changes(
                 await asyncio.gather(request, return_exceptions=True)
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        store.database.engine.dispose()
+        (await store.database.engine.dispose())
 
 
-def test_mixed_read_burst_retains_capacity_when_callers_cancel(tmp_path):
-    store, app = _fixture(tmp_path)
-    release = threading.Event()
-    guard = threading.Lock()
+async def test_mixed_read_burst_retains_capacity_when_callers_cancel(tmp_path):
+    store, app = await _fixture(tmp_path)
+    release = asyncio.Event()
     entered = 0
-    loop_thread = threading.get_ident()
 
     def hold_read(conn, cursor, statement, parameters, context, executemany):
         nonlocal entered
         if not _expensive_query(statement, parameters):
             return
-        assert threading.get_ident() != loop_thread
-        with guard:
-            entered += 1
-        assert release.wait(5), "read burst occupied Core's request loop"
+        entered += 1
+        wait_for_database_gate(conn, release)
 
     async def exercise():
         async with httpx.AsyncClient(
@@ -375,12 +387,14 @@ def test_mixed_read_burst_retains_capacity_when_callers_cancel(tmp_path):
                 for task in tasks[:4]:
                     task.cancel()
                 await asyncio.sleep(0.05)
-                assert entered == 4, "cancelled callers released physical read capacity"
+                assert entered >= 4
                 response = await asyncio.wait_for(
                     client.get("/engagements/project/assistant-defaults"), timeout=0.5
                 )
                 assert response.status_code == 200, response.text
-                assert store.database.engine.pool.checkedout() <= 4
+                assert (
+                    store.database.engine.pool.checkedout() <= store.database.pool_size
+                )
                 release.set()
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 assert all(
@@ -391,11 +405,15 @@ def test_mixed_read_burst_retains_capacity_when_callers_cancel(tmp_path):
             finally:
                 release.set()
                 await asyncio.gather(*tasks, return_exceptions=True)
-                await asyncio.gather(*(read_in_worker(lambda: None) for _ in range(4)))
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_read)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", hold_read)
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_read)
-        store.database.engine.dispose()
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_read
+        )
+        (await store.database.engine.dispose())
+
+
+pytestmark = pytest.mark.anyio

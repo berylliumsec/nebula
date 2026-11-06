@@ -362,7 +362,7 @@ class TerminalProcess:
 
 
 @pytest.fixture
-def lan_core(tmp_path, monkeypatch):
+async def lan_core(tmp_path, monkeypatch):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.connect(("192.0.2.1", 9))
         address = probe.getsockname()[0]
@@ -415,7 +415,7 @@ def lan_core(tmp_path, monkeypatch):
         "---\nname: review\ndescription: Summarize the synthetic document.\n---\nRead the synthetic notes and return a concise summary.\n"
     )
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(
+    project = await store.create(
         Engagement(
             id="terminal-project",
             name="Terminal Project",
@@ -427,22 +427,26 @@ def lan_core(tmp_path, monkeypatch):
             },
         )
     )
-    store.create(
-        ProviderProfile(
-            id="provider-a",
-            name="Synthetic provider",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
-            metadata={"options": {"context_window": 32768, "max_output_tokens": 2048}},
-            capabilities={"streaming": True, "tool_calling": True, "vision": True},
-            capability_verifications={
-                "model-a": {"model": "model-a", "status": "verified"}
-            },
-            privacy={"local_only": True, "permits_sensitive_data": True},
+    (
+        await store.create(
+            ProviderProfile(
+                id="provider-a",
+                name="Synthetic provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={
+                    "options": {"context_window": 32768, "max_output_tokens": 2048}
+                },
+                capabilities={"streaming": True, "tool_calling": True, "vision": True},
+                capability_verifications={
+                    "model-a": {"model": "model-a", "status": "verified"}
+                },
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
         )
     )
-    profile = store.create(
+    profile = await store.create(
         HarnessProfile(
             id="harness-a",
             name="Synthetic harness",
@@ -460,7 +464,7 @@ def lan_core(tmp_path, monkeypatch):
             privacy={"local_only": True, "permits_sensitive_data": True},
         )
     )
-    mcp = store.create(
+    mcp = await store.create(
         McpServerProfile(
             id="fixture-mcp",
             name="fixture",
@@ -498,27 +502,29 @@ def lan_core(tmp_path, monkeypatch):
         workspace_resolver=lambda _: workspace,
         adapter_factory=lambda _: Adapter(),
     )
-    harness_session = runtime.create_session(
+    harness_session = await runtime.create_session(
         engagement_id=project.id,
         profile_id=profile.id,
         model="model-a",
         tools_enabled=False,
         mcp_server_ids=[mcp.id],
     )
-    store.create(
-        ChatSession(
-            id="harness-chat",
-            title="Harness chat",
-            engagement_id=project.id,
-            backend="harness",
-            model="model-a",
-            harness_profile_id=profile.id,
-            harness_session_id=harness_session.id,
-            metadata={
-                "initial_title_state": "operator",
-                "include_knowledge": False,
-                "mcp_server_ids": [mcp.id],
-            },
+    (
+        await store.create(
+            ChatSession(
+                id="harness-chat",
+                title="Harness chat",
+                engagement_id=project.id,
+                backend="harness",
+                model="model-a",
+                harness_profile_id=profile.id,
+                harness_session_id=harness_session.id,
+                metadata={
+                    "initial_title_state": "operator",
+                    "include_knowledge": False,
+                    "mcp_server_ids": [mcp.id],
+                },
+            )
         )
     )
     provider = Provider("provider-a")

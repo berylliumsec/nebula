@@ -1,6 +1,10 @@
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from tests.v3.test_chat_queue import setup_queue, enqueue
 from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.chat_decisions import (
@@ -11,16 +15,18 @@ from nebula.v3.chat_decisions import (
 from nebula.v3.domain import ChatSession, ChatMessage, ChatTurn
 
 
-def fixture(tmp_path):
-    store, queue, request = setup_queue(tmp_path)
-    store.create(
-        ChatMessage(
-            id="source",
-            engagement_id="p",
-            session_id="s",
-            sequence=1,
-            role="user",
-            content="Use plain language. Keep answers short.",
+async def fixture(tmp_path):
+    store, queue, request = await setup_queue(tmp_path)
+    (
+        await store.create(
+            ChatMessage(
+                id="source",
+                engagement_id="p",
+                session_id="s",
+                sequence=1,
+                role="user",
+                content="Use plain language. Keep answers short.",
+            )
         )
     )
     app = FastAPI()
@@ -29,10 +35,10 @@ def fixture(tmp_path):
     return store, queue, request, client
 
 
-def test_explicit_revision_provenance_and_project_promotion(tmp_path):
-    store, _, _, client = fixture(tmp_path)
+async def test_explicit_revision_provenance_and_project_promotion(tmp_path):
+    store, _, _, client = await fixture(tmp_path)
     path = "/chat/sessions/s/decisions/d"
-    created = client.put(
+    created = await client.put(
         path,
         json={
             "expected_revision": 0,
@@ -44,46 +50,45 @@ def test_explicit_revision_provenance_and_project_promotion(tmp_path):
     )
     assert created.status_code == 200, created.text
     assert (
-        client.put(
+        await client.put(
             path,
             json={
                 "expected_revision": 1,
                 "text": "Use plain language and short paragraphs",
             },
-        ).status_code
-        == 200
-    )
+        )
+    ).status_code == 200
     assert (
-        client.put(path, json={"expected_revision": 1, "text": "stale"}).status_code
-        >= 400
-    )
-    item = client.get("/chat/sessions/s/decisions").json()[0]
+        await client.put(path, json={"expected_revision": 1, "text": "stale"})
+    ).status_code >= 400
+    item = (await client.get("/chat/sessions/s/decisions")).json()[0]
     assert item["history"][0]["text"] == "Use plain language"
     assert item["source_selection"] == "Use plain language."
     assert (
-        client.put(path, json={"expected_revision": 2, "action": "promote"}).status_code
-        == 200
-    )
-    store.create(
-        ChatSession(
-            id="other",
-            engagement_id="p",
-            title="Other",
-            model="model-a",
-            provider_profile_id="provider-a",
+        await client.put(path, json={"expected_revision": 2, "action": "promote"})
+    ).status_code == 200
+    (
+        await store.create(
+            ChatSession(
+                id="other",
+                engagement_id="p",
+                title="Other",
+                model="model-a",
+                provider_profile_id="provider-a",
+            )
         )
     )
-    snapshot = decision_snapshot(store, "other", "p")
+    snapshot = await decision_snapshot(store, "other", "p")
     assert len(snapshot) == 1 and snapshot[0]["scope"] == "project"
     assert snapshot[0]["source_message_id"] == "source"
-    assert len(decision_snapshot(store, "s", "p")) == 1
+    assert len((await decision_snapshot(store, "s", "p"))) == 1
 
 
-def test_sources_must_be_exact_and_forks_keep_applicable_provenance(tmp_path):
-    store, queue, _, client = fixture(tmp_path)
+async def test_sources_must_be_exact_and_forks_keep_applicable_provenance(tmp_path):
+    store, queue, _, client = await fixture(tmp_path)
     path = "/chat/sessions/s/decisions/d"
     assert (
-        client.put(
+        await client.put(
             path,
             json={
                 "expected_revision": 0,
@@ -91,11 +96,10 @@ def test_sources_must_be_exact_and_forks_keep_applicable_provenance(tmp_path):
                 "source_message_id": "source",
                 "source_selection": "Invented text",
             },
-        ).status_code
-        == 422
-    )
+        )
+    ).status_code == 422
     assert (
-        client.put(
+        await client.put(
             path,
             json={
                 "expected_revision": 0,
@@ -103,21 +107,22 @@ def test_sources_must_be_exact_and_forks_keep_applicable_provenance(tmp_path):
                 "source_message_id": "source",
                 "source_selection": "Use plain language.",
             },
-        ).status_code
-        == 200
-    )
+        )
+    ).status_code == 200
     before = queue.chat.fork_session("s", before_message_id="source")
-    assert decision_snapshot(store, before.id, "p") == []
+    assert (await decision_snapshot(store, before.id, "p")) == []
     after = queue.chat.fork_session("s", through_message_id="source")
-    copied = decision_snapshot(store, after.id, "p")
+    copied = await decision_snapshot(store, after.id, "p")
     assert copied[0]["source_message_id"] == "source"
     assert copied[0]["id"] != "d"
 
 
-def test_unresolved_question_remains_authoritative_until_explicit_resolution(tmp_path):
-    store, _, _, client = fixture(tmp_path)
+async def test_unresolved_question_remains_authoritative_until_explicit_resolution(
+    tmp_path,
+):
+    store, _, _, client = await fixture(tmp_path)
     path = "/chat/sessions/s/decisions/question"
-    created = client.put(
+    created = await client.put(
         path,
         json={
             "expected_revision": 0,
@@ -126,69 +131,65 @@ def test_unresolved_question_remains_authoritative_until_explicit_resolution(tmp
         },
     )
     assert created.status_code == 200, created.text
-    snapshot = decision_snapshot(store, "s", "p")
+    snapshot = await decision_snapshot(store, "s", "p")
     assert snapshot[0]["kind"] == "question"
     instructions = decision_instructions(snapshot)
     assert "authoritative outside derived summaries" in instructions
     assert "remain unresolved" in instructions
     assert "Which production region is authoritative?" in instructions
 
-    removed = client.put(
+    removed = await client.put(
         path,
         json={"expected_revision": 1, "action": "remove"},
     )
     assert removed.status_code == 200, removed.text
-    assert decision_snapshot(store, "s", "p") == []
+    assert (await decision_snapshot(store, "s", "p")) == []
 
 
-def test_queued_dispatch_uses_current_decisions_and_freezes_revision(tmp_path):
-    store, service, request, client = fixture(tmp_path)
+async def test_queued_dispatch_uses_current_decisions_and_freezes_revision(tmp_path):
+    store, service, request, client = await fixture(tmp_path)
     path = "/chat/sessions/s/decisions/d"
 
     async def run():
-        queue = enqueue(service, request, paused=True)
+        queue = await enqueue(service, request, paused=True)
         assert (
-            client.put(
+            await client.put(
                 path, json={"expected_revision": 0, "text": "First decision"}
-            ).status_code
-            == 200
-        )
+            )
+        ).status_code == 200
         assert (
-            client.put(
+            await client.put(
                 path, json={"expected_revision": 1, "text": "Current dispatch decision"}
-            ).status_code
-            == 200
-        )
+            )
+        ).status_code == 200
         from nebula.v3.chat_queue import QueueWrite
 
-        queue = service.write(
+        queue = await service.write(
             "s", QueueWrite(action="resume", expected_revision=queue.revision)
         )
         await service.step(queue)
-        item = service.get("s").items[0]
-        turn = store.get(ChatTurn, item["turn_id"])
+        item = (await service.get("s")).items[0]
+        turn = await store.get(ChatTurn, item["turn_id"])
         assert turn.request_snapshot["operator_decisions"][0]["revision"] == 2
         assert (
             "Current dispatch decision"
-            in resolve_request_snapshot(
-                store, turn.request_snapshot, session_id=turn.session_id
+            in (
+                await resolve_request_snapshot(
+                    store, turn.request_snapshot, session_id=turn.session_id
+                )
             )["model_request"]["instructions"]
         )
         assert (
-            client.put(
+            await client.put(
                 path, json={"expected_revision": 2, "text": "Only subsequent turns"}
-            ).status_code
-            == 200
-        )
-        assert (
-            store.get(ChatTurn, item["turn_id"]).request_snapshot["operator_decisions"][
-                0
-            ]["text"]
-            == "Current dispatch decision"
-        )
+            )
+        ).status_code == 200
+        assert (await store.get(ChatTurn, item["turn_id"])).request_snapshot[
+            "operator_decisions"
+        ][0]["text"] == "Current dispatch decision"
         await service.chat.shutdown()
 
-    asyncio.run(run())
+    (await run())
 
 
 def test_managed_chat_records_cannot_bypass_workflow_routes(tmp_path):
@@ -201,12 +202,12 @@ def test_managed_chat_records_cannot_bypass_workflow_routes(tmp_path):
         assert not any(f"/{kind}" in path for path in paths)
 
 
-def test_harness_submits_and_freezes_explicit_context(tmp_path):
+async def test_harness_submits_and_freezes_explicit_context(tmp_path):
     from tests.v3.test_harnesses import _runtime
     from nebula.v3.domain import ChatDecision
 
-    store, project, profile, _, _, runtime = _runtime(tmp_path)
-    chat, _, _ = runtime.prepare_chat(
+    store, project, profile, _, _, runtime = await _runtime(tmp_path)
+    chat, _, _ = await runtime.prepare_chat(
         engagement_id=project.id,
         profile_id=profile.id,
         model=None,
@@ -217,7 +218,7 @@ def test_harness_submits_and_freezes_explicit_context(tmp_path):
     )
     # The first turn is deliberately not executed; create a project entry and
     # prepare a separate chat to verify the shared scope boundary.
-    decision = store.create(
+    decision = await store.create(
         ChatDecision(
             engagement_id=project.id,
             scope="project",
@@ -225,7 +226,7 @@ def test_harness_submits_and_freezes_explicit_context(tmp_path):
             text="Explain uncertainty explicitly",
         )
     )
-    _, turn, harness_turn = runtime.prepare_chat(
+    _, turn, harness_turn = await runtime.prepare_chat(
         engagement_id=project.id,
         profile_id=profile.id,
         model=None,
@@ -236,10 +237,15 @@ def test_harness_submits_and_freezes_explicit_context(tmp_path):
     )
     assert turn.request_snapshot["operator_decisions"][0]["id"] == decision.id
     assert "Explain uncertainty explicitly" in harness_turn.prompt
-    store.update(
-        ChatDecision,
-        decision.id,
-        {"text": "Only future work"},
-        expected_revision=decision.revision,
+    (
+        await store.update(
+            ChatDecision,
+            decision.id,
+            {"text": "Only future work"},
+            expected_revision=decision.revision,
+        )
     )
     assert "Only future work" not in harness_turn.prompt
+
+
+pytestmark = pytest.mark.anyio

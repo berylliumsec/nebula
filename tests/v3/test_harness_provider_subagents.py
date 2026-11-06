@@ -1,6 +1,10 @@
 """Harness chats delegating to a Nebula provider model as a subagent."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -214,25 +218,25 @@ class ScriptedAdapter(HarnessAdapter):
         return connection
 
 
-def _setup(
+async def _setup(
     tmp_path: Path,
     *,
     providers: dict[str, ChildProvider] | None = None,
     local_only_project: bool = False,
 ):
     store = NebulaStore(tmp_path / "nebula.db")
-    project = store.create(Engagement(id="project", name="Provider subagents"))
+    project = await store.create(Engagement(id="project", name="Provider subagents"))
     if local_only_project:
-        policy = store.create(
+        policy = await store.create(
             ScopePolicy(id="policy", engagement_id=project.id, local_only=True)
         )
-        project = store.update(
+        project = await store.update(
             Engagement,
             project.id,
             {"scope_policy_id": policy.id},
             expected_revision=project.revision,
         )
-    harness = store.create(
+    harness = await store.create(
         HarnessProfile(
             id="codex",
             name="Codex fixture",
@@ -244,20 +248,22 @@ def _setup(
     )
     providers = providers or {"provider": ChildProvider()}
     for provider_id, provider in providers.items():
-        store.create(
-            ProviderProfile(
-                id=provider_id,
-                name=provider_id.title(),
-                provider_type="vllm" if provider.config.local else "openrouter",
-                is_local=provider.config.local,
-                model_allowlist=["model-a", "model-unverified"],
-                capabilities={"streaming": True, "tool_calling": True},
-                capability_verifications={
-                    "model-a": ProviderCapabilityVerification(
-                        model="model-a", status=ProviderVerificationStatus.VERIFIED
-                    )
-                },
-                privacy={"permits_sensitive_data": provider_id != "closed"},
+        (
+            await store.create(
+                ProviderProfile(
+                    id=provider_id,
+                    name=provider_id.title(),
+                    provider_type="vllm" if provider.config.local else "openrouter",
+                    is_local=provider.config.local,
+                    model_allowlist=["model-a", "model-unverified"],
+                    capabilities={"streaming": True, "tool_calling": True},
+                    capability_verifications={
+                        "model-a": ProviderCapabilityVerification(
+                            model="model-a", status=ProviderVerificationStatus.VERIFIED
+                        )
+                    },
+                    privacy={"permits_sensitive_data": provider_id != "closed"},
+                )
             )
         )
     chat = ChatService(
@@ -281,9 +287,11 @@ def _setup(
 SETTING = {"provider_profile_id": "provider", "model": "model-a"}
 
 
-def test_harness_delegates_to_harness_and_reuses_child_for_another_round(tmp_path):
+async def test_harness_delegates_to_harness_and_reuses_child_for_another_round(
+    tmp_path,
+):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
         setting = {"harness_profile_id": harness.id, "model": "gpt-test"}
         seen: dict = {}
 
@@ -317,12 +325,14 @@ def test_harness_delegates_to_harness_and_reuses_child_for_another_round(tmp_pat
             runtime, project, harness, "Delegate the work.", setting=setting
         )
         await runtime.start_chat_turn(turn.id)
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE, (
-            store.get(HarnessTurn, turn.id).error,
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE, (
+            (await store.get(HarnessTurn, turn.id)).error,
             seen,
         )
-        record = store.get(ChatSubagent, seen["started"]["subagent_id"])
-        child = store.get(ChatSession, record.child_session_id)
+        record = await store.get(ChatSubagent, seen["started"]["subagent_id"])
+        child = await store.get(ChatSession, record.child_session_id)
         assert child.backend == ChatBackend.HARNESS
         assert child.harness_profile_id == harness.id
         assert child.parent_session_id == parent.id
@@ -337,12 +347,12 @@ def test_harness_delegates_to_harness_and_reuses_child_for_another_round(tmp_pat
         assert seen["message"]["delivery"] == "new_round"
         assert seen["second"]["subagents"][0]["report"] == "The correction is complete."
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_subagent_stop_cancels_its_harness_turn(tmp_path):
+async def test_harness_subagent_stop_cancels_its_harness_turn(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
         gate = asyncio.Event()
         seen: dict = {}
 
@@ -372,18 +382,17 @@ def test_harness_subagent_stop_cancels_its_harness_turn(tmp_path):
             setting={"harness_profile_id": harness.id, "model": "gpt-test"},
         )
         await runtime.start_chat_turn(parent_turn.id)
-        record = store.get(ChatSubagent, seen["id"])
-        child_turn = store.get(ChatTurn, record.child_turn_id)
+        record = await store.get(ChatSubagent, seen["id"])
+        child_turn = await store.get(ChatTurn, record.child_turn_id)
         assert seen["stopped"]["status"] == "stopped"
         assert record.status == ChatSubagentStatus.STOPPED
         assert child_turn.harness_turn_id
         assert (
-            store.get(HarnessTurn, child_turn.harness_turn_id).status
-            == HarnessTurnStatus.CANCELLED
-        )
+            await store.get(HarnessTurn, child_turn.harness_turn_id)
+        ).status == HarnessTurnStatus.CANCELLED
         gate.set()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def _prepare(runtime, project, harness, prompt, *, chat_id=None, setting=SETTING):
@@ -412,21 +421,21 @@ def _payload(response: dict) -> dict:
     return json.loads(response["content"][0]["text"])
 
 
-def _messages(store: NebulaStore, session_id: str) -> list[ChatMessage]:
+async def _messages(store: NebulaStore, session_id: str) -> list[ChatMessage]:
     return sorted(
         (
             item
-            for item in store.list_entities(ChatMessage, limit=1_000)
+            for item in (await store.list_entities(ChatMessage, limit=1_000))
             if item.session_id == session_id
         ),
         key=lambda item: item.sequence,
     )
 
 
-def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
+async def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Found 3 route files."]
         seen: dict = {}
 
@@ -452,16 +461,18 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
         )
         await runtime.start_chat_turn(turn.id)
 
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE, (
-            store.get(HarnessTurn, turn.id).error
-        )
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE, (
+            await store.get(HarnessTurn, turn.id)
+        ).error
         assert seen["started"]["model"] == "model-a"
         report = seen["waited"]["subagents"][0]
         assert report["report"] == "Found 3 route files."
         assert seen["waited"]["still_running"] == []
         assert seen["listed"]["subagents"][0]["status"] == "completed"
 
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert record.parent_backend == ChatBackend.HARNESS
         assert record.parent_session_id == parent_chat.id
         assert record.parent_turn_id == chat_turn.id
@@ -469,7 +480,7 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
         assert record.status == ChatSubagentStatus.COMPLETED
         # The harness read the report through subagent.wait.
         assert record.reported_at is not None
-        child_session = store.get(ChatSession, record.child_session_id)
+        child_session = await store.get(ChatSession, record.child_session_id)
         assert child_session.backend == ChatBackend.PROVIDER
         assert child_session.provider_profile_id == "provider"
         assert child_session.model == "model-a"
@@ -482,7 +493,7 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
         # Each gateway call is a durable tool call on the harness turn.
         calls = [
             item
-            for item in store.list_entities(ToolCall, limit=100)
+            for item in (await store.list_entities(ToolCall, limit=100))
             if item.chat_turn_id == chat_turn.id
         ]
         assert sorted(item.tool_name for item in calls) == [
@@ -496,22 +507,24 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
         await _until(
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
-        messages = _messages(store, parent_chat.id)
+        messages = await _messages(store, parent_chat.id)
         assert messages[-2].content == "There are three route files."
         assert messages[-1].metadata["kind"] == "subagent_result"
         assert messages[-1].content.startswith("Subagent finished: Count routes")
-        view = chat.subagents.view(store.get(ChatSubagent, record.id))
+        view = await chat.subagents.view((await store.get(ChatSubagent, record.id)))
         assert view["model"] == "model-a"
         assert view["parent_backend"] == "harness"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path):
+async def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child_provider = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child_provider = chat.provider_factory(
+            (await store.get(ProviderProfile, "provider"))
+        )
         child_provider.answers = ["Route count complete."]
         calls = 0
 
@@ -560,22 +573,22 @@ def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path
                 in {RunStatus.COMPLETE, RunStatus.FAILED}
             )
         )
-        final = store.get(type(run), run.id)
+        final = await store.get(type(run), run.id)
         assert final.status == RunStatus.COMPLETE, final.metadata.get("final_summary")
         assert final.metadata["final_summary"] == "Final Mission result."
-        tasks = store.find_entities(Task, {"run_id": run.id})
+        tasks = await store.find_entities(Task, {"run_id": run.id})
         assert {task.status for task in tasks} == {TaskStatus.COMPLETE}
         assert len(tasks) == 2
         assert calls == 2
         await service.shutdown()
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
+async def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
         chat.workspace_resolver = lambda _: tmp_path
         hook_dir = tmp_path / ".agents" / "hooks" / "audit"
         hook_dir.mkdir(parents=True)
@@ -594,7 +607,7 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
             ),
             encoding="utf-8",
         )
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Done."]
 
         async def script(connection: ScriptedConnection, prompt: str) -> str:
@@ -622,13 +635,15 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
         adapter.script = script
         _, _, turn = _prepare(runtime, project, harness, "Delegate a check")
         await runtime.start_chat_turn(turn.id)
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE, (
-            store.get(HarnessTurn, turn.id).error
-        )
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.COMPLETE, (
+            await store.get(HarnessTurn, turn.id)
+        ).error
         names = {tool.name for tool in child.requests[0].tools or []}
         assert "notes.write" not in names
         assert {"message_parent", "read_parent_messages"} <= names
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert record.parent_request["capabilities"] == {
             "tool_names": [],
             "mcp_server_ids": [],
@@ -642,17 +657,17 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
             item.chat_turn_id == record.child_turn_id
             and item.event_name == "chat.turn.completed"
             and item.status == "complete"
-            for item in store.list_entities(NativeHookExecution)
+            for item in (await store.list_entities(NativeHookExecution))
         )
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
+async def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Cookies lack SameSite."]
         child.gate = asyncio.Event()
 
@@ -670,14 +685,14 @@ def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
         adapter.script = delegate
         parent_chat, _, turn = _prepare(runtime, project, harness, "Review auth.")
         await runtime.start_chat_turn(turn.id)
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert record.status == ChatSubagentStatus.RUNNING
 
         child.gate.set()
         await _until(
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
-        assert store.get(ChatSubagent, record.id).reported_at is None
+        assert (await store.get(ChatSubagent, record.id)).reported_at is None
         assert "Focus on session cookies." in child.requests[0].messages[-1].content
 
         async def follow_up(connection: ScriptedConnection, prompt: str) -> str:
@@ -692,10 +707,10 @@ def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
         assert "Cookies lack SameSite." in second.prompt
         assert "arrived after your last turn" in second.prompt
         # Received only once the vendor accepts the prompt carrying it.
-        assert store.get(ChatSubagent, record.id).reported_at is None
+        assert (await store.get(ChatSubagent, record.id)).reported_at is None
         await runtime.start_chat_turn(second.id)
         assert "Cookies lack SameSite." in adapter.connections[0].prompts[-1]
-        assert store.get(ChatSubagent, record.id).reported_at is not None
+        assert (await store.get(ChatSubagent, record.id)).reported_at is not None
 
         # A report is handed over once.
         _, _, third = _prepare(
@@ -705,13 +720,13 @@ def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
         await runtime.start_chat_turn(third.id)
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_wait_is_bounded_and_reports_what_is_still_running(tmp_path):
+async def test_wait_is_bounded_and_reports_what_is_still_running(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Late answer."]
         child.gate = asyncio.Event()
         seen: dict = {}
@@ -733,10 +748,10 @@ def test_wait_is_bounded_and_reports_what_is_still_running(tmp_path):
         adapter.script = script
         _, _, turn = _prepare(runtime, project, harness, "Delegate slowly.")
         await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=5)
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert seen["waited"]["still_running"] == [record.id]
         assert "subagent.wait again" in seen["waited"]["note"]
-        assert store.get(ChatSubagent, record.id).reported_at is None
+        assert (await store.get(ChatSubagent, record.id)).reported_at is None
         child.gate.set()
         await _until(
             lambda: (
@@ -746,13 +761,13 @@ def test_wait_is_bounded_and_reports_what_is_still_running(tmp_path):
         )
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
+async def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Never delivered."]
         child.gate = asyncio.Event()
         started = asyncio.Event()
@@ -766,7 +781,7 @@ def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
 
         adapter.script = script
         parent_chat, _, turn = _prepare(runtime, project, harness, "Delegate.")
-        task = runtime.start_chat_turn(turn.id)
+        task = await runtime.start_chat_turn(turn.id)
         await asyncio.wait_for(started.wait(), timeout=5)
         await runtime.cancel_turn(turn.id, reason="Operator stop")
         try:
@@ -774,7 +789,7 @@ def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
         except asyncio.CancelledError:
             pass
 
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         await _until(
             lambda: (
                 store.get(ChatSubagent, record.id).status == ChatSubagentStatus.STOPPED
@@ -783,34 +798,34 @@ def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
         await _until(
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
-        assert _messages(store, parent_chat.id)[-1].metadata["subagent_status"] == (
-            "stopped"
-        )
+        assert (await _messages(store, parent_chat.id))[-1].metadata[
+            "subagent_status"
+        ] == ("stopped")
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_subagent_tools_follow_the_chat_setting(tmp_path):
+async def test_subagent_tools_follow_the_chat_setting(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
         parent_chat, off_chat_turn, off_turn = _prepare(
             runtime, project, harness, "No delegation.", setting=None
         )
-        assert (
-            chat.subagents.available_capabilities(off_chat_turn.id)["subagents"][
-                "selected"
-            ]
-            is False
-        )
-        session = store.get(HarnessSession, off_turn.harness_session_id)
-        names = {item["name"] for item in runtime._gateway_catalog(session)["tools"]}
+        assert (await chat.subagents.available_capabilities(off_chat_turn.id))[
+            "subagents"
+        ]["selected"] is False
+        session = await store.get(HarnessSession, off_turn.harness_session_id)
+        names = {
+            item["name"] for item in (await runtime._gateway_catalog(session))["tools"]
+        }
         assert not names & SUBAGENT_TOOLS
         await runtime.start_chat_turn(off_turn.id)
-        assert "provider_subagent" not in store.get(
-            ChatSession, parent_chat.id
+        assert "provider_subagent" not in (
+            await store.get(ChatSession, parent_chat.id)
         ).metadata or (
-            store.get(ChatSession, parent_chat.id).metadata["provider_subagent"] is None
+            (await store.get(ChatSession, parent_chat.id)).metadata["provider_subagent"]
+            is None
         )
 
         _, chat_turn, on_turn = _prepare(
@@ -818,14 +833,15 @@ def test_subagent_tools_follow_the_chat_setting(tmp_path):
         )
         # Turning subagents on keeps the vendor session and thread.
         assert on_turn.harness_session_id == off_turn.harness_session_id
-        session = store.get(HarnessSession, on_turn.harness_session_id)
+        session = await store.get(HarnessSession, on_turn.harness_session_id)
         assert session.metadata["provider_subagent"] == SETTING
-        assert (
-            store.get(ChatSession, parent_chat.id).metadata["provider_subagent"]
-            == SETTING
-        )
+        assert (await store.get(ChatSession, parent_chat.id)).metadata[
+            "provider_subagent"
+        ] == SETTING
         assert chat_turn.request_snapshot["provider_subagent"] == SETTING
-        names = {item["name"] for item in runtime._gateway_catalog(session)["tools"]}
+        names = {
+            item["name"] for item in (await runtime._gateway_catalog(session))["tools"]
+        }
         assert SUBAGENT_TOOLS <= names
         await runtime.start_chat_turn(on_turn.id)
         # The vendor catalog is fixed per connection, so the change reopens it
@@ -845,18 +861,20 @@ def test_subagent_tools_follow_the_chat_setting(tmp_path):
 
         # Unchecking Subagents saves the choice on the conversation, as the
         # composer's settings update does; the binding follows that choice.
-        saved = store.get(ChatSession, parent_chat.id)
-        store.update(
-            ChatSession,
-            saved.id,
-            {
-                "metadata": {
-                    key: value
-                    for key, value in saved.metadata.items()
-                    if key != "provider_subagent"
-                }
-            },
-            expected_revision=saved.revision,
+        saved = await store.get(ChatSession, parent_chat.id)
+        (
+            await store.update(
+                ChatSession,
+                saved.id,
+                {
+                    "metadata": {
+                        key: value
+                        for key, value in saved.metadata.items()
+                        if key != "provider_subagent"
+                    }
+                },
+                expected_revision=saved.revision,
+            )
         )
 
         # A turn without the setting refuses the tools even on an old catalog:
@@ -884,16 +902,16 @@ def test_subagent_tools_follow_the_chat_setting(tmp_path):
         assert not SUBAGENT_TOOLS & {
             item["name"] for item in adapter.opens[2].gateway_tools
         }
-        assert not store.list_entities(ChatSubagent)
+        assert not (await store.list_entities(ChatSubagent))
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
+async def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["First."]
         child.gate = asyncio.Event()
         limited = {**SETTING, "max_active": 1}
@@ -918,10 +936,9 @@ def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
             runtime, project, harness, "Fan out.", setting=limited
         )
         assert chat_turn.request_snapshot["provider_subagent"] == limited
-        assert (
-            store.get(ChatSession, parent_chat.id).metadata["provider_subagent"]
-            == limited
-        )
+        assert (await store.get(ChatSession, parent_chat.id)).metadata[
+            "provider_subagent"
+        ] == limited
         await runtime.start_chat_turn(turn.id)
         # The refusal is a schema-guided failure (#520), which carries no
         # Core error text: a capacity refusal says to wait for running work
@@ -943,7 +960,7 @@ def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
             "current": 1,
         }
         assert "running at once" not in refused["content"][0]["text"]
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         assert "at most 1 run at once" in instructions(adapter.opens[0])
 
         child.gate.set()
@@ -963,11 +980,11 @@ def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
         assert "run at once" not in instructions(adapter.opens[1])
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path):
-    store, project, harness, chat, _adapter, runtime = _setup(
+async def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path):
+    store, project, harness, chat, _adapter, runtime = await _setup(
         tmp_path,
         providers={
             "provider": ChildProvider("provider"),
@@ -1001,8 +1018,8 @@ def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path):
         )
     with pytest.raises(ChatConfigurationError, match="between 1 and 100"):
         _prepare(runtime, project, harness, "Hi", setting={**SETTING, "max_active": 0})
-    assert not store.list_entities(ChatTurn)
-    assert not store.list_entities(ChatSession)
+    assert not (await store.list_entities(ChatTurn))
+    assert not (await store.list_entities(ChatSession))
     # A cloud provider that accepts project data is fine: turning subagents on
     # is the consent to send it their tool results.
     _prepare(
@@ -1014,8 +1031,8 @@ def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path):
     )
 
 
-def test_local_only_projects_refuse_cloud_subagent_models(tmp_path):
-    store, project, harness, chat, _adapter, runtime = _setup(
+async def test_local_only_projects_refuse_cloud_subagent_models(tmp_path):
+    store, project, harness, chat, _adapter, runtime = await _setup(
         tmp_path,
         providers={"cloud": ChildProvider("cloud", local=False)},
         local_only_project=True,
@@ -1030,12 +1047,12 @@ def test_local_only_projects_refuse_cloud_subagent_models(tmp_path):
         )
 
 
-def test_subagent_gateway_calls_read_as_delegated_work(tmp_path):
-    store, project, harness, chat, _adapter, runtime = _setup(tmp_path)
+async def test_subagent_gateway_calls_read_as_delegated_work(tmp_path):
+    store, project, harness, chat, _adapter, runtime = await _setup(tmp_path)
     _, _, turn = _prepare(runtime, project, harness, "Hi")
-    session = store.get(HarnessSession, turn.harness_session_id)
+    session = await store.get(HarnessSession, turn.harness_session_id)
     for name in ("subagent.start", _portable_gateway_tool_name("subagent.wait")):
-        event = runtime._record_tool_event(
+        event = await runtime._record_tool_event(
             turn,
             session,
             HarnessEvent(
@@ -1047,7 +1064,7 @@ def test_subagent_gateway_calls_read_as_delegated_work(tmp_path):
             ),
         )
         assert event.item_kind == "subagent"
-    other = runtime._record_tool_event(
+    other = await runtime._record_tool_event(
         turn,
         session,
         HarnessEvent(
@@ -1101,12 +1118,12 @@ def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
     )
 
 
-def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
+async def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
     tmp_path,
 ):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        harness = store.update(
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        harness = await store.update(
             HarnessProfile,
             harness.id,
             {
@@ -1127,7 +1144,7 @@ def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
             },
             expected_revision=harness.revision,
         )
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = ["Done.", "Done.", "Done.", "Done."]
         started: list[dict] = []
 
@@ -1154,8 +1171,8 @@ def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
             _payload(await connection.call("subagent.wait"))
             return "Delegated."
 
-        def prepare(effort: str, setting: dict = SETTING):
-            return runtime.prepare_chat(
+        async def prepare(effort: str, setting: dict = SETTING):
+            return await runtime.prepare_chat(
                 engagement_id=project.id,
                 profile_id=harness.id,
                 model="gpt-test",
@@ -1168,7 +1185,7 @@ def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
             )
 
         adapter.script = delegate
-        _, _, turn = prepare("high")
+        _, _, turn = await prepare("high")
         await runtime.start_chat_turn(turn.id)
         assert [item["reasoning_effort"] for item in started] == [
             "model default",
@@ -1179,7 +1196,7 @@ def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
             for request in child.requests
         } == {"Map the API routes.": None, "List the config files.": "high"}
         assert {
-            item.reasoning_effort for item in store.list_entities(ChatSubagent)
+            item.reasoning_effort for item in (await store.list_entities(ChatSubagent))
         } == {None, "high"}
 
         # The harness's own level does not change the child's model default.
@@ -1192,7 +1209,7 @@ def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
             return "Delegated."
 
         adapter.script = delegate_once
-        _, _, other = prepare("max")
+        _, _, other = await prepare("max")
         await runtime.start_chat_turn(other.id)
         assert started[-1]["reasoning_effort"] == "model default"
         assert child.requests[-1].messages[-1].content == "Count tests."
@@ -1213,13 +1230,13 @@ def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
             return "Delegated."
 
         adapter.script = delegate_forced
-        _, _, forced = prepare("high", {**SETTING, "reasoning_effort": "xhigh"})
+        _, _, forced = await prepare("high", {**SETTING, "reasoning_effort": "xhigh"})
         await runtime.start_chat_turn(forced.id)
         assert started[-1]["reasoning_effort"] == "xhigh"
         assert child.requests[-1].reasoning_effort == "xhigh"
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def _ask_parent(message: str, *, wait: bool) -> ModelResponse:
@@ -1238,10 +1255,10 @@ def _ask_parent(message: str, *, wait: bool) -> ModelResponse:
     )
 
 
-def test_harness_answers_a_subagent_question_with_subagent_message(tmp_path):
+async def test_harness_answers_a_subagent_question_with_subagent_message(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = [
             _ask_parent("Staging or production?", wait=True),
             "Checked staging: healthy.",
@@ -1267,7 +1284,7 @@ def test_harness_answers_a_subagent_question_with_subagent_message(tmp_path):
         adapter.script = script
         _, _, turn = _prepare(runtime, project, harness, "Check the deploy.")
         await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=10)
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
 
         # The wait returned as soon as the subagent asked, well before timeout.
         asked = seen["asked"]
@@ -1278,22 +1295,22 @@ def test_harness_answers_a_subagent_question_with_subagent_message(tmp_path):
         assert seen["replied"]["delivery"] == "answered"
         assert seen["reported"]["subagents"][0]["report"] == "Checked staging: healthy."
 
-        child_turn = store.get(ChatTurn, record.child_turn_id)
+        child_turn = await store.get(ChatTurn, record.child_turn_id)
         (entry,) = [
             item
-            for item in chat._turn_history(child_turn)
+            for item in (await chat._turn_history(child_turn))
             if item["name"] == "message_parent"
         ]
         assert "Use staging." in entry["provider_result"]
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_subagent_message_is_steered_into_the_running_harness_turn(tmp_path):
+async def test_subagent_message_is_steered_into_the_running_harness_turn(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = [
             _ask_parent("Found credentials in .env; stop the others?", wait=False),
             "Reviewed the configuration.",
@@ -1311,17 +1328,17 @@ def test_subagent_message_is_steered_into_the_running_harness_turn(tmp_path):
         steered = adapter.connections[0].steered[0]
         assert steered.startswith("Nebula subagent update")
         assert "Found credentials in .env; stop the others?" in steered
-        (message,) = store.list_entities(ChatSubagentMessage)
+        (message,) = await store.list_entities(ChatSubagentMessage)
         assert message.status == ChatSubagentMessageStatus.DELIVERED
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
+async def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+        child = chat.provider_factory((await store.get(ProviderProfile, "provider")))
         child.answers = [
             _ask_parent("Which region?", wait=True),
             "Used us-east-1.",
@@ -1337,21 +1354,24 @@ def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
         parent_chat, _, turn = _prepare(runtime, project, harness, "Provision.")
         await runtime.start_chat_turn(turn.id)
         child.gate.set()
-        (record,) = store.list_entities(ChatSubagent)
+        (record,) = await store.list_entities(ChatSubagent)
         await _until(
             lambda: store.get(ChatSubagent, record.id).result_message_id is not None
         )
         # Asked while the harness was idle: the child went on without waiting.
-        child_turn = store.get(ChatTurn, record.child_turn_id)
+        child_turn = await store.get(ChatTurn, record.child_turn_id)
         (entry,) = [
             item
-            for item in chat._turn_history(child_turn)
+            for item in (await chat._turn_history(child_turn))
             if item["name"] == "message_parent"
         ]
         assert "not working right now" in entry["provider_result"]
-        (question,) = store.list_entities(ChatSubagentMessage)
+        (question,) = await store.list_entities(ChatSubagentMessage)
         assert question.status == ChatSubagentMessageStatus.PENDING
-        kinds = [item.metadata.get("kind") for item in _messages(store, parent_chat.id)]
+        kinds = [
+            item.metadata.get("kind")
+            for item in (await _messages(store, parent_chat.id))
+        ]
         assert "subagent_message" in kinds
 
         adapter.script = None
@@ -1364,20 +1384,18 @@ def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
         assert "Used us-east-1." in second.prompt
         # Received once the vendor accepts the prompt that carries it.
         assert (
-            store.get(ChatSubagentMessage, question.id).status
-            == ChatSubagentMessageStatus.PENDING
-        )
+            await store.get(ChatSubagentMessage, question.id)
+        ).status == ChatSubagentMessageStatus.PENDING
         await runtime.start_chat_turn(second.id)
         assert (
-            store.get(ChatSubagentMessage, question.id).status
-            == ChatSubagentMessageStatus.DELIVERED
-        )
+            await store.get(ChatSubagentMessage, question.id)
+        ).status == ChatSubagentMessageStatus.DELIVERED
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path):
+async def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path):
     """A send that omits the saved subagent choice must not drop the binding.
 
     The composer leaves the choice out while a model's tool check is still
@@ -1388,13 +1406,13 @@ def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path):
     """
 
     async def scenario() -> None:
-        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
         # First send carries the verified choice and saves it on the chat.
         parent_chat, _, first = _prepare(runtime, project, harness, "Delegate.")
         await runtime.start_chat_turn(first.id)
-        assert store.get(ChatSession, parent_chat.id).metadata["provider_subagent"] == (
-            SETTING
-        )
+        assert (await store.get(ChatSession, parent_chat.id)).metadata[
+            "provider_subagent"
+        ] == (SETTING)
         assert len(adapter.opens) == 1
 
         # A later send omits the choice (composer still verifying the model).
@@ -1409,11 +1427,14 @@ def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path):
         # The saved choice is reapplied, so the turn keeps subagents ...
         assert second.metadata["provider_subagent"] == SETTING
         assert chat_turn.request_snapshot["provider_subagent"] == SETTING
-        session = store.get(HarnessSession, second.harness_session_id)
+        session = await store.get(HarnessSession, second.harness_session_id)
         assert session.metadata["provider_subagent"] == SETTING
         await runtime.start_chat_turn(second.id)
         # ... and the connection is reused rather than reopened twice.
         assert len(adapter.opens) == 1
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

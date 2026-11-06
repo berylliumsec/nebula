@@ -267,25 +267,37 @@ class BrowserAssessmentService:
         self.policy = PolicyEngine()
 
     async def workspace(self, engagement_id: str) -> BrowserAssessmentWorkspace:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         return BrowserAssessmentWorkspace(
-            assessments=self.store.list_latest_entities(
-                BrowserAssessment, engagement_id=engagement_id
+            assessments=(
+                await self.store.list_latest_entities(
+                    BrowserAssessment, engagement_id=engagement_id
+                )
             ),
-            steps=self.store.list_latest_entities(
-                BrowserAssessmentStep, engagement_id=engagement_id
+            steps=(
+                await self.store.list_latest_entities(
+                    BrowserAssessmentStep, engagement_id=engagement_id
+                )
             ),
-            login_flows=self.store.list_latest_entities(
-                BrowserLoginFlow, engagement_id=engagement_id
+            login_flows=(
+                await self.store.list_latest_entities(
+                    BrowserLoginFlow, engagement_id=engagement_id
+                )
             ),
-            recipes=self.store.list_latest_entities(
-                BrowserRecipe, engagement_id=engagement_id
+            recipes=(
+                await self.store.list_latest_entities(
+                    BrowserRecipe, engagement_id=engagement_id
+                )
             ),
-            candidates=self.store.list_latest_entities(
-                BrowserIssueCandidate, engagement_id=engagement_id
+            candidates=(
+                await self.store.list_latest_entities(
+                    BrowserIssueCandidate, engagement_id=engagement_id
+                )
             ),
-            validation_grants=self.store.list_latest_entities(
-                BrowserValidationGrant, engagement_id=engagement_id
+            validation_grants=(
+                await self.store.list_latest_entities(
+                    BrowserValidationGrant, engagement_id=engagement_id
+                )
             ),
             profiles=list(BUILTIN_PROFILES),
             engines=await self.engines.capabilities(),
@@ -297,10 +309,10 @@ class BrowserAssessmentService:
         request: BrowserAssessmentCreateRequest,
         actor_id: str,
     ) -> BrowserAssessment:
-        scope = self._scope(engagement_id)
-        session = self._owned(BrowserSession, request.session_id, engagement_id)
+        scope = await self._scope(engagement_id)
+        session = await self._owned(BrowserSession, request.session_id, engagement_id)
         for identity_id in request.identity_ids:
-            identity = self._owned(BrowserIdentity, identity_id, engagement_id)
+            identity = await self._owned(BrowserIdentity, identity_id, engagement_id)
             if identity.revoked_at is not None:
                 raise BrowserWorkflowError("a selected browser identity is revoked")
         if session.identity_id != request.primary_identity_id:
@@ -313,8 +325,10 @@ class BrowserAssessmentService:
                 self._require_in_scope(scope, target, risk)
 
         if request.profile == BrowserAssessmentProfile.VALIDATION:
-            self._validation_grant(
-                request.validation_grant_id, engagement_id, request.target_urls
+            (
+                await self._validation_grant(
+                    request.validation_grant_id, engagement_id, request.target_urls
+                )
             )
 
         capabilities = await self.engines.capabilities()
@@ -358,7 +372,7 @@ class BrowserAssessmentService:
             ),
             created_by=actor_id,
         )
-        created, _ = self.store.create_with_operation_event(
+        created, _ = await self.store.create_with_operation_event(
             assessment,
             operation_id=assessment.id,
             operation_kind="browser_assessment",
@@ -373,27 +387,29 @@ class BrowserAssessmentService:
             idempotency_key=f"create:{assessment.id}",
         )
         for step in self._initial_steps(created):
-            self.store.create_with_operation_event(
-                step,
-                operation_id=created.id,
-                operation_kind="browser_assessment",
-                engagement_id=engagement_id,
-                event_type="browser_assessment.step.created",
-                event_payload={
-                    "assessment_id": created.id,
-                    "step_id": step.id,
-                    "sequence": step.sequence,
-                    "title": step.title,
-                },
-                actor_id=actor_id,
-                idempotency_key=f"create-step:{step.id}",
+            (
+                await self.store.create_with_operation_event(
+                    step,
+                    operation_id=created.id,
+                    operation_kind="browser_assessment",
+                    engagement_id=engagement_id,
+                    event_type="browser_assessment.step.created",
+                    event_payload={
+                        "assessment_id": created.id,
+                        "step_id": step.id,
+                        "sequence": step.sequence,
+                        "title": step.title,
+                    },
+                    actor_id=actor_id,
+                    idempotency_key=f"create-step:{step.id}",
+                )
             )
         return created
 
     async def refresh_readiness(
         self, assessment_id: str, expected_revision: int, actor_id: str
     ) -> BrowserAssessment:
-        assessment = self.store.get(BrowserAssessment, assessment_id)
+        assessment = await self.store.get(BrowserAssessment, assessment_id)
         capabilities = await self.engines.capabilities()
         profile = PROFILE_BY_ID[assessment.profile]
         ready = {
@@ -411,7 +427,7 @@ class BrowserAssessmentService:
             BrowserAssessmentStatus.FAILED,
         }:
             next_status = assessment.status
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserAssessment,
             assessment.id,
             {
@@ -445,8 +461,8 @@ class BrowserAssessmentService:
         request: BrowserAssessmentTransitionRequest,
         actor_id: str,
     ) -> BrowserAssessment:
-        assessment = self.store.get(BrowserAssessment, assessment_id)
-        for event in self.store.replay_operation_events(
+        assessment = await self.store.get(BrowserAssessment, assessment_id)
+        for event in await self.store.replay_operation_events(
             assessment.id, after_sequence=0, limit=10_000
         ):
             if event.idempotency_key != request.idempotency_key:
@@ -462,7 +478,7 @@ class BrowserAssessmentService:
                 f"cannot {request.action} an assessment in {assessment.status.value} state"
             )
         if request.action in {"start", "retry"}:
-            self._require_frozen_scope(assessment)
+            (await self._require_frozen_scope(assessment))
         managed = await self.engines.adapter("managed-chromium")
         requires_engine = request.action in {"start", "pause", "resume"}
         if requires_engine and managed is None:
@@ -518,7 +534,7 @@ class BrowserAssessmentService:
                 recovery_action=request.recovery_action,
                 pause_reason=request.reason,
             )
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             BrowserAssessment,
             assessment.id,
             changes,
@@ -538,14 +554,14 @@ class BrowserAssessmentService:
         )
         return updated
 
-    def create_candidate(
+    async def create_candidate(
         self, request: BrowserIssueCandidateCreateRequest, actor_id: str
     ) -> BrowserIssueCandidate:
-        assessment = self.store.get(BrowserAssessment, request.assessment_id)
-        self._require_frozen_scope(assessment)
+        assessment = await self.store.get(BrowserAssessment, request.assessment_id)
+        (await self._require_frozen_scope(assessment))
         self._require_assessment_target(assessment, request.target_url)
         self._require_in_scope(
-            self._scope(assessment.engagement_id),
+            (await self._scope(assessment.engagement_id)),
             request.target_url,
             RiskClass.PASSIVE,
         )
@@ -558,7 +574,7 @@ class BrowserAssessmentService:
         fingerprint = hashlib.sha256(
             json.dumps(digest_payload, sort_keys=True).encode("utf-8")
         ).hexdigest()
-        existing = self.store.find_entities(
+        existing = await self.store.find_entities(
             BrowserIssueCandidate,
             {"deduplication_fingerprint": fingerprint},
             engagement_id=assessment.engagement_id,
@@ -577,25 +593,29 @@ class BrowserAssessmentService:
             "severity": candidate.severity.value,
         }
         try:
-            with self.store.transaction() as transaction:
-                transaction.add(candidate)
-                transaction.update(
-                    BrowserAssessment,
-                    assessment.id,
-                    {"candidate_ids": [*assessment.candidate_ids, candidate.id]},
-                    expected_revision=assessment.revision,
+            async with self.store.transaction() as transaction:
+                (await transaction.add(candidate))
+                (
+                    await transaction.update(
+                        BrowserAssessment,
+                        assessment.id,
+                        {"candidate_ids": [*assessment.candidate_ids, candidate.id]},
+                        expected_revision=assessment.revision,
+                    )
                 )
-                transaction.append_operation_event(
-                    assessment.id,
-                    "browser_assessment",
-                    assessment.engagement_id,
-                    "browser_assessment.candidate.created",
-                    event_payload,
-                    actor_id=actor_id,
-                    idempotency_key=f"candidate:{fingerprint}",
+                (
+                    await transaction.append_operation_event(
+                        assessment.id,
+                        "browser_assessment",
+                        assessment.engagement_id,
+                        "browser_assessment.candidate.created",
+                        event_payload,
+                        actor_id=actor_id,
+                        idempotency_key=f"candidate:{fingerprint}",
+                    )
                 )
         except ConflictError:
-            duplicates = self.store.find_entities(
+            duplicates = await self.store.find_entities(
                 BrowserIssueCandidate,
                 {"deduplication_fingerprint": fingerprint},
                 engagement_id=assessment.engagement_id,
@@ -606,15 +626,15 @@ class BrowserAssessmentService:
             raise
         return candidate
 
-    def grant_validation(
+    async def grant_validation(
         self,
         candidate_id: str,
         request: BrowserValidationGrantRequest,
         actor_id: str,
     ) -> BrowserValidationGrant:
-        candidate = self.store.get(BrowserIssueCandidate, candidate_id)
-        assessment = self.store.get(BrowserAssessment, candidate.assessment_id)
-        prior = self._validation_event(
+        candidate = await self.store.get(BrowserIssueCandidate, candidate_id)
+        assessment = await self.store.get(BrowserAssessment, candidate.assessment_id)
+        prior = await self._validation_event(
             assessment.id,
             request.idempotency_key,
             "browser_assessment.validation.granted",
@@ -630,18 +650,18 @@ class BrowserAssessmentService:
                 raise BrowserWorkflowError(
                     "validation idempotency key was reused for different authority"
                 )
-            return self.store.get(
+            return await self.store.get(
                 BrowserValidationGrant, str(prior.payload["grant_id"])
             )
-        self._require_frozen_scope(assessment)
+        (await self._require_frozen_scope(assessment))
         self._require_assessment_target(assessment, candidate.target_url)
         self._require_in_scope(
-            self._scope(candidate.engagement_id),
+            (await self._scope(candidate.engagement_id)),
             candidate.target_url,
             RiskClass.EXPLOITATION,
         )
         now = utc_now()
-        prior_grants = self.store.find_entities(
+        prior_grants = await self.store.find_entities(
             BrowserValidationGrant,
             {"candidate_id": candidate.id, "status": "active"},
             engagement_id=candidate.engagement_id,
@@ -681,57 +701,63 @@ class BrowserAssessmentService:
             "expires_at": grant.expires_at.isoformat(),
         }
         try:
-            with self.store.transaction() as transaction:
+            async with self.store.transaction() as transaction:
                 for expired in prior_grants:
-                    transaction.update(
-                        BrowserValidationGrant,
-                        expired.id,
-                        {"status": "expired"},
-                        expected_revision=expired.revision,
+                    (
+                        await transaction.update(
+                            BrowserValidationGrant,
+                            expired.id,
+                            {"status": "expired"},
+                            expected_revision=expired.revision,
+                        )
                     )
-                transaction.add(grant)
-                transaction.update(
-                    BrowserIssueCandidate,
-                    candidate.id,
-                    {
-                        "validation_status": BrowserIssueValidationStatus.QUEUED,
-                        "validation_grant_id": grant.id,
-                    },
-                    expected_revision=request.expected_candidate_revision,
+                (await transaction.add(grant))
+                (
+                    await transaction.update(
+                        BrowserIssueCandidate,
+                        candidate.id,
+                        {
+                            "validation_status": BrowserIssueValidationStatus.QUEUED,
+                            "validation_grant_id": grant.id,
+                        },
+                        expected_revision=request.expected_candidate_revision,
+                    )
                 )
-                transaction.append_operation_event(
-                    assessment.id,
-                    "browser_assessment",
-                    assessment.engagement_id,
-                    "browser_assessment.validation.granted",
-                    event_payload,
-                    actor_id=actor_id,
-                    idempotency_key=request.idempotency_key,
+                (
+                    await transaction.append_operation_event(
+                        assessment.id,
+                        "browser_assessment",
+                        assessment.engagement_id,
+                        "browser_assessment.validation.granted",
+                        event_payload,
+                        actor_id=actor_id,
+                        idempotency_key=request.idempotency_key,
+                    )
                 )
         except ConflictError:
-            prior = self._validation_event(
+            prior = await self._validation_event(
                 assessment.id,
                 request.idempotency_key,
                 "browser_assessment.validation.granted",
             )
             if prior is not None:
-                return self.store.get(
+                return await self.store.get(
                     BrowserValidationGrant, str(prior.payload["grant_id"])
                 )
             raise
         return grant
 
-    def revoke_validation(
+    async def revoke_validation(
         self,
         candidate_id: str,
         request: BrowserValidationRevokeRequest,
         actor_id: str,
     ) -> BrowserValidationGrant:
-        candidate = self.store.get(BrowserIssueCandidate, candidate_id)
-        grant = self.store.get(
+        candidate = await self.store.get(BrowserIssueCandidate, candidate_id)
+        grant = await self.store.get(
             BrowserValidationGrant, candidate.validation_grant_id or ""
         )
-        prior = self._validation_event(
+        prior = await self._validation_event(
             candidate.assessment_id,
             request.idempotency_key,
             "browser_assessment.validation.revoked",
@@ -744,7 +770,7 @@ class BrowserAssessmentService:
                 raise BrowserWorkflowError(
                     "validation idempotency key was reused for a different revocation"
                 )
-            return self.store.get(BrowserValidationGrant, grant.id)
+            return await self.store.get(BrowserValidationGrant, grant.id)
         if (
             grant.candidate_id != candidate.id
             or grant.assessment_id != candidate.assessment_id
@@ -759,8 +785,8 @@ class BrowserAssessmentService:
             "grant_id": grant.id,
             "reason": request.reason,
         }
-        with self.store.transaction() as transaction:
-            updated = transaction.update(
+        async with self.store.transaction() as transaction:
+            updated = await transaction.update(
                 BrowserValidationGrant,
                 grant.id,
                 {"status": "revoked", "revoked_at": now},
@@ -770,34 +796,40 @@ class BrowserAssessmentService:
                 BrowserIssueValidationStatus.QUEUED,
                 BrowserIssueValidationStatus.VALIDATING,
             }:
-                transaction.update(
-                    BrowserIssueCandidate,
-                    candidate.id,
-                    {"validation_status": BrowserIssueValidationStatus.INCONCLUSIVE},
-                    expected_revision=candidate.revision,
+                (
+                    await transaction.update(
+                        BrowserIssueCandidate,
+                        candidate.id,
+                        {
+                            "validation_status": BrowserIssueValidationStatus.INCONCLUSIVE
+                        },
+                        expected_revision=candidate.revision,
+                    )
                 )
-            transaction.append_operation_event(
-                candidate.assessment_id,
-                "browser_assessment",
-                candidate.engagement_id,
-                "browser_assessment.validation.revoked",
-                event_payload,
-                actor_id=actor_id,
-                idempotency_key=request.idempotency_key,
+            (
+                await transaction.append_operation_event(
+                    candidate.assessment_id,
+                    "browser_assessment",
+                    candidate.engagement_id,
+                    "browser_assessment.validation.revoked",
+                    event_payload,
+                    actor_id=actor_id,
+                    idempotency_key=request.idempotency_key,
+                )
             )
         return updated
 
-    def finish_validation(
+    async def finish_validation(
         self,
         candidate_id: str,
         request: BrowserValidationResultRequest,
         actor_id: str,
     ) -> BrowserIssueCandidate:
-        candidate = self.store.get(BrowserIssueCandidate, candidate_id)
-        grant = self.store.get(
+        candidate = await self.store.get(BrowserIssueCandidate, candidate_id)
+        grant = await self.store.get(
             BrowserValidationGrant, candidate.validation_grant_id or ""
         )
-        prior = self._validation_event(
+        prior = await self._validation_event(
             candidate.assessment_id,
             request.idempotency_key,
             "browser_assessment.validation.completed",
@@ -811,8 +843,8 @@ class BrowserAssessmentService:
                     "validation idempotency key was reused for a different result"
                 )
             return candidate
-        assessment = self.store.get(BrowserAssessment, candidate.assessment_id)
-        self._require_frozen_scope(assessment)
+        assessment = await self.store.get(BrowserAssessment, candidate.assessment_id)
+        (await self._require_frozen_scope(assessment))
         self._require_assessment_target(assessment, candidate.target_url)
         if (
             grant.candidate_id != candidate.id
@@ -826,7 +858,7 @@ class BrowserAssessmentService:
             )
         status = BrowserIssueValidationStatus(request.result)
         for evidence_id in request.evidence_ids:
-            self._owned(Evidence, evidence_id, candidate.engagement_id)
+            (await self._owned(Evidence, evidence_id, candidate.engagement_id))
         event_payload = {
             "assessment_id": candidate.assessment_id,
             "candidate_id": candidate.id,
@@ -834,8 +866,8 @@ class BrowserAssessmentService:
             "result": status.value,
             "evidence_ids": request.evidence_ids,
         }
-        with self.store.transaction() as transaction:
-            updated = transaction.update(
+        async with self.store.transaction() as transaction:
+            updated = await transaction.update(
                 BrowserIssueCandidate,
                 candidate.id,
                 {
@@ -847,25 +879,29 @@ class BrowserAssessmentService:
                 },
                 expected_revision=request.expected_candidate_revision,
             )
-            transaction.update(
-                BrowserValidationGrant,
-                grant.id,
-                {"status": "consumed"},
-                expected_revision=request.expected_grant_revision,
+            (
+                await transaction.update(
+                    BrowserValidationGrant,
+                    grant.id,
+                    {"status": "consumed"},
+                    expected_revision=request.expected_grant_revision,
+                )
             )
-            transaction.append_operation_event(
-                candidate.assessment_id,
-                "browser_assessment",
-                candidate.engagement_id,
-                "browser_assessment.validation.completed",
-                event_payload,
-                actor_id=actor_id,
-                idempotency_key=request.idempotency_key,
+            (
+                await transaction.append_operation_event(
+                    candidate.assessment_id,
+                    "browser_assessment",
+                    candidate.engagement_id,
+                    "browser_assessment.validation.completed",
+                    event_payload,
+                    actor_id=actor_id,
+                    idempotency_key=request.idempotency_key,
+                )
             )
         return updated
 
-    def delete(self, assessment_id: str, expected_revision: int) -> None:
-        assessment = self.store.get(BrowserAssessment, assessment_id)
+    async def delete(self, assessment_id: str, expected_revision: int) -> None:
+        assessment = await self.store.get(BrowserAssessment, assessment_id)
         if assessment.status not in {
             BrowserAssessmentStatus.DRAFT,
             BrowserAssessmentStatus.STOPPED,
@@ -874,21 +910,23 @@ class BrowserAssessmentService:
             BrowserAssessmentStatus.REVOKED,
         }:
             raise BrowserWorkflowError("stop the assessment before deleting it")
-        self.store.delete(
-            BrowserAssessment, assessment.id, expected_revision=expected_revision
+        (
+            await self.store.delete(
+                BrowserAssessment, assessment.id, expected_revision=expected_revision
+            )
         )
 
-    def _scope(self, engagement_id: str) -> ScopePolicy:
-        engagement = self.store.get(Engagement, engagement_id)
+    async def _scope(self, engagement_id: str) -> ScopePolicy:
+        engagement = await self.store.get(Engagement, engagement_id)
         if not engagement.scope_policy_id:
             raise BrowserWorkflowError("Project scope is not configured")
-        scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+        scope = await self.store.get(ScopePolicy, engagement.scope_policy_id)
         if scope.engagement_id != engagement_id:
             raise BrowserWorkflowError("Project scope ownership is invalid")
         return scope
 
-    def _require_frozen_scope(self, assessment: BrowserAssessment) -> None:
-        scope = self._scope(assessment.engagement_id)
+    async def _require_frozen_scope(self, assessment: BrowserAssessment) -> None:
+        scope = await self._scope(assessment.engagement_id)
         if (
             scope.id != assessment.scope_policy_id
             or scope.revision != assessment.scope_policy_revision
@@ -928,10 +966,10 @@ class BrowserAssessmentService:
                 "candidate target is outside the assessment's frozen target corridor"
             )
 
-    def _validation_event(
+    async def _validation_event(
         self, assessment_id: str, idempotency_key: str, event_type: str
     ) -> Any | None:
-        for event in self.store.replay_operation_events(
+        for event in await self.store.replay_operation_events(
             assessment_id, after_sequence=0, limit=10_000
         ):
             if event.idempotency_key != idempotency_key:
@@ -943,13 +981,13 @@ class BrowserAssessmentService:
             return event
         return None
 
-    def _owned(self, model: type[Any], entity_id: str, engagement_id: str) -> Any:
-        entity = self.store.get(model, entity_id)
+    async def _owned(self, model: type[Any], entity_id: str, engagement_id: str) -> Any:
+        entity = await self.store.get(model, entity_id)
         if getattr(entity, "engagement_id", None) != engagement_id:
             raise BrowserWorkflowError("browser entity belongs to another Project")
         return entity
 
-    def _validation_grant(
+    async def _validation_grant(
         self,
         grant_id: str | None,
         engagement_id: str,
@@ -958,7 +996,7 @@ class BrowserAssessmentService:
         if not grant_id:
             raise BrowserWorkflowError("Validation requires an issue-specific grant")
         try:
-            grant = self.store.get(BrowserValidationGrant, grant_id)
+            grant = await self.store.get(BrowserValidationGrant, grant_id)
         except NotFoundError as exc:
             raise BrowserWorkflowError("Validation grant does not exist") from exc
         if grant.engagement_id != engagement_id or grant.target_url not in targets:

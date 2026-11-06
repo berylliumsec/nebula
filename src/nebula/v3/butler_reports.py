@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 from uuid import uuid4
 
@@ -107,68 +109,75 @@ class ButlerReports:
             "url": f"/projects/{report.engagement_id}/reports/{report.id}",
         }
 
-    def _project_report(self, report: Report) -> Report:
-        projected = self.relations.project_legacy(report)
+    async def _project_report(self, report: Report) -> Report:
+        projected = await self.relations.project_legacy(report)
         assert isinstance(projected, Report)
         return projected
 
-    def _report(self, report_id: str) -> Report:
-        report = self.store.get(Report, report_id)
+    async def _report(self, report_id: str) -> Report:
+        report = await self.store.get(Report, report_id)
         if report.engagement_id != self.project_id:
             raise ValueError("report is outside the selected project")
-        return self._project_report(report)
+        return await self._project_report(report)
 
-    def _current(self, arguments: dict[str, Any]) -> Report:
-        report = self._report(arguments["report_id"])
+    async def _current(self, arguments: dict[str, Any]) -> Report:
+        report = await self._report(arguments["report_id"])
         if report.revision != arguments["expected_revision"]:
             raise ValueError("report changed; read its current revision before acting")
         return report
 
-    def _note(self, observation_id: str) -> Observation:
-        note = self.store.get(Observation, observation_id)
+    async def _note(self, observation_id: str) -> Observation:
+        note = await self.store.get(Observation, observation_id)
         if note.engagement_id != self.project_id:
             raise ValueError("note is outside the selected project")
         return note
 
-    def _references(self, changes: dict[str, Any]) -> None:
+    async def _references(self, changes: dict[str, Any]) -> None:
         for field in ("finding_ids", "observation_ids"):
             for entity_id in changes.get(field, []):
                 entity: Finding | Observation
                 if field == "finding_ids":
-                    entity = self.store.get(Finding, entity_id)
+                    entity = await self.store.get(Finding, entity_id)
                 else:
-                    entity = self.store.get(Observation, entity_id)
+                    entity = await self.store.get(Observation, entity_id)
                 if entity.engagement_id != self.project_id:
                     raise ValueError(
                         f"{field} includes an item outside the selected project"
                     )
 
-    def list_reports(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def list_reports(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.list_entities(
+        rows = await self.store.list_entities(
             Report, engagement_id=self.project_id, offset=offset, limit=51
         )
         return {
             "reports": [
-                self._summary(self._project_report(item)) for item in rows[:50]
+                self._summary((await self._project_report(item))) for item in rows[:50]
             ],
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
         kind = arguments["kind"]
         offset = arguments.get("offset", 0)
         rows: list[Finding | Observation] = []
         if kind == "finding":
             rows.extend(
-                self.store.list_entities(
-                    Finding, engagement_id=self.project_id, offset=offset, limit=51
+                (
+                    await self.store.list_entities(
+                        Finding, engagement_id=self.project_id, offset=offset, limit=51
+                    )
                 )
             )
         else:
             rows.extend(
-                self.store.list_entities(
-                    Observation, engagement_id=self.project_id, offset=offset, limit=51
+                (
+                    await self.store.list_entities(
+                        Observation,
+                        engagement_id=self.project_id,
+                        offset=offset,
+                        limit=51,
+                    )
                 )
             )
         return {
@@ -189,8 +198,8 @@ class ButlerReports:
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        report = self._report(arguments["report_id"])
+    async def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = await self._report(arguments["report_id"])
         offset = arguments.get("summary_offset", 0)
         summary = report.executive_summary
         end = min(offset + 8000, len(summary))
@@ -210,8 +219,8 @@ class ButlerReports:
             ),
         }
 
-    def source_note(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        note = self._note(arguments["observation_id"])
+    async def source_note(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        note = await self._note(arguments["observation_id"])
         offset = arguments.get("body_offset", 0)
         end = min(offset + 8000, len(note.body))
         return {
@@ -223,7 +232,7 @@ class ButlerReports:
             "next_body_offset": end if end < len(note.body) else None,
         }
 
-    def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def create(self, arguments: dict[str, Any]) -> dict[str, Any]:
         title = arguments["title"].strip()
         if not title:
             raise ValueError("report title cannot be blank")
@@ -232,7 +241,7 @@ class ButlerReports:
             findings = []
             offset = 0
             while True:
-                batch = self.store.list_entities(
+                batch = await self.store.list_entities(
                     Finding, engagement_id=self.project_id, offset=offset, limit=1000
                 )
                 findings.extend(
@@ -251,7 +260,7 @@ class ButlerReports:
             "finding_ids": findings,
             "observation_ids": arguments.get("observation_ids", []),
         }
-        self._references(changes)
+        (await self._references(changes))
         return self._pending(
             {
                 "kind": "report_create",
@@ -261,8 +270,8 @@ class ButlerReports:
             }
         )
 
-    def update(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        report = self._current(arguments)
+    async def update(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = await self._current(arguments)
         if report.status == ReportStatus.FINAL:
             raise ValueError("final reports are immutable; create a new draft")
         changes = {
@@ -282,7 +291,7 @@ class ButlerReports:
             changes["title"] = changes["title"].strip()
             if not changes["title"]:
                 raise ValueError("report title cannot be blank")
-        self._references(changes)
+        (await self._references(changes))
         return self._pending(
             {
                 "kind": "report_update",
@@ -293,11 +302,11 @@ class ButlerReports:
             }
         )
 
-    def transform_note(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        report = self._current(arguments)
+    async def transform_note(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = await self._current(arguments)
         if report.status == ReportStatus.FINAL:
             raise ValueError("final reports are immutable; create a new draft")
-        note = self._note(arguments["observation_id"])
+        note = await self._note(arguments["observation_id"])
         if note.id not in report.observation_ids:
             raise ValueError("select the note in this report before transforming it")
         if note.revision != arguments["expected_source_revision"]:
@@ -321,8 +330,8 @@ class ButlerReports:
             }
         )
 
-    def signoff(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        report = self._current(arguments)
+    async def signoff(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = await self._current(arguments)
         if report.status != ReportStatus.REVIEW:
             raise ValueError("save a report in review before requesting signoff")
         return self._pending(
@@ -334,11 +343,11 @@ class ButlerReports:
             }
         )
 
-    def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        report = self._current(arguments)
+    async def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = await self._current(arguments)
         if report.status == ReportStatus.FINAL:
             raise ValueError("a signed final report cannot be deleted")
-        if self.store.find_entities(
+        if await self.store.find_entities(
             ReportRender,
             {"report_id": report.id},
             engagement_id=self.project_id,
@@ -355,8 +364,8 @@ class ButlerReports:
             }
         )
 
-    def export_pdf(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        report = self._current(arguments)
+    async def export_pdf(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = await self._current(arguments)
         return self._pending(
             {
                 "kind": "report_export_pdf",
@@ -366,8 +375,8 @@ class ButlerReports:
             }
         )
 
-    def export_bundle(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self.store.get(Engagement, self.project_id)
+    async def export_bundle(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = await self.store.get(Engagement, self.project_id)
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("project changed; read its current revision before export")
         return self._pending(
@@ -482,7 +491,7 @@ class ButlerReports:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             plugins.append(
                 AnalysisTool(

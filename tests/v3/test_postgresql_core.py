@@ -1,17 +1,24 @@
 """Core persistence contracts exercised against an isolated PostgreSQL schema."""
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from tests.v3.async_test_support import (
+    inspect_database,
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
+from concurrent.futures import TimeoutError
 from datetime import timedelta, timezone
 import os
 from pathlib import Path
 import subprocess
 import sys
-from threading import Event
 from uuid import uuid4
 
+import asyncio
 import pytest
-from sqlalchemy import create_engine, event, inspect, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 
 from nebula.v3.database import (
     BootstrapStateRow,
@@ -34,14 +41,21 @@ from nebula.v3.storage import ConflictError, NebulaStore, NotFoundError
 
 
 @pytest.fixture
-def postgresql_url():
+def postgresql_url(monkeypatch):
+    for name, value in {
+        "ADMIN_RESERVE": "5",
+        "OTHER_CONNECTIONS": "12",
+        "PEAK_PROCESSES": "6",
+        "POOL_SIZE": "2",
+    }.items():
+        monkeypatch.setenv("NEBULA_V3_DB_" + name, value)
     configured = os.getenv("NEBULA_TEST_POSTGRES_URL")
     if not configured:
         pytest.skip("NEBULA_TEST_POSTGRES_URL is required for PostgreSQL coverage")
     url = make_url(Database._normalize_url(configured))
     assert url.get_backend_name() == "postgresql"
     schema = f"nebula_test_{uuid4().hex}"
-    engine = create_engine(url)
+    engine = create_engine(url, poolclass=NullPool)
     with engine.begin() as connection:
         connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
     options = " ".join(
@@ -59,13 +73,13 @@ def postgresql_url():
 
 
 @pytest.fixture
-def postgresql_store(postgresql_url):
+async def postgresql_store(postgresql_url):
     store = NebulaStore(postgresql_url)
     try:
         yield store
     finally:
-        store.event_history.close()
-        store.database.dispose()
+        (await store.event_history.close())
+        (await store.database.dispose())
 
 
 @pytest.mark.parametrize("scheme", ["postgresql", "postgres", "postgresql+psycopg"])
@@ -103,19 +117,24 @@ def test_postgresql_driver_is_required_in_frozen_core():
         assert f'"--collect-all",\n        "{package}"' in build_script
 
 
-def test_postgresql_bootstrap_is_atomic_between_processes(postgresql_url):
+async def test_postgresql_bootstrap_is_atomic_between_processes(postgresql_url):
     code = """
+import asyncio
 import os
 import sys
+from nebula.v3.async_utils import close_store_resources
 from nebula.v3.database import Database
 from nebula.v3.setup import bootstrap_scratch_project
 from nebula.v3.storage import NebulaStore
 print('ready', flush=True)
 sys.stdin.readline()
-store = NebulaStore(Database(os.environ['NEBULA_TEST_POSTGRES_URL']))
-print(bootstrap_scratch_project(store), flush=True)
-store.event_history.close()
-store.database.dispose()
+async def main():
+    store = NebulaStore(Database(os.environ['NEBULA_TEST_POSTGRES_URL']))
+    try:
+        print(await bootstrap_scratch_project(store), flush=True)
+    finally:
+        await close_store_resources([store])
+asyncio.run(main())
 """
     environment = {
         **os.environ,
@@ -150,46 +169,48 @@ store.database.dispose()
                 process.communicate()
     store = NebulaStore(postgresql_url)
     try:
-        assert store.count(Engagement) == 1
-        assert store.database.health() == {
+        assert (await store.count(Engagement)) == 1
+        assert (await store.database.health()) == {
             "database": "ok",
             "dialect": "postgresql",
             "schema_version": CURRENT_SCHEMA_VERSION,
         }
-        with store.database.session() as session:
-            marker = session.get(BootstrapStateRow, SCRATCH_PROJECT_BOOTSTRAP_KEY)
+        async with store.database.session() as session:
+            marker = await session.get(BootstrapStateRow, SCRATCH_PROJECT_BOOTSTRAP_KEY)
             assert marker.status == "complete"
             assert marker.engagement_id == "scratch-project"
-        assert "session_projections" in inspect(store.database.engine).get_table_names()
+        assert "session_projections" in (
+            await inspect_database(store.database, "get_table_names")
+        )
     finally:
-        store.event_history.close()
-        store.database.dispose()
+        (await store.event_history.close())
+        (await store.database.dispose())
 
 
-def test_postgresql_run_event_sequence_and_retry_are_atomic(postgresql_store):
+async def test_postgresql_run_event_sequence_and_retry_are_atomic(postgresql_store):
     store = postgresql_store
 
-    def append(number):
-        return store.append_event("parallel-run", "tick", {"number": number})
+    async def append(number):
+        return await store.append_event("parallel-run", "tick", {"number": number})
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        events = list(pool.map(append, range(18)))
+    events = list((await asyncio.gather(*(append(_item) for _item in range(18)))))
     assert sorted(item.sequence for item in events) == list(range(1, 19))
-    first = store.append_event(
+    first = await store.append_event(
         "parallel-run", "once", {"text": 'π\\"_%'}, idempotency_key="once"
     )
     assert (
-        store.append_event(
+        await store.append_event(
             "parallel-run", "once", {"text": 'π\\"_%'}, idempotency_key="once"
         )
-        == first
-    )
-    assert [item.sequence for item in store.replay_events("parallel-run")] == list(
-        range(1, 20)
-    )
+    ) == first
+    assert [
+        item.sequence for item in (await store.replay_events("parallel-run"))
+    ] == list(range(1, 20))
 
 
-def test_postgresql_alembic_environment_accepts_bare_url(postgresql_url, monkeypatch):
+async def test_postgresql_alembic_environment_accepts_bare_url(
+    postgresql_url, monkeypatch
+):
     from alembic import command
     from alembic.config import Config
 
@@ -203,76 +224,73 @@ def test_postgresql_alembic_environment_accepts_bare_url(postgresql_url, monkeyp
     command.upgrade(config, "head")
     database = Database(bare_url)
     try:
-        assert database.health()["schema_version"] == CURRENT_SCHEMA_VERSION
-        with database.session() as session:
-            marker = session.get(BootstrapStateRow, SCRATCH_PROJECT_BOOTSTRAP_KEY)
+        assert (await database.health())["schema_version"] == CURRENT_SCHEMA_VERSION
+        async with database.session() as session:
+            marker = await session.get(BootstrapStateRow, SCRATCH_PROJECT_BOOTSTRAP_KEY)
             assert marker.status == "complete"
     finally:
-        database.dispose()
+        (await database.dispose())
 
 
-def test_postgresql_transaction_and_direct_operation_writers_share_lock(
+async def test_postgresql_transaction_and_direct_operation_writers_share_lock(
     postgresql_store,
 ):
     store = postgresql_store
-    project = store.create(Engagement(name="Operation stream"))
-    attempted = Event()
+    project = await store.create(Engagement(name="Operation stream"))
+    attempted = asyncio.Event()
     operation_id = "mixed-stream"
 
     def before(_connection, _cursor, statement, _parameters, _context, _many):
         if "pg_advisory_xact_lock" in statement:
             attempted.set()
 
-    def direct():
-        return store.append_operation_event(
+    async def direct():
+        return await store.append_operation_event(
             operation_id, "fixture", project.id, "direct", idempotency_key="direct"
         )
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        with store.transaction() as transaction:
-            first = transaction.append_operation_event(
+    async with store.transaction() as transaction:
+        first = await transaction.append_operation_event(
+            operation_id, "fixture", project.id, "state", idempotency_key="state"
+        )
+        assert (
+            await transaction.append_operation_event(
                 operation_id, "fixture", project.id, "state", idempotency_key="state"
             )
-            assert (
-                transaction.append_operation_event(
-                    operation_id,
-                    "fixture",
-                    project.id,
-                    "state",
-                    idempotency_key="state",
-                )
-                == first
+            == first
+        )
+        second = await transaction.append_operation_event(
+            operation_id, "fixture", project.id, "second"
+        )
+        assert (first.sequence, second.sequence) == (1, 2)
+        event.listen(store.database.engine.sync_engine, "before_cursor_execute", before)
+        future = asyncio.create_task(direct())
+        try:
+            await asyncio.wait_for(attempted.wait(), 5)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(future), 0.1)
+        finally:
+            event.remove(
+                store.database.engine.sync_engine, "before_cursor_execute", before
             )
-            second = transaction.append_operation_event(
-                operation_id, "fixture", project.id, "second"
-            )
-            assert (first.sequence, second.sequence) == (1, 2)
-            event.listen(store.database.engine, "before_cursor_execute", before)
-            try:
-                future = pool.submit(direct)
-                assert attempted.wait(5), (
-                    "direct writer did not attempt its stream lock"
-                )
-                with pytest.raises(TimeoutError):
-                    future.result(timeout=0.1)
-            finally:
-                event.remove(store.database.engine, "before_cursor_execute", before)
-        assert future.result(timeout=5).sequence == 3
-    assert [item.sequence for item in store.replay_operation_events(operation_id)] == [
+    assert (await asyncio.wait_for(future, 5)).sequence == 3
+    assert [
+        item.sequence for item in (await store.replay_operation_events(operation_id))
+    ] == [
         1,
         2,
         3,
     ]
 
 
-def test_postgresql_json_filters_references_and_timezones_survive_reopen(
+async def test_postgresql_json_filters_references_and_timezones_survive_reopen(
     postgresql_store, postgresql_url
 ):
     store = postgresql_store
-    project = store.create(Engagement(name="Unicode π and quotes ' \""))
+    project = await store.create(Engagement(name="Unicode π and quotes ' \""))
     instant = utc_now().astimezone(timezone(timedelta(hours=5, minutes=30)))
     target = "item_π%'\\\""
-    asset = store.create(
+    asset = await store.create(
         Asset(
             engagement_id=project.id,
             name=target,
@@ -282,45 +300,58 @@ def test_postgresql_json_filters_references_and_timezones_survive_reopen(
             updated_at=instant,
         )
     )
-    assert store.find_entities(Asset, {"metadata.quote": target}) == [asset]
-    assert store.find_entities(Asset, {"metadata.count": 7}) == [asset]
-    assert store.find_entities(Asset, {"metadata.empty": None}) == [asset]
-    assert store.find_entities(Asset, {"metadata.absent": None}) == [asset]
-    assert list(store.iter_reference_candidates(Asset, [("tags", target, True)])) == [
-        asset
-    ]
-    with store.database.session() as session:
-        stored_time = session.scalar(
+    assert (await store.find_entities(Asset, {"metadata.quote": target})) == [asset]
+    assert (await store.find_entities(Asset, {"metadata.count": 7})) == [asset]
+    assert (await store.find_entities(Asset, {"metadata.empty": None})) == [asset]
+    assert (await store.find_entities(Asset, {"metadata.absent": None})) == [asset]
+    assert list(
+        [
+            item
+            async for item in store.iter_reference_candidates(
+                Asset, [("tags", target, True)]
+            )
+        ]
+    ) == [asset]
+    async with store.database.session() as session:
+        stored_time = await session.scalar(
             select(EntityRow.created_at).where(EntityRow.id == asset.id)
         )
     assert stored_time == instant
     assert stored_time.tzinfo is not None
     reopened = NebulaStore(postgresql_url)
     try:
-        assert reopened.get(Asset, asset.id) == asset
-        assert bootstrap_scratch_project(reopened) is None
+        assert (await reopened.get(Asset, asset.id)) == asset
+        assert (await bootstrap_scratch_project(reopened)) is None
     finally:
-        reopened.event_history.close()
-        reopened.database.dispose()
+        (await reopened.event_history.close())
+        (await reopened.database.dispose())
 
 
-def test_postgresql_archive_delete_is_revision_guarded(postgresql_store):
+async def test_postgresql_archive_delete_is_revision_guarded(postgresql_store):
     store = postgresql_store
-    project = store.create(Engagement(name="Archive", status=EngagementStatus.ARCHIVED))
-    asset = store.create(Asset(engagement_id=project.id, name="archived child"))
+    project = await store.create(
+        Engagement(name="Archive", status=EngagementStatus.ARCHIVED)
+    )
+    asset = await store.create(Asset(engagement_id=project.id, name="archived child"))
     with pytest.raises(ConflictError, match="Project changed"):
-        store.delete_archived_engagement(project.id, expected_revision=2)
-    assert store.get(Asset, asset.id) == asset
-    store.delete_archived_engagement(project.id, expected_revision=project.revision)
+        (await store.delete_archived_engagement(project.id, expected_revision=2))
+    assert (await store.get(Asset, asset.id)) == asset
+    (
+        await store.delete_archived_engagement(
+            project.id, expected_revision=project.revision
+        )
+    )
     with pytest.raises(NotFoundError):
-        store.get(Engagement, project.id)
-    assert store.find_entities(Asset, {}, engagement_id=project.id) == []
+        (await store.get(Engagement, project.id))
+    assert (await store.find_entities(Asset, {}, engagement_id=project.id)) == []
 
 
-def test_postgresql_session_projection_retries_share_one_revision(postgresql_store):
+async def test_postgresql_session_projection_retries_share_one_revision(
+    postgresql_store,
+):
     store = postgresql_store
-    project = store.create(Engagement(name="Durable chat"))
-    chat = store.create(
+    project = await store.create(Engagement(name="Durable chat"))
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Persisted",
@@ -328,10 +359,15 @@ def test_postgresql_session_projection_retries_share_one_revision(postgresql_sto
             model="fixture",
         )
     )
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        states = list(pool.map(lambda _: session_state(store, chat), range(12)))
+    states = list(
+        (
+            await asyncio.gather(
+                *((lambda _: session_state(store, chat))(_item) for _item in range(12))
+            )
+        )
+    )
     assert {state["revision"] for state in states} == {1}
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=chat.id,
@@ -339,7 +375,15 @@ def test_postgresql_session_projection_retries_share_one_revision(postgresql_sto
             model="fixture",
         )
     )
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        states = list(pool.map(lambda _: session_state(store, chat), range(12)))
+    states = list(
+        (
+            await asyncio.gather(
+                *((lambda _: session_state(store, chat))(_item) for _item in range(12))
+            )
+        )
+    )
     assert {state["revision"] for state in states} == {2}
-    assert store.list_session_entities(ChatTurn, chat.id) == [turn]
+    assert (await store.list_session_entities(ChatTurn, chat.id)) == [turn]
+
+
+pytestmark = pytest.mark.anyio

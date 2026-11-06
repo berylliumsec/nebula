@@ -1,6 +1,10 @@
 """Interactive Butler Notebook actions keep Core's project and grant boundaries."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -23,14 +27,16 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import CapabilityInputError, GuidedToolError
 
 
-def _fixture(tmp_path):
+async def _fixture(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     root = tmp_path / "selected"
     root.mkdir()
     foreign_root = tmp_path / "foreign"
     foreign_root.mkdir()
-    selected = store.create(Engagement(name="Selected", workspace_path=str(root)))
-    foreign = store.create(Engagement(name="Foreign", workspace_path=str(foreign_root)))
+    selected = await store.create(Engagement(name="Selected", workspace_path=str(root)))
+    foreign = await store.create(
+        Engagement(name="Foreign", workspace_path=str(foreign_root))
+    )
     notebooks = NotebookService(
         store=store,
         workspace_resolver=lambda project_id: (
@@ -39,8 +45,8 @@ def _fixture(tmp_path):
         automation_runtime=None,
         data_root=tmp_path / "runtime",
     )
-    profile = NotebookMcpTools(store, notebooks).register_profile(selected.id)
-    capabilities = ButlerCapabilities(
+    profile = await NotebookMcpTools(store, notebooks).register_profile(selected.id)
+    capabilities = await ButlerCapabilities.create(
         store,
         ArtifactStore(tmp_path / "artifacts"),
         selected.id,
@@ -49,8 +55,8 @@ def _fixture(tmp_path):
     return store, selected, foreign, notebooks, profile, capabilities
 
 
-def test_butler_notebook_pages_exact_cells_and_rejects_stale_edits(tmp_path):
-    store, selected, foreign, notebooks, _, capabilities = _fixture(tmp_path)
+async def test_butler_notebook_pages_exact_cells_and_rejects_stale_edits(tmp_path):
+    store, selected, foreign, notebooks, _, capabilities = await _fixture(tmp_path)
 
     async def invoke(name, arguments=None, *, change=False):
         return await capabilities.invoke(
@@ -130,11 +136,11 @@ def test_butler_notebook_pages_exact_cells_and_rejects_stale_edits(tmp_path):
         with pytest.raises(Exception, match="project-relative|escapes"):
             await invoke("read", {"path": "../foreign/foreign.ipynb"})
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
-    store, selected, _, _, profile, capabilities = _fixture(tmp_path)
+async def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
+    store, selected, _, _, profile, capabilities = await _fixture(tmp_path)
 
     async def scenario():
         assert (
@@ -142,11 +148,13 @@ def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
                 {"operation": "nebula.notebook.list", "arguments": {}}, change=False
             )
         )["notebooks"] == []
-        store.update(
-            McpServerProfile,
-            profile.id,
-            {"enabled": False},
-            expected_revision=profile.revision,
+        (
+            await store.update(
+                McpServerProfile,
+                profile.id,
+                {"enabled": False},
+                expected_revision=profile.revision,
+            )
         )
         with pytest.raises(GuidedToolError, match="revoked"):
             await capabilities.invoke(
@@ -158,11 +166,13 @@ def test_butler_notebook_grant_revocation_blocks_next_action(tmp_path):
             )
         assert not (tmp_path / "selected" / "blocked.ipynb").exists()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(tmp_path):
-    store, selected, _, notebooks, profile, capabilities = _fixture(tmp_path)
+async def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(
+    tmp_path,
+):
+    store, selected, _, notebooks, profile, capabilities = await _fixture(tmp_path)
 
     async def invoke(name, arguments=None, *, change=False):
         return await capabilities.invoke(
@@ -215,7 +225,7 @@ def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(tmp_pat
             "butler_operation": "nebula.notebook.connect_file_index",
             "butler_project_id": selected.id,
         }
-        changed = store.update(
+        changed = await store.update(
             Engagement,
             selected.id,
             {"metadata": {"notebook_file_index": "/private/host/inventory.db"}},
@@ -254,22 +264,24 @@ def test_butler_file_index_handoff_keeps_host_path_on_requesting_browser(tmp_pat
         )
         assert removal["client_action"]["kind"] == "notebook_index_remove"
         assert "/private/host" not in json.dumps([status, pending, removal])
-        store.update(
-            McpServerProfile,
-            profile.id,
-            {"enabled": False},
-            expected_revision=profile.revision,
+        (
+            await store.update(
+                McpServerProfile,
+                profile.id,
+                {"enabled": False},
+                expected_revision=profile.revision,
+            )
         )
         with pytest.raises(GuidedToolError, match="revoked"):
             await invoke("file_index_status")
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_changes(
+async def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_changes(
     tmp_path,
 ):
-    _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
+    _, selected, _, notebooks, _, capabilities = await _fixture(tmp_path)
     runtime = SimpleNamespace(
         policy=AutomationProjectPolicy(
             engagement_id=selected.id,
@@ -344,13 +356,13 @@ def test_butler_notebook_package_lookup_requires_policy_and_excludes_unverified_
         assert network.value.code == "notebook.permission_required"
         assert "network" in str(network.value).lower()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kernel(
+async def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kernel(
     tmp_path,
 ):
-    store, selected, _, notebooks, profile, capabilities = _fixture(tmp_path)
+    store, selected, _, notebooks, profile, capabilities = await _fixture(tmp_path)
     runtime = SimpleNamespace(
         policy=AutomationProjectPolicy(
             engagement_id=selected.id,
@@ -394,7 +406,7 @@ def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kerne
             restart_uncertain=False,
             active_run=None,
             policy_revision=runtime.policy.revision,
-            workspace_path=notebooks._workspace_path(selected.id),
+            workspace_path=(await notebooks._workspace_path(selected.id)),
             command=command,
         )
         notebooks.workers[(selected.id, "kernel.ipynb")] = worker
@@ -423,7 +435,7 @@ def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kerne
                 },
                 change=True,
             )
-        queued = store.create(
+        queued = await store.create(
             NotebookRun(
                 engagement_id=selected.id,
                 notebook_path="kernel.ipynb",
@@ -442,11 +454,13 @@ def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kerne
                 },
                 change=True,
             )
-        store.update(
-            NotebookRun,
-            queued.id,
-            {"status": "interrupted"},
-            expected_revision=queued.revision,
+        (
+            await store.update(
+                NotebookRun,
+                queued.id,
+                {"status": "interrupted"},
+                expected_revision=queued.revision,
+            )
         )
         restarted = await invoke(
             "restart",
@@ -471,20 +485,26 @@ def test_butler_notebook_restart_reports_absence_and_requires_current_idle_kerne
                 },
                 change=True,
             )
-        store.update(
-            McpServerProfile,
-            profile.id,
-            {"enabled": False},
-            expected_revision=store.get(McpServerProfile, profile.id).revision,
+        (
+            await store.update(
+                McpServerProfile,
+                profile.id,
+                {"enabled": False},
+                expected_revision=(
+                    await store.get(McpServerProfile, profile.id)
+                ).revision,
+            )
         )
         with pytest.raises(GuidedToolError, match="revoked"):
             await invoke("kernel_status", {"path": "kernel.ipynb"})
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_notebook_package_install_requires_pin_and_observed_version(tmp_path):
-    _, selected, _, notebooks, _, capabilities = _fixture(tmp_path)
+async def test_butler_notebook_package_install_requires_pin_and_observed_version(
+    tmp_path,
+):
+    _, selected, _, notebooks, _, capabilities = await _fixture(tmp_path)
     runtime = SimpleNamespace(
         policy=AutomationProjectPolicy(
             engagement_id=selected.id,
@@ -561,13 +581,13 @@ def test_butler_notebook_package_install_requires_pin_and_observed_version(tmp_p
             )
         assert len(commands) == 2
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_docker_package_read_is_unknown_until_persisted_environment_is_mounted(
+async def test_docker_package_read_is_unknown_until_persisted_environment_is_mounted(
     tmp_path, monkeypatch
 ):
-    _, selected, _, notebooks, _, _ = _fixture(tmp_path)
+    _, selected, _, notebooks, _, _ = await _fixture(tmp_path)
     policy = AutomationProjectPolicy(
         engagement_id=selected.id,
         execution_mode="docker",
@@ -614,11 +634,11 @@ def test_docker_package_read_is_unknown_until_persisted_environment_is_mounted(
         assert len(commands) == 1
         assert commands[0][-1] == "nebula-fixture"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_notebook_runs_exact_source_and_reads_back_interruption(tmp_path):
-    store, selected, foreign, notebooks, _, capabilities = _fixture(tmp_path)
+async def test_butler_notebook_runs_exact_source_and_reads_back_interruption(tmp_path):
+    store, selected, foreign, notebooks, _, capabilities = await _fixture(tmp_path)
     runtime = SimpleNamespace(
         policy=AutomationProjectPolicy(
             engagement_id=selected.id,
@@ -700,11 +720,11 @@ def test_butler_notebook_runs_exact_source_and_reads_back_interruption(tmp_path)
         release.set()
         observed = await invoke("wait", {"run_id": run_id, "timeout": 5})
         assert observed["run"]["status"] == "interrupted"
-        events = notebooks.run(run_id, engagement_id=selected.id)["events"]
+        events = (await notebooks.run(run_id, engagement_id=selected.id))["events"]
         assert [event["event_type"] for event in events].count(
             "notebook.completed"
         ) == 1
-        foreign_run = store.create(
+        foreign_run = await store.create(
             NotebookRun(
                 engagement_id=foreign.id,
                 notebook_path="foreign.ipynb",
@@ -716,4 +736,7 @@ def test_butler_notebook_runs_exact_source_and_reads_back_interruption(tmp_path)
         with pytest.raises(GuidedToolError):
             await invoke("run", {"run_id": foreign_run.id})
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

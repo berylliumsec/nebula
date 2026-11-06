@@ -153,9 +153,9 @@ class ManagedBrowserHost:
     async def _identity_proxy(self, identity_id: str) -> dict[str, str]:
         security = BrowserSecurityService(self.store)
 
-        def authorize(destination: str) -> None:
+        async def authorize(destination: str) -> None:
             try:
-                identity = self.store.get(BrowserIdentity, identity_id)
+                identity = await self.store.get(BrowserIdentity, identity_id)
                 if identity.revoked_at:
                     raise ValueError("The browser identity is revoked.")
                 if (
@@ -165,7 +165,7 @@ class ManagedBrowserHost:
                     raise ValueError(
                         "The headless security host requires an agent security identity."
                     )
-                scope = security._scope(identity.engagement_id)
+                scope = await security._scope(identity.engagement_id)
             except NotFoundError as exc:
                 # diagnostic-expected: deletion revokes an existing egress grant.
                 raise ValueError(
@@ -181,7 +181,7 @@ class ManagedBrowserHost:
                     "The host browser identity limit is reached. Restart the managed browser before opening more identities."
                 )
             # Validate ownership and scope before allocating any listener.
-            identity = self.store.get(BrowserIdentity, identity_id)
+            identity = await self.store.get(BrowserIdentity, identity_id)
             if identity.revoked_at:
                 raise ValueError("The browser identity is revoked.")
             if (
@@ -191,11 +191,11 @@ class ManagedBrowserHost:
                 raise ValueError(
                     "The headless security host requires an agent security identity."
                 )
-            security._scope(identity.engagement_id)
+            (await security._scope(identity.engagement_id))
             if self.headless:
                 from .domain import BrowserSession
 
-                sessions = self.store.find_entities(
+                sessions = await self.store.find_entities(
                     BrowserSession,
                     {"identity_id": identity_id, "runtime_kind": "agent_security"},
                     engagement_id=identity.engagement_id,

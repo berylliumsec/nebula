@@ -8,11 +8,11 @@ from .domain import ChatTurn, Entity
 from .storage import ConflictError, NebulaStore
 
 
-def save_host_wait(
+async def save_host_wait(
     store: NebulaStore, model: type[Entity], identity: str, reason: str | None
 ) -> None:
     for attempt in range(3):
-        current = store.get(model, identity)
+        current = await store.get(model, identity)
         if getattr(current, "status", None) != "queued":
             return
         changes: dict[str, Any]
@@ -30,7 +30,11 @@ def save_host_wait(
                 metadata["host_load_wait"] = reason
             changes = {"metadata": metadata}
         try:
-            store.update(model, identity, changes, expected_revision=current.revision)
+            (
+                await store.update(
+                    model, identity, changes, expected_revision=current.revision
+                )
+            )
             return
         except ConflictError:
             # diagnostic-expected: reread a concurrently changed owner, never overwrite it.

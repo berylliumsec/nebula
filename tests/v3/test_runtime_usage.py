@@ -1,9 +1,14 @@
 """Account figures are vendor-scoped and local turn counts are never a balance."""
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 
 import httpx
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.domain import (
@@ -81,7 +86,7 @@ def test_vendor_payloads_keep_key_account_and_window_scopes_separate():
     assert codex.windows[0].resets_at is not None
 
 
-def test_codex_account_read_sends_no_model_turn(monkeypatch, tmp_path):
+async def test_codex_account_read_sends_no_model_turn(monkeypatch, tmp_path):
     class Rpc:
         def __init__(self):
             self.calls = []
@@ -111,7 +116,7 @@ def test_codex_account_read_sends_no_model_turn(monkeypatch, tmp_path):
         kind=HarnessKind.CODEX_APP_SERVER,
         executable="/bin/true",
     )
-    result = asyncio.run(adapter.read_account_usage(profile, object()))
+    result = await adapter.read_account_usage(profile, object())
     assert result["rateLimits"]["primary"]["usedPercent"] == 10
     assert rpc.calls == [
         ("account/rateLimits/read", {"excludeResetCreditDetails": True})
@@ -119,7 +124,7 @@ def test_codex_account_read_sends_no_model_turn(monkeypatch, tmp_path):
     assert rpc.closed
 
 
-def test_grok_billing_read_uses_control_rpc_without_model_turn(monkeypatch):
+async def test_grok_billing_read_uses_control_rpc_without_model_turn(monkeypatch):
     class Rpc:
         def __init__(self):
             self.calls = []
@@ -146,13 +151,13 @@ def test_grok_billing_read_uses_control_rpc_without_model_turn(monkeypatch):
     profile = HarnessProfile(
         id="grok", name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
     )
-    result = asyncio.run(adapter.read_account_usage(profile, object()))
+    result = await adapter.read_account_usage(profile, object())
     assert result["config"]["creditUsagePercent"] == 35
     assert rpc.calls == [("_x.ai/billing", {})]
     assert rpc.closed
 
 
-def test_runtime_usage_api_tracks_turns_and_refreshes_balance_without_leaking_key(
+async def test_runtime_usage_api_tracks_turns_and_refreshes_balance_without_leaking_key(
     tmp_path, monkeypatch
 ):
     async def unreadable_grok_account(self, profile, credentials):
@@ -161,102 +166,125 @@ def test_runtime_usage_api_tracks_turns_and_refreshes_balance_without_leaking_ke
     monkeypatch.setattr(GrokAcpAdapter, "read_account_usage", unreadable_grok_account)
     monkeypatch.setenv("NEBULA_USAGE_TEST_KEY", "secret-for-test")
     store = NebulaStore(tmp_path / "nebula.db")
-    store.create(
-        ProviderProfile(
-            id="router",
-            name="OpenRouter",
-            provider_type="openrouter",
-            endpoint="https://openrouter.ai/api/v1",
-            secret_ref="env:NEBULA_USAGE_TEST_KEY",
+    (
+        await store.create(
+            ProviderProfile(
+                id="router",
+                name="OpenRouter",
+                provider_type="openrouter",
+                endpoint="https://openrouter.ai/api/v1",
+                secret_ref="env:NEBULA_USAGE_TEST_KEY",
+            )
         )
     )
-    store.create(
-        ProviderProfile(
-            id="other",
-            name="Other",
-            provider_type="openai",
-            endpoint="https://api.openai.com",
+    (
+        await store.create(
+            ProviderProfile(
+                id="other",
+                name="Other",
+                provider_type="openai",
+                endpoint="https://api.openai.com",
+            )
         )
     )
-    store.create(
-        ProviderProfile(
-            id="bad",
-            name="Bad endpoint",
-            provider_type="openrouter",
-            endpoint="https://[::",
-            secret_ref="env:NEBULA_USAGE_TEST_KEY",
+    (
+        await store.create(
+            ProviderProfile(
+                id="bad",
+                name="Bad endpoint",
+                provider_type="openrouter",
+                endpoint="https://[::",
+                secret_ref="env:NEBULA_USAGE_TEST_KEY",
+            )
         )
     )
-    store.create(
-        ChatTurn(
-            id="provider-turn",
-            engagement_id="project",
-            session_id="chat",
-            provider_profile_id="router",
-            model="model",
-            usage=ChatTokenUsage(
-                input_tokens=120,
-                output_tokens=30,
-                total_tokens=150,
-                cached_input_tokens=40,
-            ),
+    (
+        await store.create(
+            ChatTurn(
+                id="provider-turn",
+                engagement_id="project",
+                session_id="chat",
+                provider_profile_id="router",
+                model="model",
+                usage=ChatTokenUsage(
+                    input_tokens=120,
+                    output_tokens=30,
+                    total_tokens=150,
+                    cached_input_tokens=40,
+                ),
+            )
         )
     )
-    store.create(
-        AgentRun(
-            id="usage-run",
-            engagement_id="project",
-            objective="Inspect",
-            supervisor_provider_id="router",
+    (
+        await store.create(
+            AgentRun(
+                id="usage-run",
+                engagement_id="project",
+                objective="Inspect",
+                supervisor_provider_id="router",
+            )
         )
     )
-    store.create(
-        AgentAttempt(
-            id="usage-attempt",
-            engagement_id="project",
-            run_id="usage-run",
-            task_id="usage-task",
-            agent_role="scope_planning",
-            attempt_number=1,
-            tokens_used=42,
+    (
+        await store.create(
+            AgentAttempt(
+                id="usage-attempt",
+                engagement_id="project",
+                run_id="usage-run",
+                task_id="usage-task",
+                agent_role="scope_planning",
+                attempt_number=1,
+                tokens_used=42,
+            )
         )
     )
-    store.create(
-        ContextSnapshot(
-            id="usage-context",
-            engagement_id="project",
-            owner_type=ContextOwnerType.AGENT_RUN,
-            owner_id="usage-run",
-            status=ContextSnapshotStatus.FAILED,
-            provider_profile_id="router",
-            model="model",
-            prompt_version="test",
-            source_sha256="a" * 64,
-            error="fixture failure",
-            usage=ChatTokenUsage(input_tokens=10, output_tokens=2, total_tokens=12),
+    (
+        await store.create(
+            ContextSnapshot(
+                id="usage-context",
+                engagement_id="project",
+                owner_type=ContextOwnerType.AGENT_RUN,
+                owner_id="usage-run",
+                status=ContextSnapshotStatus.FAILED,
+                provider_profile_id="router",
+                model="model",
+                prompt_version="test",
+                source_sha256="a" * 64,
+                error="fixture failure",
+                usage=ChatTokenUsage(input_tokens=10, output_tokens=2, total_tokens=12),
+            )
         )
     )
-    store.create(
-        HarnessProfile(
-            id="grok", name="Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+    (
+        await store.create(
+            HarnessProfile(
+                id="grok",
+                name="Grok",
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+            )
         )
     )
-    store.create(
-        HarnessSession(
-            id="harness-session",
-            engagement_id="project",
-            harness_profile_id="grok",
-            model="model",
+    (
+        await store.create(
+            HarnessSession(
+                id="harness-session",
+                engagement_id="project",
+                harness_profile_id="grok",
+                model="model",
+            )
         )
     )
-    store.create(
-        HarnessTurn(
-            id="harness-turn",
-            engagement_id="project",
-            harness_session_id="harness-session",
-            origin=HarnessTurnOrigin.ANALYSIS,
-            prompt="Inspect",
-            usage=ChatTokenUsage(input_tokens=70, output_tokens=8, total_tokens=78),
+    (
+        await store.create(
+            HarnessTurn(
+                id="harness-turn",
+                engagement_id="project",
+                harness_session_id="harness-session",
+                origin=HarnessTurnOrigin.ANALYSIS,
+                prompt="Inspect",
+                usage=ChatTokenUsage(input_tokens=70, output_tokens=8, total_tokens=78),
+            )
         )
     )
     calls = []
@@ -276,9 +304,9 @@ def test_runtime_usage_api_tracks_turns_and_refreshes_balance_without_leaking_ke
             runtime_usage_transport=httpx.MockTransport(vendor),
         )
     )
-    assert client.get("/api/v1/runtime-usage").status_code == 401
+    assert (await client.get("/api/v1/runtime-usage")).status_code == 401
     headers = {"Authorization": "Bearer test-token"}
-    first = client.get("/api/v1/runtime-usage", headers=headers)
+    first = await client.get("/api/v1/runtime-usage", headers=headers)
     assert first.status_code == 200
     assert first.headers["Cache-Control"] == "no-store"
     items = {item["profile_id"]: item for item in first.json()["items"]}
@@ -297,14 +325,17 @@ def test_runtime_usage_api_tracks_turns_and_refreshes_balance_without_leaking_ke
     assert items["bad"]["vendor"]["state"] == "unavailable"
     assert "secret-for-test" not in first.text
     assert len(calls) == 1
-    client.get("/api/v1/runtime-usage", headers=headers)
+    (await client.get("/api/v1/runtime-usage", headers=headers))
     assert len(calls) == 1
-    client.get("/api/v1/runtime-usage?refresh=true", headers=headers)
+    (await client.get("/api/v1/runtime-usage?refresh=true", headers=headers))
     assert len(calls) == 2
-    store.delete(ProviderProfile, "other")
-    after_delete = client.get("/api/v1/runtime-usage", headers=headers)
+    (await store.delete(ProviderProfile, "other"))
+    after_delete = await client.get("/api/v1/runtime-usage", headers=headers)
     assert {item["profile_id"] for item in after_delete.json()["items"]} == {
         "router",
         "grok",
         "bad",
     }
+
+
+pytestmark = pytest.mark.anyio

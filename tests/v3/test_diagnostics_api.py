@@ -1,6 +1,9 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import json
 import threading
 import zipfile
@@ -9,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.diagnostics import DiagnosticManager, SETTINGS_SCHEMA, _on_event_loop
@@ -26,7 +29,9 @@ def _records(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -> None:
+async def test_diagnostics_api_settings_correlation_fault_and_export(
+    tmp_path: Path,
+) -> None:
     manager = DiagnosticManager(tmp_path / "data", watch_settings=False)
     store = NebulaStore(tmp_path / "nebula.db")
     app = create_app(
@@ -41,13 +46,13 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
         raise OSError("Bearer canary-secret-token should never be logged")
 
     try:
-        with TestClient(app, raise_server_exceptions=False) as client:
-            unauthorized = client.get("/api/v1/diagnostics/settings")
+        async with TestClient(app, raise_server_exceptions=False) as client:
+            unauthorized = await client.get("/api/v1/diagnostics/settings")
             assert unauthorized.status_code == 401
             assert unauthorized.headers["x-request-id"]
             assert unauthorized.json()["detail"] == "valid bearer token required"
 
-            settings = client.get("/api/v1/diagnostics/settings", headers=_auth())
+            settings = await client.get("/api/v1/diagnostics/settings", headers=_auth())
             assert settings.status_code == 200
             assert settings.json() == {
                 "schema": SETTINGS_SCHEMA,
@@ -55,7 +60,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 "feature_levels": {},
                 "sensitive_detail_capture": False,
             }
-            updated = client.put(
+            updated = await client.put(
                 "/api/v1/diagnostics/settings",
                 headers=_auth(),
                 json={
@@ -69,7 +74,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
             assert updated.json()["feature_levels"] == {"storage": "debug"}
 
             operation_id = "op_frontend_123"
-            failure = client.get(
+            failure = await client.get(
                 "/api/v1/test/diagnostic-fault",
                 headers={**_auth(), "X-Nebula-Operation-ID": operation_id},
             )
@@ -129,7 +134,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
             }
 
             browser_error_id = "err_browser_shared_123"
-            browser = client.post(
+            browser = await client.post(
                 "/api/v1/diagnostics/events",
                 headers=_auth(),
                 json={
@@ -162,7 +167,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
             assert interface_record["metadata"] == {"component": "test"}
 
             handled_error_id = "err_core_handled_123"
-            handled = client.post(
+            handled = await client.post(
                 "/api/v1/diagnostics/events",
                 headers=_auth(),
                 json={
@@ -194,7 +199,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 for record in _records(manager.log_dir / "errors.log")
             )
 
-            recent = client.get(
+            recent = await client.get(
                 "/api/v1/diagnostics/errors?feature=storage&limit=10",
                 headers=_auth(),
             )
@@ -203,7 +208,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 body["error_id"]
             ]
 
-            files = client.get("/api/v1/diagnostics/files", headers=_auth())
+            files = await client.get("/api/v1/diagnostics/files", headers=_auth())
             assert files.status_code == 200
             assert files.json()["health"]["global_level"] == "debug"
             assert all(
@@ -211,7 +216,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 for item in files.json()["files"]
             )
 
-            exported = client.post("/api/v1/diagnostics/export", headers=_auth())
+            exported = await client.post("/api/v1/diagnostics/export", headers=_auth())
             assert exported.status_code == 200
             assert exported.headers["content-type"] == "application/zip"
             with zipfile.ZipFile(BytesIO(exported.content)) as archive:
@@ -229,13 +234,15 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
         manager.close()
 
 
-def test_browser_ingress_is_disabled_outside_development_mode(tmp_path: Path) -> None:
+async def test_browser_ingress_is_disabled_outside_development_mode(
+    tmp_path: Path,
+) -> None:
     manager = DiagnosticManager(tmp_path / "data", watch_settings=False)
     store = NebulaStore(tmp_path / "nebula.db")
     app = create_app(store, auth_token="test-token", diagnostic_manager=manager)
     try:
-        with TestClient(app) as client:
-            response = client.post(
+        async with TestClient(app) as client:
+            response = await client.post(
                 "/api/v1/diagnostics/events",
                 headers=_auth(),
                 json={
@@ -258,7 +265,7 @@ def test_browser_ingress_is_disabled_outside_development_mode(tmp_path: Path) ->
         manager.close()
 
 
-def test_actionable_incident_resolution_and_guarded_sensitive_detail(
+async def test_actionable_incident_resolution_and_guarded_sensitive_detail(
     tmp_path: Path,
 ) -> None:
     detail_store = SensitiveDiagnosticStore(
@@ -299,7 +306,7 @@ def test_actionable_incident_resolution_and_guarded_sensitive_detail(
     assert error_id
 
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             wrapper = {
                 "schema": "nebula.diagnostic/v1",
                 "level": "ERROR",
@@ -311,7 +318,7 @@ def test_actionable_incident_resolution_and_guarded_sensitive_detail(
                 "operation_id": "op_shared_harness",
                 "reason_code": "transport_closed",
             }
-            resolved = client.post(
+            resolved = await client.post(
                 "/api/v1/diagnostics/incidents/resolve",
                 headers=_auth(),
                 json={"records": [wrapper]},
@@ -324,20 +331,20 @@ def test_actionable_incident_resolution_and_guarded_sensitive_detail(
             assert incident["guidance"]["verification"]
             assert len(incident["related_records"]) == 1
 
-            fetched = client.get(
+            fetched = await client.get(
                 f"/api/v1/diagnostics/incidents/{error_id}", headers=_auth()
             )
             assert fetched.status_code == 200
             assert fetched.json()["sensitive_detail_available"] is True
 
-            unconfirmed = client.post(
+            unconfirmed = await client.post(
                 f"/api/v1/diagnostics/incidents/{error_id}/sensitive-detail",
                 headers=_auth(),
                 json={"confirmed": False, "action": "reveal"},
             )
             assert unconfirmed.status_code == 409
 
-            revealed = client.post(
+            revealed = await client.post(
                 f"/api/v1/diagnostics/incidents/{error_id}/sensitive-detail",
                 headers=_auth(),
                 json={"confirmed": True, "action": "reveal"},
@@ -346,7 +353,7 @@ def test_actionable_incident_resolution_and_guarded_sensitive_detail(
             assert revealed.headers["cache-control"] == "no-store"
             assert revealed.json()["detail"] == f"HarnessTransportError: {failure}"
 
-            rejected = client.post(
+            rejected = await client.post(
                 f"/api/v1/diagnostics/incidents/{error_id}/actions/arbitrary_command",
                 headers=_auth(),
                 json={"confirmed": True},
@@ -370,7 +377,7 @@ def test_actionable_incident_resolution_and_guarded_sensitive_detail(
         manager.close()
 
 
-def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
+async def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manager = DiagnosticManager(tmp_path / "data", watch_settings=False)
@@ -402,17 +409,17 @@ def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
         )
 
     try:
-        with TestClient(app) as client:
+        async with TestClient(app) as client:
             assert manager.flush()
             monkeypatch.setattr(manager, "_write_pending", blocked_write)
             monkeypatch.setattr(manager, "flush", observed_flush)
             # Recorded on an event loop, the ERROR is acknowledged by the writer
             # thread, which is now stuck on a slow disk.
-            error_id = asyncio.run(record_on_loop())
+            error_id = await record_on_loop()
             responses: dict[str, Any] = {}
 
-            def fetch_errors() -> None:
-                responses["errors"] = client.get(
+            async def fetch_errors() -> None:
+                responses["errors"] = await client.get(
                     "/api/v1/diagnostics/errors", headers=_auth()
                 )
 
@@ -424,7 +431,9 @@ def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
                 # everything else: this request comes back while the disk is
                 # still stuck. A viewer that stalled the loop would hold it
                 # until the writer gave up on its own.
-                settings = client.get("/api/v1/diagnostics/settings", headers=_auth())
+                settings = await client.get(
+                    "/api/v1/diagnostics/settings", headers=_auth()
+                )
                 assert settings.status_code == 200
                 assert not released.is_set()
             finally:
@@ -438,25 +447,28 @@ def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
             # Incident lookups, incident actions, resolution and the support
             # bundle wait on the writer the same way, so they read off the loop.
             flush_on_loop.clear()
-            incident = client.get(
+            incident = await client.get(
                 f"/api/v1/diagnostics/incidents/{error_id}", headers=_auth()
             )
             assert incident.status_code == 200
-            action = client.post(
+            action = await client.post(
                 f"/api/v1/diagnostics/incidents/{error_id}/actions/missing",
                 headers=_auth(),
                 json={},
             )
             assert action.status_code == 404
-            resolved = client.post(
+            resolved = await client.post(
                 "/api/v1/diagnostics/incidents/resolve",
                 headers=_auth(),
                 json={"records": []},
             )
             assert resolved.status_code == 200
-            exported = client.post("/api/v1/diagnostics/export", headers=_auth())
+            exported = await client.post("/api/v1/diagnostics/export", headers=_auth())
             assert exported.status_code == 200
             assert len(flush_on_loop) == 4
             assert not any(flush_on_loop)
     finally:
         manager.close()
+
+
+pytestmark = pytest.mark.anyio

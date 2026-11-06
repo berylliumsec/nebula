@@ -88,10 +88,10 @@ class ActionBroker:
             <= HEALTH_WINDOW_SECONDS
         )
 
-    def heartbeat(
+    async def heartbeat(
         self, device_id: str, snapshot: DeviceCapabilitySnapshot
     ) -> PairedDeviceSession:
-        device = self.store.get(PairedDeviceSession, device_id)
+        device = await self.store.get(PairedDeviceSession, device_id)
         if device.revoked_at is not None:
             raise ConflictError("paired device is revoked")
         expected = snapshot.expected_revision or device.revision
@@ -100,7 +100,7 @@ class ActionBroker:
         # phone clock hide a live device and a fast one keep an offline
         # device "healthy" until its intents expired.
         now = utc_now()
-        return self.store.update(
+        return await self.store.update(
             PairedDeviceSession,
             device.id,
             {
@@ -118,7 +118,7 @@ class ActionBroker:
             expected_revision=expected,
         )
 
-    def _transition(
+    async def _transition(
         self,
         intent: ActionIntent,
         changes: dict[str, object],
@@ -127,7 +127,7 @@ class ActionBroker:
         actor_id: str,
         expected_revision: int,
     ) -> ActionIntent:
-        updated, _ = self.store.update_with_operation_event(
+        updated, _ = await self.store.update_with_operation_event(
             ActionIntent,
             intent.id,
             changes,
@@ -142,8 +142,8 @@ class ActionBroker:
         )
         return updated
 
-    def create(self, request: ActionIntentCreateRequest) -> ActionIntent:
-        existing = self.store.find_entities(
+    async def create(self, request: ActionIntentCreateRequest) -> ActionIntent:
+        existing = await self.store.find_entities(
             ActionIntent,
             {"idempotency_key": request.idempotency_key},
             engagement_id=request.project_id,
@@ -164,14 +164,16 @@ class ActionBroker:
             raise ValueError("action intent requires a registered device action")
         devices = [
             item
-            for item in self.store.find_entities(
-                PairedDeviceSession, {"revoked_at": None}
+            for item in (
+                await self.store.find_entities(
+                    PairedDeviceSession, {"revoked_at": None}
+                )
             )
             if self.healthy(item)
         ]
         eligible = []
         for device in devices:
-            resolved = self.registry.resolve(
+            resolved = await self.registry.resolve(
                 ActionResolutionRequest(
                     resources=request.resources,
                     device_id=device.id,
@@ -226,7 +228,7 @@ class ActionBroker:
             core_mutation_committed=request.core_mutation_committed,
             metadata=request.metadata,
         )
-        created, _ = self.store.create_with_operation_event(
+        created, _ = await self.store.create_with_operation_event(
             intent,
             operation_id=intent.id,
             operation_kind="action_intent",
@@ -238,8 +240,8 @@ class ActionBroker:
         )
         return created
 
-    def _current(self, intent_id: str) -> ActionIntent:
-        intent = self.store.get(ActionIntent, intent_id)
+    async def _current(self, intent_id: str) -> ActionIntent:
+        intent = await self.store.get(ActionIntent, intent_id)
         now = utc_now()
         if intent.status not in TERMINAL_STATUSES and now >= intent.expires_at:
             if (
@@ -249,7 +251,7 @@ class ActionBroker:
                 # The Core side is already mutated and the device never reported.
                 # Plain expiry would hide the same obligation that a failed
                 # result enforces, so the intent ends in RECONCILE_REQUIRED.
-                return self._transition(
+                return await self._transition(
                     intent,
                     {
                         "status": ActionIntentStatus.RECONCILE_REQUIRED,
@@ -263,7 +265,7 @@ class ActionBroker:
                     actor_id="core",
                     expected_revision=intent.revision,
                 )
-            return self._transition(
+            return await self._transition(
                 intent,
                 {"status": ActionIntentStatus.EXPIRED, "lease_expires_at": None},
                 "action_intent.expired",
@@ -275,7 +277,7 @@ class ActionBroker:
             and intent.lease_expires_at is not None
             and now >= intent.lease_expires_at
         ):
-            return self._transition(
+            return await self._transition(
                 intent,
                 {
                     "status": ActionIntentStatus.QUEUED,
@@ -289,37 +291,41 @@ class ActionBroker:
             )
         return intent
 
-    def get(self, intent_id: str) -> ActionIntent:
-        return self._current(intent_id)
+    async def get(self, intent_id: str) -> ActionIntent:
+        return await self._current(intent_id)
 
-    def list_intents(
+    async def list_intents(
         self, project_id: str, *, offset: int = 0, limit: int = 100
     ) -> list[ActionIntent]:
         """Return one page of a project's intents, newest first."""
 
         return [
-            self._current(item.id)
-            for item in self.store.list_entities(
-                ActionIntent,
-                engagement_id=project_id,
-                offset=offset,
-                limit=limit,
-                newest_first=True,
+            (await self._current(item.id))
+            for item in (
+                await self.store.list_entities(
+                    ActionIntent,
+                    engagement_id=project_id,
+                    offset=offset,
+                    limit=limit,
+                    newest_first=True,
+                )
             )
         ]
 
-    def claim(self, intent_id: str, request: ActionIntentClaimRequest) -> ActionIntent:
-        intent = self._current(intent_id)
+    async def claim(
+        self, intent_id: str, request: ActionIntentClaimRequest
+    ) -> ActionIntent:
+        intent = await self._current(intent_id)
         if intent.status != ActionIntentStatus.QUEUED:
             raise ConflictError("action intent is not queued")
         if request.device_id not in intent.eligible_device_ids:
             raise ConflictError("device is not eligible for this action intent")
         if intent.selected_device_id and intent.selected_device_id != request.device_id:
             raise ConflictError("action intent belongs to another device")
-        device = self.store.get(PairedDeviceSession, request.device_id)
+        device = await self.store.get(PairedDeviceSession, request.device_id)
         if not self.healthy(device):
             raise ConflictError("device is no longer healthy")
-        return self._transition(
+        return await self._transition(
             intent,
             {
                 "status": ActionIntentStatus.CLAIMED,
@@ -331,17 +337,17 @@ class ActionBroker:
             expected_revision=request.expected_revision,
         )
 
-    def prepare(
+    async def prepare(
         self, intent_id: str, request: ActionIntentPrepareRequest
     ) -> ActionIntent:
-        intent = self._current(intent_id)
+        intent = await self._current(intent_id)
         if intent.status != ActionIntentStatus.CLAIMED:
             raise ConflictError("action intent must be claimed before prepare")
         if intent.selected_device_id != request.device_id:
             raise ConflictError("only the claiming device may prepare this action")
-        device = self.store.get(PairedDeviceSession, request.device_id)
+        device = await self.store.get(PairedDeviceSession, request.device_id)
         if not self.healthy(device):
-            return self._transition(
+            return await self._transition(
                 intent,
                 {
                     "status": ActionIntentStatus.FAILED,
@@ -353,7 +359,7 @@ class ActionBroker:
                 expected_revision=request.expected_revision,
             )
         if not request.preflight_succeeded:
-            return self._transition(
+            return await self._transition(
                 intent,
                 {
                     "status": ActionIntentStatus.FAILED,
@@ -364,7 +370,7 @@ class ActionBroker:
                 actor_id=f"device:{request.device_id}",
                 expected_revision=request.expected_revision,
             )
-        return self._transition(
+        return await self._transition(
             intent,
             {
                 "status": ActionIntentStatus.PREPARED,
@@ -376,25 +382,25 @@ class ActionBroker:
             expected_revision=request.expected_revision,
         )
 
-    def commit(
+    async def commit(
         self, intent_id: str, request: ActionIntentCommitRequest
     ) -> ActionIntent:
-        intent = self._current(intent_id)
+        intent = await self._current(intent_id)
         if intent.status != ActionIntentStatus.PREPARED:
             raise ConflictError("action intent must be prepared before commit")
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             for ref in intent.resources:
                 entity_kind = RESOURCE_ENTITY_KINDS.get(ref.kind)
                 if entity_kind is None or ref.revision is None:
                     continue
-                row = session.get(EntityRow, ref.id)
+                row = await session.get(EntityRow, ref.id)
                 if (
                     row is None
                     or row.kind != entity_kind
                     or row.revision != ref.revision
                 ):
                     raise ConflictError("resource changed before action intent commit")
-        return self._transition(
+        return await self._transition(
             intent,
             {
                 "status": ActionIntentStatus.COMMITTED,
@@ -407,15 +413,15 @@ class ActionBroker:
             expected_revision=request.expected_revision,
         )
 
-    def result(
+    async def result(
         self, intent_id: str, request: ActionIntentResultRequest
     ) -> ActionIntent:
-        intent = self._current(intent_id)
+        intent = await self._current(intent_id)
         if intent.status != ActionIntentStatus.COMMITTED:
             raise ConflictError("action intent must be committed before result")
         if intent.selected_device_id != request.device_id:
             raise ConflictError("only the selected device may complete this action")
-        device = self.store.get(PairedDeviceSession, request.device_id)
+        device = await self.store.get(PairedDeviceSession, request.device_id)
         if not self.healthy(device):
             request = request.model_copy(
                 update={
@@ -425,7 +431,7 @@ class ActionBroker:
                 }
             )
         if request.succeeded:
-            return self._transition(
+            return await self._transition(
                 intent,
                 {
                     "status": ActionIntentStatus.SUCCEEDED,
@@ -438,7 +444,7 @@ class ActionBroker:
                 expected_revision=request.expected_revision,
             )
         if not intent.core_mutation_committed:
-            return self._transition(
+            return await self._transition(
                 intent,
                 {
                     "status": ActionIntentStatus.FAILED,
@@ -449,7 +455,7 @@ class ActionBroker:
                 actor_id=f"device:{request.device_id}",
                 expected_revision=request.expected_revision,
             )
-        compensating = self._transition(
+        compensating = await self._transition(
             intent,
             {
                 "status": ActionIntentStatus.COMPENSATING,
@@ -460,7 +466,7 @@ class ActionBroker:
             expected_revision=request.expected_revision,
         )
         compensated = request.compensation_succeeded is True
-        return self._transition(
+        return await self._transition(
             compensating,
             {
                 "status": ActionIntentStatus.COMPENSATED
@@ -475,17 +481,17 @@ class ActionBroker:
             expected_revision=compensating.revision,
         )
 
-    def cancel(
+    async def cancel(
         self, intent_id: str, request: ActionIntentCancelRequest, actor_id: str
     ) -> ActionIntent:
-        intent = self._current(intent_id)
+        intent = await self._current(intent_id)
         if intent.status not in {
             ActionIntentStatus.QUEUED,
             ActionIntentStatus.CLAIMED,
             ActionIntentStatus.PREPARED,
         }:
             raise ConflictError("action intent can no longer be cancelled")
-        return self._transition(
+        return await self._transition(
             intent,
             {
                 "status": ActionIntentStatus.CANCELLED,

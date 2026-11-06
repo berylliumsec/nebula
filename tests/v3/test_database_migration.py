@@ -32,24 +32,29 @@ from nebula.v3 import database_migration as migration
 
 
 @pytest.fixture
-def source(tmp_path: Path) -> Path:
+async def source(tmp_path: Path) -> Path:
     path = tmp_path / "core.db"
     database = Database(path)
     metadata = MetaData()
     metadata.reflect(bind=database.engine)
     now = datetime(2026, 11, 5, 11, 30, 12, 345678, tzinfo=timezone.utc)
-    with database.engine.begin() as connection:
+    async with database.engine.begin() as connection:
         entities = metadata.tables["entities"]
         for entity_id in ("project", "Zebra", "alpha", "éclair"):
-            connection.execute(
-                entities.insert().values(
-                    id=entity_id,
-                    kind="engagements",
-                    engagement_id=None,
-                    revision=7,
-                    payload={"name": entity_id, "nested": [None, True, 3.125, "☃\n\t"]},
-                    created_at=now,
-                    updated_at=now,
+            (
+                await connection.execute(
+                    entities.insert().values(
+                        id=entity_id,
+                        kind="engagements",
+                        engagement_id=None,
+                        revision=7,
+                        payload={
+                            "name": entity_id,
+                            "nested": [None, True, 3.125, "☃\n\t"],
+                        },
+                        created_at=now,
+                        updated_at=now,
+                    )
                 )
             )
         for table in metadata.sorted_tables:
@@ -83,15 +88,17 @@ def source(tmp_path: Path) -> Path:
                     raise AssertionError(
                         f"Add synthetic seed for {table.name}.{column.name}"
                     )
-            connection.execute(table.insert().values(**values))
+            (await connection.execute(table.insert().values(**values)))
         # JSON null must remain distinct from SQL NULL. A timestamp with an
         # explicit offset must preserve its instant across backend adapters.
-        connection.exec_driver_sql(
-            "INSERT INTO entities (id, kind, revision, payload, created_at, updated_at) "
-            "VALUES ('json-null', 'engagements', 1, 'null', "
-            "'2026-11-05 17:00:00.000001+05:30', '2026-11-05 11:30:00.000001+00:00')"
+        (
+            await connection.exec_driver_sql(
+                "INSERT INTO entities (id, kind, revision, payload, created_at, updated_at) "
+                "VALUES ('json-null', 'engagements', 1, 'null', "
+                "'2026-11-05 17:00:00.000001+05:30', '2026-11-05 11:30:00.000001+00:00')"
+            )
         )
-    database.engine.dispose()
+    (await database.engine.dispose())
     # Database's existing URL normalizer treats ? as a URL query. Rename only
     # after seeding so this fixture exercises the migrator's literal-path URI.
     migrated_path = tmp_path / "core ? unicode-é.db"

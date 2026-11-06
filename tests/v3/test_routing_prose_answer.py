@@ -8,6 +8,11 @@ discarding the answer and paying for a second full-context synthesis, while a
 reply that is not a usable answer still goes to the synthesis.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
@@ -103,7 +108,7 @@ def _synthesis(text: str) -> httpx.Response:
     )
 
 
-def _glm_turn(tmp_path, script: list, broker: RecordingBroker | None = None):
+async def _glm_turn(tmp_path, script: list, broker: RecordingBroker | None = None):
     """A tool turn whose provider is GLM on OpenRouter, behind a wire script."""
 
     seen: list[dict] = []
@@ -119,7 +124,7 @@ def _glm_turn(tmp_path, script: list, broker: RecordingBroker | None = None):
         )
 
     broker = broker or RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     prepared.provider = OpenAICompatibleProvider(
         ProviderConfig(
             id="provider",
@@ -162,9 +167,11 @@ def _recorded(monkeypatch) -> list[tuple[str, str]]:
     return recorded
 
 
-def test_glm_prose_reply_on_the_first_routing_step_is_the_answer(tmp_path, monkeypatch):
+async def test_glm_prose_reply_on_the_first_routing_step_is_the_answer(
+    tmp_path, monkeypatch
+):
     recorded = _recorded(monkeypatch)
-    store, service, prepared, broker, seen = _glm_turn(
+    store, service, prepared, broker, seen = await _glm_turn(
         tmp_path,
         [
             _answer("Hello!", reasoning="A greeting needs no tool."),
@@ -183,14 +190,14 @@ def test_glm_prose_reply_on_the_first_routing_step_is_the_answer(tmp_path, monke
     assert len(seen) == 1
     assert seen[0].get("tool_choice", "auto") == "auto"
     assert broker.calls == []
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.execution_claim_id is None
     assert turn.usage.total_tokens == 3
     assert done["usage"]["total_tokens"] == 3
     [stored] = [
         item
-        for item in service.session_messages("session")
+        for item in (await service.session_messages("session"))
         if item.role == ChatRole.ASSISTANT
     ]
     assert stored.id == turn.final_message_id
@@ -202,8 +209,8 @@ def test_glm_prose_reply_on_the_first_routing_step_is_the_answer(tmp_path, monke
     assert not [level for level, _ in recorded if level in {"warning", "error"}]
 
 
-def test_glm_prose_reply_after_a_tool_step_answers_from_its_results(tmp_path):
-    store, service, prepared, broker, seen = _glm_turn(
+async def test_glm_prose_reply_after_a_tool_step_answers_from_its_results(tmp_path):
+    store, service, prepared, broker, seen = await _glm_turn(
         tmp_path,
         [
             _call("call_-8231", "safe_read", {"value": "a"}),
@@ -212,7 +219,7 @@ def test_glm_prose_reply_after_a_tool_step_answers_from_its_results(tmp_path):
         ],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "The value is a."
     assert [call.arguments for call in broker.calls] == [{"value": "a"}]
@@ -223,14 +230,14 @@ def test_glm_prose_reply_after_a_tool_step_answers_from_its_results(tmp_path):
     replayed = [message for message in seen[1]["messages"] if message["role"] == "tool"]
     assert [message["tool_call_id"] for message in replayed] == ["call_-8231"]
     assert json.loads(replayed[0]["content"])["value"] == "a"
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == ["complete"]
     assert turn.usage.total_tokens == 6
     assert completion.usage.total_tokens == 6
     [stored] = [
         item
-        for item in service.session_messages("session")
+        for item in (await service.session_messages("session"))
         if item.role == ChatRole.ASSISTANT
     ]
     assert stored.content == "The value is a."
@@ -254,8 +261,10 @@ def test_glm_prose_reply_after_a_tool_step_answers_from_its_results(tmp_path):
     ],
     ids=["output-limit", "call-finish", "control-frame", "trailing-frame"],
 )
-def test_prose_that_is_not_a_usable_answer_still_goes_to_synthesis(tmp_path, routing):
-    store, service, prepared, broker, seen = _glm_turn(
+async def test_prose_that_is_not_a_usable_answer_still_goes_to_synthesis(
+    tmp_path, routing
+):
+    store, service, prepared, broker, seen = await _glm_turn(
         tmp_path, [routing, _synthesis("The value is a.")]
     )
 
@@ -267,11 +276,11 @@ def test_prose_that_is_not_a_usable_answer_still_goes_to_synthesis(tmp_path, rou
     # The second request is the synthesis: tools declared, calling off.
     assert seen[1].get("tool_choice") == "none"
     assert broker.calls == []
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
-def test_reasoning_only_routing_reply_still_goes_to_synthesis(tmp_path):
-    store, service, prepared, broker, seen = _glm_turn(
+async def test_reasoning_only_routing_reply_still_goes_to_synthesis(tmp_path):
+    store, service, prepared, broker, seen = await _glm_turn(
         tmp_path,
         [
             _answer("", reasoning="Nothing to call; the value is known."),
@@ -284,20 +293,20 @@ def test_reasoning_only_routing_reply_still_goes_to_synthesis(tmp_path):
     assert _shown(events, "delta") == "The value is a."
     assert len(seen) == 2
     assert seen[1].get("tool_choice") == "none"
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.reasoning == "Nothing to call; the value is known."
 
 
-def test_goal_turn_answered_by_routing_is_charged_once_and_completes(tmp_path):
-    store, service, prepared, _, seen = _glm_turn(
+async def test_goal_turn_answered_by_routing_is_charged_once_and_completes(tmp_path):
+    store, service, prepared, _, seen = await _glm_turn(
         tmp_path,
         [
             _answer("Hello!", total_tokens=5_000),
             _synthesis("A second, paid-for answer."),
         ],
     )
-    goal = store.create(
+    goal = await store.create(
         ChatGoal(
             id="goal",
             engagement_id="project",
@@ -311,25 +320,25 @@ def test_goal_turn_answered_by_routing_is_charged_once_and_completes(tmp_path):
             token_budget=5_000,
         )
     )
-    prepared.turn = store.update(
+    prepared.turn = await store.update(
         ChatTurn,
         "turn",
         {"goal_id": goal.id},
         expected_revision=prepared.turn.revision,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Hello!"
     assert len(seen) == 1
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
-    charged = store.get(ChatGoal, goal.id)
+    charged = await store.get(ChatGoal, goal.id)
     assert charged.usage.total_tokens == 5_000
     assert charged.status == ChatGoalStatus.PAUSED
 
 
-def test_routing_answer_runs_the_completed_hook_once(tmp_path):
+async def test_routing_answer_runs_the_completed_hook_once(tmp_path):
     workspace = tmp_path / "workspace"
     _write_native_hook(
         workspace,
@@ -338,19 +347,19 @@ def test_routing_answer_runs_the_completed_hook_once(tmp_path):
         script=PAYLOAD_HOOK,
         failure_policy="block",
     )
-    store, service, prepared, _, seen = _glm_turn(
+    store, service, prepared, _, seen = await _glm_turn(
         tmp_path, [_answer("Hello!"), _synthesis("A second, paid-for answer.")]
     )
     prepared.hook_snapshots = [
         snapshot_native_hook("audit", discover_native_hooks(workspace))
     ]
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Hello!"
     assert len(seen) == 1
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
-    executions = service.list_turn_hook_executions("turn")
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
+    executions = await service.list_turn_hook_executions("turn")
     # The turn ended once, on the routing answer, as a synthesis ends it.
     assert [(item.event_name, item.status) for item in executions] == [
         ("chat.turn.started", "complete"),
@@ -359,3 +368,6 @@ def test_routing_answer_runs_the_completed_hook_once(tmp_path):
     payload = json.loads(executions[1].stdout)["payload"]
     assert payload["finish_reason"] == "stop"
     assert payload["detail"] is None
+
+
+pytestmark = pytest.mark.anyio

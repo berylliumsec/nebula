@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 
@@ -35,10 +39,10 @@ from tests.v3.test_chat_subagents import _response as _subagent_response
 from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
 
 
-def _store(tmp_path):
+async def _store(tmp_path):
     store = NebulaStore(tmp_path / "throughput.db")
-    project = store.create(Engagement(id="project", name="Throughput"))
-    profile = store.create(
+    project = await store.create(Engagement(id="project", name="Throughput"))
+    profile = await store.create(
         ProviderProfile(
             id="provider",
             name="Provider",
@@ -48,7 +52,7 @@ def _store(tmp_path):
             capabilities={"streaming": True, "tool_calling": True},
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id=project.id,
@@ -60,9 +64,9 @@ def _store(tmp_path):
     return store, project, profile, session
 
 
-def test_long_turn_uses_checkpointed_ledger_without_growing_turn_json(tmp_path):
-    store, project, profile, session = _store(tmp_path)
-    turn = store.create(
+async def test_long_turn_uses_checkpointed_ledger_without_growing_turn_json(tmp_path):
+    store, project, profile, session = await _store(tmp_path)
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id=project.id,
@@ -88,31 +92,31 @@ def test_long_turn_uses_checkpointed_ledger_without_growing_turn_json(tmp_path):
             "provider_result": {"status": "complete", "preview": "x" * 400},
             "result_summary": f"Read file {step}",
         }
-        ledger.append(turn.id, entry)
-        history = ledger.history(turn)
-        checkpoint, replay = ledger.compacted_history(turn)
+        (await ledger.append(turn.id, entry))
+        history = await ledger.history(turn)
+        checkpoint, replay = await ledger.compacted_history(turn)
         baseline_replay_bytes += len(json.dumps(history))
         compact_replay_bytes += len(json.dumps(replay)) + (
             len(json.dumps(checkpoint.summary)) if checkpoint else 0
         )
 
-    checkpoint, replay = ledger.compacted_history(turn)
+    checkpoint, replay = await ledger.compacted_history(turn)
     assert checkpoint is not None
     assert checkpoint.through_step >= 111
     # The checkpoint advances every 16 folded steps, so the replay is the
     # latest eight groups plus at most 15 steps not folded yet.
     assert len(replay) <= 8 + 15
     assert compact_replay_bytes < baseline_replay_bytes * 0.35
-    with store.database.session() as session_db:
-        row = session_db.scalar(select(EntityRow).where(EntityRow.id == turn.id))
+    async with store.database.session() as session_db:
+        row = await session_db.scalar(select(EntityRow).where(EntityRow.id == turn.id))
         assert row is not None
         assert len(json.dumps(row.payload)) < 64 * 1024
         assert row.payload["tool_history"] == []
 
 
-def test_scheduler_caps_total_and_background_provider_work(tmp_path):
+async def test_scheduler_caps_total_and_background_provider_work(tmp_path):
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
+        store, project, profile, session = await _store(tmp_path)
         scheduler = ProviderScheduler(
             store,
             worker_id="worker",
@@ -125,7 +129,7 @@ def test_scheduler_caps_total_and_background_provider_work(tmp_path):
         )
         turns = []
         for index in range(20):
-            turn = store.create(
+            turn = await store.create(
                 ChatTurn(
                     id=f"turn-{index:02d}",
                     engagement_id=project.id,
@@ -137,7 +141,7 @@ def test_scheduler_caps_total_and_background_provider_work(tmp_path):
                     capacity_lane="background" if index < 10 else "direct",
                 )
             )
-            scheduler.enqueue(turn)
+            (await scheduler.enqueue(turn))
             turns.append(turn)
 
         release = asyncio.Event()
@@ -163,26 +167,26 @@ def test_scheduler_caps_total_and_background_provider_work(tmp_path):
 
         tasks = [asyncio.create_task(run(turn)) for turn in turns]
         await asyncio.wait_for(all_six.wait(), 2)
-        assert scheduler.metrics()["active"] == 6
-        assert scheduler.metrics()["active_background"] == 4
+        assert (await scheduler.metrics())["active"] == 6
+        assert (await scheduler.metrics())["active_background"] == 4
         release.set()
         await asyncio.gather(*tasks)
         assert peak == 6
         assert peak_background == 4
-        assert scheduler.metrics()["queued"] == 0
+        assert (await scheduler.metrics())["queued"] == 0
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_queued_cancellation_prevents_provider_admission(tmp_path):
+async def test_queued_cancellation_prevents_provider_admission(tmp_path):
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
+        store, project, profile, session = await _store(tmp_path)
         scheduler = ProviderScheduler(
             store,
             worker_id="worker",
             config=ProviderSchedulerConfig(provider_limit=1, background_limit=1),
         )
-        first = store.create(
+        first = await store.create(
             ChatTurn(
                 id="first",
                 engagement_id=project.id,
@@ -193,7 +197,7 @@ def test_queued_cancellation_prevents_provider_admission(tmp_path):
                 queued_at=utc_now(),
             )
         )
-        second = store.create(
+        second = await store.create(
             ChatTurn(
                 id="second",
                 engagement_id=project.id,
@@ -204,30 +208,32 @@ def test_queued_cancellation_prevents_provider_admission(tmp_path):
                 queued_at=utc_now(),
             )
         )
-        scheduler.enqueue(first)
-        scheduler.enqueue(second)
+        (await scheduler.enqueue(first))
+        (await scheduler.enqueue(second))
         first_admission = await scheduler.admit(first.id)
         waiting = asyncio.create_task(scheduler.admit(second.id))
         await asyncio.sleep(0)
-        scheduler.cancel(second.id)
-        latest = store.get(ChatTurn, second.id)
-        store.update(
-            ChatTurn,
-            second.id,
-            {"status": ChatTurnStatus.CANCELLED},
-            expected_revision=latest.revision,
+        (await scheduler.cancel(second.id))
+        latest = await store.get(ChatTurn, second.id)
+        (
+            await store.update(
+                ChatTurn,
+                second.id,
+                {"status": ChatTurnStatus.CANCELLED},
+                expected_revision=latest.revision,
+            )
         )
         await first_admission.release(first.id)
         with pytest.raises(asyncio.CancelledError):
             await waiting
-        assert scheduler.metrics()["active"] == 0
+        assert (await scheduler.metrics())["active"] == 0
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_recovery_clears_an_expired_queued_lease(tmp_path):
-    store, project, profile, session = _store(tmp_path)
-    turn = store.create(
+async def test_recovery_clears_an_expired_queued_lease(tmp_path):
+    store, project, profile, session = await _store(tmp_path)
+    turn = await store.create(
         ChatTurn(
             id="leased",
             engagement_id=project.id,
@@ -239,24 +245,24 @@ def test_recovery_clears_an_expired_queued_lease(tmp_path):
         )
     )
     scheduler = ProviderScheduler(store, worker_id="worker")
-    scheduler.enqueue(turn)
-    with store.database.session() as database_session:
-        row = database_session.get(ProviderTurnQueueRow, turn.id)
+    (await scheduler.enqueue(turn))
+    async with store.database.session() as database_session:
+        row = await database_session.get(ProviderTurnQueueRow, turn.id)
         assert row is not None
         row.lease_owner = "dead-worker"
         row.lease_expires_at = utc_now() - timedelta(seconds=1)
 
-    assert scheduler.recover() == [turn.id]
-    with store.database.session() as database_session:
-        recovered = database_session.get(ProviderTurnQueueRow, turn.id)
+    assert (await scheduler.recover()) == [turn.id]
+    async with store.database.session() as database_session:
+        recovered = await database_session.get(ProviderTurnQueueRow, turn.id)
         assert recovered is not None
         assert recovered.lease_owner is None
         assert recovered.lease_expires_at is None
 
 
-def _queue_state(store: NebulaStore, turn_id: str) -> str | None:
-    with store.database.session() as database_session:
-        row = database_session.get(ProviderTurnQueueRow, turn_id)
+async def _queue_state(store: NebulaStore, turn_id: str) -> str | None:
+    async with store.database.session() as database_session:
+        row = await database_session.get(ProviderTurnQueueRow, turn_id)
         return row.state if row is not None else None
 
 
@@ -270,12 +276,12 @@ def _queue_state(store: NebulaStore, turn_id: str) -> str | None:
         (ChatTurnStatus.FINALIZING, ChatTurnStatus.FINALIZING),
     ],
 )
-def test_admission_starts_only_a_new_turn_routing(tmp_path, parked, admitted):
+async def test_admission_starts_only_a_new_turn_routing(tmp_path, parked, admitted):
     """A resumed turn keeps the parked state that selects how it resumes."""
 
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
-        turn = store.create(
+        store, project, profile, session = await _store(tmp_path)
+        turn = await store.create(
             ChatTurn(
                 id="parked",
                 engagement_id=project.id,
@@ -287,22 +293,22 @@ def test_admission_starts_only_a_new_turn_routing(tmp_path, parked, admitted):
             )
         )
         scheduler = ProviderScheduler(store, worker_id="worker")
-        scheduler.enqueue(turn)
+        (await scheduler.enqueue(turn))
         admission = await scheduler.admit(turn.id)
-        latest = store.get(ChatTurn, turn.id)
+        latest = await store.get(ChatTurn, turn.id)
         assert latest.status == admitted
         assert latest.admitted_at is not None
         await admission.release(turn.id)
         # Releasing twice (early, then on task exit) completes it only once.
-        scheduler.enqueue(latest)
+        (await scheduler.enqueue(latest))
         second = await scheduler.admit(turn.id)
         await admission.release(turn.id)
-        assert _queue_state(store, turn.id) == "running"
-        assert scheduler.metrics()["active"] == 1
+        assert (await _queue_state(store, turn.id)) == "running"
+        assert (await scheduler.metrics())["active"] == 1
         await second.release(turn.id)
-        assert scheduler.metrics()["active"] == 0
+        assert (await scheduler.metrics())["active"] == 0
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 class _ApprovingBroker(RecordingBroker):
@@ -321,10 +327,10 @@ class _ApprovingBroker(RecordingBroker):
         return ToolExecutionResult(output={"value": invocation.arguments["value"]})
 
 
-def _approval_turn(tmp_path, responses):
+async def _approval_turn(tmp_path, responses):
     broker = _ApprovingBroker()
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
-    broker.approval = store.create(
+    store, service, prepared, provider = await _prepared(tmp_path, responses, broker)
+    broker.approval = await store.create(
         Approval(
             id="approval-1",
             engagement_id="project",
@@ -338,17 +344,19 @@ def _approval_turn(tmp_path, responses):
     return store, service, prepared, provider, broker
 
 
-def _approve(store: NebulaStore) -> None:
-    approval = store.get(Approval, "approval-1")
-    store.update(
-        Approval,
-        approval.id,
-        {
-            "status": ApprovalStatus.APPROVED,
-            "decided_by": "operator",
-            "decided_at": utc_now(),
-        },
-        expected_revision=approval.revision,
+async def _approve(store: NebulaStore) -> None:
+    approval = await store.get(Approval, "approval-1")
+    (
+        await store.update(
+            Approval,
+            approval.id,
+            {
+                "status": ApprovalStatus.APPROVED,
+                "decided_by": "operator",
+                "decided_at": utc_now(),
+            },
+            expected_revision=approval.revision,
+        )
     )
 
 
@@ -364,33 +372,33 @@ def _approval_script():
     ]
 
 
-def test_approved_call_runs_when_its_turn_resumes_through_admission(tmp_path):
+async def test_approved_call_runs_when_its_turn_resumes_through_admission(tmp_path):
     """The operator's approval resume (POST /chat/turns/{id}/resume) runs the call."""
 
     async def scenario():
-        store, service, prepared, provider, broker = _approval_turn(
+        store, service, prepared, provider, broker = await _approval_turn(
             tmp_path, _approval_script()
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         first = [event async for event, _ in service.follow_provider_turn(turn_id)]
         assert first[-1] == "approval_required"
-        paused = store.get(ChatTurn, turn_id)
+        paused = await store.get(ChatTurn, turn_id)
         assert paused.status == ChatTurnStatus.WAITING_APPROVAL
         assert paused.execution_claim_id is None
-        _approve(store)
+        (await _approve(store))
 
         prepared.turn = paused
         prepared.execution_claim_id = None
-        service.start_provider_turn(prepared)
+        (await service.start_provider_turn(prepared))
         resumed = [event async for event, _ in service.follow_provider_turn(turn_id)]
 
         assert resumed[:3] == ["queued", "admitted", "started"]
         assert "tool_completed" in resumed
         assert resumed[-1] == "done"
         assert broker.approved_runs == 1
-        finished = store.get(ChatTurn, turn_id)
+        finished = await store.get(ChatTurn, turn_id)
         assert finished.status == ChatTurnStatus.COMPLETE
-        (step,) = service._turn_history(finished)
+        (step,) = await service._turn_history(finished)
         assert step["status"] == "complete"
         assert json.loads(step["provider_result"])["value"] == "b"
         # The model answered from the approved call's output.
@@ -399,41 +407,41 @@ def test_approved_call_runs_when_its_turn_resumes_through_admission(tmp_path):
         assert "b" in json.dumps(after_approval.tool_results[0].output)
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_non_streaming_approval_pause_frees_the_turn_for_its_resume(tmp_path):
+async def test_non_streaming_approval_pause_frees_the_turn_for_its_resume(tmp_path):
     """complete() lets the stream park the turn, so the resume can claim it."""
 
     async def scenario():
-        store, service, prepared, provider, broker = _approval_turn(
+        store, service, prepared, provider, broker = await _approval_turn(
             tmp_path, _approval_script()
         )
         with pytest.raises(ChatError, match="waiting for operator approval"):
             await service.complete(prepared)
-        paused = store.get(ChatTurn, "turn")
+        paused = await store.get(ChatTurn, "turn")
         assert paused.status == ChatTurnStatus.WAITING_APPROVAL
         assert paused.execution_claim_id is None
         assert paused.execution_owner_id is None
-        _approve(store)
+        (await _approve(store))
 
         prepared.turn = paused
         prepared.execution_claim_id = None
-        service.start_provider_turn(prepared)
+        (await service.start_provider_turn(prepared))
         resumed = [event async for event, _ in service.follow_provider_turn("turn")]
         assert resumed[-1] == "done"
         assert broker.approved_runs == 1
-        assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+        assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_turn_resumed_while_it_settles_is_admitted_again(tmp_path):
+async def test_turn_resumed_while_it_settles_is_admitted_again(tmp_path):
     """A settle that resumes the same turn never queues behind the finished run."""
 
     async def scenario():
-        store, service, prepared, provider, broker = _approval_turn(
+        store, service, prepared, provider, broker = await _approval_turn(
             tmp_path, _approval_script()
         )
         settled = service.subagents.turn_settled
@@ -443,14 +451,14 @@ def test_turn_resumed_while_it_settles_is_admitted_again(tmp_path):
             # What a satisfied subagent wait or a closed child question does
             # from inside the settle of the run that parked the turn.
             if not resumes:
-                _approve(store)
-                prepared.turn = store.get(ChatTurn, turn_id)
+                (await _approve(store))
+                prepared.turn = await store.get(ChatTurn, turn_id)
                 prepared.execution_claim_id = None
-                resumes.append(service.start_provider_turn(prepared))
+                resumes.append((await service.start_provider_turn(prepared)))
             await settled(turn_id)
 
         service.subagents.turn_settled = resume_while_settling  # type: ignore[method-assign]
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         first = service._active_provider_turns[turn_id]
         await _drain(service, turn_id)
         assert first.task is not None
@@ -462,15 +470,15 @@ def test_turn_resumed_while_it_settles_is_admitted_again(tmp_path):
         await second.task
         assert second.error is None
         assert broker.approved_runs == 1
-        assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.COMPLETE
-        assert _queue_state(store, turn_id) == "complete"
-        assert service.provider_scheduler.metrics()["active"] == 0
+        assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.COMPLETE
+        assert (await _queue_state(store, turn_id)) == "complete"
+        assert (await service.provider_scheduler.metrics())["active"] == 0
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_final_answer_retry_resumes_synthesis_through_admission(tmp_path):
+async def test_final_answer_retry_resumes_synthesis_through_admission(tmp_path):
     """An operator's "Finish the answer" retry goes straight to synthesis."""
 
     async def scenario():
@@ -487,36 +495,36 @@ def test_final_answer_retry_resumes_synthesis_through_admission(tmp_path):
             ],
             child=[],
         )
-        store, project, _, chat = _setup(tmp_path, provider)
+        store, project, _, chat = await _setup(tmp_path, provider)
         prepared = await chat.prepare_async(
             _request(project, content="Answer me.", allow_subagents=True)
         )
-        turn_id = chat.start_provider_turn(prepared)
+        turn_id = await chat.start_provider_turn(prepared)
         with pytest.raises(ProviderResponseError, match="no operator-facing answer"):
             await _drain(chat, turn_id)
-        failed = store.get(ChatTurn, turn_id)
+        failed = await store.get(ChatTurn, turn_id)
         assert failed.status == ChatTurnStatus.FAILED
         assert failed.request_snapshot["final_answer_recovery"]["attempts"] >= 2
         before = len(provider.parent_requests)
 
-        chat.start_provider_turn(chat.prepare_resume(turn_id))
+        (await chat.start_provider_turn((await chat.prepare_resume(turn_id))))
         events = await _drain(chat, turn_id)
 
         assert events[-1] == "done"
         retried = provider.parent_requests[before:]
         assert len(retried) == 1
         assert retried[0].tool_choice == ToolChoice.NONE
-        completed = store.get(ChatTurn, turn_id)
+        completed = await store.get(ChatTurn, turn_id)
         assert completed.status == ChatTurnStatus.COMPLETE
         assert completed.final_message_id is not None
         await chat.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_closes_the_admission_of_a_turn_that_no_longer_exists(tmp_path):
+async def test_startup_closes_the_admission_of_a_turn_that_no_longer_exists(tmp_path):
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
+        store, project, profile, session = await _store(tmp_path)
         missing = ChatTurn(
             id="deleted-turn",
             engagement_id=project.id,
@@ -527,22 +535,22 @@ def test_startup_closes_the_admission_of_a_turn_that_no_longer_exists(tmp_path):
             queued_at=utc_now(),
             capacity_lane="background",
         )
-        ProviderScheduler(store, worker_id="worker").enqueue(missing)
+        (await ProviderScheduler(store, worker_id="worker").enqueue(missing))
 
         service = ChatService(store, worker_id="restarted")
         await service.startup()
 
-        assert _queue_state(store, missing.id) == "cancelled"
-        assert service.provider_scheduler.recover() == []
+        assert (await _queue_state(store, missing.id)) == "cancelled"
+        assert (await service.provider_scheduler.recover()) == []
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_queued_turn_restore_skips_an_unreadable_turn(tmp_path):
+async def test_queued_turn_restore_skips_an_unreadable_turn(tmp_path):
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
-        corrupt = store.create(
+        store, project, profile, session = await _store(tmp_path)
+        corrupt = await store.create(
             ChatTurn(
                 id="corrupt-turn",
                 engagement_id=project.id,
@@ -563,56 +571,58 @@ def test_queued_turn_restore_skips_an_unreadable_turn(tmp_path):
             queued_at=utc_now(),
         )
         scheduler = ProviderScheduler(store, worker_id="worker")
-        scheduler.enqueue(corrupt)
-        scheduler.enqueue(missing)
-        with store.database.session() as database_session:
-            database_session.execute(
-                update(EntityRow)
-                .where(EntityRow.id == corrupt.id)
-                .values(payload={"status": "not-a-status"})
+        (await scheduler.enqueue(corrupt))
+        (await scheduler.enqueue(missing))
+        async with store.database.session() as database_session:
+            (
+                await database_session.execute(
+                    update(EntityRow)
+                    .where(EntityRow.id == corrupt.id)
+                    .values(payload={"status": "not-a-status"})
+                )
             )
 
         service = ChatService(store, worker_id="restarted")
-        service._restore_queued_turns()
+        (await service._restore_queued_turns())
 
         # The unreadable turn stays queued for a repaired record; the one
         # that is gone is closed; neither stops the other.
-        assert _queue_state(store, corrupt.id) == "queued"
-        assert _queue_state(store, missing.id) == "cancelled"
+        assert (await _queue_state(store, corrupt.id)) == "queued"
+        assert (await _queue_state(store, missing.id)) == "cancelled"
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_startup_restores_a_resume_the_previous_core_never_admitted(tmp_path):
+async def test_startup_restores_a_resume_the_previous_core_never_admitted(tmp_path):
     """An approval resume still waiting for capacity survives a Core restart."""
 
     async def scenario():
-        store, service, prepared, provider, broker = _approval_turn(
+        store, service, prepared, provider, broker = await _approval_turn(
             tmp_path, _approval_script()
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         await _drain(service, turn_id)
-        paused = store.get(ChatTurn, turn_id)
+        paused = await store.get(ChatTurn, turn_id)
         assert paused.status == ChatTurnStatus.WAITING_APPROVAL
-        _approve(store)
+        (await _approve(store))
         # The resume was accepted, then Core stopped before admitting it.
-        service.provider_scheduler.enqueue(paused)
+        (await service.provider_scheduler.enqueue(paused))
         await service.shutdown()
 
         restarted = ChatService(store, worker_id="restarted")
         restarted.prepare_resume = lambda _turn_id: prepared  # type: ignore[method-assign]
-        prepared.turn = store.get(ChatTurn, turn_id)
+        prepared.turn = await store.get(ChatTurn, turn_id)
         prepared.execution_claim_id = None
         await restarted.startup()
         assert restarted.has_active_provider_turn(turn_id)
         events = await _drain(restarted, turn_id)
         assert events[-1] == "done"
         assert broker.approved_runs == 1
-        assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.COMPLETE
+        assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.COMPLETE
         await restarted.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -625,11 +635,11 @@ def test_startup_restores_a_resume_the_previous_core_never_admitted(tmp_path):
         (ChatTurnStatus.INTERRUPTED, {"required": False}, False),
     ],
 )
-def test_conversation_delete_waits_for_a_queued_or_recovering_turn(
+async def test_conversation_delete_waits_for_a_queued_or_recovering_turn(
     tmp_path, status, recovery, refused
 ):
-    store, project, profile, session = _store(tmp_path)
-    turn = store.create(
+    store, project, profile, session = await _store(tmp_path)
+    turn = await store.create(
         ChatTurn(
             id="unfinished",
             engagement_id=project.id,
@@ -641,21 +651,21 @@ def test_conversation_delete_waits_for_a_queued_or_recovering_turn(
             request_snapshot={"recovery": recovery} if recovery else {},
         )
     )
-    ProviderScheduler(store, worker_id="worker").enqueue(turn)
+    (await ProviderScheduler(store, worker_id="worker").enqueue(turn))
 
     if refused:
         with pytest.raises(ConflictError, match="response is active"):
-            store.delete_chat_session(session.id)
-        assert store.get(ChatTurn, turn.id).id == turn.id
+            (await store.delete_chat_session(session.id))
+        assert (await store.get(ChatTurn, turn.id)).id == turn.id
     else:
-        store.delete_chat_session(session.id)
-        assert _queue_state(store, turn.id) is None
+        (await store.delete_chat_session(session.id))
+        assert (await _queue_state(store, turn.id)) is None
 
 
-def test_conversation_delete_removes_its_turns_admission_rows(tmp_path):
+async def test_conversation_delete_removes_its_turns_admission_rows(tmp_path):
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
-        turn = store.create(
+        store, project, profile, session = await _store(tmp_path)
+        turn = await store.create(
             ChatTurn(
                 id="finished",
                 engagement_id=project.id,
@@ -667,29 +677,31 @@ def test_conversation_delete_removes_its_turns_admission_rows(tmp_path):
             )
         )
         scheduler = ProviderScheduler(store, worker_id="worker")
-        scheduler.enqueue(turn)
+        (await scheduler.enqueue(turn))
         admission = await scheduler.admit(turn.id)
-        latest = store.get(ChatTurn, turn.id)
-        store.update(
-            ChatTurn,
-            turn.id,
-            {"status": ChatTurnStatus.COMPLETE},
-            expected_revision=latest.revision,
+        latest = await store.get(ChatTurn, turn.id)
+        (
+            await store.update(
+                ChatTurn,
+                turn.id,
+                {"status": ChatTurnStatus.COMPLETE},
+                expected_revision=latest.revision,
+            )
         )
         await admission.release(turn.id)
-        assert _queue_state(store, turn.id) == "complete"
+        assert (await _queue_state(store, turn.id)) == "complete"
 
-        store.delete_chat_session(session.id)
+        (await store.delete_chat_session(session.id))
 
-        assert _queue_state(store, turn.id) is None
+        assert (await _queue_state(store, turn.id)) is None
         restarted = ChatService(store, worker_id="restarted")
         await restarted.startup()
         await restarted.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def _admission(
+async def _admission(
     store: NebulaStore,
     project,
     profile,
@@ -701,19 +713,21 @@ def _admission(
     """A turn in ``turn_status`` (None: deleted) whose admission is ``state``."""
 
     if turn_status is not None:
-        store.create(
-            ChatTurn(
-                id=turn_id,
-                engagement_id=project.id,
-                session_id=session.id,
-                provider_profile_id=profile.id,
-                model="model-a",
-                status=turn_status,
-                queued_at=utc_now(),
-                capacity_lane="background",
+        (
+            await store.create(
+                ChatTurn(
+                    id=turn_id,
+                    engagement_id=project.id,
+                    session_id=session.id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    status=turn_status,
+                    queued_at=utc_now(),
+                    capacity_lane="background",
+                )
             )
         )
-    with store.database.session() as database_session:
+    async with store.database.session() as database_session:
         database_session.add(
             ProviderTurnQueueRow(
                 turn_id=turn_id,
@@ -752,124 +766,138 @@ _SETTLED_ADMISSIONS = {
 }
 
 
-def test_settle_closes_only_the_admissions_of_ended_turns(tmp_path):
-    store, project, profile, session = _store(tmp_path)
+async def test_settle_closes_only_the_admissions_of_ended_turns(tmp_path):
+    store, project, profile, session = await _store(tmp_path)
     ids = {}
     for index, (status, state) in enumerate(_SETTLED_ADMISSIONS):
         ids[status, state] = f"turn-{index:02d}"
-        _admission(store, project, profile, session, ids[status, state], status, state)
-    _admission(
-        store,
-        project,
-        profile,
-        session,
-        "unreadable",
-        ChatTurnStatus.CANCELLED,
-        "parked",
+        (
+            await _admission(
+                store, project, profile, session, ids[status, state], status, state
+            )
+        )
+    (
+        await _admission(
+            store,
+            project,
+            profile,
+            session,
+            "unreadable",
+            ChatTurnStatus.CANCELLED,
+            "parked",
+        )
     )
-    with store.database.session() as database_session:
-        database_session.execute(
-            update(EntityRow)
-            .where(EntityRow.id == "unreadable")
-            .values(payload={"status": "not-a-status"})
+    async with store.database.session() as database_session:
+        (
+            await database_session.execute(
+                update(EntityRow)
+                .where(EntityRow.id == "unreadable")
+                .values(payload={"status": "not-a-status"})
+            )
         )
     scheduler = ProviderScheduler(store, worker_id="worker")
 
-    settled = scheduler.settle()
+    settled = await scheduler.settle()
 
     assert sorted(settled) == sorted(
         ids[key] for key, expected in _SETTLED_ADMISSIONS.items() if expected != key[1]
     )
     for key, expected in _SETTLED_ADMISSIONS.items():
-        assert _queue_state(store, ids[key]) == expected, key
+        assert (await _queue_state(store, ids[key])) == expected, key
     # A repaired record may still resume; its admission waits for it.
-    assert _queue_state(store, "unreadable") == "parked"
-    with store.database.session() as database_session:
-        closed = database_session.get(
+    assert (await _queue_state(store, "unreadable")) == "parked"
+    async with store.database.session() as database_session:
+        closed = await database_session.get(
             ProviderTurnQueueRow, ids[ChatTurnStatus.CANCELLED, "queued"]
         )
         assert closed is not None and closed.completed_at is not None
-    assert scheduler.metrics()["queued"] == 1
-    assert scheduler.settle() == []
-    assert scheduler.settle(ids[ChatTurnStatus.WAITING_CALLBACK, "parked"]) == []
+    assert (await scheduler.metrics())["queued"] == 1
+    assert (await scheduler.settle()) == []
+    assert (
+        await scheduler.settle(ids[ChatTurnStatus.WAITING_CALLBACK, "parked"])
+    ) == []
 
 
-def test_restart_keeps_the_admission_of_a_resumable_turn_parked(tmp_path):
+async def test_restart_keeps_the_admission_of_a_resumable_turn_parked(tmp_path):
     """A lease the stopped Core held ends as its turn now stands."""
 
-    store, project, profile, session = _store(tmp_path)
+    store, project, profile, session = await _store(tmp_path)
     for turn_id, status in (
         ("waiting", ChatTurnStatus.WAITING_CALLBACK),
         ("interrupted", ChatTurnStatus.INTERRUPTED),
         ("finished", ChatTurnStatus.COMPLETE),
         ("stopped", ChatTurnStatus.CANCELLED),
     ):
-        _admission(store, project, profile, session, turn_id, status, "running")
-    _admission(store, project, profile, session, "deleted", None, "running")
+        (await _admission(store, project, profile, session, turn_id, status, "running"))
+    (await _admission(store, project, profile, session, "deleted", None, "running"))
 
-    assert ProviderScheduler(store, worker_id="restarted").recover() == []
+    assert (await ProviderScheduler(store, worker_id="restarted").recover()) == []
 
-    assert _queue_state(store, "waiting") == "parked"
-    assert _queue_state(store, "interrupted") == "parked"
-    assert _queue_state(store, "finished") == "complete"
-    assert _queue_state(store, "stopped") == "cancelled"
-    assert _queue_state(store, "deleted") == "cancelled"
+    assert (await _queue_state(store, "waiting")) == "parked"
+    assert (await _queue_state(store, "interrupted")) == "parked"
+    assert (await _queue_state(store, "finished")) == "complete"
+    assert (await _queue_state(store, "stopped")) == "cancelled"
+    assert (await _queue_state(store, "deleted")) == "cancelled"
 
 
 @pytest.mark.parametrize("stop", ["operator", "approval_decision"])
-def test_stopping_a_parked_turn_closes_its_admission(tmp_path, stop):
+async def test_stopping_a_parked_turn_closes_its_admission(tmp_path, stop):
     """Stopping a waiting turn ends it without admission release."""
 
     async def scenario():
-        store, service, prepared, provider, broker = _approval_turn(
+        store, service, prepared, provider, broker = await _approval_turn(
             tmp_path, _approval_script()
         )
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
         await _drain(service, turn_id)
-        assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.WAITING_APPROVAL
-        assert _queue_state(store, turn_id) == "parked"
+        assert (
+            await store.get(ChatTurn, turn_id)
+        ).status == ChatTurnStatus.WAITING_APPROVAL
+        assert (await _queue_state(store, turn_id)) == "parked"
 
         if stop == "operator":
             await service.stop_provider_turn(turn_id)
         else:
             # POST /approvals/{id}/decision with "stop" cancels the turn.
-            service.cancel_turn(turn_id)
+            (await service.cancel_turn(turn_id))
 
-        assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.CANCELLED
-        assert _queue_state(store, turn_id) == "cancelled"
+        assert (await store.get(ChatTurn, turn_id)).status == ChatTurnStatus.CANCELLED
+        assert (await _queue_state(store, turn_id)) == "cancelled"
         assert broker.approved_runs == 0
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_a_parked_wait_that_cannot_resume_closes_its_admission(tmp_path):
+async def test_a_parked_wait_that_cannot_resume_closes_its_admission(tmp_path):
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
-        _admission(
-            store,
-            project,
-            profile,
-            session,
-            "waiting",
-            ChatTurnStatus.WAITING_CALLBACK,
-            "parked",
+        store, project, profile, session = await _store(tmp_path)
+        (
+            await _admission(
+                store,
+                project,
+                profile,
+                session,
+                "waiting",
+                ChatTurnStatus.WAITING_CALLBACK,
+                "parked",
+            )
         )
         service = ChatService(store, worker_id="worker")
 
         await service.subagents._fail_unresumable(
-            store.get(ChatTurn, "waiting"), RuntimeError("resume failed")
+            (await store.get(ChatTurn, "waiting")), RuntimeError("resume failed")
         )
 
-        assert store.get(ChatTurn, "waiting").status == ChatTurnStatus.FAILED
-        assert _queue_state(store, "waiting") == "complete"
+        assert (await store.get(ChatTurn, "waiting")).status == ChatTurnStatus.FAILED
+        assert (await _queue_state(store, "waiting")) == "complete"
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("entry", ["startup", "recovery_tick"])
-def test_recovery_closes_admissions_that_ended_turns_left_open(
+async def test_recovery_closes_admissions_that_ended_turns_left_open(
     tmp_path, monkeypatch, entry
 ):
     off_loop: list[str] = []
@@ -882,33 +910,39 @@ def test_recovery_closes_admissions_that_ended_turns_left_open(
     monkeypatch.setattr(asyncio, "to_thread", recording_to_thread)
 
     async def scenario():
-        store, project, profile, session = _store(tmp_path)
-        _admission(
-            store,
-            project,
-            profile,
-            session,
-            "stopped",
-            ChatTurnStatus.CANCELLED,
-            "parked",
+        store, project, profile, session = await _store(tmp_path)
+        (
+            await _admission(
+                store,
+                project,
+                profile,
+                session,
+                "stopped",
+                ChatTurnStatus.CANCELLED,
+                "parked",
+            )
         )
-        _admission(
-            store,
-            project,
-            profile,
-            session,
-            "never-admitted",
-            ChatTurnStatus.CANCELLED,
-            "queued",
+        (
+            await _admission(
+                store,
+                project,
+                profile,
+                session,
+                "never-admitted",
+                ChatTurnStatus.CANCELLED,
+                "queued",
+            )
         )
-        _admission(
-            store,
-            project,
-            profile,
-            session,
-            "awaiting-approval",
-            ChatTurnStatus.WAITING_APPROVAL,
-            "parked",
+        (
+            await _admission(
+                store,
+                project,
+                profile,
+                session,
+                "awaiting-approval",
+                ChatTurnStatus.WAITING_APPROVAL,
+                "parked",
+            )
         )
         service = ChatService(store, worker_id="restarted")
 
@@ -917,20 +951,20 @@ def test_recovery_closes_admissions_that_ended_turns_left_open(
         else:
             await service.recovery_tick()
 
-        assert _queue_state(store, "stopped") == "cancelled"
-        assert _queue_state(store, "never-admitted") == "cancelled"
-        assert _queue_state(store, "awaiting-approval") == "parked"
-        assert service.provider_scheduler.metrics()["queued"] == 0
-        assert service.provider_scheduler.recover() == []
+        assert (await _queue_state(store, "stopped")) == "cancelled"
+        assert (await _queue_state(store, "never-admitted")) == "cancelled"
+        assert (await _queue_state(store, "awaiting-approval")) == "parked"
+        assert (await service.provider_scheduler.metrics())["queued"] == 0
+        assert (await service.provider_scheduler.recover()) == []
         # The scan ran off the event loop.
         assert "settle" in off_loop
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("stage", ["admission", "claim"])
-def test_a_turn_that_cannot_start_fails_and_says_what_to_do(tmp_path, stage):
+async def test_a_turn_that_cannot_start_fails_and_says_what_to_do(tmp_path, stage):
     """An admission or claim failure left the turn queued (or routing) with
     its row open, reading as waiting for capacity until a Core restart."""
 
@@ -939,7 +973,7 @@ def test_a_turn_that_cannot_start_fails_and_says_what_to_do(tmp_path, stage):
     from nebula.v3.domain import ChatMessage
 
     async def scenario():
-        store, service, prepared, provider = _prepared(
+        store, service, prepared, provider = await _prepared(
             tmp_path, [_response(text="unused")], RecordingBroker()
         )
         if stage == "admission":
@@ -958,29 +992,32 @@ def test_a_turn_that_cannot_start_fails_and_says_what_to_do(tmp_path, stage):
                 )
 
             service._claim_execution = claim  # type: ignore[method-assign]
-        turn_id = service.start_provider_turn(prepared)
+        turn_id = await service.start_provider_turn(prepared)
 
         with pytest.raises(ChatError, match="Core could not start this response"):
             await _drain(service, turn_id)
 
-        failed = store.get(ChatTurn, turn_id)
+        failed = await store.get(ChatTurn, turn_id)
         assert failed.status == ChatTurnStatus.FAILED
         assert failed.error is not None
         assert "send the message again" in failed.error
         assert failed.execution_claim_id is None
-        assert _queue_state(store, turn_id) == "complete"
-        assert service.provider_scheduler.metrics()["queued"] == 0
-        assert service.provider_scheduler.metrics()["active"] == 0
+        assert (await _queue_state(store, turn_id)) == "complete"
+        assert (await service.provider_scheduler.metrics())["queued"] == 0
+        assert (await service.provider_scheduler.metrics())["active"] == 0
         # The conversation takes the next message, and the transcript says
         # why the operator's message went unanswered.
-        assert service.pending_turn(prepared.turn.session_id) is None
+        assert (await service.pending_turn(prepared.turn.session_id)) is None
         notes = [
             message
-            for message in store.list_entities(ChatMessage)
+            for message in (await store.list_entities(ChatMessage))
             if message.finish_reason == TURN_OUTCOME_FINISH_REASON
         ]
         assert len(notes) == 1
         assert provider.requests == []
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

@@ -1,12 +1,15 @@
 """Contract, gating and containment for the local web.search runtime."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3 import web_search
@@ -240,16 +243,14 @@ def test_results_reach_the_receipt_as_bounded_web_result_observations():
     assert observations[0].url == "https://vendor.example/advisory"
 
 
-def test_the_receipt_summary_carries_a_refusal_into_the_transcript():
+async def test_the_receipt_summary_carries_a_refusal_into_the_transcript():
     from nebula.v3.tools import _compact_tool_summary
     from nebula.v3.tool_results import ToolResultStatus
 
     runtime = _StubRuntime()
     scope = _scope(web_search=True, allowed_domains=["acme-client.com"])
-    result = asyncio.run(
-        WebSearchTool(runtime, scope).execute(
-            _invocation(query="acme-client.com vpn"), None
-        )
+    result = await WebSearchTool(runtime, scope).execute(
+        _invocation(query="acme-client.com vpn"), None
     )
     summary = _compact_tool_summary(result, ToolResultStatus.FAILED)
     assert summary is not None
@@ -257,7 +258,7 @@ def test_the_receipt_summary_carries_a_refusal_into_the_transcript():
     assert "Project > Policy" in summary
 
 
-def test_the_receipt_summary_counts_a_successful_search():
+async def test_the_receipt_summary_counts_a_successful_search():
     from nebula.v3.tools import _compact_tool_summary
     from nebula.v3.tool_results import ToolResultStatus
 
@@ -267,10 +268,8 @@ def test_the_receipt_summary_counts_a_successful_search():
             WebSearchResult(rank=2, title="B", url="https://b.example"),
         ]
     )
-    result = asyncio.run(
-        WebSearchTool(runtime, _scope(web_search=True)).execute(
-            _invocation(query="tls handshake"), None
-        )
+    result = await WebSearchTool(runtime, _scope(web_search=True)).execute(
+        _invocation(query="tls handshake"), None
     )
     summary = _compact_tool_summary(result, ToolResultStatus.COMPLETED)
     assert summary == "Found 2 results for \u201ctls handshake\u201d."
@@ -305,7 +304,7 @@ def test_nmap_observations_still_work_after_the_union_change():
 # -- tool execution --------------------------------------------------------
 
 
-def test_execute_returns_ranked_results_and_a_redacted_query():
+async def test_execute_returns_ranked_results_and_a_redacted_query():
     runtime = _StubRuntime(
         results=[
             WebSearchResult(
@@ -314,9 +313,7 @@ def test_execute_returns_ranked_results_and_a_redacted_query():
         ]
     )
     tool = WebSearchTool(runtime, _scope(web_search=True))
-    result = asyncio.run(
-        tool.execute(_invocation(query="tls 1.3 handshake", count=3), None)
-    )
+    result = await tool.execute(_invocation(query="tls 1.3 handshake", count=3), None)
     assert result.exit_code == 0
     assert result.output["tool"] == WEB_SEARCH_TOOL_NAME
     assert result.output["result_count"] == 1
@@ -324,11 +321,11 @@ def test_execute_returns_ranked_results_and_a_redacted_query():
     assert runtime.calls == [("tls 1.3 handshake", 3, "any")]
 
 
-def test_execute_refuses_a_scope_disclosure_before_any_egress():
+async def test_execute_refuses_a_scope_disclosure_before_any_egress():
     runtime = _StubRuntime()
     scope = _scope(web_search=True, allowed_domains=["acme-client.com"])
     tool = WebSearchTool(runtime, scope)
-    result = asyncio.run(tool.execute(_invocation(query="acme-client.com vpn"), None))
+    result = await tool.execute(_invocation(query="acme-client.com vpn"), None)
     assert result.exit_code == 1
     assert runtime.calls == [], "the query must not reach upstream engines"
     assert "acme-client.com" in result.stderr
@@ -336,7 +333,7 @@ def test_execute_refuses_a_scope_disclosure_before_any_egress():
     assert "Allow queries naming in-scope targets" in result.stderr
 
 
-def test_execute_turns_a_runtime_failure_into_a_readable_result(monkeypatch):
+async def test_execute_turns_a_runtime_failure_into_a_readable_result(monkeypatch):
     runtime = _StubRuntime(error="the search runtime is not installed")
     tool = WebSearchTool(runtime, _scope(web_search=True))
     recorded = []
@@ -345,7 +342,7 @@ def test_execute_turns_a_runtime_failure_into_a_readable_result(monkeypatch):
         "record_caught_exception",
         lambda *args, **kwargs: recorded.append((args, kwargs)),
     )
-    result = asyncio.run(tool.execute(_invocation(query="anything"), None))
+    result = await tool.execute(_invocation(query="anything"), None)
     assert result.exit_code == 1
     assert "not installed" in result.stderr
     assert recorded[0][0][:3] == (
@@ -414,9 +411,9 @@ def _auth():
     return {"Authorization": "Bearer test-token"}
 
 
-def test_status_reports_an_unconfigured_runtime_without_failing(api):
+async def test_status_reports_an_unconfigured_runtime_without_failing(api):
     client, _ = api
-    response = client.get("/api/v1/integrations/web-search", headers=_auth())
+    response = await client.get("/api/v1/integrations/web-search", headers=_auth())
     assert response.status_code == 200
     body = response.json()
     assert body["runtime_available"] is False
@@ -424,9 +421,9 @@ def test_status_reports_an_unconfigured_runtime_without_failing(api):
     assert body["projects_using"] == 0
 
 
-def test_status_counts_only_projects_that_can_actually_search(api):
+async def test_status_counts_only_projects_that_can_actually_search(api):
     client, store = api
-    store.create(WebSearchSettings(id=SETTINGS_ID))
+    (await store.create(WebSearchSettings(id=SETTINGS_ID)))
     for index, changes in enumerate(
         [
             {"web_search": True},
@@ -434,25 +431,29 @@ def test_status_counts_only_projects_that_can_actually_search(api):
             {"web_search": False},
         ]
     ):
-        store.create(
-            ScopePolicy(
-                id=f"scope-{index}", engagement_id=f"project-{index}", **changes
+        (
+            await store.create(
+                ScopePolicy(
+                    id=f"scope-{index}", engagement_id=f"project-{index}", **changes
+                )
             )
         )
-    body = client.get("/api/v1/integrations/web-search", headers=_auth()).json()
+    body = (await client.get("/api/v1/integrations/web-search", headers=_auth())).json()
     assert body["projects_using"] == 1
 
 
-def test_scope_update_round_trips_both_web_search_fields(api, tmp_path):
+async def test_scope_update_round_trips_both_web_search_fields(api, tmp_path):
     client, store = api
-    store.create(
-        Engagement(
-            id="project-1",
-            name="Project",
-            workspace_path=str(tmp_path / "workspace"),
+    (
+        await store.create(
+            Engagement(
+                id="project-1",
+                name="Project",
+                workspace_path=str(tmp_path / "workspace"),
+            )
         )
     )
-    response = client.put(
+    response = await client.put(
         "/api/v1/engagements/project-1/scope",
         headers=_auth(),
         json={"web_search": True, "web_search_discloses_scope": True},
@@ -463,27 +464,33 @@ def test_scope_update_round_trips_both_web_search_fields(api, tmp_path):
     assert body["web_search_discloses_scope"] is True
 
 
-def test_scope_update_leaves_web_search_untouched_when_the_client_omits_it(
+async def test_scope_update_leaves_web_search_untouched_when_the_client_omits_it(
     api, tmp_path
 ):
     client, store = api
-    store.create(
-        Engagement(
-            id="project-1",
-            name="Project",
-            workspace_path=str(tmp_path / "workspace"),
+    (
+        await store.create(
+            Engagement(
+                id="project-1",
+                name="Project",
+                workspace_path=str(tmp_path / "workspace"),
+            )
         )
     )
-    client.put(
-        "/api/v1/engagements/project-1/scope",
-        headers=_auth(),
-        json={"web_search": True},
+    (
+        await client.put(
+            "/api/v1/engagements/project-1/scope",
+            headers=_auth(),
+            json={"web_search": True},
+        )
     )
     # An older client that has never heard of the field must not clear it.
-    body = client.put(
-        "/api/v1/engagements/project-1/scope",
-        headers=_auth(),
-        json={"allowed_domains": ["example.com"]},
+    body = (
+        await client.put(
+            "/api/v1/engagements/project-1/scope",
+            headers=_auth(),
+            json={"allowed_domains": ["example.com"]},
+        )
     ).json()
     assert body["web_search"] is True
 
@@ -501,23 +508,29 @@ def _platform(tmp_path, store):
     )
 
 
-def _project(store, tmp_path, **scope_changes):
+async def _project(store, tmp_path, **scope_changes):
     (tmp_path / "workspace").mkdir(parents=True, exist_ok=True)
-    store.create(ScopePolicy(id="scope-1", engagement_id="project-1", **scope_changes))
-    store.create(
-        Engagement(
-            id="project-1",
-            name="Project",
-            workspace_path=str(tmp_path / "workspace"),
-            scope_policy_id="scope-1",
+    (
+        await store.create(
+            ScopePolicy(id="scope-1", engagement_id="project-1", **scope_changes)
+        )
+    )
+    (
+        await store.create(
+            Engagement(
+                id="project-1",
+                name="Project",
+                workspace_path=str(tmp_path / "workspace"),
+                scope_policy_id="scope-1",
+            )
         )
     )
 
 
-def test_opting_in_registers_web_search_with_no_other_tool_source(tmp_path):
+async def test_opting_in_registers_web_search_with_no_other_tool_source(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    _project(store, tmp_path, web_search=True)
-    components = _platform(tmp_path, store).chat_components(
+    (await _project(store, tmp_path, web_search=True))
+    components = await _platform(tmp_path, store).chat_components(
         engagement_id="project-1",
         turn_id="turn-1",
         provider=None,
@@ -526,10 +539,10 @@ def test_opting_in_registers_web_search_with_no_other_tool_source(tmp_path):
     assert WEB_SEARCH_TOOL_NAME in components.specs
 
 
-def test_an_opted_out_project_never_sees_the_tool(tmp_path):
+async def test_an_opted_out_project_never_sees_the_tool(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    _project(store, tmp_path)
-    components = _platform(tmp_path, store).chat_components(
+    (await _project(store, tmp_path))
+    components = await _platform(tmp_path, store).chat_components(
         engagement_id="project-1",
         turn_id="turn-1",
         provider=None,
@@ -539,10 +552,10 @@ def test_an_opted_out_project_never_sees_the_tool(tmp_path):
     assert WEB_SEARCH_TOOL_NAME not in components.specs
 
 
-def test_a_local_only_project_never_sees_the_tool(tmp_path):
+async def test_a_local_only_project_never_sees_the_tool(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
-    _project(store, tmp_path, web_search=True, local_only=True)
-    components = _platform(tmp_path, store).chat_components(
+    (await _project(store, tmp_path, web_search=True, local_only=True))
+    components = await _platform(tmp_path, store).chat_components(
         engagement_id="project-1",
         turn_id="turn-1",
         provider=None,
@@ -552,21 +565,23 @@ def test_a_local_only_project_never_sees_the_tool(tmp_path):
     assert WEB_SEARCH_TOOL_NAME not in components.specs
 
 
-def test_selecting_nothing_at_all_still_reports_no_tool_source(tmp_path):
+async def test_selecting_nothing_at_all_still_reports_no_tool_source(tmp_path):
     from nebula.v3.runtime_platform import RuntimePlatformError
 
     store = NebulaStore(tmp_path / "nebula.db")
-    _project(store, tmp_path)
+    (await _project(store, tmp_path))
     with pytest.raises(RuntimePlatformError, match="no tool source"):
-        _platform(tmp_path, store).chat_components(
-            engagement_id="project-1",
-            turn_id="turn-1",
-            provider=None,
-            model="m",
+        (
+            await _platform(tmp_path, store).chat_components(
+                engagement_id="project-1",
+                turn_id="turn-1",
+                provider=None,
+                model="m",
+            )
         )
 
 
-def test_chat_treats_the_project_opt_in_as_a_tool_source(tmp_path):
+async def test_chat_treats_the_project_opt_in_as_a_tool_source(tmp_path):
     """The chat turn must build tool components for search alone.
 
     Without this the tool is registered by the platform but never reached,
@@ -577,22 +592,25 @@ def test_chat_treats_the_project_opt_in_as_a_tool_source(tmp_path):
     from nebula.v3.chat import ChatService
 
     store = NebulaStore(tmp_path / "nebula.db")
-    _project(store, tmp_path, web_search=True)
+    (await _project(store, tmp_path, web_search=True))
     platform = _platform(tmp_path, store)
 
     service = ChatService(store, tool_platform=platform)
-    assert service._web_search_selected("project-1") is True
-    assert service._web_search_selected(None) is False
-    assert service._web_search_selected("missing-project") is False
+    assert (await service._web_search_selected("project-1")) is True
+    assert (await service._web_search_selected(None)) is False
+    assert (await service._web_search_selected("missing-project")) is False
 
     # No platform means no runtime to register the tool into.
-    assert ChatService(store)._web_search_selected("project-1") is False
+    assert (await ChatService(store)._web_search_selected("project-1")) is False
 
 
-def test_chat_ignores_the_opt_in_for_a_local_only_project(tmp_path):
+async def test_chat_ignores_the_opt_in_for_a_local_only_project(tmp_path):
     from nebula.v3.chat import ChatService
 
     store = NebulaStore(tmp_path / "nebula.db")
-    _project(store, tmp_path, web_search=True, local_only=True)
+    (await _project(store, tmp_path, web_search=True, local_only=True))
     service = ChatService(store, tool_platform=_platform(tmp_path, store))
-    assert service._web_search_selected("project-1") is False
+    assert (await service._web_search_selected("project-1")) is False
+
+
+pytestmark = pytest.mark.anyio

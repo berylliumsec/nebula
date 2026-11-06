@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -7,7 +11,7 @@ from functools import wraps
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
@@ -101,10 +105,10 @@ class StubHarnessRuntime:
         return SimpleNamespace(id="harness-session-1")
 
 
-def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
+async def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(name="AI execution notes"))
+    engagement = await store.create(Engagement(name="AI execution notes"))
     source_bytes = (
         "password=supersecret123\nprint('start')\n" + "λ" * 20_000 + "\nprint('end')"
     ).encode()
@@ -114,8 +118,8 @@ def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
         filename="source.py",
         media_type="text/x-python",
     )
-    store.create(source)
-    evidence = store.create(
+    (await store.create(source))
+    evidence = await store.create(
         Evidence(
             engagement_id=engagement.id,
             evidence_type="operator-execution",
@@ -124,7 +128,7 @@ def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
             sha256=source.sha256,
         )
     )
-    execution = store.create(
+    execution = await store.create(
         OperatorExecution(
             engagement_id=engagement.id,
             operator_id="operator",
@@ -153,21 +157,25 @@ def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
             evidence_id=evidence.id,
         )
     )
-    store.append_operation_event(
-        execution.id,
-        "execution",
-        engagement.id,
-        "execution.stdout",
-        {"stream": "stdout", "text": "api_key=anothersecret123\nhello\n"},
+    (
+        await store.append_operation_event(
+            execution.id,
+            "execution",
+            engagement.id,
+            "execution.stdout",
+            {"stream": "stdout", "text": "api_key=anothersecret123\nhello\n"},
+        )
     )
-    store.append_operation_event(
-        execution.id,
-        "execution",
-        engagement.id,
-        "execution.stderr",
-        {"stream": "stderr", "text": "warning\x1b[31m\n"},
+    (
+        await store.append_operation_event(
+            execution.id,
+            "execution",
+            engagement.id,
+            "execution.stderr",
+            {"stream": "stderr", "text": "warning\x1b[31m\n"},
+        )
     )
-    profile = store.create(
+    profile = await store.create(
         ProviderProfile(
             id="provider-1",
             name="Provider",
@@ -201,10 +209,17 @@ def _fixture(tmp_path, *, local: bool = True, strict: bool = True):
 
 @async_test
 async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path):
-    store, _artifacts, engagement, execution, profile, evidence, provider, service = (
-        _fixture(tmp_path)
-    )
-    config = service.set_config(
+    (
+        store,
+        _artifacts,
+        engagement,
+        execution,
+        profile,
+        evidence,
+        provider,
+        service,
+    ) = await _fixture(tmp_path)
+    config = await service.set_config(
         engagement.id,
         PostToolAssistantConfig(
             suggest_next_steps=True,
@@ -213,7 +228,7 @@ async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path
             model="model-1",
         ),
     )
-    assert service.get_config(engagement.id) == config
+    assert (await service.get_config(engagement.id)) == config
     provider.response_text = json.dumps(
         {
             "title": "AI-generated execution note",
@@ -242,18 +257,18 @@ async def test_post_tool_config_generates_suggestion_and_automatic_note(tmp_path
         ),
     )
     await service._tasks[draft.id]
-    result = store.get(GeneratedDraft, draft.id)
+    result = await store.get(GeneratedDraft, draft.id)
     assert result.status == GeneratedDraftStatus.ACCEPTED, result.error_detail
     assert result.content and result.content.next_step
     assert result.content.next_step.command.startswith("curl")
-    note = store.get(Observation, result.observation_id)
+    note = await store.get(Observation, result.observation_id)
     assert note.observation_type == "ai_tool_note"
     assert note.metadata["provenance"] == "ai-generated"
-    dismissed = service.dismiss_suggestion(result.id)
+    dismissed = await service.dismiss_suggestion(result.id)
     assert dismissed.metadata["dismissed"] is True
 
 
-def test_post_tool_config_requires_runtime_before_enablement(tmp_path):
+async def test_post_tool_config_requires_runtime_before_enablement(tmp_path):
     (
         _store,
         _artifacts,
@@ -263,21 +278,30 @@ def test_post_tool_config_requires_runtime_before_enablement(tmp_path):
         _evidence,
         _provider,
         service,
-    ) = _fixture(tmp_path)
+    ) = await _fixture(tmp_path)
     with pytest.raises(ExecutionAIError) as refusal:
-        service.set_config(
-            engagement.id, PostToolAssistantConfig(suggest_next_steps=True)
+        (
+            await service.set_config(
+                engagement.id, PostToolAssistantConfig(suggest_next_steps=True)
+            )
         )
     assert refusal.value.code == "configuration_invalid"
-    assert service.get_config(engagement.id).suggest_next_steps is False
+    assert (await service.get_config(engagement.id)).suggest_next_steps is False
 
 
 @async_test
 async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
-    store, _artifacts, engagement, _execution, profile, _evidence, provider, service = (
-        _fixture(tmp_path)
-    )
-    run = store.create(
+    (
+        store,
+        _artifacts,
+        engagement,
+        _execution,
+        profile,
+        _evidence,
+        provider,
+        service,
+    ) = await _fixture(tmp_path)
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Review the target",
@@ -285,15 +309,17 @@ async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
             metadata={"final_summary": "Mission found an exposed service."},
         )
     )
-    store.create(
-        AgentAttempt(
-            engagement_id=engagement.id,
-            run_id=run.id,
-            task_id="task-1",
-            agent_role="researcher",
-            attempt_number=1,
-            status=TaskStatus.COMPLETE,
-            output={"summary": "Port 443 responded."},
+    (
+        await store.create(
+            AgentAttempt(
+                engagement_id=engagement.id,
+                run_id=run.id,
+                task_id="task-1",
+                agent_role="researcher",
+                attempt_number=1,
+                status=TaskStatus.COMPLETE,
+                output={"summary": "Port 443 responded."},
+            )
         )
     )
     provider.response_text = json.dumps(
@@ -316,12 +342,12 @@ async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
         ),
     )
     await service._tasks[draft.id]
-    result = store.get(GeneratedDraft, draft.id)
+    result = await store.get(GeneratedDraft, draft.id)
     assert result.status == GeneratedDraftStatus.ACCEPTED, result.error_detail
     assert result.execution_id == run.id
     assert result.metadata["source_kind"] == "mission"
     assert "Port 443 responded" in provider.requests[-1].messages[0].content
-    note = store.get(Observation, result.observation_id)
+    note = await store.get(Observation, result.observation_id)
     assert note.observation_type == "ai_tool_note"
     assert note.metadata["mission_id"] == run.id
 
@@ -330,10 +356,17 @@ async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
 async def test_mission_analysis_reads_attempts_after_a_page_of_project_history(
     tmp_path,
 ):
-    store, _artifacts, engagement, _execution, profile, _evidence, provider, service = (
-        _fixture(tmp_path)
-    )
-    run = store.create(
+    (
+        store,
+        _artifacts,
+        engagement,
+        _execution,
+        profile,
+        _evidence,
+        provider,
+        service,
+    ) = await _fixture(tmp_path)
+    run = await store.create(
         AgentRun(
             engagement_id=engagement.id,
             objective="Review the target",
@@ -350,13 +383,15 @@ async def test_mission_analysis_reads_attempts_after_a_page_of_project_history(
         output={"summary": "Port 8443 responded."},
     )
     # Earlier missions in the Project already recorded a page of attempts.
-    seed_older_copies(
-        store,
-        attempt.model_copy(
-            update={"run_id": "earlier-mission", "output": {"summary": "old"}}
-        ),
+    (
+        await seed_older_copies(
+            store,
+            attempt.model_copy(
+                update={"run_id": "earlier-mission", "output": {"summary": "old"}}
+            ),
+        )
     )
-    store.create(attempt)
+    (await store.create(attempt))
     provider.response_text = json.dumps(
         {
             "title": "Mission note",
@@ -380,10 +415,17 @@ async def test_mission_analysis_reads_attempts_after_a_page_of_project_history(
 
 @async_test
 async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_path):
-    store, artifacts, engagement, execution, _profile, evidence, _provider, _service = (
-        _fixture(tmp_path)
-    )
-    harness = store.create(
+    (
+        store,
+        artifacts,
+        engagement,
+        execution,
+        _profile,
+        evidence,
+        _provider,
+        _service,
+    ) = await _fixture(tmp_path)
+    harness = await store.create(
         HarnessProfile(
             name="Local Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -415,7 +457,7 @@ async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_p
         artifact_store=artifacts,
         harness_runtime=runtime,  # type: ignore[arg-type]
     )
-    config = service.set_config(
+    config = await service.set_config(
         engagement.id,
         PostToolAssistantConfig(
             suggest_next_steps=True,
@@ -437,7 +479,7 @@ async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_p
         ),
     )
     await service._tasks[draft.id]
-    result = store.get(GeneratedDraft, draft.id)
+    result = await store.get(GeneratedDraft, draft.id)
     assert result.status == GeneratedDraftStatus.READY
     assert result.content and result.content.next_step.command.startswith("printf")
     assert result.metadata["backend_kind"] == "harness"
@@ -451,10 +493,17 @@ async def test_post_tool_assistant_supports_tool_disabled_harness_analysis(tmp_p
 
 @async_test
 async def test_manual_harness_note_stays_ready_until_explicit_acceptance(tmp_path):
-    store, artifacts, engagement, execution, _profile, evidence, provider, _service = (
-        _fixture(tmp_path)
-    )
-    harness = store.create(
+    (
+        store,
+        artifacts,
+        engagement,
+        execution,
+        _profile,
+        evidence,
+        provider,
+        _service,
+    ) = await _fixture(tmp_path)
+    harness = await store.create(
         HarnessProfile(
             name="Inert local note harness",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -477,31 +526,38 @@ async def test_manual_harness_note_stays_ready_until_explicit_acceptance(tmp_pat
         ),
     )
     await service._tasks[draft.id]
-    ready = store.get(GeneratedDraft, draft.id)
+    ready = await store.get(GeneratedDraft, draft.id)
     assert ready.status == GeneratedDraftStatus.READY, ready.error_detail
     assert ready.metadata["automatic"] is False and ready.observation_id is None
-    assert store.count(Observation, engagement_id=engagement.id) == 0
+    assert (await store.count(Observation, engagement_id=engagement.id)) == 0
     assert runtime.requests[0]["profile_id"] == harness.id
     assert runtime.requests[0]["model"] == "model-1"
-    accepted = service.accept(
+    accepted = await service.accept(
         ready.id, DraftTransitionRequest(expected_revision=ready.revision)
     )
-    saved = store.get(Observation, accepted.observation_id)
+    saved = await store.get(Observation, accepted.observation_id)
     assert saved.observation_type == "ai_execution_note"
     assert saved.source == "operator-accepted-ai-draft"
     assert saved.metadata["generated_draft_id"] == draft.id
     assert saved.evidence_ids == [evidence.id]
-    assert store.count(Observation, engagement_id=engagement.id) == 1
+    assert (await store.count(Observation, engagement_id=engagement.id)) == 1
 
 
 @async_test
 async def test_draft_context_is_bounded_redacted_deduplicated_and_accepts_once(
     tmp_path,
 ):
-    store, _artifacts, _engagement, execution, profile, evidence, provider, service = (
-        _fixture(tmp_path)
-    )
-    context, fingerprint, metadata = service._context(execution)
+    (
+        store,
+        _artifacts,
+        _engagement,
+        execution,
+        profile,
+        evidence,
+        provider,
+        service,
+    ) = await _fixture(tmp_path)
+    context, fingerprint, metadata = await service._context(execution)
     decoded = json.loads(context)
     assert len(decoded["source_excerpt"].encode()) <= SOURCE_LIMIT
     assert "supersecret123" not in context
@@ -515,7 +571,7 @@ async def test_draft_context_is_bounded_redacted_deduplicated_and_accepts_once(
         DraftNoteRequest(provider_id=profile.id, model="model-1"),
     )
     await service._tasks[draft.id]
-    ready = store.get(GeneratedDraft, draft.id)
+    ready = await store.get(GeneratedDraft, draft.id)
     assert ready.status == GeneratedDraftStatus.READY
     assert ready.context_fingerprint == fingerprint
     assert ready.usage and ready.usage.total_tokens == 20
@@ -527,14 +583,14 @@ async def test_draft_context_is_bounded_redacted_deduplicated_and_accepts_once(
         DraftNoteRequest(provider_id=profile.id, model="model-1"),
     )
     assert duplicate.id == ready.id
-    accepted = service.accept(
+    accepted = await service.accept(
         ready.id, DraftTransitionRequest(expected_revision=ready.revision)
     )
-    retried = service.accept(
+    retried = await service.accept(
         accepted.id, DraftTransitionRequest(expected_revision=accepted.revision)
     )
     assert retried.observation_id == accepted.observation_id
-    observations = store.list_entities(
+    observations = await store.list_entities(
         Observation, engagement_id=execution.engagement_id
     )
     assert len(observations) == 1
@@ -543,10 +599,12 @@ async def test_draft_context_is_bounded_redacted_deduplicated_and_accepts_once(
     assert (
         observations[0].metadata["potential_findings"][0]["title"] == "Possible issue"
     )
-    assert store.count(Finding, engagement_id=execution.engagement_id) == 0
+    assert (await store.count(Finding, engagement_id=execution.engagement_id)) == 0
 
 
-def test_draft_context_reads_only_its_executions_output_events(tmp_path, monkeypatch):
+async def test_draft_context_reads_only_its_executions_output_events(
+    tmp_path, monkeypatch
+):
     """The context paged every event of the Project to find one execution's
     output: 225k rows and ~15 s on the live database for two events."""
 
@@ -564,36 +622,44 @@ def test_draft_context_reads_only_its_executions_output_events(tmp_path, monkeyp
         _evidence,
         _provider,
         service,
-    ) = _fixture(tmp_path)
+    ) = await _fixture(tmp_path)
     # The rest of the Project's history, and this execution's own lifecycle.
     for index in range(25):
-        store.append_operation_event(
-            "harness-turn",
-            "harness_turn",
-            engagement.id,
-            "harness.delta",
-            {"text": f"delta {index}"},
+        (
+            await store.append_operation_event(
+                "harness-turn",
+                "harness_turn",
+                engagement.id,
+                "harness.delta",
+                {"text": f"delta {index}"},
+            )
         )
-    store.append_operation_event(
-        "other-execution",
-        "execution",
-        engagement.id,
-        "execution.stdout",
-        {"stream": "stdout", "text": "other output\n"},
+    (
+        await store.append_operation_event(
+            "other-execution",
+            "execution",
+            engagement.id,
+            "execution.stdout",
+            {"stream": "stdout", "text": "other output\n"},
+        )
     )
-    store.append_operation_event(
-        execution.id,
-        "execution",
-        engagement.id,
-        "execution.terminal",
-        {"status": "completed"},
+    (
+        await store.append_operation_event(
+            execution.id,
+            "execution",
+            engagement.id,
+            "execution.terminal",
+            {"status": "completed"},
+        )
     )
-    store.append_operation_event(
-        execution.id,
-        "execution",
-        engagement.id,
-        "execution.stdout",
-        {"stream": "stdout", "text": "last line\n"},
+    (
+        await store.append_operation_event(
+            execution.id,
+            "execution",
+            engagement.id,
+            "execution.stdout",
+            {"stream": "stdout", "text": "last line\n"},
+        )
     )
     loaded: list[tuple[str, str]] = []
 
@@ -602,7 +668,7 @@ def test_draft_context_reads_only_its_executions_output_events(tmp_path, monkeyp
 
     orm_event.listen(OperationEventRow, "load", count)
     try:
-        context, fingerprint, _metadata = service._context(execution)
+        context, fingerprint, _metadata = await service._context(execution)
     finally:
         orm_event.remove(OperationEventRow, "load", count)
 
@@ -624,23 +690,30 @@ def test_draft_context_reads_only_its_executions_output_events(tmp_path, monkeyp
 
     # Output past one page keeps every event, in order.
     monkeypatch.setattr(execution_ai, "_OUTPUT_EVENT_PAGE", 2)
-    assert service._context(execution)[1] == fingerprint
+    assert (await service._context(execution))[1] == fingerprint
 
 
 @async_test
 async def test_provider_failure_is_retryable_and_strict_prose_never_falls_back(
     tmp_path,
 ):
-    store, _artifacts, _engagement, execution, profile, _evidence, provider, service = (
-        _fixture(tmp_path)
-    )
+    (
+        store,
+        _artifacts,
+        _engagement,
+        execution,
+        profile,
+        _evidence,
+        provider,
+        service,
+    ) = await _fixture(tmp_path)
     provider.failure = ProviderError("temporary provider outage")
     draft = await service.generate(
         execution.id,
         DraftNoteRequest(provider_id=profile.id, model="model-1"),
     )
     await service._tasks[draft.id]
-    failed = store.get(GeneratedDraft, draft.id)
+    failed = await store.get(GeneratedDraft, draft.id)
     assert failed.status == GeneratedDraftStatus.FAILED
     assert "temporary provider outage" in (failed.error_detail or "")
 
@@ -652,7 +725,7 @@ async def test_provider_failure_is_retryable_and_strict_prose_never_falls_back(
     )
     assert retry.id == failed.id
     await service._tasks[retry.id]
-    strict_failure = store.get(GeneratedDraft, retry.id)
+    strict_failure = await store.get(GeneratedDraft, retry.id)
     assert strict_failure.status == GeneratedDraftStatus.FAILED
     assert (
         strict_failure.error_detail
@@ -664,9 +737,16 @@ async def test_provider_failure_is_retryable_and_strict_prose_never_falls_back(
 async def test_cloud_transfer_requires_confirmation_and_chat_attachment_stays_inert(
     tmp_path,
 ):
-    store, _artifacts, engagement, execution, profile, _evidence, _provider, service = (
-        _fixture(tmp_path, local=False)
-    )
+    (
+        store,
+        _artifacts,
+        engagement,
+        execution,
+        profile,
+        _evidence,
+        _provider,
+        service,
+    ) = await _fixture(tmp_path, local=False)
     with pytest.raises(ExecutionAIError) as refusal:
         await service.generate(
             execution.id,
@@ -674,7 +754,7 @@ async def test_cloud_transfer_requires_confirmation_and_chat_attachment_stays_in
         )
     assert refusal.value.code == "cloud_confirmation_required"
 
-    attachment = service.attach_to_chat(
+    attachment = await service.attach_to_chat(
         execution.id,
         ExecutionChatAttachRequest(
             provider_id=profile.id,
@@ -688,10 +768,10 @@ async def test_cloud_transfer_requires_confirmation_and_chat_attachment_stays_in
     assert "BEGIN EXECUTION ATTACHMENT (JSON)" in attachment.context_message.content
     assert "END EXECUTION ATTACHMENT" in attachment.context_message.content
     assert "supersecret123" not in attachment.context_message.content
-    assert store.count(ChatSession, engagement_id=engagement.id) == 1
+    assert (await store.count(ChatSession, engagement_id=engagement.id)) == 1
 
 
-def test_execution_chat_attachment_supports_codex_harness(tmp_path):
+async def test_execution_chat_attachment_supports_codex_harness(tmp_path):
     (
         store,
         artifacts,
@@ -701,8 +781,8 @@ def test_execution_chat_attachment_supports_codex_harness(tmp_path):
         _evidence,
         _provider,
         _service,
-    ) = _fixture(tmp_path)
-    harness = store.create(
+    ) = await _fixture(tmp_path)
+    harness = await store.create(
         HarnessProfile(
             name="Local Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -719,7 +799,7 @@ def test_execution_chat_attachment_supports_codex_harness(tmp_path):
         harness_runtime=runtime,  # type: ignore[arg-type]
     )
 
-    attachment = service.attach_to_chat(
+    attachment = await service.attach_to_chat(
         execution.id,
         ExecutionChatAttachRequest(
             backend_kind="harness",
@@ -739,12 +819,19 @@ def test_execution_chat_attachment_supports_codex_harness(tmp_path):
     assert runtime.requests[-1]["create_session"]["mcp_server_ids"] == []
 
 
-def test_execution_ai_api_is_closed_and_protected(tmp_path):
-    store, artifacts, _engagement, execution, profile, _evidence, _provider, service = (
-        _fixture(tmp_path)
-    )
+async def test_execution_ai_api_is_closed_and_protected(tmp_path):
+    (
+        store,
+        artifacts,
+        _engagement,
+        execution,
+        profile,
+        _evidence,
+        _provider,
+        service,
+    ) = await _fixture(tmp_path)
     headers = {"Authorization": "Bearer test-token"}
-    with TestClient(
+    async with TestClient(
         create_app(
             store,
             artifact_store=artifacts,
@@ -753,12 +840,9 @@ def test_execution_ai_api_is_closed_and_protected(tmp_path):
         )
     ) as client:
         assert (
-            client.post(
-                "/api/v1/generated-drafts", headers=headers, json={}
-            ).status_code
-            == 405
-        )
-        invalid = client.post(
+            await client.post("/api/v1/generated-drafts", headers=headers, json={})
+        ).status_code == 405
+        invalid = await client.post(
             f"/api/v1/executions/{execution.id}/draft-notes",
             headers=headers,
             json={
@@ -769,7 +853,7 @@ def test_execution_ai_api_is_closed_and_protected(tmp_path):
             },
         )
         assert invalid.status_code == 422
-        queued = client.post(
+        queued = await client.post(
             f"/api/v1/executions/{execution.id}/draft-notes",
             headers=headers,
             json={"provider_id": profile.id, "model": "model-1"},
@@ -777,12 +861,16 @@ def test_execution_ai_api_is_closed_and_protected(tmp_path):
         assert queued.status_code == 202
         draft_id = queued.json()["id"]
         for _ in range(100):
-            detail = client.get(f"/api/v1/generated-drafts/{draft_id}", headers=headers)
+            detail = await client.get(
+                f"/api/v1/generated-drafts/{draft_id}", headers=headers
+            )
             if detail.json()["status"] != "generating":
                 break
             time.sleep(0.01)
         assert detail.json()["status"] == "ready"
-        delete = client.delete(f"/api/v1/generated-drafts/{draft_id}", headers=headers)
+        delete = await client.delete(
+            f"/api/v1/generated-drafts/{draft_id}", headers=headers
+        )
         assert delete.status_code == 405
 
 
@@ -790,9 +878,16 @@ def test_execution_ai_api_is_closed_and_protected(tmp_path):
 async def test_dismissing_a_generating_draft_is_rejected_and_result_stays_ready(
     tmp_path,
 ):
-    store, _artifacts, _engagement, execution, profile, _evidence, provider, service = (
-        _fixture(tmp_path)
-    )
+    (
+        store,
+        _artifacts,
+        _engagement,
+        execution,
+        profile,
+        _evidence,
+        provider,
+        service,
+    ) = await _fixture(tmp_path)
     release = asyncio.Event()
     real_complete = provider.complete
 
@@ -807,18 +902,23 @@ async def test_dismissing_a_generating_draft_is_rejected_and_result_stays_ready(
     )
     for _ in range(5):
         await asyncio.sleep(0)
-    assert store.get(GeneratedDraft, draft.id).status == GeneratedDraftStatus.GENERATING
+    assert (
+        await store.get(GeneratedDraft, draft.id)
+    ).status == GeneratedDraftStatus.GENERATING
 
     with pytest.raises(ExecutionAIError) as rejected:
-        service.dismiss_suggestion(draft.id)
+        (await service.dismiss_suggestion(draft.id))
     assert rejected.value.status_code == 409
     assert rejected.value.code == "draft_state"
 
     release.set()
     await service._tasks[draft.id]
-    result = store.get(GeneratedDraft, draft.id)
+    result = await store.get(GeneratedDraft, draft.id)
     assert result.status == GeneratedDraftStatus.READY, result.error_detail
     assert "dismissed" not in result.metadata
 
-    dismissed = service.dismiss_suggestion(draft.id)
+    dismissed = await service.dismiss_suggestion(draft.id)
     assert dismissed.metadata["dismissed"] is True
+
+
+pytestmark = pytest.mark.anyio

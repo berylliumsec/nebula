@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 from typing import Any
 from uuid import uuid4
 
@@ -74,18 +76,18 @@ class ButlerProjects:
             "url": f"/projects/{project.id}/workbench?view=chat",
         }
 
-    def list_projects(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def list_projects(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 10000:
             raise ValueError("offset must be from 0 to 10000")
-        rows = self.store.list_entities(Engagement, offset=offset, limit=51)
+        rows = await self.store.list_entities(Engagement, offset=offset, limit=51)
         return {
             "projects": [self._summary(item) for item in rows[:50]],
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self.store.get(Engagement, arguments["project_id"])
+    async def detail(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = await self.store.get(Engagement, arguments["project_id"])
         return {
             **self._summary(project),
             "description": project.description[:20000],
@@ -112,14 +114,14 @@ class ButlerProjects:
             }
         )
 
-    def _current(self, arguments: dict[str, Any]) -> Engagement:
-        project = self.store.get(Engagement, arguments["project_id"])
+    async def _current(self, arguments: dict[str, Any]) -> Engagement:
+        project = await self.store.get(Engagement, arguments["project_id"])
         if project.revision != arguments["expected_revision"]:
             raise ValueError("project changed; read its current revision before acting")
         return project
 
-    def rename(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self._current(arguments)
+    async def rename(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = await self._current(arguments)
         name = arguments["name"].strip()
         if not name:
             raise ValueError("project name cannot be blank")
@@ -133,8 +135,8 @@ class ButlerProjects:
             }
         )
 
-    def relink(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self._current(arguments)
+    async def relink(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = await self._current(arguments)
         return self._pending(
             {
                 "kind": "project_relink",
@@ -144,8 +146,8 @@ class ButlerProjects:
             }
         )
 
-    def archive(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self._current(arguments)
+    async def archive(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = await self._current(arguments)
         if project.status == EngagementStatus.ARCHIVED:
             raise ValueError("project is already archived; read it again")
         return self._pending(
@@ -157,8 +159,8 @@ class ButlerProjects:
             }
         )
 
-    def restore(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self._current(arguments)
+    async def restore(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = await self._current(arguments)
         if project.status != EngagementStatus.ARCHIVED:
             raise ValueError("choose an archived project to restore")
         return self._pending(
@@ -170,8 +172,8 @@ class ButlerProjects:
             }
         )
 
-    def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        project = self._current(arguments)
+    async def delete(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project = await self._current(arguments)
         if project.status != EngagementStatus.ARCHIVED:
             raise ValueError("archive the project before permanently deleting it")
         return self._pending(
@@ -260,7 +262,7 @@ class ButlerProjects:
             ) -> dict[str, Any]:
                 if selected_read:
                     return await read_in_worker(selected_handler, arguments)
-                return selected_handler(arguments)
+                return await call_async(selected_handler, arguments)
 
             plugins.append(
                 AnalysisTool(

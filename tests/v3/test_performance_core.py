@@ -1,6 +1,10 @@
 """Performance diagnostics over authenticated, non-loopback HTTP to real Core."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import hashlib
 import ipaddress
@@ -22,7 +26,9 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.version import build_metadata
 
 
-def test_live_core_reports_correlated_reads_exports_and_stops_its_monitor(tmp_path):
+async def test_live_core_reports_correlated_reads_exports_and_stops_its_monitor(
+    tmp_path,
+):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         # Route lookup only; sends no packet to this documentation address.
         probe.connect(("192.0.2.1", 9))
@@ -119,7 +125,7 @@ def test_live_core_reports_correlated_reads_exports_and_stops_its_monitor(tmp_pa
         thread.join(timeout=15)
         listener.close()
         manager.close()
-        store.database.dispose()
+        (await store.database.dispose())
         assert not thread.is_alive(), "Synthetic Core did not shut down"
     lag_before = next(
         (
@@ -139,3 +145,6 @@ def test_live_core_reports_correlated_reads_exports_and_stops_its_monitor(tmp_pa
         0,
     )
     assert lag_after == lag_before
+
+
+pytestmark = pytest.mark.anyio

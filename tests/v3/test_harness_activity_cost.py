@@ -7,6 +7,10 @@ with how long the turn has streamed.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import ast
 import asyncio
@@ -79,8 +83,8 @@ class ScriptedAdapter(FakeAdapter):
         return connection
 
 
-def _scripted_runtime(tmp_path: Path, script, *, release=None):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+async def _scripted_runtime(tmp_path: Path, script, *, release=None):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
     adapter = ScriptedAdapter(script, release=release)
     runtime.adapter_factory = lambda _kind: adapter
     return store, engagement, profile, adapter, runtime
@@ -98,10 +102,10 @@ def _prepare(runtime, engagement, profile, prompt="Report"):
     )
 
 
-def _ledger(store, turn_id: str, event_type: str) -> list:
+async def _ledger(store, turn_id: str, event_type: str) -> list:
     return [
         event
-        for event in store.replay_operation_events(turn_id, limit=10_000)
+        for event in (await store.replay_operation_events(turn_id, limit=10_000))
         if event.event_type == event_type
     ]
 
@@ -109,7 +113,7 @@ def _ledger(store, turn_id: str, event_type: str) -> list:
 # HARN-8: assistant text is coalesced like command output.
 
 
-def test_streamed_answer_shares_durable_rows_and_replays_identically(tmp_path):
+async def test_streamed_answer_shares_durable_rows_and_replays_identically(tmp_path):
     answer = "".join(chr(ord("a") + index % 26) for index in range(500))
 
     async def script(_connection):
@@ -119,7 +123,7 @@ def test_streamed_answer_shares_durable_rows_and_replays_identically(tmp_path):
         yield HarnessEvent(type="completed", message=answer)
 
     async def scenario() -> None:
-        store, engagement, profile, _adapter, runtime = _scripted_runtime(
+        store, engagement, profile, _adapter, runtime = await _scripted_runtime(
             tmp_path, script
         )
         chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
@@ -127,13 +131,13 @@ def test_streamed_answer_shares_durable_rows_and_replays_identically(tmp_path):
         live = [event async for event in runtime.stream_turn(turn.id)]
         elapsed = time.monotonic() - started
 
-        rows = _ledger(store, turn.id, "harness.message_delta")
+        rows = await _ledger(store, turn.id, "harness.message_delta")
         # One row per flush window instead of one per token.
         assert len(rows) <= max(20, int(elapsed / 0.1) + 5), (len(rows), elapsed)
         live_text = "".join(
             event.delta or "" for event in live if event.type == "message_delta"
         )
-        replay = runtime.activity_events(turn.id, limit=10_000).events
+        replay = (await runtime.activity_events(turn.id, limit=10_000)).events
         replay_text = "".join(
             event.delta or "" for event in replay if event.type == "message_delta"
         )
@@ -150,15 +154,15 @@ def test_streamed_answer_shares_durable_rows_and_replays_identically(tmp_path):
         ]
         saved = [
             message
-            for message in store.list_session_entities(ChatMessage, chat.id)
+            for message in (await store.list_session_entities(ChatMessage, chat.id))
             if message.role == ChatRole.ASSISTANT
         ]
         assert [message.content for message in saved] == [answer]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_coalescing_keeps_distinct_streams_apart_and_flushes_before_others():
+async def test_coalescing_keeps_distinct_streams_apart_and_flushes_before_others():
     async def source() -> AsyncIterator[HarnessEvent]:
         for event in (
             HarnessEvent(type="message_delta", delta="Hel", item_id="a"),
@@ -178,7 +182,7 @@ def test_coalescing_keeps_distinct_streams_apart_and_flushes_before_others():
     async def scenario() -> list[HarnessEvent]:
         return [event async for event in _coalesce_activity_deltas(source())]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
     assert [(event.type, event.item_id, event.delta) for event in events] == [
         ("message_delta", "a", "Hello"),
         ("message_delta", "b", "\n\nNext"),
@@ -188,7 +192,9 @@ def test_coalescing_keeps_distinct_streams_apart_and_flushes_before_others():
     ]
 
 
-def test_stop_inside_the_coalescing_window_keeps_the_last_text(tmp_path, monkeypatch):
+async def test_stop_inside_the_coalescing_window_keeps_the_last_text(
+    tmp_path, monkeypatch
+):
     # A window long enough that nothing is flushed before Stop lands.
     monkeypatch.setattr(harness_module, "ACTIVITY_DELTA_FLUSH_SECONDS", 30.0)
 
@@ -200,7 +206,7 @@ def test_stop_inside_the_coalescing_window_keeps_the_last_text(tmp_path, monkeyp
 
     async def scenario() -> None:
         gate = asyncio.Event()
-        store, engagement, profile, adapter, runtime = _scripted_runtime(
+        store, engagement, profile, adapter, runtime = await _scripted_runtime(
             tmp_path, script, release=gate
         )
         produced = asyncio.Event()
@@ -213,9 +219,9 @@ def test_stop_inside_the_coalescing_window_keeps_the_last_text(tmp_path, monkeyp
 
         adapter.open = open_with_signal
         chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
-        runtime.start_chat_turn(turn.id)
+        (await runtime.start_chat_turn(turn.id))
         await asyncio.wait_for(produced.wait(), timeout=5)
-        assert _ledger(store, turn.id, "harness.message_delta") == []
+        assert (await _ledger(store, turn.id, "harness.message_delta")) == []
         await runtime.cancel_turn(turn.id, reason="Stopped by operator")
         deadline = time.monotonic() + 5
         while turn.id in runtime._chat_turn_tasks:
@@ -223,73 +229,87 @@ def test_stop_inside_the_coalescing_window_keeps_the_last_text(tmp_path, monkeyp
             await asyncio.sleep(0.01)
         saved = [
             message.content
-            for message in store.list_session_entities(ChatMessage, chat.id)
+            for message in (await store.list_session_entities(ChatMessage, chat.id))
             if message.role == ChatRole.ASSISTANT
         ]
         assert saved == ["Partial finding"]
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.CANCELLED
+        assert (
+            await store.get(HarnessTurn, turn.id)
+        ).status == HarnessTurnStatus.CANCELLED
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-9: session activity is bounded and reports late state.
 
 
-def test_session_activity_reports_state_after_long_streams_and_old_turns(
+async def test_session_activity_reports_state_after_long_streams_and_old_turns(
     tmp_path, monkeypatch
 ):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
-    other = runtime.create_session(
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    other = await runtime.create_session(
         engagement_id=engagement.id, profile_id=profile.id, model=None
     )
     # A full older page of the project's turns must not hide the reservation.
-    with store.transaction() as transaction:
+    async with store.transaction() as transaction:
         for index in range(1_001):
-            transaction.add(
-                HarnessTurn(
-                    id=f"older-{index:04d}",
-                    engagement_id=engagement.id,
-                    harness_session_id=other.id,
-                    origin=HarnessTurnOrigin.ANALYSIS,
-                    prompt="p",
-                    status=HarnessTurnStatus.COMPLETE,
+            (
+                await transaction.add(
+                    HarnessTurn(
+                        id=f"older-{index:04d}",
+                        engagement_id=engagement.id,
+                        harness_session_id=other.id,
+                        origin=HarnessTurnOrigin.ANALYSIS,
+                        prompt="p",
+                        status=HarnessTurnStatus.COMPLETE,
+                    )
                 )
             )
     _chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
-    session = store.get(HarnessSession, turn.harness_session_id)
+    session = await store.get(HarnessSession, turn.harness_session_id)
     # Past the first 1,000 ledger rows the old status read ever looked at.
     for _ in range(1_000):
-        runtime._persist_activity(
-            turn, session, HarnessEvent(type="message_delta", delta="tok ")
+        (
+            await runtime._persist_activity(
+                turn, session, HarnessEvent(type="message_delta", delta="tok ")
+            )
         )
-    runtime._persist_activity(
-        turn,
-        session,
-        HarnessEvent(
-            type="item_upsert",
-            item_kind="plan",
-            item_id="turn-plan",
-            plan=[{"id": "p1", "title": "Late plan", "status": "in_progress"}],
-        ),
+    (
+        await runtime._persist_activity(
+            turn,
+            session,
+            HarnessEvent(
+                type="item_upsert",
+                item_kind="plan",
+                item_id="turn-plan",
+                plan=[{"id": "p1", "title": "Late plan", "status": "in_progress"}],
+            ),
+        )
     )
-    runtime._persist_activity(
-        turn,
-        session,
-        HarnessEvent(
-            type="item_upsert",
-            item_kind="goal",
-            item_id="turn-goal",
-            goal={"objective": "Finish the audit", "status": "running"},
-        ),
+    (
+        await runtime._persist_activity(
+            turn,
+            session,
+            HarnessEvent(
+                type="item_upsert",
+                item_kind="goal",
+                item_id="turn-goal",
+                goal={"objective": "Finish the audit", "status": "running"},
+            ),
+        )
     )
-    runtime._persist_activity(
-        turn,
-        session,
-        HarnessEvent(type="item_upsert", item_kind="mode", item_id="mode", mode="plan"),
+    (
+        await runtime._persist_activity(
+            turn,
+            session,
+            HarnessEvent(
+                type="item_upsert", item_kind="mode", item_id="mode", mode="plan"
+            ),
+        )
     )
 
-    activity = runtime.session_activity(session.id)
+    activity = await runtime.session_activity(session.id)
     assert activity.busy is True
     assert activity.turn_id == turn.id
     assert [entry.title for entry in activity.plan] == ["Late plan"]
@@ -307,25 +327,29 @@ def test_session_activity_reports_state_after_long_streams_and_old_turns(
     # A cold read (after a Core restart) decodes only rows that carry turn
     # state, never the streamed text.
     runtime._turn_activity_states.clear()
-    assert runtime.session_activity(session.id).mode == "plan"
+    assert (await runtime.session_activity(session.id)).mode == "plan"
     assert len(decoded) == 3
 
     decoded.clear()
     for _ in range(50):
-        runtime._persist_activity(
-            turn, session, HarnessEvent(type="message_delta", delta="tok ")
+        (
+            await runtime._persist_activity(
+                turn, session, HarnessEvent(type="message_delta", delta="tok ")
+            )
         )
-    runtime._persist_activity(
-        turn,
-        session,
-        HarnessEvent(
-            type="item_upsert",
-            item_kind="plan",
-            item_id="turn-plan",
-            plan=[{"id": "p1", "title": "Late plan", "status": "completed"}],
-        ),
+    (
+        await runtime._persist_activity(
+            turn,
+            session,
+            HarnessEvent(
+                type="item_upsert",
+                item_kind="plan",
+                item_id="turn-plan",
+                plan=[{"id": "p1", "title": "Late plan", "status": "completed"}],
+            ),
+        )
     )
-    activity = runtime.session_activity(session.id)
+    activity = await runtime.session_activity(session.id)
     assert [entry.status for entry in activity.plan] == ["completed"]
     assert activity.goal is not None and activity.goal.status == "running"
     # A later poll reads only what was appended since the previous one.
@@ -335,33 +359,35 @@ def test_session_activity_reports_state_after_long_streams_and_old_turns(
 # HARN-11: per-turn work is scoped to the conversation, followers are woken.
 
 
-def test_harness_turn_reads_only_its_own_conversation(tmp_path, monkeypatch):
-    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+async def test_harness_turn_reads_only_its_own_conversation(tmp_path, monkeypatch):
+    store, engagement, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
     chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
-    with store.transaction() as transaction:
+    async with store.transaction() as transaction:
         for index in range(50):
-            transaction.add(
-                ChatMessage(
-                    engagement_id=engagement.id,
-                    session_id="another-chat",
-                    sequence=index + 1,
-                    role=ChatRole.USER,
-                    content="unrelated",
+            (
+                await transaction.add(
+                    ChatMessage(
+                        engagement_id=engagement.id,
+                        session_id="another-chat",
+                        sequence=index + 1,
+                        role=ChatRole.USER,
+                        content="unrelated",
+                    )
                 )
             )
     scanned: list[str] = []
     original = store.list_entities
 
-    def recording(model, **kwargs):
+    async def recording(model, **kwargs):
         scanned.append(model.entity_kind)
-        return original(model, **kwargs)
+        return await original(model, **kwargs)
 
     monkeypatch.setattr(store, "list_entities", recording)
 
     async def scenario() -> None:
         async for _event in runtime.stream_turn(turn.id):
             pass
-        _chat, _next_chat_turn, _next = runtime.prepare_chat(
+        _chat, _next_chat_turn, _next = await runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -371,10 +397,11 @@ def test_harness_turn_reads_only_its_own_conversation(tmp_path, monkeypatch):
             mcp_server_ids=[],
         )
 
-    asyncio.run(scenario())
+    (await scenario())
     assert ChatMessage.entity_kind not in scanned
     messages = sorted(
-        store.list_session_entities(ChatMessage, chat.id), key=lambda m: m.sequence
+        (await store.list_session_entities(ChatMessage, chat.id)),
+        key=lambda m: m.sequence,
     )
     assert [message.sequence for message in messages] == [1, 2, 3]
     assert [message.role for message in messages] == [
@@ -392,7 +419,9 @@ def test_harness_turn_reads_only_its_own_conversation(tmp_path, monkeypatch):
         ("interrupted", HarnessTurnStatus.INTERRUPTED),
     ],
 )
-def test_idle_follower_is_woken_instead_of_polling(tmp_path, monkeypatch, last, status):
+async def test_idle_follower_is_woken_instead_of_polling(
+    tmp_path, monkeypatch, last, status
+):
     monkeypatch.setattr(harness_module, "ACTIVITY_FOLLOW_IDLE_SECONDS", 30.0)
 
     async def script(connection):
@@ -402,16 +431,16 @@ def test_idle_follower_is_woken_instead_of_polling(tmp_path, monkeypatch, last, 
 
     async def scenario() -> None:
         gate = asyncio.Event()
-        store, engagement, profile, _adapter, runtime = _scripted_runtime(
+        store, engagement, profile, _adapter, runtime = await _scripted_runtime(
             tmp_path, script, release=gate
         )
         _chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
         reads: list[float] = []
         original = runtime.activity_events
 
-        def counting(turn_id, **kwargs):
+        async def counting(turn_id, **kwargs):
             reads.append(time.monotonic())
-            return original(turn_id, **kwargs)
+            return await original(turn_id, **kwargs)
 
         monkeypatch.setattr(runtime, "activity_events", counting)
         received: list[tuple[str, float]] = []
@@ -420,7 +449,7 @@ def test_idle_follower_is_woken_instead_of_polling(tmp_path, monkeypatch, last, 
             async for event in runtime.follow_turn(turn.id):
                 received.append((event.type, time.monotonic()))
 
-        runtime.start_chat_turn(turn.id)
+        (await runtime.start_chat_turn(turn.id))
         follower = asyncio.create_task(follow())
         deadline = time.monotonic() + 5
         while not any(kind == "started" for kind, _ in received):
@@ -437,10 +466,10 @@ def test_idle_follower_is_woken_instead_of_polling(tmp_path, monkeypatch, last, 
         await asyncio.wait_for(follower, timeout=5)
         kinds = [kind for kind, _ in received]
         assert kinds.index("message_delta") < kinds.index(last)
-        assert store.get(HarnessTurn, turn.id).status == status
+        assert (await store.get(HarnessTurn, turn.id)).status == status
         await runtime.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-7: the gateway shim never imports Nebula Core.
@@ -482,7 +511,7 @@ def test_packaged_entry_serves_the_gateway_without_importing_core():
     assert "core []" in result.stdout
 
 
-def test_gateway_shim_answers_mcp_over_stdio_from_its_launch_command():
+async def test_gateway_shim_answers_mcp_over_stdio_from_its_launch_command():
     async def scenario() -> None:
         gateway = McpGatewaySession(
             list_tools=lambda params: {"tools": [{"name": "echo"}]},
@@ -517,11 +546,11 @@ def test_gateway_shim_answers_mcp_over_stdio_from_its_launch_command():
             await asyncio.wait_for(process.wait(), timeout=10)
             await gateway.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("replaced", [False, True])
-def test_frozen_gateway_reuses_the_unpacked_core_only_for_the_same_binary(
+async def test_frozen_gateway_reuses_the_unpacked_core_only_for_the_same_binary(
     monkeypatch, replaced
 ):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -546,7 +575,7 @@ def test_frozen_gateway_reuses_the_unpacked_core_only_for_the_same_binary(
         finally:
             await gateway.close()
 
-    environment = asyncio.run(scenario())
+    environment = await scenario()
     assert environment["NEBULA_MCP_GATEWAY_TOKEN"]
     relaunch = {name for name in environment if name.startswith("_PYI_")}
     if replaced:
@@ -558,3 +587,6 @@ def test_frozen_gateway_reuses_the_unpacked_core_only_for_the_same_binary(
             "_PYI_ARCHIVE_FILE",
             "_PYI_PARENT_PROCESS_LEVEL",
         }
+
+
+pytestmark = pytest.mark.anyio

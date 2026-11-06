@@ -1,6 +1,11 @@
 """Public sender isolation, durable incidents, and operator action contracts."""
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -8,7 +13,7 @@ import json
 from pathlib import Path
 import threading
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from jsonschema import Draft202012Validator, FormatChecker
 
 from nebula.v3.api import create_app
@@ -48,9 +53,9 @@ def test_published_event_schema_matches_versioned_sender_contract():
     assert list(validator.iter_errors({**report, "schema_version": 2}))
 
 
-def test_openapi_exposes_versioned_event_and_inventory_bodies(tmp_path):
-    client, _ = setup(tmp_path)
-    paths = client.get("/openapi.json").json()["paths"]
+async def test_openapi_exposes_versioned_event_and_inventory_bodies(tmp_path):
+    client, _ = await setup(tmp_path)
+    paths = (await client.get("/openapi.json")).json()["paths"]
     for path in ("events", "test"):
         body = paths[f"/api/v1/storage/{path}"]["post"]["requestBody"]
         schema = body["content"]["application/json"]["schema"]
@@ -65,15 +70,17 @@ def test_openapi_exposes_versioned_event_and_inventory_bodies(tmp_path):
     assert "devices" in inventory["required"]
 
 
-def setup(tmp_path):
+async def setup(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    store.create(Engagement(id="storage-project", name="Storage project"))
-    store.create(
-        ProviderProfile(
-            id="storage-provider",
-            name="Local model",
-            provider_type="openai_compatible",
-            model_allowlist=["test-model"],
+    (await store.create(Engagement(id="storage-project", name="Storage project")))
+    (
+        await store.create(
+            ProviderProfile(
+                id="storage-provider",
+                name="Local model",
+                provider_type="openai_compatible",
+                model_allowlist=["test-model"],
+            )
         )
     )
     app = create_app(store, auth_token="operator-token")
@@ -111,94 +118,85 @@ def enroll(client):
     return result.json()
 
 
-def test_enrollment_test_endpoint_and_sender_authorization(tmp_path):
-    client, store = setup(tmp_path)
+async def test_enrollment_test_endpoint_and_sender_authorization(tmp_path):
+    client, store = await setup(tmp_path)
     created = enroll(client)
     token = created["token"]
     source_id = created["source"]["id"]
     assert token not in str(
-        store.get_by_kind("storage_sources", source_id).model_dump()
+        (await store.get_by_kind("storage_sources", source_id)).model_dump()
     )
     report = event()
     headers = {"Authorization": "Bearer " + token}
-    assert client.post("/api/v1/storage/test", headers=headers, json=report).json()[
-        "valid"
-    ]
-    assert store.count(StorageVolume) == 0
     assert (
-        client.post("/api/v1/storage/events", headers=headers, json=report).status_code
-        == 403
-    )
+        await client.post("/api/v1/storage/test", headers=headers, json=report)
+    ).json()["valid"]
+    assert (await store.count(StorageVolume)) == 0
     assert (
-        client.post(
+        await client.post("/api/v1/storage/events", headers=headers, json=report)
+    ).status_code == 403
+    assert (
+        await client.post(
             "/api/v1/storage/events",
             headers={"Authorization": "Bearer wrong"},
             json=report,
-        ).status_code
-        == 401
-    )
-    assert client.post("/api/v1/storage/events", json=report).status_code == 401
-    enabled = client.patch(
+        )
+    ).status_code == 401
+    assert (await client.post("/api/v1/storage/events", json=report)).status_code == 401
+    enabled = await client.patch(
         f"/api/v1/storage/sources/{source_id}",
         headers=AUTH,
         json={"expected_revision": created["source"]["revision"], "enabled": True},
     )
     assert enabled.status_code == 200, enabled.text
     assert (
-        client.post(
+        await client.post(
             "/api/v1/storage/events",
             headers=headers,
             json={**report, "free_bytes": 200},
-        ).status_code
-        == 422
-    )
+        )
+    ).status_code == 422
     assert (
-        client.post(
+        await client.post(
             "/api/v1/storage/events", headers=headers, content=b" " * (64 * 1024 + 1)
-        ).status_code
-        == 413
-    )
+        )
+    ).status_code == 413
     assert (
-        client.post("/api/v1/storage/events", headers=headers, json=report).status_code
-        == 202
+        await client.post("/api/v1/storage/events", headers=headers, json=report)
+    ).status_code == 202
+    assert (await store.count(StorageVolume)) == 1
+    rotated = await client.post(
+        f"/api/v1/storage/sources/{source_id}/rotate", headers=AUTH
     )
-    assert store.count(StorageVolume) == 1
-    rotated = client.post(f"/api/v1/storage/sources/{source_id}/rotate", headers=AUTH)
     assert rotated.status_code == 200
     assert (
-        client.post(
+        await client.post(
             "/api/v1/storage/events", headers=headers, json=event("observation-2")
-        ).status_code
-        == 401
-    )
+        )
+    ).status_code == 401
     fresh = {"Authorization": "Bearer " + rotated.json()["token"]}
     assert (
-        client.post(
+        await client.post(
             "/api/v1/storage/events", headers=fresh, json=event("observation-2")
-        ).status_code
-        == 202
-    )
+        )
+    ).status_code == 202
     assert (
-        client.post(
-            f"/api/v1/storage/sources/{source_id}/revoke", headers=AUTH
-        ).status_code
-        == 200
-    )
+        await client.post(f"/api/v1/storage/sources/{source_id}/revoke", headers=AUTH)
+    ).status_code == 200
     assert (
-        client.post(
+        await client.post(
             "/api/v1/storage/events", headers=fresh, json=event("observation-3")
-        ).status_code
-        == 401
-    )
+        )
+    ).status_code == 401
 
 
-def test_source_token_changes_reject_stale_browser_revisions(tmp_path):
-    client, _ = setup(tmp_path)
+async def test_source_token_changes_reject_stale_browser_revisions(tmp_path):
+    client, _ = await setup(tmp_path)
     created = enroll(client)
     source_id = created["source"]["id"]
     initial_revision = created["source"]["revision"]
     endpoint = f"/api/v1/storage/sources/{source_id}"
-    rotated = client.post(
+    rotated = await client.post(
         f"{endpoint}/rotate",
         headers=AUTH,
         json={"expected_revision": initial_revision},
@@ -207,27 +205,24 @@ def test_source_token_changes_reject_stale_browser_revisions(tmp_path):
     current_revision = rotated.json()["source"]["revision"]
     assert current_revision > initial_revision
     assert (
-        client.post(
+        await client.post(
             f"{endpoint}/rotate",
             headers=AUTH,
             json={"expected_revision": initial_revision},
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
     assert (
-        client.post(
+        await client.post(
             f"{endpoint}/revoke",
             headers=AUTH,
             json={"expected_revision": initial_revision},
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
     fresh = {"Authorization": "Bearer " + rotated.json()["token"]}
     assert (
-        client.post("/api/v1/storage/test", headers=fresh, json=event()).status_code
-        == 200
-    )
-    revoked = client.post(
+        await client.post("/api/v1/storage/test", headers=fresh, json=event())
+    ).status_code == 200
+    revoked = await client.post(
         f"{endpoint}/revoke",
         headers=AUTH,
         json={"expected_revision": current_revision},
@@ -235,16 +230,15 @@ def test_source_token_changes_reject_stale_browser_revisions(tmp_path):
     assert revoked.status_code == 200, revoked.text
     assert revoked.json()["enabled"] is False
     assert (
-        client.post("/api/v1/storage/test", headers=fresh, json=event()).status_code
-        == 401
-    )
+        await client.post("/api/v1/storage/test", headers=fresh, json=event())
+    ).status_code == 401
 
 
-def test_callback_auth_is_required_and_source_can_be_disabled_after_runtime_fails(
+async def test_callback_auth_is_required_and_source_can_be_disabled_after_runtime_fails(
     tmp_path,
 ):
-    client, store = setup(tmp_path)
-    invalid = client.post(
+    client, store = await setup(tmp_path)
+    invalid = await client.post(
         "/api/v1/storage/sources",
         headers=AUTH,
         json={
@@ -258,20 +252,22 @@ def test_callback_auth_is_required_and_source_can_be_disabled_after_runtime_fail
     )
     assert invalid.status_code == 422
     created = enroll(client)["source"]
-    enabled = client.patch(
+    enabled = await client.patch(
         f"/api/v1/storage/sources/{created['id']}",
         headers=AUTH,
         json={"expected_revision": created["revision"], "enabled": True},
     )
     assert enabled.status_code == 200
-    profile = store.get(ProviderProfile, "storage-provider")
-    store.update(
-        ProviderProfile,
-        profile.id,
-        {"enabled": False},
-        expected_revision=profile.revision,
+    profile = await store.get(ProviderProfile, "storage-provider")
+    (
+        await store.update(
+            ProviderProfile,
+            profile.id,
+            {"enabled": False},
+            expected_revision=profile.revision,
+        )
     )
-    disabled = client.patch(
+    disabled = await client.patch(
         f"/api/v1/storage/sources/{created['id']}",
         headers=AUTH,
         json={"expected_revision": enabled.json()["revision"], "enabled": False},
@@ -280,58 +276,52 @@ def test_callback_auth_is_required_and_source_can_be_disabled_after_runtime_fail
     assert disabled.json()["enabled"] is False
 
 
-def test_duplicate_late_worsening_resolution_and_restart(tmp_path):
-    client, store = setup(tmp_path)
+async def test_duplicate_late_worsening_resolution_and_restart(tmp_path):
+    client, store = await setup(tmp_path)
     created = enroll(client)
     source = created["source"]
-    client.patch(
-        f"/api/v1/storage/sources/{source['id']}",
-        headers=AUTH,
-        json={"expected_revision": source["revision"], "enabled": True},
+    (
+        await client.patch(
+            f"/api/v1/storage/sources/{source['id']}",
+            headers=AUTH,
+            json={"expected_revision": source["revision"], "enabled": True},
+        )
     )
     sender = {"Authorization": "Bearer " + created["token"]}
     first_time = utc_now()
     first = event(observed_at=first_time)
-    accepted = client.post("/api/v1/storage/events", headers=sender, json=first)
+    accepted = await client.post("/api/v1/storage/events", headers=sender, json=first)
     assert accepted.status_code == 202, accepted.text
     assert accepted.json()["current"] is True
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=first).json()[
-            "duplicate"
-        ]
-        is True
-    )
+        await client.post("/api/v1/storage/events", headers=sender, json=first)
+    ).json()["duplicate"] is True
     assert (
-        client.post(
+        await client.post(
             "/api/v1/storage/events", headers=sender, json={**first, "free_bytes": 1}
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
     late = event(
         "late", state="healthy", observed_at=first_time - timedelta(minutes=1), free=90
     )
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=late).json()[
-            "current"
-        ]
-        is False
-    )
-    assert store.count(StorageIncident) == 1
-    assert store.count(StorageEventReceipt) == 2
-    incident = store.list_entities(StorageIncident)[0]
-    assert store.list_entities(StorageVolume)[0].state == "warning"
-    assert store.count(ChatSession) == 1
-    assert store.count(StorageDispatch) == 1
+        await client.post("/api/v1/storage/events", headers=sender, json=late)
+    ).json()["current"] is False
+    assert (await store.count(StorageIncident)) == 1
+    assert (await store.count(StorageEventReceipt)) == 2
+    incident = (await store.list_entities(StorageIncident))[0]
+    assert (await store.list_entities(StorageVolume))[0].state == "warning"
+    assert (await store.count(ChatSession)) == 1
+    assert (await store.count(StorageDispatch)) == 1
     worse = event(
         "worse", state="critical", observed_at=first_time + timedelta(seconds=1), free=5
     )
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=worse).status_code
-        == 202
-    )
-    assert store.count(StorageIncident) == 1
-    assert store.count(ChatSession) == 1
-    assert store.count(StorageDispatch) == 2
+        await client.post("/api/v1/storage/events", headers=sender, json=worse)
+    ).status_code == 202
+    assert (await store.count(StorageIncident)) == 1
+    assert (await store.count(ChatSession)) == 1
+    assert (await store.count(StorageDispatch)) == 2
     healthy = event(
         "healthy",
         state="healthy",
@@ -339,26 +329,25 @@ def test_duplicate_late_worsening_resolution_and_restart(tmp_path):
         free=80,
     )
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=healthy).status_code
-        == 202
-    )
-    assert store.get(StorageIncident, incident.id).state == "resolved"
+        await client.post("/api/v1/storage/events", headers=sender, json=healthy)
+    ).status_code == 202
+    assert (await store.get(StorageIncident, incident.id)).state == "resolved"
     # A fresh Core sees durable state, including the old linked conversation.
     reloaded = create_app(database=tmp_path / "core.db", auth_token="operator-token")
-    with TestClient(reloaded, base_url="https://testserver") as restarted:
-        dashboard = restarted.get("/api/v1/storage", headers=AUTH).json()
+    async with TestClient(reloaded, base_url="https://testserver") as restarted:
+        dashboard = (await restarted.get("/api/v1/storage", headers=AUTH)).json()
         assert len(dashboard["incidents"]) == 1
         assert dashboard["incidents"][0]["chat_session_id"] == incident.chat_session_id
-    assert store.count(ChatSession) == 1
+    assert (await store.count(ChatSession)) == 1
 
 
-def test_callback_offer_preview_approval_and_uncertain_lookup(tmp_path):
-    client, store = setup(tmp_path)
+async def test_callback_offer_preview_approval_and_uncertain_lookup(tmp_path):
+    client, store = await setup(tmp_path)
     service = client.app.state.storage_integrations
     created = enroll(client)
     source = created["source"]
-    source_entity = store.get_by_kind("storage_sources", source["id"])
-    source_entity = store.update(
+    source_entity = await store.get_by_kind("storage_sources", source["id"])
+    source_entity = await store.update(
         type(source_entity),
         source["id"],
         {"enabled": True, "callback_url": "http://127.0.0.1:8766"},
@@ -399,36 +388,30 @@ def test_callback_offer_preview_approval_and_uncertain_lookup(tmp_path):
 
     service._callback = callback
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=event()).status_code
-        == 202
-    )
-    action = store.list_entities(StorageAction)[0]
+        await client.post("/api/v1/storage/events", headers=sender, json=event())
+    ).status_code == 202
+    action = (await store.list_entities(StorageAction))[0]
     assert (
-        client.post(
-            f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH
-        ).status_code
-        == 502
-    )
+        await client.post(f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH)
+    ).status_code == 502
     preview_mode["value"] = "long"
     assert (
-        client.post(
-            f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH
-        ).status_code
-        == 502
-    )
+        await client.post(f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH)
+    ).status_code == 502
     preview_mode["value"] = "valid"
-    preview = client.post(f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH)
+    preview = await client.post(
+        f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH
+    )
     assert preview.status_code == 200, preview.text
     digest = preview.json()["digest"]
     assert (
-        client.post(
+        await client.post(
             f"/api/v1/storage/actions/{action.id}/approve",
             headers=AUTH,
             json={"digest": "0" * 64},
-        ).status_code
-        == 409
-    )
-    approval = client.post(
+        )
+    ).status_code == 409
+    approval = await client.post(
         f"/api/v1/storage/actions/{action.id}/approve",
         headers=AUTH,
         json={"digest": digest},
@@ -438,22 +421,21 @@ def test_callback_offer_preview_approval_and_uncertain_lookup(tmp_path):
     assert approval.json()["receipt"] == {"copied": True}
     assert sum(path.endswith("/execute") for path, _ in calls) == 1
     assert sum(path.endswith("/status") for path, _ in calls) == 1
-    current_source = store.get_by_kind("storage_sources", source["id"])
-    store.update(
-        type(current_source),
-        source["id"],
-        {"enabled": False},
-        expected_revision=current_source.revision,
+    current_source = await store.get_by_kind("storage_sources", source["id"])
+    (
+        await store.update(
+            type(current_source),
+            source["id"],
+            {"enabled": False},
+            expected_revision=current_source.revision,
+        )
     )
     assert (
-        client.post(
-            f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH
-        ).status_code
-        == 409
-    )
+        await client.post(f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH)
+    ).status_code == 409
 
 
-def test_source_preview_refusal_is_actionable_conflict(tmp_path, monkeypatch):
+async def test_source_preview_refusal_is_actionable_conflict(tmp_path, monkeypatch):
     class Callback(BaseHTTPRequestHandler):
         def do_POST(self):
             assert self.headers["Authorization"] == "Bearer callback-token"
@@ -488,35 +470,34 @@ def test_source_preview_refusal_is_actionable_conflict(tmp_path, monkeypatch):
     thread.start()
     try:
         monkeypatch.setenv("NEBULA_TEST_STORAGE_CALLBACK_TOKEN", "callback-token")
-        client, store = setup(tmp_path)
+        client, store = await setup(tmp_path)
         created = enroll(client)
-        source = store.get_by_kind("storage_sources", created["source"]["id"])
-        store.update(
-            type(source),
-            source.id,
-            {
-                "enabled": True,
-                "callback_url": f"http://127.0.0.1:{server.server_port}",
-                "callback_credential_ref": "env:NEBULA_TEST_STORAGE_CALLBACK_TOKEN",
-            },
-            expected_revision=source.revision,
+        source = await store.get_by_kind("storage_sources", created["source"]["id"])
+        (
+            await store.update(
+                type(source),
+                source.id,
+                {
+                    "enabled": True,
+                    "callback_url": f"http://127.0.0.1:{server.server_port}",
+                    "callback_credential_ref": "env:NEBULA_TEST_STORAGE_CALLBACK_TOKEN",
+                },
+                expected_revision=source.revision,
+            )
         )
         sender = {"Authorization": "Bearer " + created["token"]}
         assert (
-            client.post(
-                "/api/v1/storage/events", headers=sender, json=event()
-            ).status_code
-            == 202
-        )
-        action = store.list_entities(StorageAction)[0]
-        preview = client.post(
+            await client.post("/api/v1/storage/events", headers=sender, json=event())
+        ).status_code == 202
+        action = (await store.list_entities(StorageAction))[0]
+        preview = await client.post(
             f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH
         )
         assert preview.status_code == 409, preview.text
         assert preview.json()["detail"] == (
             "Storage source refused preview: unsupported tree entry: /fixture/backup-link"
         )
-        saved = store.get(StorageAction, action.id)
+        saved = await store.get(StorageAction, action.id)
         assert saved.status == "offered" and saved.digest is None
     finally:
         server.shutdown()
@@ -524,18 +505,20 @@ def test_source_preview_refusal_is_actionable_conflict(tmp_path, monkeypatch):
         thread.join(timeout=5)
 
 
-def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp_path):
+async def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp_path):
     import httpx
     from nebula.v3.storage_integrations import _digest
 
-    client, store = setup(tmp_path)
+    client, store = await setup(tmp_path)
     created = enroll(client)
-    source = store.get_by_kind("storage_sources", created["source"]["id"])
-    store.update(
-        type(source),
-        source.id,
-        {"enabled": True, "callback_url": "http://127.0.0.1:8766"},
-        expected_revision=source.revision,
+    source = await store.get_by_kind("storage_sources", created["source"]["id"])
+    (
+        await store.update(
+            type(source),
+            source.id,
+            {"enabled": True, "callback_url": "http://127.0.0.1:8766"},
+            expected_revision=source.revision,
+        )
     )
     calls = []
     effects = [{"operation": "copy", "source": "/fixture", "disposition": "retained"}]
@@ -558,14 +541,13 @@ def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp_path)
     client.app.state.storage_integrations._callback = unavailable
     sender = {"Authorization": "Bearer " + created["token"]}
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=event()).status_code
-        == 202
-    )
-    action = store.list_entities(StorageAction)[0]
-    digest = client.post(
-        f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH
+        await client.post("/api/v1/storage/events", headers=sender, json=event())
+    ).status_code == 202
+    action = (await store.list_entities(StorageAction))[0]
+    digest = (
+        await client.post(f"/api/v1/storage/actions/{action.id}/preview", headers=AUTH)
     ).json()["digest"]
-    approval = client.post(
+    approval = await client.post(
         f"/api/v1/storage/actions/{action.id}/approve",
         headers=AUTH,
         json={"digest": digest},
@@ -581,7 +563,7 @@ def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp_path)
         return {"status": "complete", "receipt": {"copied": True}}
 
     client.app.state.storage_integrations._callback = recovered
-    reconciled = client.post(
+    reconciled = await client.post(
         f"/api/v1/storage/actions/{action.id}/reconcile", headers=AUTH
     )
     assert reconciled.status_code == 200, reconciled.text
@@ -590,105 +572,120 @@ def test_uncertain_action_remains_visible_when_status_callback_is_down(tmp_path)
     assert sum(path.endswith("/execute") for path in calls) == 1
 
 
-def test_inventory_staleness_and_callback_failure_keep_alert_visible(tmp_path):
+async def test_inventory_staleness_and_callback_failure_keep_alert_visible(tmp_path):
     import httpx
 
-    client, store = setup(tmp_path)
+    client, store = await setup(tmp_path)
     created = enroll(client)
     source = created["source"]
-    source_entity = store.get_by_kind("storage_sources", source["id"])
-    store.update(
-        type(source_entity),
-        source["id"],
-        {"enabled": True, "callback_url": "http://127.0.0.1:8766"},
-        expected_revision=source_entity.revision,
+    source_entity = await store.get_by_kind("storage_sources", source["id"])
+    (
+        await store.update(
+            type(source_entity),
+            source["id"],
+            {"enabled": True, "callback_url": "http://127.0.0.1:8766"},
+            expected_revision=source_entity.revision,
+        )
     )
     sender = {"Authorization": "Bearer " + created["token"]}
-    inventory = client.post(
+    inventory = await client.post(
         "/api/v1/storage/inventory",
         headers=sender,
         json={"schema_version": 1, "devices": [{"id": "nas-1", "label": "NAS One"}]},
     )
     assert inventory.status_code == 202, inventory.text
-    assert store.count(StorageVolume) == 0
+    assert (await store.count(StorageVolume)) == 0
 
     async def unavailable(_source, _path, _body):
         raise httpx.ConnectError("callback offline")
 
     client.app.state.storage_integrations._callback = unavailable
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=event()).status_code
-        == 202
-    )
-    dashboard = client.get("/api/v1/storage", headers=AUTH).json()
+        await client.post("/api/v1/storage/events", headers=sender, json=event())
+    ).status_code == 202
+    dashboard = (await client.get("/api/v1/storage", headers=AUTH)).json()
     assert dashboard["incidents"][0]["callback_error"] == "callback offline"
     assert dashboard["incidents"][0]["dispatch_status"] == "queued"
     assert dashboard["actions"] == []
     assert len(dashboard["devices"]) == 1
     assert dashboard["volumes"][0]["state"] == "warning"
     chat_id = dashboard["incidents"][0]["chat_session_id"]
-    queue = store.get(ChatQueue, "chat-queue-" + chat_id)
+    queue = await store.get(ChatQueue, "chat-queue-" + chat_id)
     prompt = queue.items[0]["request"]["messages"][0]["content"]
     assert "Read-only diagnostics are unavailable" in prompt
     assert "callback offline" not in prompt
-    volume = store.list_entities(StorageVolume)[0]
-    store.update(
-        StorageVolume,
-        volume.id,
-        {"received_at": utc_now() - timedelta(seconds=61)},
-        expected_revision=volume.revision,
+    volume = (await store.list_entities(StorageVolume))[0]
+    (
+        await store.update(
+            StorageVolume,
+            volume.id,
+            {"received_at": utc_now() - timedelta(seconds=61)},
+            expected_revision=volume.revision,
+        )
     )
-    stale = client.get("/api/v1/storage", headers=AUTH).json()["volumes"][0]
+    stale = (await client.get("/api/v1/storage", headers=AUTH)).json()["volumes"][0]
     assert stale["stale"] is True
     assert stale["state"] == "warning"
 
 
-def test_configured_runtime_failure_stays_retryable(tmp_path):
-    client, store = setup(tmp_path)
+async def test_configured_runtime_failure_stays_retryable(tmp_path):
+    client, store = await setup(tmp_path)
     created = enroll(client)
     source = created["source"]
-    client.patch(
-        f"/api/v1/storage/sources/{source['id']}",
-        headers=AUTH,
-        json={"expected_revision": source["revision"], "enabled": True},
+    (
+        await client.patch(
+            f"/api/v1/storage/sources/{source['id']}",
+            headers=AUTH,
+            json={"expected_revision": source["revision"], "enabled": True},
+        )
     )
-    profile = store.get(ProviderProfile, "storage-provider")
-    store.update(
-        ProviderProfile,
-        profile.id,
-        {"enabled": False},
-        expected_revision=profile.revision,
+    profile = await store.get(ProviderProfile, "storage-provider")
+    (
+        await store.update(
+            ProviderProfile,
+            profile.id,
+            {"enabled": False},
+            expected_revision=profile.revision,
+        )
     )
     sender = {"Authorization": "Bearer " + created["token"]}
     assert (
-        client.post("/api/v1/storage/events", headers=sender, json=event()).status_code
-        == 202
-    )
-    dashboard = client.get("/api/v1/storage", headers=AUTH).json()
+        await client.post("/api/v1/storage/events", headers=sender, json=event())
+    ).status_code == 202
+    dashboard = (await client.get("/api/v1/storage", headers=AUTH)).json()
     assert dashboard["incidents"][0]["dispatch_status"] == "failed"
     assert dashboard["dispatches"][0]["status"] == "failed"
-    assert store.count(ChatSession) == 0
-    disabled = store.get(ProviderProfile, "storage-provider")
-    store.update(
-        ProviderProfile,
-        disabled.id,
-        {"enabled": True},
-        expected_revision=disabled.revision,
+    assert (await store.count(ChatSession)) == 0
+    disabled = await store.get(ProviderProfile, "storage-provider")
+    (
+        await store.update(
+            ProviderProfile,
+            disabled.id,
+            {"enabled": True},
+            expected_revision=disabled.revision,
+        )
     )
     dispatch_id = dashboard["dispatches"][0]["id"]
-    retried = client.post(
+    retried = await client.post(
         f"/api/v1/storage/dispatches/{dispatch_id}/retry", headers=AUTH
     )
     assert retried.status_code == 200, retried.text
     assert retried.json()["status"] == "queued"
-    assert store.count(ChatSession) == 1
-    chat = store.list_entities(ChatSession)[0]
-    queue = store.get(ChatQueue, "chat-queue-" + chat.id)
+    assert (await store.count(ChatSession)) == 1
+    chat = (await store.list_entities(ChatSession))[0]
+    queue = await store.get(ChatQueue, "chat-queue-" + chat.id)
     items = [dict(item) for item in queue.items]
     items[0].update(status="needs_review", detail="configured runtime failed")
-    store.update(
-        ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+    (
+        await store.update(
+            ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+        )
     )
-    surfaced = client.get("/api/v1/storage", headers=AUTH).json()["dispatches"][0]
+    surfaced = (await client.get("/api/v1/storage", headers=AUTH)).json()["dispatches"][
+        0
+    ]
     assert surfaced["queue_status"] == "needs_review"
     assert surfaced["queue_detail"] == "configured runtime failed"
+
+
+pytestmark = pytest.mark.anyio

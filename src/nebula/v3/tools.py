@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import resolve_workspace
+
 from .diagnostics import record_caught_exception
 
 import asyncio
@@ -693,15 +697,14 @@ class StoreToolLedger:
         )
         try:
             if self.enforce_run_budget:
-                call = await asyncio.to_thread(self.store.reserve_tool_call, proposed)
+                call = await self.store.reserve_tool_call(proposed)
                 if not self._same_intent(call, proposed):
                     raise ToolBrokerError(
                         "idempotency key was reused for a different request"
                     )
             else:
-                call = await asyncio.to_thread(self.store.create, proposed)
-            await asyncio.to_thread(
-                self.store.append_event,
+                call = await self.store.create(proposed)
+            await self.store.append_event(
                 invocation.run_id,
                 "tool.proposed",
                 {"tool_call": call.model_dump(mode="json")},
@@ -717,9 +720,7 @@ class StoreToolLedger:
                 caught_error,
                 stage="tools",
             )
-            existing = await asyncio.to_thread(
-                self.store.get, PersistedToolCall, call_id
-            )
+            existing = await self.store.get(PersistedToolCall, call_id)
             if not self._same_intent(existing, proposed):
                 raise ToolBrokerError(
                     "idempotency key was reused for a different request"
@@ -754,8 +755,7 @@ class StoreToolLedger:
             ToolCallStatus.CANCELLED,
         }:
             changes["completed_at"] = utc_now()
-        updated, _ = await asyncio.to_thread(
-            self.store.update_with_event,
+        updated, _ = await self.store.update_with_event(
             PersistedToolCall,
             call.id,
             changes,
@@ -776,7 +776,7 @@ class StoreToolLedger:
     ) -> Approval:
         approval_id = str(uuid5(NAMESPACE_URL, f"nebula:approval:{call.id}"))
         try:
-            approval = await asyncio.to_thread(self.store.get, Approval, approval_id)
+            approval = await self.store.get(Approval, approval_id)
         except NotFoundError as caught_error:
             record_caught_exception(
                 "runtime",
@@ -807,9 +807,8 @@ class StoreToolLedger:
                 policy_rationale=decision.reason,
                 requested_by=invocation.requested_by,
             )
-            approval = await asyncio.to_thread(self.store.create, approval)
-            await asyncio.to_thread(
-                self.store.append_event,
+            approval = await self.store.create(approval)
+            await self.store.append_event(
                 call.run_id,
                 "approval.requested",
                 {"approval": approval.model_dump(mode="json")},
@@ -825,11 +824,10 @@ class StoreToolLedger:
         return approval
 
     async def get_approval(self, approval_id: str) -> Approval:
-        return await asyncio.to_thread(self.store.get, Approval, approval_id)
+        return await self.store.get(Approval, approval_id)
 
     async def expire_approval(self, approval: Approval) -> Approval:
-        updated, _ = await asyncio.to_thread(
-            self.store.update_with_event,
+        updated, _ = await self.store.update_with_event(
             Approval,
             approval.id,
             {
@@ -1494,9 +1492,7 @@ class StoreToolEvidenceRecorder:
             },
         )
         try:
-            await asyncio.to_thread(
-                self.store.create_many, [*artifact_entities, evidence]
-            )
+            await self.store.create_many([*artifact_entities, evidence])
         except Exception as caught_error:
             record_caught_exception(
                 "runtime",
@@ -1571,16 +1567,14 @@ def register_artifact_retrieval_tools(
     common_output = {"type": "object", "additionalProperties": True}
 
     async def tool_search(invocation: ToolInvocation) -> dict[str, Any]:
-        return await asyncio.to_thread(
-            output_service.search,
+        return await output_service.search(
             engagement_id=invocation.engagement_id,
             owner_id=invocation.run_id,
             **invocation.arguments,
         )
 
     async def tool_read(invocation: ToolInvocation) -> dict[str, Any]:
-        return await asyncio.to_thread(
-            output_service.read,
+        return await output_service.read(
             engagement_id=invocation.engagement_id,
             owner_id=invocation.run_id,
             **invocation.arguments,
@@ -1761,7 +1755,7 @@ class ToolBroker:
         policy_engine: PolicyEngine,
         runner: SandboxRunner,
         ledger: ToolLedger,
-        workspace_resolver: Callable[[str], Path],
+        workspace_resolver: (MaybeAsync[[str], Path]),
         dns_resolver: Callable[[str], Awaitable[list[str]]] | None = None,
         evidence_recorder: ToolEvidenceRecorder | None = None,
         auto_approve: bool = False,
@@ -1785,14 +1779,14 @@ class ToolBroker:
         ):
             return
 
-        def save() -> None:
+        async def save() -> None:
             from .butler_recovery import record_subagent_start_failure
 
-            with ledger.store.transaction(immediate=True) as transaction:
-                record_subagent_start_failure(transaction, call, error)
+            async with ledger.store.transaction(immediate=True) as transaction:
+                (await record_subagent_start_failure(transaction, call, error))
 
         try:
-            await asyncio.to_thread(save)
+            await save()
         except Exception as exc:
             record_caught_exception(
                 "runtime",
@@ -2145,7 +2139,7 @@ class ToolBroker:
         self, invocation: ToolInvocation, spec: ToolSpec, scope: ScopePolicy
     ) -> ToolInvocation:
         workspace = (
-            self.workspace_resolver(invocation.engagement_id)
+            (await resolve_workspace(self.workspace_resolver, invocation.engagement_id))
             .expanduser()
             .resolve(strict=True)
         )

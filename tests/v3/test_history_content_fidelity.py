@@ -6,7 +6,11 @@ must survive into later turns, compaction and context-length recovery, and a
 text-only model must receive stored images as text rather than image parts.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import base64
 import hashlib
 
@@ -72,14 +76,14 @@ def _provider_factory(profile: ProviderProfile) -> ModelProvider:
     return provider
 
 
-def _image_block(
+async def _image_block(
     store: NebulaStore,
     artifacts: ArtifactStore,
     engagement_id: str,
     name: str,
     salt: int = 0,
 ) -> dict[str, object]:
-    original = store.create(
+    original = await store.create(
         artifacts.put_bytes(
             _PNG + bytes([salt]),
             engagement_id=engagement_id,
@@ -89,7 +93,7 @@ def _image_block(
             metadata={"sensitive": True, "chat_image_original": True},
         )
     )
-    preview = store.create(
+    preview = await store.create(
         artifacts.put_bytes(
             _PNG + bytes([salt]),
             engagement_id=engagement_id,
@@ -109,11 +113,11 @@ def _image_block(
     }
 
 
-def _image_session(
+async def _image_session(
     store: NebulaStore, artifacts: ArtifactStore, profile_id: str, images: int
 ) -> tuple[Engagement, ChatSession]:
-    engagement = store.create(Engagement(id="eng-images", name="Images"))
-    session = store.create(
+    engagement = await store.create(Engagement(id="eng-images", name="Images"))
+    session = await store.create(
         ChatSession(
             id="session-images",
             engagement_id=engagement.id,
@@ -125,28 +129,32 @@ def _image_session(
     )
     sequence = 0
     for index in range(images):
-        block = _image_block(
+        block = await _image_block(
             store, artifacts, engagement.id, f"shot-{index}.png", index
         )
         sequence += 1
-        store.create(
-            ChatMessage(
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.USER,
-                content=f"screenshot {index}",
-                content_blocks=[block],
+        (
+            await store.create(
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.USER,
+                    content=f"screenshot {index}",
+                    content_blocks=[block],
+                )
             )
         )
         sequence += 1
-        store.create(
-            ChatMessage(
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=ChatRole.ASSISTANT,
-                content=f"noted {index}",
+        (
+            await store.create(
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.ASSISTANT,
+                    content=f"noted {index}",
+                )
             )
         )
     return engagement, session
@@ -156,18 +164,18 @@ def _placeholder(name: str) -> str:
     return f"[image: {name} omitted: this model does not accept images]"
 
 
-def test_text_only_switch_replaces_history_images_with_placeholders(tmp_path):
+async def test_text_only_switch_replaces_history_images_with_placeholders(tmp_path):
     store = NebulaStore(tmp_path / "switch-images.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    engagement = store.create(Engagement(id="eng-switch", name="Switch"))
-    store.create(_provider_profile("vision", vision=True))
-    store.create(_provider_profile("text-only", vision=False))
+    engagement = await store.create(Engagement(id="eng-switch", name="Switch"))
+    (await store.create(_provider_profile("vision", vision=True)))
+    (await store.create(_provider_profile("text-only", vision=False)))
     service = ChatService(
         store, provider_factory=_provider_factory, artifact_store=artifacts
     )
-    block = _image_block(store, artifacts, engagement.id, "login-page.png")
+    block = await _image_block(store, artifacts, engagement.id, "login-page.png")
 
-    first = service.prepare(
+    first = await service.prepare(
         ChatCompletionRequest(
             provider_id="vision",
             engagement_id=engagement.id,
@@ -184,10 +192,10 @@ def test_text_only_switch_replaces_history_images_with_placeholders(tmp_path):
     sent = first.model_request.messages[0].content
     assert isinstance(sent, list)
     assert [part["type"] for part in sent] == ["text", "image"]
-    completion = asyncio.run(service.complete(first))
-    session = store.get(ChatSession, completion.session_id)
+    completion = await service.complete(first)
+    session = await store.get(ChatSession, completion.session_id)
 
-    preflight = service.runtime_switch_preflight(
+    preflight = await service.runtime_switch_preflight(
         session.id,
         ChatRuntimeSwitchPreflightRequest(
             provider_id="text-only",
@@ -199,8 +207,8 @@ def test_text_only_switch_replaces_history_images_with_placeholders(tmp_path):
     assert preflight.compatible is True
 
     # A client that replays the whole transcript, stored image included.
-    stored = service.session_messages(session.id)
-    replayed = service.prepare(
+    stored = await service.session_messages(session.id)
+    replayed = await service.prepare(
         ChatCompletionRequest(
             provider_id="text-only",
             engagement_id=engagement.id,
@@ -225,10 +233,10 @@ def test_text_only_switch_replaces_history_images_with_placeholders(tmp_path):
         stored[1].content,
         "Summarise what the page showed.",
     ]
-    asyncio.run(service.complete(replayed))
+    (await service.complete(replayed))
 
     # The web client sends only the new message for an existing conversation.
-    follow_up = service.prepare(
+    follow_up = await service.prepare(
         ChatCompletionRequest(
             provider_id="text-only",
             engagement_id=engagement.id,
@@ -244,41 +252,47 @@ def test_text_only_switch_replaces_history_images_with_placeholders(tmp_path):
     )
     assert messages[-1].content == "Now summarise our findings."
     # The stored transcript keeps the image itself for a later vision model.
-    assert service.session_messages(session.id)[0].content_blocks[0].type == "image"
+    assert (await service.session_messages(session.id))[0].content_blocks[
+        0
+    ].type == "image"
 
     # A new image sent to the text-only model is still refused.
     with pytest.raises(ChatConfigurationError, match="not verified for vision input"):
-        service.prepare(
-            ChatCompletionRequest(
-                provider_id="text-only",
-                engagement_id=engagement.id,
-                session_id=session.id,
-                include_knowledge=False,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "And this one?",
-                        "content_blocks": [
-                            _image_block(
-                                store, artifacts, engagement.id, "second.png", 9
-                            )
-                        ],
-                    }
-                ],
+        (
+            await service.prepare(
+                ChatCompletionRequest(
+                    provider_id="text-only",
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    include_knowledge=False,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "And this one?",
+                            "content_blocks": [
+                                (
+                                    await _image_block(
+                                        store, artifacts, engagement.id, "second.png", 9
+                                    )
+                                )
+                            ],
+                        }
+                    ],
+                )
             )
         )
 
 
-def test_image_history_counts_toward_compaction(tmp_path):
+async def test_image_history_counts_toward_compaction(tmp_path):
     store = NebulaStore(tmp_path / "image-budget.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    profile = store.create(_provider_profile("vision", vision=True))
-    engagement, session = _image_session(store, artifacts, profile.id, images=3)
+    profile = await store.create(_provider_profile("vision", vision=True))
+    engagement, session = await _image_session(store, artifacts, profile.id, images=3)
     service = ChatService(
         store, provider_factory=_provider_factory, artifact_store=artifacts
     )
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -289,7 +303,7 @@ def test_image_history_counts_toward_compaction(tmp_path):
     )
 
     assert prepared.context_snapshot is not None
-    assert store.list_entities(ContextSnapshot, limit=10)
+    assert await store.list_entities(ContextSnapshot, limit=10)
     limits = resolve_context_limits(profile, model="model-a")
     assert estimate_model_request(prepared.model_request) <= limits.input_capacity
     # Only the current message fits beside the images, so the memory of the
@@ -299,19 +313,19 @@ def test_image_history_counts_toward_compaction(tmp_path):
     assert current.endswith("Compare the three screenshots.")
 
 
-def test_switch_preflight_estimates_history_images_for_the_target_model(tmp_path):
+async def test_switch_preflight_estimates_history_images_for_the_target_model(tmp_path):
     store = NebulaStore(tmp_path / "switch-estimate.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    store.create(_provider_profile("vision", vision=True))
-    store.create(_provider_profile("vision-b", vision=True))
-    store.create(_provider_profile("text-only", vision=False))
-    _, session = _image_session(store, artifacts, "vision", images=3)
+    (await store.create(_provider_profile("vision", vision=True)))
+    (await store.create(_provider_profile("vision-b", vision=True)))
+    (await store.create(_provider_profile("text-only", vision=False)))
+    _, session = await _image_session(store, artifacts, "vision", images=3)
     service = ChatService(
         store, provider_factory=_provider_factory, artifact_store=artifacts
     )
 
-    def preflight(target: str):
-        return service.runtime_switch_preflight(
+    async def preflight(target: str):
+        return await service.runtime_switch_preflight(
             session.id,
             ChatRuntimeSwitchPreflightRequest(
                 provider_id=target,
@@ -321,8 +335,8 @@ def test_switch_preflight_estimates_history_images_for_the_target_model(tmp_path
             ),
         )
 
-    to_vision = preflight("vision-b")
-    to_text = preflight("text-only")
+    to_vision = await preflight("vision-b")
+    to_text = await preflight("text-only")
 
     # Three images are sent to a vision model at the same per-image reserve the
     # request capacity check charges, so the switch must offer compaction.
@@ -335,14 +349,14 @@ def test_switch_preflight_estimates_history_images_for_the_target_model(tmp_path
     assert to_text.requires_compaction_confirmation is False
 
 
-def test_selected_context_survives_followups(tmp_path):
+async def test_selected_context_survives_followups(tmp_path):
     store = NebulaStore(tmp_path / "selected-followup.db")
-    engagement = store.create(Engagement(id="eng-selected", name="Selected"))
-    profile = store.create(_profile(local=True))
+    engagement = await store.create(Engagement(id="eng-selected", name="Selected"))
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
     service = ChatService(store, provider_factory=lambda _: provider)
 
-    first = service.prepare(
+    first = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -352,14 +366,14 @@ def test_selected_context_survives_followups(tmp_path):
         )
     )
     assert "BEGIN SELECTED CONTEXT" in str(first.model_request.messages[-1].content)
-    completion = asyncio.run(service.complete(first))
+    completion = await service.complete(first)
     session_id = completion.session_id
-    stored = service.session_messages(session_id)
+    stored = await service.session_messages(session_id)
     # The durable transcript keeps the operator's words; the attachment stays
     # in metadata.
     assert stored[0].content == "Is this comparison safe?"
 
-    second = service.prepare(
+    second = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -379,7 +393,7 @@ def test_selected_context_survives_followups(tmp_path):
 
     # A client replaying the transcript sends the operator's words, not the
     # envelope, and still matches the durable history.
-    replayed = service.prepare(
+    replayed = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -398,9 +412,9 @@ def test_selected_context_survives_followups(tmp_path):
     ]
 
 
-def test_selected_context_survives_context_length_recovery(tmp_path):
+async def test_selected_context_survives_context_length_recovery(tmp_path):
     store = NebulaStore(tmp_path / "selected-recovery.db")
-    engagement = store.create(Engagement(id="eng-recovery", name="Recovery"))
+    engagement = await store.create(Engagement(id="eng-recovery", name="Recovery"))
     payload = _profile(local=False, permits_sensitive_data=True).model_dump(
         mode="python"
     )
@@ -427,13 +441,13 @@ def test_selected_context_survives_context_length_recovery(tmp_path):
             }
         ],
     }
-    profile = store.create(ProviderProfile.model_validate(payload))
+    profile = await store.create(ProviderProfile.model_validate(payload))
     provider = ContextRejectingProvider(profile.id)
     provider.config.default_model = "author/model-a"
     provider.config.model_allowlist = ["author/model-a"]
     service = ChatService(store, provider_factory=lambda _: provider)
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -449,7 +463,7 @@ def test_selected_context_survives_context_length_recovery(tmp_path):
     async def collect_stream():
         return [item async for item in _admitted_stream(service, prepared)]
 
-    assert asyncio.run(collect_stream())[-1][0] == "done"
+    assert (await collect_stream())[-1][0] == "done"
     assert provider.normal_attempts == 2
     retried = next(
         request
@@ -461,11 +475,11 @@ def test_selected_context_survives_context_length_recovery(tmp_path):
     assert "ADMIN_TOKEN" in last
 
 
-def test_compaction_summarises_selected_context_of_archived_messages(tmp_path):
+async def test_compaction_summarises_selected_context_of_archived_messages(tmp_path):
     store = NebulaStore(tmp_path / "selected-compaction.db")
-    engagement = store.create(Engagement(id="eng-compact", name="Compact"))
-    profile = store.create(_profile(local=True))
-    session = store.create(
+    engagement = await store.create(Engagement(id="eng-compact", name="Compact"))
+    profile = await store.create(_profile(local=True))
+    session = await store.create(
         ChatSession(
             id="session-compact",
             engagement_id=engagement.id,
@@ -475,27 +489,29 @@ def test_compaction_summarises_selected_context_of_archived_messages(tmp_path):
         )
     )
     snippet = "SESSION_SECRET = 'rotate-me'  # hard-coded in settings.py"
-    store.create_many(
-        [
-            ChatMessage(
-                engagement_id=engagement.id,
-                session_id=session.id,
-                sequence=index + 1,
-                role=ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT,
-                content=f"review-{index} " + "finding " * 300,
-                metadata=(
-                    {"context_attachments": [_attachment(snippet)]}
-                    if index == 0
-                    else {}
-                ),
-            )
-            for index in range(12)
-        ]
+    (
+        await store.create_many(
+            [
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    sequence=index + 1,
+                    role=ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT,
+                    content=f"review-{index} " + "finding " * 300,
+                    metadata=(
+                        {"context_attachments": [_attachment(snippet)]}
+                        if index == 0
+                        else {}
+                    ),
+                )
+                for index in range(12)
+            ]
+        )
     )
     provider = FakeProvider(profile.id, local=True)
     service = ChatService(store, provider_factory=lambda _: provider)
 
-    prepared = service.prepare(
+    prepared = await service.prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id=engagement.id,
@@ -524,3 +540,6 @@ def _no_real_provider(monkeypatch):
         raise AssertionError("tests pass their own provider factory")
 
     monkeypatch.setattr(chat_module, "provider_from_profile", refuse)
+
+
+pytestmark = pytest.mark.anyio

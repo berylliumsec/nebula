@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import async_any
+
+from .async_utils import async_done_callback
+
 import asyncio
 from collections import deque
 from typing import Any
@@ -67,7 +71,7 @@ class DelegatedMissionService:
         self._harness_costs: dict[str, tuple[int, float]] = {}
 
     async def startup(self) -> None:
-        for run in self.store.iter_readable_entities(AgentRun):
+        async for run in self.store.iter_readable_entities(AgentRun):
             if (
                 run.metadata.get("supervisor_mode") == "conversation"
                 and run.status not in _TERMINAL_RUNS
@@ -120,12 +124,12 @@ class DelegatedMissionService:
         harness_service_tier: str | None = None,
         retry_of_run_id: str | None = None,
     ) -> AgentRun:
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         if not objective.strip():
             raise MissionConfigurationError("mission objective cannot be empty")
         prompt = self._prompt(objective, stages)
         if backend == RunBackend.NATIVE:
-            profile = self.store.get(ProviderProfile, provider_id or "")
+            profile = await self.store.get(ProviderProfile, provider_id or "")
             if not profile.tools_verified_for(model):
                 raise MissionConfigurationError(
                     "supervisor delegation requires verified tool calling for the selected model"
@@ -156,7 +160,7 @@ class DelegatedMissionService:
                 raise MissionConfigurationError(
                     "harness Mission subagents require a provider and model"
                 )
-            session, turn, harness_turn = self.harness.prepare_chat(
+            session, turn, harness_turn = await self.harness.prepare_chat(
                 engagement_id=engagement_id,
                 profile_id=harness_profile_id or "",
                 model=model,
@@ -176,7 +180,7 @@ class DelegatedMissionService:
                     "max_active": budget.max_concurrency,
                 },
             )
-        run = self.store.create(
+        run = await self.store.create(
             AgentRun(
                 id=str(uuid4()),
                 engagement_id=engagement_id,
@@ -219,38 +223,44 @@ class DelegatedMissionService:
                 },
             )
         )
-        self.store.create(
-            Task(
-                id=f"supervisor-{run.id}",
-                engagement_id=engagement_id,
-                run_id=run.id,
-                specialist_role="supervisor",
-                title="Mission supervisor",
-                instructions=objective,
-                status=TaskStatus.RUNNING,
-                started_at=run.started_at,
-                metadata={"chat_session_id": session.id},
+        (
+            await self.store.create(
+                Task(
+                    id=f"supervisor-{run.id}",
+                    engagement_id=engagement_id,
+                    run_id=run.id,
+                    specialist_role="supervisor",
+                    title="Mission supervisor",
+                    instructions=objective,
+                    status=TaskStatus.RUNNING,
+                    started_at=run.started_at,
+                    metadata={"chat_session_id": session.id},
+                )
             )
         )
-        self.store.append_event(
-            run.id,
-            "run.started",
-            {"summary": "Mission supervisor started."},
-            actor_id="system",
+        (
+            await self.store.append_event(
+                run.id,
+                "run.started",
+                {"summary": "Mission supervisor started."},
+                actor_id="system",
+            )
         )
-        self.store.append_event(
-            run.id,
-            "task.started",
-            {
-                "task_id": f"supervisor-{run.id}",
-                "summary": "Mission supervisor started.",
-            },
-            actor_id="system",
+        (
+            await self.store.append_event(
+                run.id,
+                "task.started",
+                {
+                    "task_id": f"supervisor-{run.id}",
+                    "summary": "Mission supervisor started.",
+                },
+                actor_id="system",
+            )
         )
         if harness_turn is None:
-            self.chat.start_provider_turn(prepared)
+            (await self.chat.start_provider_turn(prepared))
         else:
-            self.harness.start_chat_turn(harness_turn.id)
+            (await self.harness.start_chat_turn(harness_turn.id))
         self._watch(run.id)
         return run
 
@@ -267,20 +277,24 @@ class DelegatedMissionService:
         )
         self._watchers[run_id] = task
         task.add_done_callback(
-            lambda done: (
-                self._watchers.pop(run_id, None)
-                if self._watchers.get(run_id) is done
-                else None
+            async_done_callback(
+                lambda done: (
+                    self._watchers.pop(run_id, None)
+                    if self._watchers.get(run_id) is done
+                    else None
+                )
             )
         )
 
-    def _children(self, root_session_id: str) -> list[tuple[ChatSubagent, str | None]]:
+    async def _children(
+        self, root_session_id: str
+    ) -> list[tuple[ChatSubagent, str | None]]:
         queue: deque[tuple[str, str | None]] = deque([(root_session_id, None)])
         seen = {root_session_id}
         result: list[tuple[ChatSubagent, str | None]] = []
         while queue:
             session_id, parent_id = queue.popleft()
-            for child in self.store.find_entities(
+            for child in await self.store.find_entities(
                 ChatSubagent, {"parent_session_id": session_id}
             ):
                 if child.child_session_id in seen:
@@ -290,13 +304,13 @@ class DelegatedMissionService:
                 queue.append((child.child_session_id, child.id))
         return result
 
-    def _sync(
+    async def _sync(
         self, run: AgentRun
     ) -> tuple[AgentRun, ChatTurn, list[tuple[ChatSubagent, str | None]]]:
         session_id = str(run.metadata["supervisor_chat_session_id"])
         root_turn_id = str(run.metadata["supervisor_chat_turn_id"])
-        root_turn = self.store.get(ChatTurn, root_turn_id)
-        children = self._children(session_id)
+        root_turn = await self.store.get(ChatTurn, root_turn_id)
+        children = await self._children(session_id)
         for child, parent_id in children:
             task_id = f"mission-child-{child.id}"
             status = {
@@ -318,32 +332,39 @@ class DelegatedMissionService:
                 "metadata": child_metadata,
             }
             try:
-                task = self.store.get(Task, task_id)
+                task = await self.store.get(Task, task_id)
             except NotFoundError:
                 # diagnostic-expected: the first projection creates this child task.
-                self.store.create(
-                    Task(
-                        id=task_id,
-                        engagement_id=run.engagement_id,
-                        run_id=run.id,
-                        parent_task_id=f"mission-child-{parent_id}"
-                        if parent_id
-                        else f"supervisor-{run.id}",
-                        specialist_role="subagent",
-                        title=child.name,
-                        instructions=child.task,
-                        started_at=child.started_at,
-                        status=status,
-                        completed_at=child.finished_at,
-                        metadata=child_metadata,
+                (
+                    await self.store.create(
+                        Task(
+                            id=task_id,
+                            engagement_id=run.engagement_id,
+                            run_id=run.id,
+                            parent_task_id=f"mission-child-{parent_id}"
+                            if parent_id
+                            else f"supervisor-{run.id}",
+                            specialist_role="subagent",
+                            title=child.name,
+                            instructions=child.task,
+                            started_at=child.started_at,
+                            status=status,
+                            completed_at=child.finished_at,
+                            metadata=child_metadata,
+                        )
                     )
                 )
-                self.store.append_event(
-                    run.id,
-                    "task.started",
-                    {"task_id": task_id, "summary": f"Subagent {child.name} started."},
-                    actor_id="system",
-                    idempotency_key=f"delegated:{task_id}:started",
+                (
+                    await self.store.append_event(
+                        run.id,
+                        "task.started",
+                        {
+                            "task_id": task_id,
+                            "summary": f"Subagent {child.name} started.",
+                        },
+                        actor_id="system",
+                        idempotency_key=f"delegated:{task_id}:started",
+                    )
                 )
                 if status in {
                     TaskStatus.COMPLETE,
@@ -351,27 +372,8 @@ class DelegatedMissionService:
                     TaskStatus.CANCELLED,
                     TaskStatus.BLOCKED,
                 }:
-                    self.store.append_event(
-                        run.id,
-                        f"task.{status.value}",
-                        {
-                            "task_id": task_id,
-                            "summary": (
-                                child.result
-                                or child.error
-                                or f"Subagent {child.name} {status.value}."
-                            )[:4_000],
-                        },
-                        actor_id="system",
-                        idempotency_key=f"delegated:{task_id}:{status.value}",
-                    )
-            else:
-                if task.status != status or task.metadata != child_metadata:
-                    self.store.update(
-                        Task, task.id, child_changes, expected_revision=task.revision
-                    )
-                    if task.status != status:
-                        self.store.append_event(
+                    (
+                        await self.store.append_event(
                             run.id,
                             f"task.{status.value}",
                             {
@@ -385,7 +387,35 @@ class DelegatedMissionService:
                             actor_id="system",
                             idempotency_key=f"delegated:{task_id}:{status.value}",
                         )
-        supervisor = self.store.get(Task, f"supervisor-{run.id}")
+                    )
+            else:
+                if task.status != status or task.metadata != child_metadata:
+                    (
+                        await self.store.update(
+                            Task,
+                            task.id,
+                            child_changes,
+                            expected_revision=task.revision,
+                        )
+                    )
+                    if task.status != status:
+                        (
+                            await self.store.append_event(
+                                run.id,
+                                f"task.{status.value}",
+                                {
+                                    "task_id": task_id,
+                                    "summary": (
+                                        child.result
+                                        or child.error
+                                        or f"Subagent {child.name} {status.value}."
+                                    )[:4_000],
+                                },
+                                actor_id="system",
+                                idempotency_key=f"delegated:{task_id}:{status.value}",
+                            )
+                        )
+        supervisor = await self.store.get(Task, f"supervisor-{run.id}")
         supervisor_status = {
             ChatTurnStatus.COMPLETE: TaskStatus.COMPLETE,
             ChatTurnStatus.FAILED: TaskStatus.FAILED,
@@ -407,22 +437,24 @@ class DelegatedMissionService:
         ):
             supervisor_status = TaskStatus.RUNNING
         if supervisor.status != supervisor_status:
-            self.store.update(
-                Task,
-                supervisor.id,
-                {
-                    "status": supervisor_status,
-                    "completed_at": utc_now()
-                    if supervisor_status
-                    in {
-                        TaskStatus.COMPLETE,
-                        TaskStatus.FAILED,
-                        TaskStatus.CANCELLED,
-                        TaskStatus.BLOCKED,
-                    }
-                    else None,
-                },
-                expected_revision=supervisor.revision,
+            (
+                await self.store.update(
+                    Task,
+                    supervisor.id,
+                    {
+                        "status": supervisor_status,
+                        "completed_at": utc_now()
+                        if supervisor_status
+                        in {
+                            TaskStatus.COMPLETE,
+                            TaskStatus.FAILED,
+                            TaskStatus.CANCELLED,
+                            TaskStatus.BLOCKED,
+                        }
+                        else None,
+                    },
+                    expected_revision=supervisor.revision,
+                )
             )
             if supervisor_status in {
                 TaskStatus.COMPLETE,
@@ -430,25 +462,29 @@ class DelegatedMissionService:
                 TaskStatus.CANCELLED,
                 TaskStatus.BLOCKED,
             }:
-                self.store.append_event(
-                    run.id,
-                    f"task.{supervisor_status.value}",
-                    {
-                        "task_id": supervisor.id,
-                        "summary": f"Mission supervisor {supervisor_status.value}.",
-                    },
-                    actor_id="system",
-                    idempotency_key=f"delegated:{supervisor.id}:{supervisor_status.value}",
+                (
+                    await self.store.append_event(
+                        run.id,
+                        f"task.{supervisor_status.value}",
+                        {
+                            "task_id": supervisor.id,
+                            "summary": f"Mission supervisor {supervisor_status.value}.",
+                        },
+                        actor_id="system",
+                        idempotency_key=f"delegated:{supervisor.id}:{supervisor_status.value}",
+                    )
                 )
         completed = int(supervisor_status == TaskStatus.COMPLETE) + sum(
             child.status == ChatSubagentStatus.COMPLETED for child, _ in children
         )
         total = 1 + len(children)
-        waiting = root_turn.status == ChatTurnStatus.WAITING_APPROVAL or any(
-            self.store.get(ChatTurn, child.child_turn_id).status
-            == ChatTurnStatus.WAITING_APPROVAL
-            for child, _ in children
-            if child.child_turn_id and child.status == ChatSubagentStatus.RUNNING
+        waiting = root_turn.status == ChatTurnStatus.WAITING_APPROVAL or (
+            await async_any(
+                (await self.store.get(ChatTurn, child.child_turn_id)).status
+                == ChatTurnStatus.WAITING_APPROVAL
+                for child, _ in children
+                if child.child_turn_id and child.status == ChatSubagentStatus.RUNNING
+            )
         )
         metadata = {**run.metadata, "completed_tasks": completed, "total_tasks": total}
         run_status = RunStatus.WAITING_APPROVAL if waiting else RunStatus.RUNNING
@@ -462,12 +498,12 @@ class DelegatedMissionService:
         ):
             run_changes["status"] = run_status
         if run_changes:
-            run = self.store.update(
+            run = await self.store.update(
                 AgentRun, run.id, run_changes, expected_revision=run.revision
             )
         return run, root_turn, children
 
-    def _usage(
+    async def _usage(
         self, run: AgentRun, children: list[tuple[ChatSubagent, str | None]]
     ) -> tuple[int, float, int, int]:
         sessions = [
@@ -477,12 +513,14 @@ class DelegatedMissionService:
         tokens = calls = artifact_queries = 0
         cost = 0.0
         for session_id in sessions:
-            for turn in self.store.list_session_entities(ChatTurn, session_id):
+            for turn in await self.store.list_session_entities(ChatTurn, session_id):
                 tokens += turn.usage.total_tokens
                 calls += turn.execution_tool_calls
                 artifact_queries += turn.artifact_queries
                 if turn.provider_profile_id:
-                    profile = self.store.get(ProviderProfile, turn.provider_profile_id)
+                    profile = await self.store.get(
+                        ProviderProfile, turn.provider_profile_id
+                    )
                     cost += usage_cost_usd(
                         provider_from_profile(profile).config, turn.model, turn.usage
                     )
@@ -491,7 +529,7 @@ class DelegatedMissionService:
                         turn.harness_turn_id, (0, 0.0)
                     )
                     while True:
-                        activity = self.harness.activity_events(
+                        activity = await self.harness.activity_events(
                             turn.harness_turn_id, after_sequence=cursor
                         )
                         for event in activity.events:
@@ -510,11 +548,11 @@ class DelegatedMissionService:
     async def _run_watch(self, run_id: str) -> None:
         try:
             while True:
-                run = self.store.get(AgentRun, run_id)
+                run = await self.store.get(AgentRun, run_id)
                 if run.status in _TERMINAL_RUNS:
                     return
-                run, root_turn, children = self._sync(run)
-                tokens, cost, calls, artifact_queries = self._usage(run, children)
+                run, root_turn, children = await self._sync(run)
+                tokens, cost, calls, artifact_queries = await self._usage(run, children)
                 limit_reason = None
                 if (
                     run.budget.max_duration_seconds is not None
@@ -569,18 +607,20 @@ class DelegatedMissionService:
                         if children and not run.metadata.get("synthesis_started"):
                             await self._synthesize(run)
                             continue
-                        final_turn = self.store.get(
+                        final_turn = await self.store.get(
                             ChatTurn, str(run.metadata["supervisor_chat_turn_id"])
                         )
                         if final_turn.final_message_id:
-                            summary = self.store.get(
-                                ChatMessage, final_turn.final_message_id
+                            summary = (
+                                await self.store.get(
+                                    ChatMessage, final_turn.final_message_id
+                                )
                             ).content
                         else:
                             summary = (
                                 final_turn.content or "Mission supervisor completed."
                             )
-                        self._finish(run, RunStatus.COMPLETE, summary)
+                        (await self._finish(run, RunStatus.COMPLETE, summary))
                         return
                 await asyncio.sleep(0.25)
         except asyncio.CancelledError:
@@ -593,7 +633,7 @@ class DelegatedMissionService:
                 exc,
                 stage="mission-supervision",
             )
-            run = self.store.get(AgentRun, run_id)
+            run = await self.store.get(AgentRun, run_id)
             if run.status not in _TERMINAL_RUNS:
                 reason = "Mission tracking stopped unexpectedly. Review the saved state and retry."
                 try:
@@ -606,7 +646,7 @@ class DelegatedMissionService:
                         stop_error,
                         stage="mission-supervision",
                     )
-                    self._finish(run, RunStatus.INTERRUPTED, reason)
+                    (await self._finish(run, RunStatus.INTERRUPTED, reason))
 
     async def _synthesize(self, run: AgentRun) -> None:
         session_id = str(run.metadata["supervisor_chat_session_id"])
@@ -630,9 +670,9 @@ class DelegatedMissionService:
             turn = prepared.turn
             if turn is None:
                 raise ValueError("Mission synthesis turn was not persisted")
-            self.chat.start_provider_turn(prepared)
+            (await self.chat.start_provider_turn(prepared))
         else:
-            session, turn, harness_turn = self.harness.prepare_chat(
+            session, turn, harness_turn = await self.harness.prepare_chat(
                 engagement_id=run.engagement_id,
                 profile_id=run.harness_profile_id or "",
                 model=run.supervisor_model,
@@ -644,29 +684,32 @@ class DelegatedMissionService:
                     "remote_mcp_confirmed", False
                 ),
             )
-            self.harness.start_chat_turn(harness_turn.id)
-        current = self.store.get(AgentRun, run.id)
-        self.store.update(
-            AgentRun,
-            run.id,
-            {
-                "metadata": {
-                    **current.metadata,
-                    "synthesis_started": True,
-                    "supervisor_chat_turn_id": turn.id,
-                }
-            },
-            expected_revision=current.revision,
+            (await self.harness.start_chat_turn(harness_turn.id))
+        current = await self.store.get(AgentRun, run.id)
+        (
+            await self.store.update(
+                AgentRun,
+                run.id,
+                {
+                    "metadata": {
+                        **current.metadata,
+                        "synthesis_started": True,
+                        "supervisor_chat_turn_id": turn.id,
+                    }
+                },
+                expected_revision=current.revision,
+            )
         )
 
-    def _finish(self, run: AgentRun, status: RunStatus, summary: str) -> AgentRun:
-        latest = self.store.get(AgentRun, run.id)
+    async def _finish(self, run: AgentRun, status: RunStatus, summary: str) -> AgentRun:
+        latest = await self.store.get(AgentRun, run.id)
         if latest.status in _TERMINAL_RUNS:
             return latest
-        tokens, cost, calls, artifact_queries = self._usage(
-            latest, self._children(str(latest.metadata["supervisor_chat_session_id"]))
+        tokens, cost, calls, artifact_queries = await self._usage(
+            latest,
+            (await self._children(str(latest.metadata["supervisor_chat_session_id"]))),
         )
-        updated, _ = self.store.update_with_event(
+        updated, _ = await self.store.update_with_event(
             AgentRun,
             latest.id,
             {
@@ -699,19 +742,21 @@ class DelegatedMissionService:
     async def stop(
         self, run_id: str, *, reason: str, status: RunStatus = RunStatus.CANCELLED
     ) -> AgentRun:
-        run = self.store.get(AgentRun, run_id)
+        run = await self.store.get(AgentRun, run_id)
         if run.status in _TERMINAL_RUNS:
             return run
         for child, _ in reversed(
-            self._children(str(run.metadata["supervisor_chat_session_id"]))
+            (await self._children(str(run.metadata["supervisor_chat_session_id"])))
         ):
             if child.status == ChatSubagentStatus.RUNNING:
                 await self.chat.subagents.stop(child.id, reason=reason)
-        turn = self.store.get(ChatTurn, str(run.metadata["supervisor_chat_turn_id"]))
+        turn = await self.store.get(
+            ChatTurn, str(run.metadata["supervisor_chat_turn_id"])
+        )
         if turn.status not in _TERMINAL_TURNS:
             if run.backend == RunBackend.HARNESS and turn.harness_turn_id:
                 await self.harness.cancel_turn(turn.harness_turn_id, reason=reason)
             else:
                 await self.chat.stop_provider_turn(turn.id)
-        self._sync(self.store.get(AgentRun, run_id))
-        return self._finish(run, status, reason)
+        (await self._sync((await self.store.get(AgentRun, run_id))))
+        return await self._finish(run, status, reason)

@@ -13,7 +13,7 @@ class ProviderPrivacyViolation(ValueError):
     """A provider would cross the engagement's declared data boundary."""
 
 
-def validate_engagement_provider_privacy(
+async def validate_engagement_provider_privacy(
     store: NebulaStore,
     engagement: Engagement,
     provider: ModelProvider,
@@ -23,7 +23,7 @@ def validate_engagement_provider_privacy(
     if not engagement.scope_policy_id:
         return
     try:
-        policy = store.get(ScopePolicy, engagement.scope_policy_id)
+        policy = await store.get(ScopePolicy, engagement.scope_policy_id)
     except NotFoundError as exc:
         record_caught_exception(
             "providers",

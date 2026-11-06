@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -321,7 +325,7 @@ def _mcp_profile() -> McpServerProfile:
     )
 
 
-def test_codex_probe_discovers_selectable_models():
+async def test_codex_probe_discovers_selectable_models():
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
         adapter = FixtureCodexAdapter(rpc)
@@ -354,10 +358,10 @@ def test_codex_probe_discovers_selectable_models():
         assert rpc.calls[0][1]["capabilities"] == {"requestAttestation": False}
         assert rpc.closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_skills_use_app_server_catalog(tmp_path):
+async def test_codex_skills_use_app_server_catalog(tmp_path):
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
         profile = HarnessProfile(
@@ -372,10 +376,10 @@ def test_codex_skills_use_app_server_catalog(tmp_path):
         assert [method for method, _ in rpc.calls] == ["initialize", "skills/list"]
         assert rpc.closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_fork_uses_stored_turn_boundary(tmp_path):
+async def test_codex_fork_uses_stored_turn_boundary(tmp_path):
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
         profile = HarnessProfile(
@@ -398,10 +402,10 @@ def test_codex_fork_uses_stored_turn_boundary(tmp_path):
         }
         assert rpc.closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_probe_uses_structured_model_catalog_without_cli(monkeypatch):
+async def test_grok_probe_uses_structured_model_catalog_without_cli(monkeypatch):
     class StructuredRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             result = await super().request(method, params)
@@ -445,10 +449,10 @@ def test_grok_probe_uses_structured_model_catalog_without_cli(monkeypatch):
         assert options.default_reasoning_effort == "high"
         assert [item.id for item in options.reasoning_efforts] == ["high", "low"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_probe_negotiates_cached_token_without_credentials():
+async def test_grok_probe_negotiates_cached_token_without_credentials():
     async def scenario() -> None:
         rpc = FixtureGrokRpc()
         adapter = FixtureGrokAdapter(rpc)
@@ -475,10 +479,12 @@ def test_grok_probe_negotiates_cached_token_without_credentials():
         }
         assert rpc.closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_process_removes_host_command_and_workspace_tools(monkeypatch, tmp_path):
+async def test_grok_process_removes_host_command_and_workspace_tools(
+    monkeypatch, tmp_path
+):
     observed: dict[str, Any] = {}
 
     class Process:
@@ -508,7 +514,7 @@ def test_grok_process_removes_host_command_and_workspace_tools(monkeypatch, tmp_
         model="grok-test",
     )
 
-    rpc = asyncio.run(GrokAcpAdapter()._connect(profile, tmp_path, session))
+    rpc = await GrokAcpAdapter()._connect(profile, tmp_path, session)
 
     argv = observed["argv"]
     disallowed = argv[argv.index("--disallowed-tools") + 1].split(",")
@@ -520,7 +526,9 @@ def test_grok_process_removes_host_command_and_workspace_tools(monkeypatch, tmp_
     assert isinstance(rpc, _AcpRpc)
 
 
-def test_core_planned_grok_uses_private_home_and_no_native_tools(monkeypatch, tmp_path):
+async def test_core_planned_grok_uses_private_home_and_no_native_tools(
+    monkeypatch, tmp_path
+):
     observed: dict[str, Any] = {}
 
     class Process:
@@ -568,7 +576,7 @@ def test_core_planned_grok_uses_private_home_and_no_native_tools(monkeypatch, tm
         },
     )
 
-    asyncio.run(GrokAcpAdapter()._connect(profile, workspace, session))
+    (await GrokAcpAdapter()._connect(profile, workspace, session))
 
     argv = observed["argv"]
     assert "--always-approve" not in argv
@@ -612,7 +620,7 @@ def test_core_planned_grok_uses_private_home_and_no_native_tools(monkeypatch, tm
         {"externalCompat": {"cells": [{"enabled": True}]}},
     ],
 )
-def test_core_planned_grok_rejects_ambient_tool_sources(tmp_path, changed):
+async def test_core_planned_grok_rejects_ambient_tool_sources(tmp_path, changed):
     base = {
         "projectRoot": None,
         "mcpServers": [],
@@ -635,15 +643,15 @@ def test_core_planned_grok_rejects_ambient_tool_sources(tmp_path, changed):
     )
     executable.chmod(0o700)
     with pytest.raises(HarnessConfigurationError, match="ambient tools"):
-        asyncio.run(
-            GrokAcpAdapter._verify_plan_isolation(
+        (
+            await GrokAcpAdapter._verify_plan_isolation(
                 executable, tmp_path, {"GROK_HOME": str(tmp_path)}
             )
         )
 
 
 @pytest.mark.parametrize("unrestricted", [False, True])
-def test_grok_host_session_preserves_native_tools_and_user_bus(
+async def test_grok_host_session_preserves_native_tools_and_user_bus(
     monkeypatch, tmp_path, unrestricted
 ):
     observed: dict[str, Any] = {}
@@ -689,7 +697,7 @@ def test_grok_host_session_preserves_native_tools_and_user_bus(
         },
     )
 
-    asyncio.run(GrokAcpAdapter()._connect(profile, tmp_path, session))
+    (await GrokAcpAdapter()._connect(profile, tmp_path, session))
 
     assert "--disallowed-tools" not in observed["argv"]
     assert ("--always-approve" in observed["argv"]) is unrestricted
@@ -702,7 +710,9 @@ def test_grok_host_session_preserves_native_tools_and_user_bus(
     )
 
 
-def test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox(tmp_path):
+async def test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox(
+    tmp_path,
+):
     async def scenario() -> None:
         for execution_mode, bypass, expected_sandbox, expected_policy in (
             ("host", True, "danger-full-access", "never"),
@@ -752,10 +762,10 @@ def test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox(tmp_pa
             assert thread["approvalPolicy"] == expected_policy
             await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_normalizes_mode_plan_and_streamed_message():
+async def test_grok_connection_normalizes_mode_plan_and_streamed_message():
     async def scenario() -> None:
         rpc = FixtureGrokRpc()
 
@@ -782,10 +792,10 @@ def test_grok_connection_normalizes_mode_plan_and_streamed_message():
         await connection.interrupt()
         assert rpc.notifications == []
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_reuses_one_acp_transport_for_sequential_turns():
+async def test_grok_connection_reuses_one_acp_transport_for_sequential_turns():
     async def scenario() -> None:
         rpc = FixtureGrokRpc()
 
@@ -809,10 +819,10 @@ def test_grok_connection_reuses_one_acp_transport_for_sequential_turns():
         assert second[-1].message == "done"
         assert [method for method, _ in rpc.calls].count("session/prompt") == 2
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_carries_selected_skill_into_prompt():
+async def test_grok_connection_carries_selected_skill_into_prompt():
     async def scenario() -> None:
         rpc = FixtureGrokRpc()
 
@@ -842,10 +852,10 @@ def test_grok_connection_carries_selected_skill_into_prompt():
             {"type": "text", "text": "$review inspect the project"}
         ]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_discards_session_load_replay_before_new_turn():
+async def test_grok_connection_discards_session_load_replay_before_new_turn():
     async def scenario() -> None:
         rpc = FixtureGrokRpc()
         await rpc.events.put(
@@ -879,10 +889,10 @@ def test_grok_connection_discards_session_load_replay_before_new_turn():
         ]
         assert events[-1].message == "done"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_bounds_verbose_tool_titles_before_activity_ingestion():
+async def test_grok_connection_bounds_verbose_tool_titles_before_activity_ingestion():
     class VerboseToolRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             if method != "session/prompt":
@@ -921,10 +931,10 @@ def test_grok_connection_bounds_verbose_tool_titles_before_activity_ingestion():
         assert len(tool.tool_name) == 1_000
         assert tool.tool_name.startswith("Execute `")
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_separates_pre_tool_commentary_from_final_answer():
+async def test_grok_connection_separates_pre_tool_commentary_from_final_answer():
     class CommentaryRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             if method != "session/prompt":
@@ -988,10 +998,10 @@ def test_grok_connection_separates_pre_tool_commentary_from_final_answer():
         ]
         assert events[-1].message == "The result is clear."
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_keeps_each_pre_tool_commentary_as_a_spaced_item():
+async def test_grok_connection_keeps_each_pre_tool_commentary_as_a_spaced_item():
     class SpacedCommentaryRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             if method != "session/prompt":
@@ -1057,10 +1067,10 @@ def test_grok_connection_keeps_each_pre_tool_commentary_as_a_spaced_item():
         ]
         assert events[-1].message == "Finished."
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_connection_keeps_final_answer_before_session_metadata():
+async def test_grok_connection_keeps_final_answer_before_session_metadata():
     class MetadataAfterAnswerRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             if method != "session/prompt":
@@ -1113,7 +1123,7 @@ def test_grok_connection_keeps_final_answer_before_session_metadata():
         )
         assert not any(event.stream == "commentary" for event in events)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_goal_snapshots_are_normalized_only_from_advertised_state():
@@ -1136,7 +1146,7 @@ def test_goal_snapshots_are_normalized_only_from_advertised_state():
     assert _harness_goal_snapshot({"status": "running"}) is None
 
 
-def test_claude_probe_offers_stable_model_aliases(monkeypatch):
+async def test_claude_probe_offers_stable_model_aliases(monkeypatch):
     monkeypatch.setattr(
         ClaudeAgentSdkAdapter,
         "_sdk",
@@ -1149,13 +1159,13 @@ def test_claude_probe_offers_stable_model_aliases(monkeypatch):
         default_model="custom-alias",
     )
 
-    health = asyncio.run(ClaudeAgentSdkAdapter().probe(profile, CredentialStore()))
+    health = await ClaudeAgentSdkAdapter().probe(profile, CredentialStore())
 
     assert health.healthy is True
     assert health.capabilities.models == ["custom-alias", "sonnet", "opus"]
 
 
-def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
+async def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
         adapter = FixtureCodexAdapter(rpc)
@@ -1272,12 +1282,12 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert "untrusted" not in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("control_assistant", [False, True])
 @pytest.mark.parametrize("resumed", [False, True])
-def test_codex_project_never_policy_keeps_butler_change_callable(
+async def test_codex_project_never_policy_keeps_butler_change_callable(
     tmp_path, control_assistant: bool, resumed: bool
 ):
     async def scenario() -> None:
@@ -1338,11 +1348,11 @@ def test_codex_project_never_policy_keeps_butler_change_callable(
         assert connection.approval_policy == "never"
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("mode", ["plan", "default"])
-def test_codex_turn_controls_use_structured_skill_and_planning_mode(mode: str):
+async def test_codex_turn_controls_use_structured_skill_and_planning_mode(mode: str):
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
 
@@ -1393,10 +1403,10 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode(mode: str):
             "path": "/workspace/.codex/skills/review/SKILL.md",
         }
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_connection_discards_session_resume_replay_before_new_turn():
+async def test_codex_connection_discards_session_resume_replay_before_new_turn():
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
         await rpc.events.put(
@@ -1430,10 +1440,10 @@ def test_codex_connection_discards_session_resume_replay_before_new_turn():
         )
         assert events[-1].message == "done"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
+async def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
     class PhaseRpc(FixtureCodexRpc):
         def __init__(self, server_name: str) -> None:
             super().__init__()
@@ -1627,10 +1637,10 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
         )
         assert trusted_rpc.responses == [(92, {"action": "accept", "content": {}})]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_reasoning_summary_uses_streams_and_authoritative_completion():
+async def test_codex_reasoning_summary_uses_streams_and_authoritative_completion():
     class ReasoningRpc(FixtureCodexRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             self.calls.append((method, params))
@@ -1778,10 +1788,10 @@ def test_codex_reasoning_summary_uses_streams_and_authoritative_completion():
         assert "PRIVATE SIGNATURE" not in serialized
         assert "PRIVATE ENCRYPTED CONTENT" not in serialized
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_reasoning_summary_preserves_long_stream_without_snapshot():
+async def test_codex_reasoning_summary_preserves_long_stream_without_snapshot():
     class StreamOnlyRpc(FixtureCodexRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             self.calls.append((method, params))
@@ -1849,10 +1859,10 @@ def test_codex_reasoning_summary_preserves_long_stream_without_snapshot():
         assert completed.payload["reasoning_summary_source"] == "stream"
         assert completed.payload["reasoning_summary_text"] == "s" * 270_000
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_reasoning_summary_rejects_malformed_private_payloads():
+async def test_codex_reasoning_summary_rejects_malformed_private_payloads():
     class MalformedSummaryRpc(FixtureCodexRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             self.calls.append((method, params))
@@ -1920,10 +1930,10 @@ def test_codex_reasoning_summary_rejects_malformed_private_payloads():
         assert "MALFORMED PRIVATE VALUE" not in serialized
         assert "PRIVATE CONTENT" not in serialized
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_probe_rejects_unverified_reasoning_summary_baseline():
+async def test_codex_probe_rejects_unverified_reasoning_summary_baseline():
     class OldCodexRpc(FixtureCodexRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             if method == "initialize":
@@ -1978,10 +1988,10 @@ def test_codex_probe_rejects_unverified_reasoning_summary_baseline():
         assert [method for method, _ in open_rpc.calls] == ["initialize"]
         assert open_rpc.closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_rpc_rejects_malformed_and_uncorrelated_messages():
+async def test_codex_rpc_rejects_malformed_and_uncorrelated_messages():
     async def scenario() -> None:
         rpc = _CodexRpc()
         try:
@@ -1998,10 +2008,10 @@ def test_codex_rpc_rejects_malformed_and_uncorrelated_messages():
         else:
             raise AssertionError("uncorrelated app-server response was accepted")
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_rpc_reader_survives_one_invalid_frame():
+async def test_codex_rpc_reader_survives_one_invalid_frame():
     class FixtureStdout:
         def __init__(self) -> None:
             self.lines = iter(
@@ -2029,10 +2039,10 @@ def test_codex_rpc_reader_survives_one_invalid_frame():
         assert isinstance(closed, Exception)
         assert "transport closed" in str(closed)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_acp_rpc_reports_its_own_transport_identity():
+async def test_grok_acp_rpc_reports_its_own_transport_identity():
     class ClosedStdout:
         async def read(self, _size: int = -1) -> bytes:
             return b""
@@ -2049,10 +2059,10 @@ def test_grok_acp_rpc_reports_its_own_transport_identity():
         assert str(closed) == "Grok ACP transport closed"
         assert "Codex" not in str(closed)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_rpc_malformed_frame_fails_an_affected_request_without_stopping_reader():
+async def test_codex_rpc_malformed_frame_fails_an_affected_request_without_stopping_reader():
     async def scenario() -> None:
         rpc = _CodexRpc()
         pending = asyncio.get_running_loop().create_future()
@@ -2065,7 +2075,7 @@ def test_codex_rpc_malformed_frame_fails_an_affected_request_without_stopping_re
         rejected = await rpc.events.get()
         assert isinstance(rejected, Exception)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def test_codex_gateway_thread_disables_vendor_execution_and_environment():
@@ -2121,7 +2131,7 @@ def test_codex_process_enables_goals_for_the_goal_command():
 
 @pytest.mark.parametrize("resumed", [False, True])
 @pytest.mark.parametrize("unrestricted", [False, True])
-def test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox(
+async def test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox(
     tmp_path, resumed, unrestricted
 ):
     async def scenario() -> None:
@@ -2218,7 +2228,7 @@ def test_codex_core_planned_turn_uses_only_gateway_and_read_only_sandbox(
                 )
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
     process = _codex_process_overrides(HarnessNativeCapabilities(), core_planned=True)
     assert "features.goals=false" in process
@@ -2279,7 +2289,7 @@ def _goal_connection(rpc: GoalRpc) -> CodexAppServerConnection:
     )
 
 
-def test_codex_turn_follows_the_turns_codex_starts_for_an_active_goal():
+async def test_codex_turn_follows_the_turns_codex_starts_for_an_active_goal():
     rpc = GoalRpc(
         [
             _goal_answer("turn-1", "alpha"),
@@ -2298,7 +2308,7 @@ def test_codex_turn_follows_the_turns_codex_starts_for_an_active_goal():
         connection = _goal_connection(rpc)
         return [event async for event in connection.run_turn("go", model="gpt-test")]
 
-    events = asyncio.run(asyncio.wait_for(scenario(), timeout=5))
+    events = await asyncio.wait_for(scenario(), timeout=5)
 
     assert [method for method, _ in rpc.calls] == ["turn/start"]
     assert [e.external_turn_id for e in events if e.type == "started"] == [
@@ -2317,7 +2327,7 @@ def test_codex_turn_follows_the_turns_codex_starts_for_an_active_goal():
     assert events[-1].external_turn_id == "turn-2"
 
 
-def test_codex_goal_turn_completes_when_codex_does_not_continue(monkeypatch):
+async def test_codex_goal_turn_completes_when_codex_does_not_continue(monkeypatch):
     monkeypatch.setattr(harness_module, "CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS", 0.01)
     rpc = GoalRpc(
         [
@@ -2331,14 +2341,14 @@ def test_codex_goal_turn_completes_when_codex_does_not_continue(monkeypatch):
         connection = _goal_connection(rpc)
         return [event async for event in connection.run_turn("go", model="gpt-test")]
 
-    events = asyncio.run(asyncio.wait_for(scenario(), timeout=5))
+    events = await asyncio.wait_for(scenario(), timeout=5)
 
     assert events[-1].type == "completed"
     assert events[-1].message == "alpha"
     assert events[-1].external_turn_id == "turn-1"
 
 
-def test_codex_goal_paused_between_turns_ends_the_wait_at_once():
+async def test_codex_goal_paused_between_turns_ends_the_wait_at_once():
     rpc = GoalRpc(
         [
             _goal_answer("turn-1", "alpha"),
@@ -2353,7 +2363,7 @@ def test_codex_goal_paused_between_turns_ends_the_wait_at_once():
         return [event async for event in connection.run_turn("go", model="gpt-test")]
 
     # Far below the 15 s continuation wait.
-    events = asyncio.run(asyncio.wait_for(scenario(), timeout=2))
+    events = await asyncio.wait_for(scenario(), timeout=2)
 
     assert events[-1].type == "completed"
     assert events[-1].message == "alpha"
@@ -2364,7 +2374,7 @@ def test_codex_goal_paused_between_turns_ends_the_wait_at_once():
 
 
 @pytest.mark.parametrize("started", [None, "turn-2"])
-def test_codex_stop_between_goal_turns_pauses_the_goal(started):
+async def test_codex_stop_between_goal_turns_pauses_the_goal(started):
     rpc = GoalRpc(
         [
             _goal_update("turn-1", "active"),
@@ -2390,7 +2400,7 @@ def test_codex_stop_between_goal_turns_pauses_the_goal(started):
             rpc.running_turns["thread-goal"] = started
         await connection.interrupt()
 
-    asyncio.run(asyncio.wait_for(scenario(), timeout=5))
+    (await asyncio.wait_for(scenario(), timeout=5))
 
     stop_calls = rpc.calls[1:]
     assert stop_calls[0] == (
@@ -2404,7 +2414,7 @@ def test_codex_stop_between_goal_turns_pauses_the_goal(started):
     )
 
 
-def test_codex_rpc_records_the_running_turn_of_each_thread():
+async def test_codex_rpc_records_the_running_turn_of_each_thread():
     async def scenario() -> None:
         rpc = _CodexRpc()
         await rpc._dispatch(
@@ -2418,7 +2428,7 @@ def test_codex_rpc_records_the_running_turn_of_each_thread():
         # Recording never swallows the notification.
         assert rpc.events.qsize() == 2
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 class StreamEvent:
@@ -2540,7 +2550,7 @@ class FakeClaudeClient:
         self.disconnected = True
 
 
-def test_claude_turn_does_not_scan_workspace(tmp_path, monkeypatch):
+async def test_claude_turn_does_not_scan_workspace(tmp_path, monkeypatch):
     class WriteClient(FakeClaudeClient):
         async def receive_response(self) -> AsyncIterator[Any]:
             yield AssistantMessage(
@@ -2571,10 +2581,12 @@ def test_claude_turn_does_not_scan_workspace(tmp_path, monkeypatch):
         assert file_change.item_kind == "file_change"
         assert not any(event.item_id == "workspace-changes" for event in events)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_reasoning_text_is_discarded_and_future_messages_are_notices(tmp_path):
+async def test_claude_reasoning_text_is_discarded_and_future_messages_are_notices(
+    tmp_path,
+):
     class ReasoningClient:
         def __init__(self) -> None:
             self.pending_turns: asyncio.Queue[str] = asyncio.Queue()
@@ -2618,7 +2630,7 @@ def test_claude_reasoning_text_is_discarded_and_future_messages_are_notices(tmp_
         assert notice.payload == {"message_type": "FutureClaudeMessage"}
         assert FutureClaudeMessage.raw not in serialized
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 class PermissionResultAllow:
@@ -2634,7 +2646,7 @@ class FakeHookMatcher:
         self.hooks = hooks
 
 
-def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
+async def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
     tmp_path, monkeypatch
 ):
     async def scenario() -> None:
@@ -2757,10 +2769,10 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         await connection.close()
         assert FakeClaudeClient.latest.disconnected is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_native_capabilities_exclude_project_files_and_shell(
+async def test_claude_native_capabilities_exclude_project_files_and_shell(
     tmp_path, monkeypatch
 ):
     async def scenario() -> None:
@@ -2862,10 +2874,12 @@ def test_claude_native_capabilities_exclude_project_files_and_shell(
         assert observed_permissions[-1].vendor_name == "Skill"
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_host_execution_mode_keeps_native_project_tools(tmp_path, monkeypatch):
+async def test_claude_host_execution_mode_keeps_native_project_tools(
+    tmp_path, monkeypatch
+):
     async def scenario() -> None:
         sdk = SimpleNamespace(
             ClaudeAgentOptions=FakeClaudeOptions,
@@ -2939,10 +2953,10 @@ def test_claude_host_execution_mode_keeps_native_project_tools(tmp_path, monkeyp
         assert read_result["hookSpecificOutput"]["permissionDecision"] == "ask"
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_gateway_is_required_and_ready_before_the_session_opens(
+async def test_claude_gateway_is_required_and_ready_before_the_session_opens(
     tmp_path, monkeypatch
 ):
     async def scenario() -> None:
@@ -3002,11 +3016,11 @@ def test_claude_gateway_is_required_and_ready_before_the_session_opens(
         assert "Read" in options["disallowed_tools"]
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("resumed", [False, True])
-def test_grok_receives_project_gateway_on_create_and_resume(tmp_path, resumed):
+async def test_grok_receives_project_gateway_on_create_and_resume(tmp_path, resumed):
     async def scenario():
         rpc = FixtureGrokRpc()
         profile = HarnessProfile(
@@ -3076,10 +3090,10 @@ def test_grok_receives_project_gateway_on_create_and_resume(tmp_path, resumed):
             assert "fixture-token" not in prompt
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_tool_identity_failure_and_nested_command_receipt():
+async def test_grok_tool_identity_failure_and_nested_command_receipt():
     from nebula.v3.harnesses import _grok_tool_details
 
     start = _grok_tool_details(
@@ -3161,11 +3175,11 @@ def test_grok_tool_identity_failure_and_nested_command_receipt():
         assert tools[1].item_status == "failed"
         assert "search deadline exceeded" in tools[1].summary
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize("stop_reason", ["end_turn", "cancelled"])
-def test_grok_thinking_episodes_drain_completion_race(stop_reason):
+async def test_grok_thinking_episodes_drain_completion_race(stop_reason):
     class ThinkingRpc(FixtureGrokRpc):
         async def request(self, method, params):
             if method != "session/prompt":
@@ -3244,7 +3258,7 @@ def test_grok_thinking_episodes_drain_completion_race(stop_reason):
             == "thinking-1"
         )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -3256,7 +3270,7 @@ def test_grok_thinking_episodes_drain_completion_race(stop_reason):
         ({}, False),
     ],
 )
-def test_codex_health_checks_authentication(account, healthy):
+async def test_codex_health_checks_authentication(account, healthy):
     async def scenario():
         rpc = FixtureCodexRpc()
         original = rpc.request
@@ -3276,7 +3290,7 @@ def test_codex_health_checks_authentication(account, healthy):
         if account.get("requiresOpenaiAuth") and not account.get("account"):
             assert "codex login" in result.detail
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
@@ -3290,7 +3304,7 @@ def test_codex_health_checks_authentication(account, healthy):
     ],
 )
 @pytest.mark.parametrize("cancel", [False, True])
-def test_harness_startup_deadline_and_cancellation_close_transport(
+async def test_harness_startup_deadline_and_cancellation_close_transport(
     tmp_path, monkeypatch, kind, method, cancel
 ):
     import nebula.v3.harnesses as module
@@ -3341,10 +3355,10 @@ def test_harness_startup_deadline_and_cancellation_close_transport(
             await asyncio.wait_for(task, 1)
         assert rpc.closed
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_stdio_accepts_large_thread_response(tmp_path):
+async def test_codex_stdio_accepts_large_thread_response(tmp_path):
     async def scenario():
         executable = tmp_path / "codex-fixture"
         executable.write_text(
@@ -3366,14 +3380,14 @@ def test_codex_stdio_accepts_large_thread_response(tmp_path):
         finally:
             await rpc.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
     "kind,key",
     [(HarnessKind.CODEX_APP_SERVER, "CODEX_HOME"), (HarnessKind.GROK_ACP, "GROK_HOME")],
 )
-def test_account_homes_isolate_spawn_without_changing_workspace(
+async def test_account_homes_isolate_spawn_without_changing_workspace(
     tmp_path, monkeypatch, kind, key
 ):
     from nebula.v3.harnesses import _harness_environment
@@ -3412,7 +3426,7 @@ def test_account_homes_isolate_spawn_without_changing_workspace(
         default = HarnessProfile(name="default", kind=kind, executable=str(executable))
         assert key not in _harness_environment(default)
 
-    asyncio.run(scenario())
+    (await scenario())
     assert [kwargs["env"][key] for _, kwargs in observed] == [
         str(tmp_path / "personal"),
         str(tmp_path / "work"),
@@ -3440,7 +3454,7 @@ def test_missing_account_home_fails_before_launch(tmp_path):
         _harness_environment(profile)
 
 
-def test_grok_catalog_uses_selected_account_for_command_and_cache(
+async def test_grok_catalog_uses_selected_account_for_command_and_cache(
     tmp_path, monkeypatch
 ):
     from nebula.v3.harnesses import _grok_model_catalog
@@ -3487,11 +3501,11 @@ def test_grok_catalog_uses_selected_account_for_command_and_cache(
             assert models == ["grok-build"]
             assert options[0].default_reasoning_effort == account
 
-    asyncio.run(scenario())
+    (await scenario())
     assert observed == [str(tmp_path / name) for name in ("personal", "work")]
 
 
-def test_grok_connection_stays_usable_after_a_rejected_mode():
+async def test_grok_connection_stays_usable_after_a_rejected_mode():
     class RejectingModeRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             if method == "session/set_mode":
@@ -3526,10 +3540,10 @@ def test_grok_connection_stays_usable_after_a_rejected_mode():
         assert events[-1].message == "done"
         assert [method for method, _ in rpc.calls].count("session/prompt") == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_connection_clears_active_when_the_query_is_rejected(tmp_path):
+async def test_claude_connection_clears_active_when_the_query_is_rejected(tmp_path):
     class RejectingClient(FakeClaudeClient):
         async def query(self, prompt: str) -> None:
             raise RuntimeError("Claude stdin closed")
@@ -3552,10 +3566,10 @@ def test_claude_connection_clears_active_when_the_query_is_rejected(tmp_path):
 
         assert connection.active is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_open_is_bounded_by_the_startup_deadline(tmp_path, monkeypatch):
+async def test_claude_open_is_bounded_by_the_startup_deadline(tmp_path, monkeypatch):
     class HangingClient(FakeClaudeClient):
         async def connect(self) -> None:
             await asyncio.Event().wait()
@@ -3600,10 +3614,10 @@ def test_claude_open_is_bounded_by_the_startup_deadline(tmp_path, monkeypatch):
                 timeout=2,
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_session_listing_is_bounded_when_the_app_server_stalls(
+async def test_codex_session_listing_is_bounded_when_the_app_server_stalls(
     tmp_path, monkeypatch
 ):
     class StallingRpc(FixtureCodexRpc):
@@ -3629,10 +3643,12 @@ def test_codex_session_listing_is_bounded_when_the_app_server_stalls(
             )
         assert rpc.closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_session_listing_timeout_kills_the_child_process(tmp_path, monkeypatch):
+async def test_grok_session_listing_timeout_kills_the_child_process(
+    tmp_path, monkeypatch
+):
     executable = tmp_path / "grok"
     executable.write_text("#!/bin/sh\nexec sleep 30\n", encoding="utf-8")
     executable.chmod(0o700)
@@ -3666,10 +3682,12 @@ def test_grok_session_listing_timeout_kills_the_child_process(tmp_path, monkeypa
         # The stalled `grok sessions list` child must not outlive the request.
         assert created[0].returncode is not None
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_grok_session_listing_uses_acp_timestamp_and_skips_cli(tmp_path, monkeypatch):
+async def test_grok_session_listing_uses_acp_timestamp_and_skips_cli(
+    tmp_path, monkeypatch
+):
     class ListingRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             result = await super().request(method, params)
@@ -3712,10 +3730,10 @@ def test_grok_session_listing_uses_acp_timestamp_and_skips_cli(tmp_path, monkeyp
         ]
         assert rpc.closed is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_rpc_reader_failure_ends_the_transport():
+async def test_codex_rpc_reader_failure_ends_the_transport():
     class FailingStdout:
         async def read(self, _size: int = -1) -> bytes:
             raise OSError("stdout read failed")
@@ -3761,4 +3779,7 @@ def test_codex_rpc_reader_failure_ends_the_transport():
         with pytest.raises(HarnessTransportError):
             await asyncio.wait_for(rpc.request("thread/list", {}), timeout=1)
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

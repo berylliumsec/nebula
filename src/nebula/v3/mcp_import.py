@@ -225,7 +225,7 @@ class _Draft:
     existing_revision: int | None = None
 
 
-def import_mcp_config(
+async def import_mcp_config(
     request: McpImportRequest,
     *,
     store: NebulaStore,
@@ -239,7 +239,7 @@ def import_mcp_config(
     # Server names are matched without regard to case, so ``GitHub`` in a
     # later file updates the ``github`` profile instead of duplicating it.
     existing: dict[str, list[McpServerProfile]] = {}
-    for profile in all_mcp_profiles(store):
+    for profile in await all_mcp_profiles(store):
         existing.setdefault(profile.name.casefold(), []).append(profile)
 
     drafts: list[_Draft] = []
@@ -309,7 +309,7 @@ def import_mcp_config(
 
     if not request.dry_run:
         for draft in drafts:
-            _apply(draft, request, store, credential_store)
+            (await _apply(draft, request, store, credential_store))
 
     return McpImportReport(
         dry_run=request.dry_run,
@@ -955,7 +955,7 @@ def _describe(values: Mapping[str, Any]) -> dict[str, str]:
     return {name: value for name, value in fields.items() if value is not None}
 
 
-def _apply(
+async def _apply(
     draft: _Draft,
     request: McpImportRequest,
     store: NebulaStore,
@@ -990,10 +990,10 @@ def _apply(
             }
         }
         if draft.existing_id is None:
-            created = store.create(McpServerProfile.model_validate(fields))
+            created = await store.create(McpServerProfile.model_validate(fields))
             entry.profile_id = created.id
             return
-        current = store.get(McpServerProfile, draft.existing_id)
+        current = await store.get(McpServerProfile, draft.existing_id)
         # Update and replace were both planned against one revision; a server
         # edited since then is reported instead of silently overwritten.
         if current.revision != draft.existing_revision:
@@ -1010,17 +1010,21 @@ def _apply(
                 "metadata": {**current.metadata, **fields["metadata"]},
             }
         )
-        store.replace(
-            McpServerProfile,
-            current.id,
-            replacement,
-            expected_revision=current.revision,
+        (
+            await store.replace(
+                McpServerProfile,
+                current.id,
+                replacement,
+                expected_revision=current.revision,
+            )
         )
         entry.profile_id = current.id
-        _release_orphaned(
-            previous_refs - _owned_references(replacement),
-            store,
-            credential_store,
+        (
+            await _release_orphaned(
+                previous_refs - _owned_references(replacement),
+                store,
+                credential_store,
+            )
         )
     except Exception as exc:
         record_caught_exception(
@@ -1092,13 +1096,13 @@ def _owned_references(profile: McpServerProfile) -> set[str]:
     return {item for item in references if item.startswith(("vault:", "session:"))}
 
 
-def _release_orphaned(
+async def _release_orphaned(
     references: set[str], store: NebulaStore, credential_store: CredentialStore
 ) -> None:
     if not references:
         return
     in_use: set[str] = set()
-    for profile in all_mcp_profiles(store):
+    for profile in await all_mcp_profiles(store):
         in_use |= _owned_references(profile)
     for reference in references - in_use:
         try:
@@ -1107,12 +1111,14 @@ def _release_orphaned(
             pass
 
 
-def all_mcp_profiles(store: NebulaStore) -> list[McpServerProfile]:
+async def all_mcp_profiles(store: NebulaStore) -> list[McpServerProfile]:
     """Every saved MCP server profile, paged past the list limit."""
 
     profiles: list[McpServerProfile] = []
     while True:
-        batch = store.list_entities(McpServerProfile, offset=len(profiles), limit=1000)
+        batch = await store.list_entities(
+            McpServerProfile, offset=len(profiles), limit=1000
+        )
         profiles.extend(batch)
         if len(batch) < 1000:
             return profiles

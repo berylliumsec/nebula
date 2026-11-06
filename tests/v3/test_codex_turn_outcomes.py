@@ -7,6 +7,10 @@ Each test drives a real ``CodexAppServerConnection`` over a scripted stand-in fo
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -15,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.credentials import CredentialStore
@@ -224,14 +228,14 @@ class ScriptedCodexAdapter(HarnessAdapter):
         return []
 
 
-def _runtime(
+async def _runtime(
     tmp_path: Path, script: list[dict[str, Any]]
 ) -> tuple[
     NebulaStore, Engagement, HarnessProfile, ScriptedCodexAdapter, HarnessRuntimeService
 ]:
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = await store.create(
         HarnessProfile(
             id="harness-a",
             name="Codex fixture",
@@ -251,10 +255,10 @@ def _runtime(
     return store, engagement, profile, adapter, runtime
 
 
-def _stream_chat(
+async def _stream_chat(
     runtime: HarnessRuntimeService, engagement: Engagement, profile: HarnessProfile
 ) -> tuple[ChatTurn, HarnessTurn, list[HarnessEvent]]:
-    _, chat_turn, turn = runtime.prepare_chat(
+    _, chat_turn, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -268,14 +272,14 @@ def _stream_chat(
         stream: AsyncIterator[HarnessEvent] = runtime.stream_turn(turn.id)
         return [event async for event in stream]
 
-    events = asyncio.run(asyncio.wait_for(collect(), timeout=10))
+    events = await asyncio.wait_for(collect(), timeout=10)
     return chat_turn, turn, events
 
 
-def _assistant_messages(store: NebulaStore) -> list[ChatMessage]:
+async def _assistant_messages(store: NebulaStore) -> list[ChatMessage]:
     return [
         message
-        for message in store.list_entities(ChatMessage, limit=50)
+        for message in (await store.list_entities(ChatMessage, limit=50))
         if message.role.value == "assistant"
     ]
 
@@ -342,27 +346,29 @@ def test_codex_goal_run_joined_answers_over_limit_are_truncated_not_fatal():
     assert completed.payload["message_truncated"] is True
 
 
-def test_codex_oversize_answer_is_saved_as_a_bounded_chat_message(tmp_path):
-    store, engagement, profile, _, runtime = _runtime(
+async def test_codex_oversize_answer_is_saved_as_a_bounded_chat_message(tmp_path):
+    store, engagement, profile, _, runtime = await _runtime(
         tmp_path,
         [_agent_completed("msg-1", "A" * (MAX_NORMALIZED_TEXT + 1)), _turn_completed()],
     )
 
-    chat_turn, turn, events = _stream_chat(runtime, engagement, profile)
+    chat_turn, turn, events = await _stream_chat(runtime, engagement, profile)
 
     assert not any(event.type == "error" for event in events)
-    assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
-    saved = store.get(ChatTurn, chat_turn.id)
+    assert (await store.get(HarnessTurn, turn.id)).status == HarnessTurnStatus.COMPLETE
+    saved = await store.get(ChatTurn, chat_turn.id)
     assert saved.status.value == "complete"
-    [message] = _assistant_messages(store)
+    [message] = await _assistant_messages(store)
     assert saved.final_message_id == message.id
     assert len(message.content) <= MAX_NORMALIZED_TEXT
     assert message.content.startswith("A" * 100_000)
 
 
-def test_complete_owner_bounds_a_message_longer_than_chat_messages_allow(tmp_path):
-    store, engagement, profile, _, runtime = _runtime(tmp_path, [])
-    _, chat_turn, turn = runtime.prepare_chat(
+async def test_complete_owner_bounds_a_message_longer_than_chat_messages_allow(
+    tmp_path,
+):
+    store, engagement, profile, _, runtime = await _runtime(tmp_path, [])
+    _, chat_turn, turn = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -372,12 +378,12 @@ def test_complete_owner_bounds_a_message_longer_than_chat_messages_allow(tmp_pat
         mcp_server_ids=[],
     )
 
-    runtime._complete_owner(turn, "B" * 250_000, ChatTokenUsage())
+    (await runtime._complete_owner(turn, "B" * 250_000, ChatTokenUsage()))
 
-    [message] = _assistant_messages(store)
+    [message] = await _assistant_messages(store)
     assert len(message.content) <= MAX_NORMALIZED_TEXT
     assert message.content.startswith("B" * 100_000)
-    assert store.get(ChatTurn, chat_turn.id).final_message_id == message.id
+    assert (await store.get(ChatTurn, chat_turn.id)).final_message_id == message.id
 
 
 # --- CODEX-4: a failure after the final answer keeps the answer ---
@@ -410,14 +416,16 @@ def test_codex_failed_turn_after_final_answer_completes_with_the_answer():
     assert _HOOK_FAILURE["message"] in (warnings[-1].summary or "")
 
 
-def test_codex_failed_turn_after_final_answer_saves_the_answer(tmp_path):
-    store, engagement, profile, _, runtime = _runtime(tmp_path, _FAILED_AFTER_ANSWER)
+async def test_codex_failed_turn_after_final_answer_saves_the_answer(tmp_path):
+    store, engagement, profile, _, runtime = await _runtime(
+        tmp_path, _FAILED_AFTER_ANSWER
+    )
 
-    chat_turn, turn, events = _stream_chat(runtime, engagement, profile)
+    chat_turn, turn, events = await _stream_chat(runtime, engagement, profile)
 
-    assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
-    assert store.get(ChatTurn, chat_turn.id).status.value == "complete"
-    assert [message.content for message in _assistant_messages(store)] == [
+    assert (await store.get(HarnessTurn, turn.id)).status == HarnessTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, chat_turn.id)).status.value == "complete"
+    assert [message.content for message in (await _assistant_messages(store))] == [
         "Final report: 3 critical findings."
     ]
     assert any(
@@ -466,22 +474,22 @@ def test_codex_failed_turn_raises_a_turn_failure_with_codex_message(info, reason
         assert "compact" in str(error).lower()
 
 
-def test_codex_turn_failure_keeps_connection_and_maps_error_info(tmp_path):
+async def test_codex_turn_failure_keeps_connection_and_maps_error_info(tmp_path):
     usage_limit = _turn_error(
         "usageLimitExceeded", "You've hit your usage limit. Try again in 2 hours."
     )
-    store, engagement, profile, adapter, runtime = _runtime(
+    store, engagement, profile, adapter, runtime = await _runtime(
         tmp_path, [_turn_completed("failed", error=usage_limit)]
     )
 
-    _, turn, events = _stream_chat(runtime, engagement, profile)
+    _, turn, events = await _stream_chat(runtime, engagement, profile)
 
     error = events[-1]
     assert error.type == "error"
     assert error.message == usage_limit["message"]
     assert error.reason_code == "quota_exhausted"
     assert error.retryable is False
-    failed = store.get(HarnessTurn, turn.id)
+    failed = await store.get(HarnessTurn, turn.id)
     assert failed.status == HarnessTurnStatus.INTERRUPTED
     assert failed.error == usage_limit["message"]
     # The Codex process is healthy: the next turn reuses it instead of respawning.
@@ -490,18 +498,18 @@ def test_codex_turn_failure_keeps_connection_and_maps_error_info(tmp_path):
     assert failed.harness_session_id in runtime._connections
 
 
-def test_codex_turn_failure_reason_reaches_the_chat_stream_error_frame(tmp_path):
+async def test_codex_turn_failure_reason_reaches_the_chat_stream_error_frame(tmp_path):
     overloaded = _turn_error(
         "serverOverloaded",
         "Selected model is at capacity. Please try a different model.",
     )
-    store, engagement, profile, adapter, runtime = _runtime(
+    store, engagement, profile, adapter, runtime = await _runtime(
         tmp_path, [_turn_completed("failed", error=overloaded)]
     )
     app = create_app(store, auth_token="t", harness_runtime_service=runtime)
 
-    with TestClient(app) as client:
-        response = client.post(
+    async with TestClient(app) as client:
+        response = await client.post(
             "/api/v1/chat/completions",
             headers={"Authorization": "Bearer t"},
             json={
@@ -702,8 +710,8 @@ def test_codex_usage_is_turn_total_not_last_request():
     )
 
 
-def test_codex_mission_spend_counts_every_model_request(tmp_path):
-    store, engagement, profile, _, runtime = _runtime(tmp_path, _TURN_USAGE)
+async def test_codex_mission_spend_counts_every_model_request(tmp_path):
+    store, engagement, profile, _, runtime = await _runtime(tmp_path, _TURN_USAGE)
 
     async def scenario() -> AgentRun:
         run = await runtime.start_mission(
@@ -715,11 +723,11 @@ def test_codex_mission_spend_counts_every_model_request(tmp_path):
             budget=RunBudget(max_duration_seconds=10),
         )
         await runtime._mission_tasks[run.id]
-        finished = store.get(AgentRun, run.id)
+        finished = await store.get(AgentRun, run.id)
         await runtime.shutdown()
         return finished
 
-    finished = asyncio.run(asyncio.wait_for(scenario(), timeout=20))
+    finished = await asyncio.wait_for(scenario(), timeout=20)
 
     pricing = codex_model_pricing(MODEL)
     assert pricing is not None
@@ -775,3 +783,6 @@ def test_codex_distinct_agent_messages_are_separated_live():
 
     assert _live_text(events) == "I'll check the config.\n\nThe config enables TLS 1.0."
     assert events[-1].message == "The config enables TLS 1.0."
+
+
+pytestmark = pytest.mark.anyio

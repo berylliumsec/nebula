@@ -14,7 +14,6 @@ Core restart may run it again.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
@@ -112,17 +111,17 @@ def conversation_search_spec() -> ToolSpec:
     )
 
 
-def _latest_ready_snapshot(
+async def _latest_ready_snapshot(
     store: NebulaStore, session: ChatSession
 ) -> ContextSnapshot | None:
-    snapshots = ContextCompactor(store).snapshots(
+    snapshots = await ContextCompactor(store).snapshots(
         ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
     )
     ready = [item for item in snapshots if item.status == ContextSnapshotStatus.READY]
     return ready[-1] if ready else None
 
 
-def search_archived_conversation(
+async def search_archived_conversation(
     store: NebulaStore,
     session_id: str,
     query: str,
@@ -133,8 +132,8 @@ def search_archived_conversation(
 ) -> dict[str, Any]:
     """Rank one session's archived active messages against ``query``."""
 
-    session = store.get(ChatSession, session_id)
-    snapshot = _latest_ready_snapshot(store, session)
+    session = await store.get(ChatSession, session_id)
+    snapshot = await _latest_ready_snapshot(store, session)
     base: dict[str, Any] = {
         "tool": CONVERSATION_SEARCH_TOOL_NAME,
         "query": query,
@@ -164,7 +163,7 @@ def search_archived_conversation(
     archived = sorted(
         (
             message
-            for message in store.list_session_entities(ChatMessage, session.id)
+            for message in (await store.list_session_entities(ChatMessage, session.id))
             if (message.id in covered or session.backend.value == "harness")
             and not message_is_replaced(message)
         ),
@@ -240,7 +239,7 @@ class ConversationSearchTool(InvocationAnalysisTool):
             raise InvalidToolArguments(
                 "conversation.search reads only the conversation it was offered in"
             )
-        session = self.store.get(ChatSession, self.session_id)
+        session = await self.store.get(ChatSession, self.session_id)
         if session.engagement_id != invocation.engagement_id:
             raise InvalidToolArguments(
                 "conversation.search reads only the conversation it was offered in"
@@ -254,8 +253,7 @@ class ConversationSearchTool(InvocationAnalysisTool):
             dense = replace(dense, max_new=max(dense.max_new, SEARCH_DENSE_MAX_NEW))
         # Chunking, ranking and any embedding are CPU work; keep them off the
         # event loop that streams every other conversation.
-        return await asyncio.to_thread(
-            search_archived_conversation,
+        return await search_archived_conversation(
             self.store,
             self.session_id,
             query,

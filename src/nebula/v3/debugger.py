@@ -180,7 +180,7 @@ class DebugService:
     async def _start(
         self, engagement_id: str, request: DebugStartRequest
     ) -> DebugStartResponse:
-        source = self.workspace_service.download(engagement_id, request.path)
+        source = await self.workspace_service.download(engagement_id, request.path)
         try:
             digest = hashlib.sha256()
             while chunk := source.stream.read(64 * 1024):

@@ -1,6 +1,10 @@
 """Every Core-owned tool family uses the same actionable failure contract."""
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 from types import SimpleNamespace
 
@@ -136,12 +140,14 @@ def test_failure_with_large_offered_schema_keeps_usage_within_result_limit():
     assert len(json.dumps(failure, ensure_ascii=False).encode()) <= 8192
 
 
-def test_notebook_path_refusal_explains_actual_path_rule_before_execution(tmp_path):
-    store, project, notebooks = notebook_project(tmp_path)
+async def test_notebook_path_refusal_explains_actual_path_rule_before_execution(
+    tmp_path,
+):
+    store, project, notebooks = await notebook_project(tmp_path)
     runtime = NotebookMcpTools(store, notebooks)
-    runtime.register_profile(project.id)
+    (await runtime.register_profile(project.id))
     with pytest.raises(GuidedToolError) as caught:
-        asyncio.run(runtime.call_tool(project.id, "read", {"path": "../secret.ipynb"}))
+        (await runtime.call_tool(project.id, "read", {"path": "../secret.ipynb"}))
     snapshot = next(
         tool for tool in runtime.capabilities().tools if tool.name == "read"
     )
@@ -163,11 +169,11 @@ def test_notebook_path_refusal_explains_actual_path_rule_before_execution(tmp_pa
     assert "secret.ipynb" not in json.dumps(failure)
 
 
-def test_security_read_refusal_names_session_prerequisite():
+async def test_security_read_refusal_names_session_prerequisite():
     runtime = SecurityToolsRuntime.__new__(SecurityToolsRuntime)
     runtime._active = lambda _: None
     with pytest.raises(GuidedToolError) as caught:
-        asyncio.run(runtime.call_tool("project", "traffic", {}))
+        (await runtime.call_tool("project", "traffic", {}))
     snapshot = next(
         tool for tool in runtime.capabilities().tools if tool.name == "traffic"
     )
@@ -190,11 +196,13 @@ def test_security_read_refusal_names_session_prerequisite():
     assert "navigate" in failure["next_action"]
 
 
-def test_security_proxy_refusal_gives_specific_usage_with_uncertain_effects(tmp_path):
-    store, project, session = security_project(tmp_path)
+async def test_security_proxy_refusal_gives_specific_usage_with_uncertain_effects(
+    tmp_path,
+):
+    store, project, session = await security_project(tmp_path)
     runtime = SecurityToolsRuntime(store, StubSessions(session))
     with pytest.raises(GuidedToolError) as caught:
-        asyncio.run(runtime.call_tool(project.id, "upstream_proxy", {"enabled": True}))
+        (await runtime.call_tool(project.id, "upstream_proxy", {"enabled": True}))
     snapshot = next(
         tool for tool in runtime.capabilities().tools if tool.name == "upstream_proxy"
     )
@@ -247,9 +255,9 @@ def test_bounded_output_query_and_work_conflict_have_distinct_actions():
     assert "private concurrent item detail" not in json.dumps(work)
 
 
-def test_mcp_plugin_keeps_core_cause_without_exposing_raw_exception(tmp_path):
-    store, project, notebooks = notebook_project(tmp_path)
-    profile = NotebookMcpTools(store, notebooks).register_profile(project.id)
+async def test_mcp_plugin_keeps_core_cause_without_exposing_raw_exception(tmp_path):
+    store, project, notebooks = await notebook_project(tmp_path)
+    profile = await NotebookMcpTools(store, notebooks).register_profile(project.id)
     error = GuidedToolError(
         "secret path /private/file",
         code="notebook.path_invalid",
@@ -266,14 +274,12 @@ def test_mcp_plugin_keeps_core_cause_without_exposing_raw_exception(tmp_path):
 
     plugin = next(
         plugin
-        for plugin in build_mcp_tool_plugins(FailingService(), (profile,))
+        for plugin in (await build_mcp_tool_plugins(FailingService(), (profile,)))
         if plugin.snapshot.name == "read"
     )
-    result = asyncio.run(
-        plugin.execute(
-            SimpleNamespace(engagement_id=project.id, arguments={"path": "bad"}),
-            None,
-        )
+    result = await plugin.execute(
+        SimpleNamespace(engagement_id=project.id, arguments={"path": "bad"}),
+        None,
     )
     assert result.failure_error is error
     assert "secret" not in result.stderr
@@ -341,7 +347,7 @@ def test_failed_receipt_keeps_searchable_evidence_and_redacted_preview():
     assert failure["side_effects"] == "unknown"
 
 
-def test_gateway_preserves_guided_error_and_actual_offered_usage():
+async def test_gateway_preserves_guided_error_and_actual_offered_usage():
     schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}},
@@ -377,13 +383,11 @@ def test_gateway_preserves_guided_error_and_actual_offered_usage():
                 before_execution=True,
             )
 
-    response = asyncio.run(
-        HarnessRuntimeService._gateway_call(
-            Gateway(),
-            SimpleNamespace(id="session"),
-            "mcp_notebook_read",
-            {"path": "secret"},
-        )
+    response = await HarnessRuntimeService._gateway_call(
+        Gateway(),
+        SimpleNamespace(id="session"),
+        "mcp_notebook_read",
+        {"path": "secret"},
     )
     failure = response["structuredContent"]
     assert response["isError"] is True
@@ -393,10 +397,10 @@ def test_gateway_preserves_guided_error_and_actual_offered_usage():
     assert "private rejected path" not in json.dumps(failure)
 
 
-def test_real_gateway_mcp_dispatch_preserves_core_error_and_receipt(tmp_path):
+async def test_real_gateway_mcp_dispatch_preserves_core_error_and_receipt(tmp_path):
     async def scenario():
-        store, project, profile, mcp, _, runtime = harness_runtime(tmp_path)
-        _, _, turn = runtime.prepare_chat(
+        store, project, profile, mcp, _, runtime = await harness_runtime(tmp_path)
+        _, _, turn = await runtime.prepare_chat(
             engagement_id=project.id,
             profile_id=profile.id,
             model=None,
@@ -405,10 +409,10 @@ def test_real_gateway_mcp_dispatch_preserves_core_error_and_receipt(tmp_path):
             harness_session_id=None,
             mcp_server_ids=[mcp.id],
         )
-        session = store.get(HarnessSession, turn.harness_session_id)
+        session = await store.get(HarnessSession, turn.harness_session_id)
         selected = next(
             item["name"]
-            for item in runtime._gateway_catalog(session)["tools"]
+            for item in (await runtime._gateway_catalog(session))["tools"]
             if item["name"].endswith("read_file")
         )
 
@@ -436,9 +440,12 @@ def test_real_gateway_mcp_dispatch_preserves_core_error_and_receipt(tmp_path):
         assert failure["result_receipt"]["tool_call_id"]
         assert failure["result_receipt"]["artifact_id"]
         assert "private error detail" not in json.dumps(failure)
-        call = store.get(ToolCall, failure["result_receipt"]["tool_call_id"])
+        call = await store.get(ToolCall, failure["result_receipt"]["tool_call_id"])
         assert call.status == ToolCallStatus.FAILED
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

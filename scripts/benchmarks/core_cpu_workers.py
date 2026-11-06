@@ -56,7 +56,7 @@ def rss_bytes(pid):
     return 0
 
 
-def serve(args):
+async def serve(args):
     from datetime import datetime, timezone
     from fastapi import Depends, Header, HTTPException
     from keyring.backends.null import Keyring
@@ -86,7 +86,7 @@ def serve(args):
         raise ValueError("Require a newly created empty synthetic directory")
     store = NebulaStore(root / "core.db")
     fixed = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
-    project = store.create(
+    project = await store.create(
         Engagement(
             id="cpu-project",
             name="Synthetic CPU worker project",
@@ -111,7 +111,7 @@ def serve(args):
         )
         for i in range(48)
     ]
-    store.create_many(notes)
+    (await store.create_many(notes))
     credentials = CredentialStore(keyring_backend=Keyring())
     artifacts = ArtifactStore(root / "artifacts")
     pool = (
@@ -122,7 +122,7 @@ def serve(args):
     renders = ReportRenderService(
         store=store, artifact_store=artifacts, cpu_workers=pool
     )
-    profile = store.create(
+    profile = await store.create(
         HarnessProfile(
             id="inert-harness",
             name="Inert mixed-load harness",
@@ -202,7 +202,7 @@ def serve(args):
         execution_data_root=root / "execution",
     )
 
-    butler = ButlerCapabilities(
+    butler = await ButlerCapabilities.create(
         store, artifacts, project.id, work=app.state.control_assistant_work
     )
 
@@ -278,7 +278,7 @@ def serve(args):
         )
 
     @app.post("/__cpu_experiment__/seed", dependencies=[Depends(authorized)])
-    def seed(payload: dict):
+    async def seed(payload: dict):
         count = int(payload["count"])
         if not 1 <= count <= 128:
             raise HTTPException(400)
@@ -286,21 +286,23 @@ def serve(args):
         if size not in {"small", "large"}:
             raise HTTPException(400)
         identities = [f"{payload['prefix']}-{index}" for index in range(count)]
-        store.create_many(
-            [
-                Report(
-                    id=key,
-                    engagement_id=project.id,
-                    title=f"Synthetic report {key}",
-                    executive_summary="Saved CPU experiment",
-                    observation_ids=[
-                        n.id for n in notes[: (1 if size == "small" else 48)]
-                    ],
-                    created_at=fixed,
-                    updated_at=fixed,
-                )
-                for key in identities
-            ]
+        (
+            await store.create_many(
+                [
+                    Report(
+                        id=key,
+                        engagement_id=project.id,
+                        title=f"Synthetic report {key}",
+                        executive_summary="Saved CPU experiment",
+                        observation_ids=[
+                            n.id for n in notes[: (1 if size == "small" else 48)]
+                        ],
+                        created_at=fixed,
+                        updated_at=fixed,
+                    )
+                    for key in identities
+                ]
+            )
         )
         return identities
 
@@ -324,10 +326,18 @@ def serve(args):
         task.cancel()
         return {"cancel_requested": True}
 
-    uvicorn.run(
-        app, host=args.host, port=args.port, access_log=False, log_level="warning"
+    (
+        await uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=args.host,
+                port=args.port,
+                access_log=False,
+                log_level="warning",
+            )
+        ).serve()
     )
-    store.database.dispose()
+    (await store.database.dispose())
 
 
 async def drive(args, token, process):
@@ -696,7 +706,7 @@ async def drive(args, token, process):
         }
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--directory")
@@ -713,7 +723,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.serve:
-        return serve(args)
+        return await serve(args)
     address = ipaddress.ip_address(args.host)
     if not address.is_private or address.is_loopback or address.is_unspecified:
         parser.error("Use a private non-loopback test LAN address")
@@ -760,7 +770,7 @@ def main():
         with args.output.with_suffix(".log").open("w") as log:
             process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
             try:
-                result = asyncio.run(drive(args, token, process))
+                result = await drive(args, token, process)
             finally:
                 if process.poll() is None:
                     process.send_signal(signal.SIGINT)
@@ -792,4 +802,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

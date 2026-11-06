@@ -2071,6 +2071,35 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const bulkListReady = fullListProjectRef.current === engagement?.id && !loadingAllSessions;
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+  const pendingRuntimeSwitch = activeChatSession?.pendingRuntimeSwitch;
+  useEffect(() => {
+    if (!api || !sessionId || pendingRuntimeSwitch?.status !== "waiting_for_idle") return;
+    const controller = new AbortController();
+    let reading = false;
+    const refresh = async () => {
+      if (reading) return;
+      reading = true;
+      try {
+        const saved = await api.getChatSession(sessionId, controller.signal);
+        if (controller.signal.aborted) return;
+        setSessions(items => items.map(item => item.id === saved.id ? saved : item));
+        if (!saved.pendingRuntimeSwitch) {
+          setRuntimeKind(saved.backend);
+          setProviderId(saved.providerId ?? "");
+          setHarnessId(saved.harnessProfileId ?? "");
+          setHarnessSessionId(saved.harnessSessionId ?? "");
+          setModel(saved.model ?? "");
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          void logCaughtDiagnostic("interface.sessions.runtime_switch_refresh_failed", "The pending runtime switch could not be refreshed.", error, "assistant_settings");
+        }
+      } finally { reading = false; }
+    };
+    const timer = window.setInterval(() => void refresh(), 1000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [api, sessionId, pendingRuntimeSwitch?.id, pendingRuntimeSwitch?.status]);
+
   // A saved provider chat is bound by Core. Local picker state can still have
   // the former harness model while an asynchronous session refresh settles.
   const boundProviderSession = runtimeKind === "provider" && activeChatSession?.backend === "provider"
@@ -3896,6 +3925,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       }));
       if (generation !== runtimeSwitchGenerationRef.current) return;
       const persisted = changingBackend ? await api.getChatSession(switched.id) : switched;
+      const pending = persisted.pendingRuntimeSwitch;
+      if (pending?.backend === "provider" && pending.profileId === nextProviderId && pending.model === nextModel) {
+        setSessions(items => items.map(item => item.id === persisted.id ? persisted : item));
+        setAssistantSettingsStatus("");
+        return;
+      }
       if (persisted.backend !== "provider" || persisted.providerId !== nextProviderId || persisted.model !== nextModel) {
         throw new Error("Core did not save the selected provider. Reload this conversation and try again.");
       }
@@ -7047,6 +7082,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
+                {pendingRuntimeSwitch && <p className="provider-dialog-note" role={pendingRuntimeSwitch.status === "needs_review" ? "alert" : "status"}>
+                  {pendingRuntimeSwitch.status === "needs_review" ? "Review runtime selection" : `Next runtime: ${pendingRuntimeSwitch.model}.`} {pendingRuntimeSwitch.reason}
+                  {pendingRuntimeSwitch.status === "needs_review" && <button className="button quiet" type="button" onClick={() => {setAssistantSettingsOpen(true); if (pendingRuntimeSwitch.backend === "provider") void proposeProviderRuntime(pendingRuntimeSwitch.profileId, pendingRuntimeSwitch.model); else chooseChatRuntime("harness");}}>Review selection</button>}
+                </p>}
                 <footer className="chat-composer-toolbar"><div className="chat-composer-tools">{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{shellOnly && api && <button className="button quiet chat-composer-icon chat-goal-trigger" type="button" aria-label={providerGoal || providerGoalLoading || providerGoalError ? "Open goal" : "Create goal"} title={providerGoal ? `Open ${providerGoal.status} goal` : providerGoalError ? "Goal could not be loaded" : providerGoalLoading ? "Loading goal" : "Create goal"} aria-haspopup="dialog" aria-expanded={studioGoalOpen} data-status={providerGoal?.status} onClick={() => setStudioGoalOpen(true)}><Flag size={18} aria-hidden="true" /></button>}{!embeddedSideChat && !shellOnly && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button>{!shellOnly && <button ref={projectSnapshotButtonRef} className="button quiet chat-composer-icon" type="button" aria-label="Project Snapshot" title="Project Snapshot" aria-expanded={projectSnapshot === "floating"} disabled={!engagement} onClick={() => setProjectSnapshot(current => current === "floating" ? "closed" : "floating")}><LayoutDashboard size={18} aria-hidden="true" /></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} onChooseImageRuntime={() => setAssistantSettingsOpen(true)} imagesSupported={imageInputEnabled} imagesBusy={composerBusy} />}</div><div className="chat-composer-turn-actions">{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</div></footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div>

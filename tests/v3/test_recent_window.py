@@ -9,7 +9,12 @@ stops at a share of the model's input capacity, never below the newest
 group, and steps still fold in blocks, so the prefix stays stable.
 """
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 from nebula.v3 import chat as chat_module
@@ -143,13 +148,13 @@ class BatchingProvider(LongTurnProvider):
         return _response(calls=calls)
 
 
-def _batched_turn(tmp_path, monkeypatch, *, token_bound: bool):
+async def _batched_turn(tmp_path, monkeypatch, *, token_bound: bool):
     if not token_bound:
         monkeypatch.setattr(chat_module, "recent_window_tokens", lambda _capacity: None)
     # Twelve responses of five ~2 KB results on a 32K window.
     provider = BatchingProvider(calls=60)
-    store, service, prepared = _long_turn(tmp_path, provider, ProbeBroker())
-    completion = asyncio.run(service.complete(prepared))
+    store, service, prepared = await _long_turn(tmp_path, provider, ProbeBroker())
+    completion = await service.complete(prepared)
     assert completion.message.content == ANSWER
     routing = [
         request
@@ -168,10 +173,10 @@ def _covered(request: ModelRequest) -> int:
     return sum(last - first + 1 for first, last in summary["covered_steps"])
 
 
-def test_batched_steps_fold_into_the_checkpoint_instead_of_being_cleared(
+async def test_batched_steps_fold_into_the_checkpoint_instead_of_being_cleared(
     tmp_path, monkeypatch
 ):
-    prepared, routing = _batched_turn(tmp_path, monkeypatch, token_bound=True)
+    prepared, routing = await _batched_turn(tmp_path, monkeypatch, token_bound=True)
     last = routing[-1]
 
     # The older batches folded: their receipts are in the checkpoint ...
@@ -195,14 +200,17 @@ def test_batched_steps_fold_into_the_checkpoint_instead_of_being_cleared(
     assert 1 <= changes <= 3
 
 
-def test_counted_in_groups_alone_the_same_batches_were_cleared_in_place(
+async def test_counted_in_groups_alone_the_same_batches_were_cleared_in_place(
     tmp_path, monkeypatch
 ):
     """The defect: eight batches of five stayed whole, so they were cleared."""
 
-    _, routing = _batched_turn(tmp_path, monkeypatch, token_bound=False)
+    _, routing = await _batched_turn(tmp_path, monkeypatch, token_bound=False)
     last = routing[-1]
 
     cleared = [result for result in last.tool_results if _cleared(result)]
     assert _covered(last) <= 20
     assert len(cleared) >= 30
+
+
+pytestmark = pytest.mark.anyio

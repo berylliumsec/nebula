@@ -1,5 +1,10 @@
 """Hot entity reads must seek to their exact keys, regardless of history size."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 from datetime import datetime, timezone
 
 import pytest
@@ -45,26 +50,34 @@ def _call(key="call", status="approved", origin="chat", project="project"):
     ["create", "create_many", "transaction", "run_event", "operation_event"],
 )
 @pytest.mark.parametrize("model", [Artifact, ToolCall])
-def test_all_entity_create_paths_populate_hot_projections(tmp_path, create_path, model):
+async def test_all_entity_create_paths_populate_hot_projections(
+    tmp_path, create_path, model
+):
     store = NebulaStore(tmp_path / "create.db")
     entity = _artifact("artifact") if model is Artifact else _call()
     if create_path == "create":
-        store.create(entity)
+        (await store.create(entity))
     elif create_path == "create_many":
-        store.create_many([entity])
+        (await store.create_many([entity]))
     elif create_path == "transaction":
-        with store.transaction() as transaction:
-            transaction.add(entity)
+        async with store.transaction() as transaction:
+            (await transaction.add(entity))
     elif create_path == "run_event":
-        store.create_with_event(entity, run_id="run", event_type="synthetic.created")
+        (
+            await store.create_with_event(
+                entity, run_id="run", event_type="synthetic.created"
+            )
+        )
     else:
-        store.create_with_operation_event(
-            entity,
-            operation_id="operation",
-            operation_kind="synthetic",
-            engagement_id="project",
-            event_type="synthetic.created",
-            event_payload={},
+        (
+            await store.create_with_operation_event(
+                entity,
+                operation_id="operation",
+                operation_kind="synthetic",
+                engagement_id="project",
+                event_type="synthetic.created",
+                event_payload={},
+            )
         )
     filters = (
         {"metadata.tool_call_id": "needle"}
@@ -75,39 +88,47 @@ def test_all_entity_create_paths_populate_hot_projections(tmp_path, create_path,
             "metadata.harness_turn_id": "harness-turn",
         }
     )
-    assert [item.id for item in store.find_entities(model, filters)] == [entity.id]
-    store.database.dispose()
+    assert [item.id for item in (await store.find_entities(model, filters))] == [
+        entity.id
+    ]
+    (await store.database.dispose())
 
 
-def test_reserved_tool_call_populates_projections_and_is_idempotent(tmp_path):
+async def test_reserved_tool_call_populates_projections_and_is_idempotent(tmp_path):
     store = NebulaStore(tmp_path / "reserve.db")
-    store.create(AgentRun(id="run", engagement_id="project", objective="Synthetic"))
+    (
+        await store.create(
+            AgentRun(id="run", engagement_id="project", objective="Synthetic")
+        )
+    )
     call = _call(origin="mission")
-    store.reserve_tool_call(call)
-    assert store.reserve_tool_call(call) == call
+    (await store.reserve_tool_call(call))
+    assert (await store.reserve_tool_call(call)) == call
     assert [
         item.id
-        for item in store.find_entities(
-            ToolCall,
-            {
-                "status": "approved",
-                "origin": "mission",
-                "metadata.harness_turn_id": "harness-turn",
-            },
+        for item in (
+            await store.find_entities(
+                ToolCall,
+                {
+                    "status": "approved",
+                    "origin": "mission",
+                    "metadata.harness_turn_id": "harness-turn",
+                },
+            )
         )
     ] == [call.id]
-    store.database.dispose()
+    (await store.database.dispose())
 
 
 @pytest.mark.parametrize(
     "update_path", ["update", "transaction", "replace", "run_event", "operation_event"]
 )
 @pytest.mark.parametrize("model", [Artifact, ToolCall])
-def test_all_update_paths_replace_and_clear_hot_projections(
+async def test_all_update_paths_replace_and_clear_hot_projections(
     tmp_path, update_path, model
 ):
     store = NebulaStore(tmp_path / "update.db")
-    entity = store.create(_artifact("artifact") if model is Artifact else _call())
+    entity = await store.create(_artifact("artifact") if model is Artifact else _call())
     for changes in (
         [{"metadata": {"tool_call_id": "changed"}}, {"metadata": {}}]
         if model is Artifact
@@ -134,23 +155,23 @@ def test_all_update_paths_replace_and_clear_hot_projections(
             }
         )
         if update_path == "update":
-            entity = store.update(
+            entity = await store.update(
                 model, entity.id, changes, expected_revision=entity.revision
             )
         elif update_path == "transaction":
-            with store.transaction() as transaction:
-                entity = transaction.update(
+            async with store.transaction() as transaction:
+                entity = await transaction.update(
                     model, entity.id, changes, expected_revision=entity.revision
                 )
         elif update_path == "replace":
-            entity = store.replace(
+            entity = await store.replace(
                 model,
                 entity.id,
                 entity.model_copy(update=changes),
                 expected_revision=entity.revision,
             )
         elif update_path == "run_event":
-            entity, _ = store.update_with_event(
+            entity, _ = await store.update_with_event(
                 model,
                 entity.id,
                 changes,
@@ -160,7 +181,7 @@ def test_all_update_paths_replace_and_clear_hot_projections(
                 event_payload={},
             )
         else:
-            entity, _ = store.update_with_operation_event(
+            entity, _ = await store.update_with_operation_event(
                 model,
                 entity.id,
                 changes,
@@ -171,7 +192,7 @@ def test_all_update_paths_replace_and_clear_hot_projections(
                 event_type="synthetic.changed",
                 event_payload={},
             )
-        assert store.find_entities(model, old_filters) == []
+        assert (await store.find_entities(model, old_filters)) == []
         filters = (
             {"metadata.tool_call_id": entity.metadata.get("tool_call_id")}
             if model is Artifact
@@ -181,69 +202,97 @@ def test_all_update_paths_replace_and_clear_hot_projections(
                 "metadata.harness_turn_id": entity.metadata.get("harness_turn_id"),
             }
         )
-        assert [item.id for item in store.find_entities(model, filters)] == [entity.id]
-    store.database.dispose()
+        assert [item.id for item in (await store.find_entities(model, filters))] == [
+            entity.id
+        ]
+    (await store.database.dispose())
 
 
-def test_artifact_lookup_preserves_project_order_and_metadata_types(tmp_path):
+async def test_artifact_lookup_preserves_project_order_and_metadata_types(tmp_path):
     store = NebulaStore(tmp_path / "artifacts.db")
     stamp = datetime(2026, 11, 2, tzinfo=timezone.utc)
-    store.create_many(
-        [
-            _artifact(key, call_id, project).model_copy(update={"created_at": stamp})
-            for key, call_id, project in [
-                ("z", "needle", "project"),
-                ("a", "needle", "project"),
-                ("foreign", "needle", "other"),
-                ("number", 12, "project"),
-                ("empty", "", "project"),
-                ("null", None, "project"),
+    (
+        await store.create_many(
+            [
+                _artifact(key, call_id, project).model_copy(
+                    update={"created_at": stamp}
+                )
+                for key, call_id, project in [
+                    ("z", "needle", "project"),
+                    ("a", "needle", "project"),
+                    ("foreign", "needle", "other"),
+                    ("number", 12, "project"),
+                    ("empty", "", "project"),
+                    ("null", None, "project"),
+                ]
             ]
-        ]
+        )
     )
-    assert [a.id for a in store.list_tool_call_artifacts("project", "needle")] == [
+    assert [
+        a.id for a in (await store.list_tool_call_artifacts("project", "needle"))
+    ] == [
         "a",
         "z",
     ]
-    assert store.list_tool_call_artifacts("project", "12") == []
+    assert (await store.list_tool_call_artifacts("project", "12")) == []
     assert [
-        a.id for a in store.find_entities(Artifact, {"metadata.tool_call_id": 12})
+        a.id
+        for a in (await store.find_entities(Artifact, {"metadata.tool_call_id": 12}))
     ] == ["number"]
     assert [
-        a.id for a in store.find_entities(Artifact, {"metadata.tool_call_id": None})
+        a.id
+        for a in (await store.find_entities(Artifact, {"metadata.tool_call_id": None}))
     ] == ["null"]
-    assert [a.id for a in store.list_tool_call_artifacts("project", "")] == ["empty"]
-    store.database.dispose()
+    assert [a.id for a in (await store.list_tool_call_artifacts("project", ""))] == [
+        "empty"
+    ]
+    (await store.database.dispose())
 
 
-def test_recovery_filters_keep_scope_paging_and_readable_iteration(tmp_path):
+async def test_recovery_filters_keep_scope_paging_and_readable_iteration(tmp_path):
     store = NebulaStore(tmp_path / "recovery.db")
-    store.create_many([_call(f"settled-{i}", status="complete") for i in range(1_001)])
-    store.create_many(
-        [
-            _call("a"),
-            _call("b", project="other"),
-            _call("c", status="running"),
-            _call("mission", origin="mission"),
-        ]
+    (
+        await store.create_many(
+            [_call(f"settled-{i}", status="complete") for i in range(1_001)]
+        )
+    )
+    (
+        await store.create_many(
+            [
+                _call("a"),
+                _call("b", project="other"),
+                _call("c", status="running"),
+                _call("mission", origin="mission"),
+            ]
+        )
     )
     filters = {"status": ["approved", "running"], "origin": "chat"}
-    assert [c.id for c in store.find_entities(ToolCall, filters)] == ["a", "b", "c"]
+    assert [c.id for c in (await store.find_entities(ToolCall, filters))] == [
+        "a",
+        "b",
+        "c",
+    ]
     assert [
-        c.id for c in store.find_entities(ToolCall, filters, engagement_id="project")
+        c.id
+        for c in (await store.find_entities(ToolCall, filters, engagement_id="project"))
     ] == ["a", "c"]
     assert [
-        c.id for c in store.find_entities(ToolCall, filters, offset=1, limit=1)
+        c.id for c in (await store.find_entities(ToolCall, filters, offset=1, limit=1))
     ] == ["b"]
-    assert store.find_entities(ToolCall, {"status": []}) == []
+    assert (await store.find_entities(ToolCall, {"status": []})) == []
     seen = []
-    for call in store.iter_readable_entities(ToolCall, filters, page_size=1):
+    async for call in store.iter_readable_entities(ToolCall, filters, page_size=1):
         seen.append(call.id)
-        store.update(
-            ToolCall, call.id, {"status": "complete"}, expected_revision=call.revision
+        (
+            await store.update(
+                ToolCall,
+                call.id,
+                {"status": "complete"},
+                expected_revision=call.revision,
+            )
         )
     assert seen == ["a", "b", "c"]
-    store.database.dispose()
+    (await store.database.dispose())
 
 
 @pytest.mark.parametrize(
@@ -281,14 +330,22 @@ def test_recovery_filters_keep_scope_paging_and_readable_iteration(tmp_path):
         ),
     ],
 )
-def test_actual_hot_queries_seek_full_keys_without_a_temporary_sort(
+async def test_actual_hot_queries_seek_full_keys_without_a_temporary_sort(
     tmp_path, operation, index, keys
 ):
     store = NebulaStore(tmp_path / "plans.db")
-    store.create_many([_artifact(f"old-{i}", f"old-call-{i}") for i in range(1_001)])
-    store.create_many([_call(f"settled-{i}", status="complete") for i in range(1_001)])
-    store.create(_artifact("target"))
-    store.create(_call())
+    (
+        await store.create_many(
+            [_artifact(f"old-{i}", f"old-call-{i}") for i in range(1_001)]
+        )
+    )
+    (
+        await store.create_many(
+            [_call(f"settled-{i}", status="complete") for i in range(1_001)]
+        )
+    )
+    (await store.create(_artifact("target")))
+    (await store.create(_call()))
     plans = []
 
     def capture(conn, cursor, statement, parameters, context, executemany):
@@ -302,36 +359,46 @@ def test_actual_hot_queries_seek_full_keys_without_a_temporary_sort(
                 )
             )
 
-    event.listen(store.database.engine, "before_cursor_execute", capture)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", capture)
     try:
         if operation.startswith("artifact_"):
             if operation == "artifact_filter":
-                store.find_entities(
-                    Artifact,
-                    {"metadata.tool_call_id": "needle"},
-                    engagement_id="project",
+                (
+                    await store.find_entities(
+                        Artifact,
+                        {"metadata.tool_call_id": "needle"},
+                        engagement_id="project",
+                    )
                 )
             else:
-                store.list_tool_call_artifacts(
-                    "project", "missing" if operation == "artifact_miss" else "needle"
+                (
+                    await store.list_tool_call_artifacts(
+                        "project",
+                        "missing" if operation == "artifact_miss" else "needle",
+                    )
                 )
         elif operation == "recovery":
             assert (
                 len(
                     list(
-                        store.iter_readable_entities(
-                            ToolCall, {"status": "approved", "origin": "chat"}
-                        )
+                        [
+                            item
+                            async for item in store.iter_readable_entities(
+                                ToolCall, {"status": "approved", "origin": "chat"}
+                            )
+                        ]
                     )
                 )
                 == 1
             )
         else:
-            store.list_entities(
-                Artifact,
-                engagement_id="project",
-                limit=1000,
-                newest_first=operation == "newest",
+            (
+                await store.list_entities(
+                    Artifact,
+                    engagement_id="project",
+                    limit=1000,
+                    newest_first=operation == "newest",
+                )
             )
         assert plans
         for position, plan in enumerate(plans):
@@ -344,5 +411,10 @@ def test_actual_hot_queries_seek_full_keys_without_a_temporary_sort(
             assert "SCAN entities" not in plan, plan
             assert "TEMP B-TREE" not in plan, plan
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", capture)
-        store.database.dispose()
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", capture
+        )
+        (await store.database.dispose())
+
+
+pytestmark = pytest.mark.anyio

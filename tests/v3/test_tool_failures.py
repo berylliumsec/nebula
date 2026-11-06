@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 import json
 import stat
@@ -126,37 +130,38 @@ def test_validation_reports_the_missing_or_unexpected_field(arguments, invalid_i
     assert failure["effective_input_schema"] == spec.input_schema
 
 
-def test_broker_rejects_hash_before_execution_and_finishes_call(tmp_path):
+async def test_broker_rejects_hash_before_execution_and_finishes_call(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    store.create(Engagement(id="project", name="Project"))
-    store.create(
-        StoredCall(
-            id="prior",
-            engagement_id="project",
-            run_id="run-1",
-            tool_name="safe_read",
-            risk_class=RiskClass.LOCAL_READ,
-            status=ToolCallStatus.COMPLETE,
+    (await store.create(Engagement(id="project", name="Project")))
+    (
+        await store.create(
+            StoredCall(
+                id="prior",
+                engagement_id="project",
+                run_id="run-1",
+                tool_name="safe_read",
+                risk_class=RiskClass.LOCAL_READ,
+                status=ToolCallStatus.COMPLETE,
+            )
         )
     )
-    store.create(
-        Artifact(
-            id="receipt-artifact-id",
-            engagement_id="project",
-            sha256="b" * 64,
-            size=0,
-            storage_path=str(tmp_path / "artifact"),
-            metadata={"tool_call_id": "prior"},
+    (
+        await store.create(
+            Artifact(
+                id="receipt-artifact-id",
+                engagement_id="project",
+                sha256="b" * 64,
+                size=0,
+                storage_path=str(tmp_path / "artifact"),
+                metadata={"tool_call_id": "prior"},
+            )
         )
     )
     assert (
-        ToolOutputService(store, None)
-        ._authorized_artifact(
+        await ToolOutputService(store, None)._authorized_artifact(
             engagement_id="project", owner_id="run-1", artifact_id="receipt-artifact-id"
         )
-        .sha256
-        == "b" * 64
-    )
+    ).sha256 == "b" * 64
     effects = []
 
     async def handler(arguments):
@@ -181,43 +186,49 @@ def test_broker_rejects_hash_before_execution_and_finishes_call(tmp_path):
         workspace=tmp_path,
     )
     with pytest.raises(InvalidToolArguments):
-        asyncio.run(broker.execute(invocation, ScopePolicy(engagement_id="project")))
+        (await broker.execute(invocation, ScopePolicy(engagement_id="project")))
     assert effects == []
-    assert store.get(StoredCall, "call-1").status == ToolCallStatus.FAILED
+    assert (await store.get(StoredCall, "call-1")).status == ToolCallStatus.FAILED
 
 
-def test_missing_and_unauthorized_artifacts_have_same_public_failure(tmp_path):
+async def test_missing_and_unauthorized_artifacts_have_same_public_failure(tmp_path):
     store = NebulaStore(tmp_path / "access.db")
-    store.create(Engagement(id="project-a", name="A"))
-    store.create(Engagement(id="project-b", name="B"))
-    store.create(
-        StoredCall(
-            id="other-call",
-            engagement_id="project-b",
-            run_id="other-run",
-            tool_name="safe_read",
-            risk_class=RiskClass.LOCAL_READ,
-            status=ToolCallStatus.COMPLETE,
+    (await store.create(Engagement(id="project-a", name="A")))
+    (await store.create(Engagement(id="project-b", name="B")))
+    (
+        await store.create(
+            StoredCall(
+                id="other-call",
+                engagement_id="project-b",
+                run_id="other-run",
+                tool_name="safe_read",
+                risk_class=RiskClass.LOCAL_READ,
+                status=ToolCallStatus.COMPLETE,
+            )
         )
     )
-    store.create(
-        Artifact(
-            id="other-artifact",
-            engagement_id="project-b",
-            sha256="a" * 64,
-            size=0,
-            storage_path=str(tmp_path / "private"),
-            metadata={"tool_call_id": "other-call"},
+    (
+        await store.create(
+            Artifact(
+                id="other-artifact",
+                engagement_id="project-b",
+                sha256="a" * 64,
+                size=0,
+                storage_path=str(tmp_path / "private"),
+                metadata={"tool_call_id": "other-call"},
+            )
         )
     )
     output = ToolOutputService(store, None)
     public = []
     for artifact_id in ("missing-artifact", "other-artifact"):
         with pytest.raises(ToolOutputAccessError) as caught:
-            output._authorized_artifact(
-                engagement_id="project-a",
-                owner_id="run-a",
-                artifact_id=artifact_id,
+            (
+                await output._authorized_artifact(
+                    engagement_id="project-a",
+                    owner_id="run-a",
+                    artifact_id=artifact_id,
+                )
             )
         failure = tool_failure(
             _spec(),
@@ -246,7 +257,7 @@ def test_read_only_missing_and_permission_errors_have_same_public_failure():
     assert public[0]["category"] == "unavailable_resource"
 
 
-def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
+async def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
     responses = [
         _response(
             calls=[ToolCall(id="bad", name="safe_read", arguments={"value": 42})]
@@ -261,7 +272,7 @@ def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
         _response(calls=[ToolCall(id="finish", name="finish_response", arguments={})]),
         _response(text="The corrected read succeeded."),
     ]
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path, responses, RecordingBroker()
     )
     registry = ToolRegistry()
@@ -278,7 +289,7 @@ def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
         workspace_resolver=lambda _: tmp_path,
     )
     prepared.tool_components = replace(prepared.tool_components, broker=broker)
-    completed = asyncio.run(service.complete(prepared))
+    completed = await service.complete(prepared)
     assert completed.message.content == "The corrected read succeeded."
     guidance = provider.requests[1].tool_results[0]
     assert guidance.is_error is True
@@ -293,16 +304,18 @@ def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
     )
     assert provider.requests[2].tool_results[-1].output["value"] == "receipt-id"
     assert [
-        store.get(StoredCall, call_id).status
-        for call_id in store.get(ChatTurn, "turn").tool_call_ids
+        (await store.get(StoredCall, call_id)).status
+        for call_id in (await store.get(ChatTurn, "turn")).tool_call_ids
     ] == [ToolCallStatus.FAILED, ToolCallStatus.COMPLETE]
-    assert [entry["status"] for entry in store.get(ChatTurn, "turn").tool_history] == [
+    assert [
+        entry["status"] for entry in (await store.get(ChatTurn, "turn")).tool_history
+    ] == [
         "failed",
         "complete",
     ]
 
 
-def test_chat_next_request_keeps_failed_receipt_evidence_and_usage(tmp_path):
+async def test_chat_next_request_keeps_failed_receipt_evidence_and_usage(tmp_path):
     class FailedBroker:
         async def execute(self, invocation, scope, *, approval=None):
             receipt = ToolResultReceipt(
@@ -332,9 +345,11 @@ def test_chat_next_request_keeps_failed_receipt_evidence_and_usage(tmp_path):
         _response(calls=[ToolCall(id="finish", name="finish_response", arguments={})]),
         _response(text="The call failed and I inspected its result."),
     ]
-    _, service, prepared, provider = _prepared(tmp_path, responses, RecordingBroker())
+    _, service, prepared, provider = await _prepared(
+        tmp_path, responses, RecordingBroker()
+    )
     prepared.tool_components = replace(prepared.tool_components, broker=FailedBroker())
-    completed = asyncio.run(service.complete(prepared))
+    completed = await service.complete(prepared)
     assert "inspected" in completed.message.content
     failure = provider.requests[1].tool_results[0].output
     assert failure["schema"] == FAILURE_SCHEMA
@@ -345,7 +360,9 @@ def test_chat_next_request_keeps_failed_receipt_evidence_and_usage(tmp_path):
     assert failure["result_receipt"]["output_preview"][0]["text"] == "invalid option"
 
 
-def test_butler_unknown_operation_guidance_reaches_next_provider_request(tmp_path):
+async def test_butler_unknown_operation_guidance_reaches_next_provider_request(
+    tmp_path,
+):
     responses = [
         _response(
             calls=[
@@ -367,10 +384,10 @@ def test_butler_unknown_operation_guidance_reaches_next_provider_request(tmp_pat
         ),
         _response(text="The catalog search returned available actions."),
     ]
-    store, service, prepared, provider = _prepared(
+    store, service, prepared, provider = await _prepared(
         tmp_path, responses, RecordingBroker()
     )
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, ArtifactStore(tmp_path / "artifacts"), "project"
     )
     registry = ToolRegistry()
@@ -389,7 +406,7 @@ def test_butler_unknown_operation_guidance_reaches_next_provider_request(tmp_pat
         broker=broker,
         specs={name: plugin.spec for name, plugin in plugins.items()},
     )
-    completed = asyncio.run(service.complete(prepared))
+    completed = await service.complete(prepared)
     assert completed.message.content == "The catalog search returned available actions."
     delivered = provider.requests[1].tool_results[0]
     assert delivered.is_error is True
@@ -400,7 +417,9 @@ def test_butler_unknown_operation_guidance_reaches_next_provider_request(tmp_pat
     assert "work_list" in delivered.output["next_action"]
     assert provider.requests[2].tool_results[-1].is_error is False
     assert provider.requests[2].tool_results[-1].output["matches"]
-    assert [entry["status"] for entry in store.get(ChatTurn, "turn").tool_history] == [
+    assert [
+        entry["status"] for entry in (await store.get(ChatTurn, "turn")).tool_history
+    ] == [
         "failed",
         "complete",
     ]
@@ -483,7 +502,7 @@ def test_failure_categories_never_expose_exception_text(
     assert "receipt-id" not in json.dumps(failure)
 
 
-def test_mission_next_request_receives_effective_schema(tmp_path):
+async def test_mission_next_request_receives_effective_schema(tmp_path):
     class InvalidBroker:
         async def execute(self, invocation, scope):
             if invocation.arguments["ports"] == "wrong":
@@ -510,9 +529,9 @@ def test_mission_next_request_receives_effective_schema(tmp_path):
         ]
     )
     specialist = _specialist(tmp_path, provider, InvalidBroker())
-    first = asyncio.run(specialist.run(mission_context()))
-    second = asyncio.run(specialist.run(mission_context(prior_turns=[first])))
-    asyncio.run(specialist.run(mission_context(prior_turns=[first, second])))
+    first = await specialist.run(mission_context())
+    second = await specialist.run(mission_context(prior_turns=[first]))
+    (await specialist.run(mission_context(prior_turns=[first, second])))
     delivered = provider.requests[1].tool_results[0]
     assert delivered.output["schema"] == FAILURE_SCHEMA
     assert (
@@ -522,7 +541,9 @@ def test_mission_next_request_receives_effective_schema(tmp_path):
     assert provider.requests[2].tool_results[-1].output["ok"] is True
 
 
-def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(tmp_path):
+async def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(
+    tmp_path,
+):
     class ReceiptBroker:
         async def execute(self, invocation, scope):
             receipt = ToolResultReceipt(
@@ -561,8 +582,8 @@ def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(tmp_
         ]
     )
     specialist = _specialist(tmp_path, provider, ReceiptBroker())
-    first = asyncio.run(specialist.run(mission_context()))
-    asyncio.run(specialist.run(mission_context(prior_turns=[first])))
+    first = await specialist.run(mission_context())
+    (await specialist.run(mission_context(prior_turns=[first])))
     failure = provider.requests[1].tool_results[0].output
     assert failure["schema"] == FAILURE_SCHEMA
     assert failure["category"] == "timeout"
@@ -582,11 +603,11 @@ def test_mission_failed_receipt_reaches_next_request_with_uncertain_effects(tmp_
         ("missing-receipt-id", "unavailable_resource"),
     ],
 )
-def test_fixed_runtime_retrieval_failures_are_terminal(
+async def test_fixed_runtime_retrieval_failures_are_terminal(
     tmp_path, artifact_id, expected_status
 ):
     store = NebulaStore(tmp_path / "automation.db")
-    store.create(Engagement(id="project", name="Project"))
+    (await store.create(Engagement(id="project", name="Project")))
     broker = AutomationBroker.__new__(AutomationBroker)
     broker.specs = {"tool_output.read": _spec()}
     broker.ledger = StoreToolLedger(store, enforce_run_budget=False)
@@ -605,7 +626,7 @@ def test_fixed_runtime_retrieval_failures_are_terminal(
         workspace=tmp_path,
     )
     with pytest.raises((InvalidToolArguments, ToolOutputAccessError)) as caught:
-        asyncio.run(broker.execute(invocation, ScopePolicy(engagement_id="project")))
+        (await broker.execute(invocation, ScopePolicy(engagement_id="project")))
     failure = tool_failure(
         _spec(),
         invocation.arguments,
@@ -615,10 +636,10 @@ def test_fixed_runtime_retrieval_failures_are_terminal(
         else "after_execution",
     )
     assert failure["category"] == expected_status
-    assert store.get(StoredCall, "call-1").status == ToolCallStatus.FAILED
+    assert (await store.get(StoredCall, "call-1")).status == ToolCallStatus.FAILED
 
 
-def test_gateway_preserves_mcp_schema_and_name_on_denial():
+async def test_gateway_preserves_mcp_schema_and_name_on_denial():
     schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}},
@@ -649,13 +670,11 @@ def test_gateway_preserves_mcp_schema_and_name_on_denial():
                 "isError": True,
             }
 
-    response = asyncio.run(
-        HarnessRuntimeService._gateway_call(
-            Gateway(),
-            SimpleNamespace(id="session"),
-            "mcp_abc_readFile",
-            {"path": "file.txt"},
-        )
+    response = await HarnessRuntimeService._gateway_call(
+        Gateway(),
+        SimpleNamespace(id="session"),
+        "mcp_abc_readFile",
+        {"path": "file.txt"},
     )
     failure = response["structuredContent"]
     assert response["isError"] is True
@@ -784,9 +803,9 @@ def test_policy_refusal_tells_the_model_why_and_what_to_change():
     assert refusal["retry_safe"] is False
 
 
-def test_broker_applies_distinct_modes_to_a_targetless_network_tool(tmp_path):
+async def test_broker_applies_distinct_modes_to_a_targetless_network_tool(tmp_path):
     store = NebulaStore(tmp_path / "policy.db")
-    store.create(Engagement(id="project", name="Project"))
+    (await store.create(Engagement(id="project", name="Project")))
 
     class OpaqueTool(ToolPlugin):
         def __init__(self, contract):
@@ -826,20 +845,20 @@ def test_broker_applies_distinct_modes_to_a_targetless_network_tool(tmp_path):
         )
 
     with pytest.raises(PolicyDenied) as bounded:
-        asyncio.run(
-            broker.prepare(invocation("bounded"), ScopePolicy(engagement_id="project"))
+        (
+            await broker.prepare(
+                invocation("bounded"), ScopePolicy(engagement_id="project")
+            )
         )
     assert bounded.value.decision.rule == "target_required"
-    all_destinations = asyncio.run(
-        broker.prepare(
-            invocation("all-destinations"),
-            ScopePolicy(engagement_id="project", allow_all_targets=True),
-        )
+    all_destinations = await broker.prepare(
+        invocation("all-destinations"),
+        ScopePolicy(engagement_id="project", allow_all_targets=True),
     )
     assert all_destinations.decision.effect == PolicyEffect.REQUIRE_APPROVAL
     assert all_destinations.approval is not None
     bypass = ScopePolicy(engagement_id="project", bypass_permissions=True)
-    prepared = asyncio.run(broker.prepare(invocation("bypass"), bypass))
+    prepared = await broker.prepare(invocation("bypass"), bypass)
     assert prepared.decision.rule == "permission_bypass"
     assert prepared.approval is None
 
@@ -854,8 +873,11 @@ def test_broker_applies_distinct_modes_to_a_targetless_network_tool(tmp_path):
         update={"tool_name": denied_spec.name}
     )
     with pytest.raises(PolicyDenied) as mcp_denied:
-        asyncio.run(broker.prepare(denied_call, ScopePolicy(engagement_id="project")))
+        (await broker.prepare(denied_call, ScopePolicy(engagement_id="project")))
     assert mcp_denied.value.decision.rule == "tool_policy_deny"
     bypass_call = denied_call.model_copy(update={"id": "mcp-bypass"})
-    allowed = asyncio.run(broker.prepare(bypass_call, bypass))
+    allowed = await broker.prepare(bypass_call, bypass)
     assert allowed.decision.rule == "permission_bypass"
+
+
+pytestmark = pytest.mark.anyio

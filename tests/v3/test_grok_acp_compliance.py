@@ -7,6 +7,10 @@ in-memory transport.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -270,10 +274,10 @@ async def _deny_permission(_request) -> PermissionTicket:
     return PermissionTicket(None, None, future)
 
 
-def _runtime(tmp_path: Path, adapter: HarnessAdapter, *, native=None):
+async def _runtime(tmp_path: Path, adapter: HarnessAdapter, *, native=None):
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = await store.create(
         HarnessProfile(
             id="grok-a",
             name="Grok fixture",
@@ -284,7 +288,7 @@ def _runtime(tmp_path: Path, adapter: HarnessAdapter, *, native=None):
         )
     )
     if native is not None:
-        profile = store.update(
+        profile = await store.update(
             HarnessProfile,
             profile.id,
             {"native_capabilities": native},
@@ -311,19 +315,19 @@ def _chat_turn(service, engagement, profile, prompt, chat_id=None, session_id=No
     )
 
 
-def _final_text(store: NebulaStore, owner_id: str) -> str | None:
-    owner = store.get(ChatTurn, owner_id)
+async def _final_text(store: NebulaStore, owner_id: str) -> str | None:
+    owner = await store.get(ChatTurn, owner_id)
     if not owner.final_message_id:
         return None
-    return store.get(ChatMessage, owner.final_message_id).content
+    return (await store.get(ChatMessage, owner.final_message_id)).content
 
 
 async def _wait_status(store, turn_id, statuses, limit: float = 5.0) -> None:
     for _ in range(int(limit / 0.01)):
-        if store.get(HarnessTurn, turn_id).status in statuses:
+        if (await store.get(HarnessTurn, turn_id)).status in statuses:
             return
         await asyncio.sleep(0.01)
-    raise AssertionError(store.get(HarnessTurn, turn_id).status)
+    raise AssertionError((await store.get(HarnessTurn, turn_id)).status)
 
 
 async def _stop(service, task, turn_id: str) -> None:
@@ -428,14 +432,14 @@ def _assert_second_prompt_followed_the_cancelled_answer(
     assert cancelled_reply < prompts[1]
 
 
-def test_next_prompt_waits_for_the_stopped_prompt_and_drops_its_late_updates(
+async def test_next_prompt_waits_for_the_stopped_prompt_and_drops_its_late_updates(
     tmp_path,
 ):
     async def scenario() -> None:
         adapter = ScriptedGrokAdapter(LATE_UPDATES_AFTER_CANCEL, tmp_path / "agent")
-        store, engagement, profile, service = _runtime(tmp_path, adapter)
+        store, engagement, profile, service = await _runtime(tmp_path, adapter)
         chat, _owner, first = _chat_turn(service, engagement, profile, "first")
-        task = service.start_chat_turn(first.id)
+        task = await service.start_chat_turn(first.id)
         await adapter.wait_for_log(
             lambda entry: "turn one starts" in json.dumps(entry.get("out", {}))
         )
@@ -447,19 +451,21 @@ def test_next_prompt_waits_for_the_stopped_prompt_and_drops_its_late_updates(
             profile,
             "second",
             chat_id=chat.id,
-            session_id=store.get(HarnessTurn, first.id).harness_session_id,
+            session_id=(await store.get(HarnessTurn, first.id)).harness_session_id,
         )
         await service.start_chat_turn(second.id)
 
-        assert store.get(HarnessTurn, second.id).status == HarnessTurnStatus.COMPLETE
-        assert _final_text(store, owner.id) == "SECOND ANSWER"
+        assert (
+            await store.get(HarnessTurn, second.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        assert (await _final_text(store, owner.id)) == "SECOND ANSWER"
         _assert_second_prompt_followed_the_cancelled_answer(adapter)
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_stop_that_abandons_the_turn_at_a_yield_does_not_block_the_next_turn(
+async def test_stop_that_abandons_the_turn_at_a_yield_does_not_block_the_next_turn(
     tmp_path,
 ):
     # Stop can land while the activity coalescer holds a prefetched event, which
@@ -482,12 +488,12 @@ def test_stop_that_abandons_the_turn_at_a_yield_does_not_block_the_next_turn(
         assert second[-1].message == "SECOND ANSWER"
         _assert_second_prompt_followed_the_cancelled_answer(adapter)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-6: "The Client MUST respond to all pending session/request_permission
 # requests with the cancelled outcome."
-def test_stop_answers_a_pending_permission_request_with_cancelled(tmp_path):
+async def test_stop_answers_a_pending_permission_request_with_cancelled(tmp_path):
     async def scenario() -> None:
         adapter = ScriptedGrokAdapter(
             {
@@ -503,11 +509,11 @@ def test_stop_answers_a_pending_permission_request_with_cancelled(tmp_path):
             },
             tmp_path / "agent",
         )
-        store, engagement, profile, service = _runtime(
+        store, engagement, profile, service = await _runtime(
             tmp_path, adapter, native=HarnessNativeCapabilities(skills=True)
         )
         chat, _owner, first = _chat_turn(service, engagement, profile, "first")
-        task = service.start_chat_turn(first.id)
+        task = await service.start_chat_turn(first.id)
         await _wait_status(store, first.id, {HarnessTurnStatus.WAITING_APPROVAL})
         await _stop(service, task, first.id)
 
@@ -517,7 +523,7 @@ def test_stop_answers_a_pending_permission_request_with_cancelled(tmp_path):
             profile,
             "second",
             chat_id=chat.id,
-            session_id=store.get(HarnessTurn, first.id).harness_session_id,
+            session_id=(await store.get(HarnessTurn, first.id)).harness_session_id,
         )
         await service.start_chat_turn(second.id)
 
@@ -527,13 +533,13 @@ def test_stop_answers_a_pending_permission_request_with_cancelled(tmp_path):
         assert adapter.index(_inbound(None, 700)) < adapter.index(
             _inbound("session/cancel")
         )
-        assert _final_text(store, owner.id) == "second ok"
+        assert (await _final_text(store, owner.id)) == "second ok"
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_interrupt_answers_the_permission_once_before_session_cancel(tmp_path):
+async def test_interrupt_answers_the_permission_once_before_session_cancel(tmp_path):
     async def scenario() -> None:
         adapter = ScriptedGrokAdapter(
             {
@@ -580,11 +586,13 @@ def test_interrupt_answers_the_permission_once_before_session_cancel(tmp_path):
         )
         assert events[-1].type == "interrupted"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-7: JSON-RPC requires a response to every request.
-def test_unknown_agent_requests_get_method_not_found_in_and_between_turns(tmp_path):
+async def test_unknown_agent_requests_get_method_not_found_in_and_between_turns(
+    tmp_path,
+):
     async def scenario() -> None:
         adapter = ScriptedGrokAdapter(
             {
@@ -647,38 +655,40 @@ def test_unknown_agent_requests_get_method_not_found_in_and_between_turns(tmp_pa
         assert first[-1].message == "Checking done"
         assert second[-1].message == "second"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-8: max_tokens and max_turn_requests are truncations, not clean answers.
 @pytest.mark.parametrize("stop_reason", ["max_tokens", "max_turn_requests"])
-def test_truncating_stop_reasons_keep_the_partial_answer_marked_incomplete(
+async def test_truncating_stop_reasons_keep_the_partial_answer_marked_incomplete(
     tmp_path, stop_reason
 ):
     async def scenario() -> None:
         rpc = MemoryRpc(([_chunk("Partial answer, cut")], {"stopReason": stop_reason}))
-        store, engagement, profile, service = _runtime(tmp_path, MemoryGrokAdapter(rpc))
+        store, engagement, profile, service = await _runtime(
+            tmp_path, MemoryGrokAdapter(rpc)
+        )
         _chat, owner, turn = _chat_turn(service, engagement, profile, "question")
         await service.start_chat_turn(turn.id)
 
-        saved = _final_text(store, owner.id)
+        saved = await _final_text(store, owner.id)
         assert saved is not None
         assert saved.startswith("Partial answer, cut\n\n")
         assert "incomplete" in saved and stop_reason in saved
         completed = next(
             event
-            for event in service.activity_events(turn.id).events
+            for event in (await service.activity_events(turn.id)).events
             if event.type == "completed"
         )
         assert completed.payload["stop_reason"] == stop_reason
         assert completed.payload["truncated"] is True
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-8: the refused prompt is dropped from Grok's history, so it is no answer.
-def test_refusal_is_an_error_and_not_a_verified_completion(tmp_path):
+async def test_refusal_is_an_error_and_not_a_verified_completion(tmp_path):
     async def scenario() -> None:
         connection = GrokAcpConnection(
             MemoryRpc(([_chunk("I can't help")], {"stopReason": "refusal"})),  # type: ignore[arg-type]
@@ -692,20 +702,22 @@ def test_refusal_is_an_error_and_not_a_verified_completion(tmp_path):
         assert not any(event.type == "completed" for event in events)
 
         rpc = MemoryRpc(([_chunk("I can't help")], {"stopReason": "refusal"}))
-        store, engagement, profile, service = _runtime(tmp_path, MemoryGrokAdapter(rpc))
+        store, engagement, profile, service = await _runtime(
+            tmp_path, MemoryGrokAdapter(rpc)
+        )
         _chat, owner, turn = _chat_turn(service, engagement, profile, "question")
         await service.start_chat_turn(turn.id)
 
-        saved = store.get(HarnessTurn, turn.id)
+        saved = await store.get(HarnessTurn, turn.id)
         assert saved.status == HarnessTurnStatus.INTERRUPTED
         assert "refus" in (saved.error or "")
-        assert _final_text(store, owner.id) is None
-        assert store.get(HarnessProfile, profile.id).capabilities.turn_state != (
-            "verified"
-        )
+        assert (await _final_text(store, owner.id)) is None
+        assert (
+            await store.get(HarnessProfile, profile.id)
+        ).capabilities.turn_state != ("verified")
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-11: a one-time operator decision never becomes a standing vendor rule.
@@ -753,7 +765,7 @@ REJECT_ONCE = {"optionId": "reject", "name": "Reject", "kind": "reject_once"}
         ),
     ],
 )
-def test_permission_answers_pick_the_once_option_by_exact_kind(
+async def test_permission_answers_pick_the_once_option_by_exact_kind(
     allowed, options, outcome
 ):
     async def scenario() -> None:
@@ -781,11 +793,11 @@ def test_permission_answers_pick_the_once_option_by_exact_kind(
         ]
         assert writes == [(55, {"outcome": outcome})]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-13: non-text content blocks are rendered instead of dropped.
-def test_links_resources_and_media_reach_the_answer():
+async def test_links_resources_and_media_reach_the_answer():
     async def scenario() -> None:
         updates = [
             _chunk("Report written to "),
@@ -831,7 +843,7 @@ def test_links_resources_and_media_reach_the_answer():
             "[image: image/png] Notes: EMBEDDED NOTES [audio: audio/wav]"
         )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-14: agent messages are grouped by ACP messageId; replays are dropped.
@@ -885,7 +897,9 @@ def test_links_resources_and_media_reach_the_answer():
         ),
     ],
 )
-def test_final_answer_is_the_last_distinct_agent_message(updates, answer, commentary):
+async def test_final_answer_is_the_last_distinct_agent_message(
+    updates, answer, commentary
+):
     async def scenario() -> None:
         connection = GrokAcpConnection(
             MemoryRpc((updates, {"stopReason": "end_turn"})),  # type: ignore[arg-type]
@@ -901,11 +915,11 @@ def test_final_answer_is_the_last_distinct_agent_message(updates, answer, commen
         assert streamed == answer
         assert _commentary(events) == commentary
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-15: usage_update is session context and cumulative cost, not token deltas.
-def test_usage_update_becomes_detailed_usage_with_a_per_turn_cost(tmp_path):
+async def test_usage_update_becomes_detailed_usage_with_a_per_turn_cost(tmp_path):
     def usage(used: int, amount: float) -> dict[str, Any]:
         return {
             "update": {
@@ -972,11 +986,11 @@ def test_usage_update_becomes_detailed_usage_with_a_per_turn_cost(tmp_path):
         assert loaded.detailed_usage.context_used == 40_000
         assert loaded.payload["session_cost"] == {"amount": 0.07, "currency": "USD"}
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # HARN-9 (first part): session/load is only sent to an agent that advertises it.
-def test_resume_requires_the_agent_to_advertise_load_session(tmp_path):
+async def test_resume_requires_the_agent_to_advertise_load_session(tmp_path):
     async def scenario() -> None:
         adapter = ScriptedGrokAdapter(
             {"prompts": [], "load_session": False}, tmp_path / "agent"
@@ -989,4 +1003,7 @@ def test_resume_requires_the_agent_to_advertise_load_session(tmp_path):
             )
         assert not any(_inbound("session/load")(entry) for entry in adapter.log())
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = pytest.mark.anyio

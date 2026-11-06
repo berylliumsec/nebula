@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
+from typing import AsyncIterator
 
-from contextlib import contextmanager
+from .diagnostics import record_caught_exception
+from .async_utils import call_async, finish_cleanup
+from .query_predicates import visible_harness_chat_title
+
+import asyncio
+
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
-from threading import Lock
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Collection,
     Iterable,
-    Iterator,
     Mapping,
     Sequence,
     TypeVar,
@@ -25,6 +30,7 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from .application_model.service import ApplicationModelService
+    from .runtime_switching import RuntimeSwitchService
 
 from pydantic import ValidationError
 from sqlalchemy import (
@@ -32,6 +38,7 @@ from sqlalchemy import (
     Select,
     String,
     and_,
+    bindparam,
     case,
     cast as sql_cast,
     delete,
@@ -45,7 +52,8 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import aliased
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import (
     ChatTurnCheckpointRow,
@@ -131,7 +139,7 @@ def _recovery_pending(payload: dict[str, Any]) -> bool:
     )
 
 
-def _delete_chat_turn_ledgers(session: Session, turn_ids: Any) -> None:
+async def _delete_chat_turn_ledgers(session: AsyncSession, turn_ids: Any) -> None:
     """Remove the provider-history ledgers of the chat turns being deleted.
 
     Step events and checkpoints are append-only while their turn lives (the
@@ -141,7 +149,7 @@ def _delete_chat_turn_ledgers(session: Session, turn_ids: Any) -> None:
     """
 
     for table in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
-        session.execute(delete(table).where(table.turn_id.in_(turn_ids)))
+        (await session.execute(delete(table).where(table.turn_id.in_(turn_ids))))
 
 
 def not_temporary_chat_session() -> ColumnElement[bool]:
@@ -263,6 +271,10 @@ def _entity_lookup_fields(entity: Entity) -> dict[str, Any]:
     fields = {**_automation_lookup_fields(entity), **_chat_lookup_fields(entity)}
     if isinstance(entity, (ChatSession, AgentRun, HarnessTurn)):
         fields["harness_session_id"] = entity.harness_session_id
+    if isinstance(entity, ChatSession):
+        pending = entity.metadata.get("pending_runtime_switch")
+        state = pending.get("status") if isinstance(pending, dict) else None
+        fields["runtime_switch_status"] = state if isinstance(state, str) else None
     if isinstance(entity, ChatTurn):
         recovery_visible = (
             entity.status == ChatTurnStatus.INTERRUPTED
@@ -346,16 +358,34 @@ def readable_entities(rows: Iterable[EntityRow], model: type[EntityT]) -> list[E
 class StoreTransaction:
     """A unit-of-work used when an operation must commit all entities together."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
         # Deleted records whose event history goes once this unit commits.
         self.deleted_event_owners: list[str] = []
         self.chat_activity_changed = False
+        self.chat_activity_session_ids: set[str] = set()
         self.oversight_projects_changed: set[str] = set()
         self.provider_usage_profiles_changed: set[str] = set()
         self._locked_operation_streams: set[str] = set()
 
-    def lock_operation_stream(self, operation_id: str) -> None:
+    def _runtime_activity(
+        self, kind: str, entity_id: str, payload: Mapping[str, Any]
+    ) -> None:
+        if kind == "chat_sessions":
+            self.chat_activity_session_ids.add(entity_id)
+            return
+        field = {
+            "chat_turns": "session_id",
+            "chat_goals": "session_id",
+            "chat_queues": "session_id",
+            "chat_subagents": "parent_session_id",
+            "harness_turns": "chat_session_id",
+        }.get(kind)
+        session_id = payload.get(field) if field else None
+        if isinstance(session_id, str) and session_id:
+            self.chat_activity_session_ids.add(session_id)
+
+    async def lock_operation_stream(self, operation_id: str) -> None:
         """Serialize project-event sequence assignment before goal row writes.
 
         SQLite serializes writers when the row update begins. PostgreSQL needs
@@ -366,13 +396,15 @@ class StoreTransaction:
         if operation_id in self._locked_operation_streams:
             return
         if self.session.bind and self.session.bind.dialect.name == "postgresql":
-            self.session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:operation_id))"),
-                {"operation_id": f"operation:{operation_id}"},
+            (
+                await self.session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:operation_id))"),
+                    {"operation_id": f"operation:{operation_id}"},
+                )
             )
         self._locked_operation_streams.add(operation_id)
 
-    def assert_project_workspace(
+    async def assert_project_workspace(
         self, engagement_id: str, expected_path: str | None
     ) -> None:
         """Serialize work admission with a project folder relink.
@@ -382,7 +414,7 @@ class StoreTransaction:
         if the relink committed before this transaction began.
         """
 
-        row = self.session.get(EntityRow, engagement_id, with_for_update=True)
+        row = await self.session.get(EntityRow, engagement_id, with_for_update=True)
         if row is None or row.kind != Engagement.entity_kind:
             raise NotFoundError(f"engagements entity not found: {engagement_id}")
         project = _row_to_entity(row, Engagement)
@@ -391,7 +423,7 @@ class StoreTransaction:
                 "Project workspace changed while preparing work; read the project and retry"
             )
 
-    def add(self, entity: Entity) -> Entity:
+    async def add(self, entity: Entity) -> Entity:
         row = EntityRow(
             id=entity.id,
             kind=entity.entity_kind,
@@ -402,9 +434,10 @@ class StoreTransaction:
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
+        self._runtime_activity(row.kind, row.id, row.payload)
         self.session.add(row)
         try:
-            self.session.flush()
+            (await self.session.flush())
         except IntegrityError as exc:
             record_caught_exception(
                 "storage",
@@ -416,22 +449,22 @@ class StoreTransaction:
             raise ConflictError(f"entity already exists: {entity.id}") from exc
         from .search import upsert_search_document
 
-        upsert_search_document(self.session, row)
-        self.session.flush()
+        (await upsert_search_document(self.session, row))
+        (await self.session.flush())
         if entity.entity_kind in {"chat_sessions", "chat_turns"}:
             self.chat_activity_changed = True
         if isinstance(entity, (Approval, HarnessInteraction, ChatQueue)):
             from .butler_attention import record_attention_transition
 
-            record_attention_transition(self, None, entity)
+            (await record_attention_transition(self, None, entity))
         return entity
 
-    def add_all(self, entities: Sequence[Entity]) -> Sequence[Entity]:
+    async def add_all(self, entities: Sequence[Entity]) -> Sequence[Entity]:
         for entity in entities:
-            self.add(entity)
+            (await self.add(entity))
         return entities
 
-    def add_chat_messages(self, messages: Sequence[ChatMessage]) -> None:
+    async def add_chat_messages(self, messages: Sequence[ChatMessage]) -> None:
         """Insert a transcript snapshot in one flush; messages have no search projection."""
 
         self.session.add_all(
@@ -450,7 +483,7 @@ class StoreTransaction:
             ]
         )
         try:
-            self.session.flush()
+            (await self.session.flush())
         except IntegrityError as exc:
             record_caught_exception(
                 "storage",
@@ -463,16 +496,16 @@ class StoreTransaction:
                 "chat message snapshot contains an existing entity"
             ) from exc
 
-    def add_absent(self, entity: Entity) -> bool:
+    async def add_absent(self, entity: Entity) -> bool:
         """Add a write-once record unless its id is already stored.
 
         For content-addressed records, whose id is derived from their value, a
         stored id already holds the same content. Returns whether it was added.
         """
 
-        row = self.session.get(EntityRow, entity.id)
+        row = await self.session.get(EntityRow, entity.id)
         if row is None:
-            self.add(entity)
+            (await self.add(entity))
             return True
         if row.kind != entity.entity_kind:
             raise ConflictError(
@@ -480,7 +513,7 @@ class StoreTransaction:
             )
         return False
 
-    def update(
+    async def update(
         self,
         model: type[EntityT],
         entity_id: str,
@@ -494,7 +527,7 @@ class StoreTransaction:
         protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
         if protected:
             raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
-        row = self.session.get(EntityRow, entity_id)
+        row = await self.session.get(EntityRow, entity_id)
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
@@ -520,6 +553,7 @@ class StoreTransaction:
             # such; otherwise the change itself is invalid.
             _row_to_entity(row, model)
             raise
+        self._runtime_activity(row.kind, row.id, payload)
         updated_goal = updated if isinstance(updated, ChatGoal) else None
         updated_turn = updated if isinstance(updated, ChatTurn) else None
         attention_entity: Approval | HarnessInteraction | ChatQueue | None = None
@@ -551,12 +585,14 @@ class StoreTransaction:
         if transition_subject is not None:
             from .butler_oversight import project_stream_id
 
-            self.lock_operation_stream(
-                project_stream_id(transition_subject.engagement_id)
+            (
+                await self.lock_operation_stream(
+                    project_stream_id(transition_subject.engagement_id)
+                )
             )
             if goal_transition:
                 before_goal = ChatGoal.model_validate(row.payload)
-        result = self.session.execute(
+        result = await self.session.execute(
             update(EntityRow)
             .where(
                 EntityRow.id == entity_id,
@@ -575,12 +611,12 @@ class StoreTransaction:
             raise ConflictError(
                 f"entity {entity_id} changed while the update was in progress"
             )
-        self.session.flush()
-        refreshed = self.session.get(EntityRow, entity_id)
+        (await self.session.flush())
+        refreshed = await self.session.get(EntityRow, entity_id)
         if refreshed is not None:
             from .search import upsert_search_document
 
-            upsert_search_document(self.session, refreshed)
+            (await upsert_search_document(self.session, refreshed))
         if (
             model.entity_kind == "chat_turns"
             and previous_status != payload.get("status")
@@ -592,25 +628,29 @@ class StoreTransaction:
             from .butler_oversight import record_goal_transition
 
             assert before_goal is not None
-            record_goal_transition(self, before_goal, updated_goal)
+            (await record_goal_transition(self, before_goal, updated_goal))
         if attention_entity is not None:
             from .butler_attention import record_attention_transition
 
-            record_attention_transition(self, before_attention, attention_entity)
+            (
+                await record_attention_transition(
+                    self, before_attention, attention_entity
+                )
+            )
         if completed_goal_turn and updated_turn is not None:
             from .butler_attention import record_completed_goal_turn
 
-            record_completed_goal_turn(self, updated_turn)
+            (await record_completed_goal_turn(self, updated_turn))
             if updated_turn.backend.value == "provider":
                 from .butler_tool_failures import record_completed_provider_turn
 
-                record_completed_provider_turn(self, updated_turn)
+                (await record_completed_provider_turn(self, updated_turn))
         if (
             isinstance(updated, AgentAttempt)
             and isinstance(previous_tokens, int)
             and updated.tokens_used > previous_tokens
         ):
-            run_row = self.session.get(EntityRow, updated.run_id)
+            run_row = await self.session.get(EntityRow, updated.run_id)
             if run_row is not None and run_row.kind == AgentRun.entity_kind:
                 run = AgentRun.model_validate(run_row.payload)
                 if (
@@ -624,7 +664,7 @@ class StoreTransaction:
                         self.provider_usage_profiles_changed.add(profile_id)
         return updated
 
-    def delete(
+    async def delete(
         self,
         model: type[Entity],
         entity_id: str,
@@ -633,30 +673,31 @@ class StoreTransaction:
     ) -> None:
         """Delete one revision-guarded entity inside the current unit of work."""
 
-        row = self.session.get(EntityRow, entity_id)
+        row = await self.session.get(EntityRow, entity_id)
         if row is None or row.kind != model.entity_kind:
             raise NotFoundError(f"{model.entity_kind} entity not found: {entity_id}")
         if expected_revision is not None and row.revision != expected_revision:
             raise ConflictError(
                 f"revision conflict: expected {expected_revision}, found {row.revision}"
             )
-        self.session.delete(row)
-        document = self.session.get(SearchDocumentRow, entity_id)
+        self._runtime_activity(row.kind, row.id, row.payload)
+        (await self.session.delete(row))
+        document = await self.session.get(SearchDocumentRow, entity_id)
         if document is not None:
-            self.session.delete(document)
-        for child in self.session.scalars(
+            (await self.session.delete(document))
+        for child in await self.session.scalars(
             select(SearchDocumentRow).where(
                 SearchDocumentRow.id.like(f"{entity_id}::tab::%")
             )
         ):
-            self.session.delete(child)
-        self.session.flush()
+            (await self.session.delete(child))
+        (await self.session.flush())
         if model.entity_kind in {"chat_sessions", "chat_turns"}:
             self.chat_activity_changed = True
         if model.entity_kind in EVENT_OWNER_ENTITY_KINDS:
             self.deleted_event_owners.append(entity_id)
 
-    def append_operation_event(
+    async def append_operation_event(
         self,
         operation_id: str,
         operation_kind: str,
@@ -675,10 +716,10 @@ class StoreTransaction:
         # The connection-based APIs take the same stream lock. Acquire it
         # before either the retry lookup or MAX(sequence), including callers
         # that have no goal row to lock first.
-        self.lock_operation_stream(operation_id)
+        (await self.lock_operation_stream(operation_id))
         existing = None
         if idempotency_key:
-            existing = self.session.scalar(
+            existing = await self.session.scalar(
                 select(OperationEventRow).where(
                     OperationEventRow.operation_id == operation_id,
                     OperationEventRow.idempotency_key == idempotency_key,
@@ -711,7 +752,7 @@ class StoreTransaction:
                     "idempotency key was reused for a different operation event"
                 )
             return event
-        last_sequence = self.session.scalar(
+        last_sequence = await self.session.scalar(
             select(func.max(OperationEventRow.sequence)).where(
                 OperationEventRow.operation_id == operation_id
             )
@@ -729,10 +770,58 @@ class StoreTransaction:
         )
         self.session.add(OperationEventRow(**event.model_dump(mode="python")))
         try:
-            self.session.flush()
+            (await self.session.flush())
         except IntegrityError as exc:
             raise ConflictError("operation event already exists") from exc
         return event
+
+
+@lru_cache(maxsize=32)
+def _harness_title_queries(dialect: str, scoped: bool, size: int):
+    """Compile immutable top-one lookup shapes once per requested batch size."""
+    keys: Any = select(bindparam("requested_0", type_=String).label("session_id"))
+    if size > 1:
+        keys = keys.union_all(
+            *[
+                select(bindparam(f"requested_{i}", type_=String).label("session_id"))
+                for i in range(1, size)
+            ]
+        )
+    requested = keys.cte("requested_harness_sessions")
+    queries = []
+    for model, newest_first in (
+        (ChatSession, True),
+        (AgentRun, True),
+        (HarnessTurn, False),
+    ):
+        candidate = aliased(EntityRow)
+        eligible = [candidate.harness_session_id == requested.c.session_id]
+        if scoped:
+            eligible.append(candidate.engagement_id == bindparam("engagement_id"))
+        if model is ChatSession:
+            eligible.append(visible_harness_chat_title(candidate, dialect))
+        else:
+            eligible.append(candidate.kind == model.entity_kind)
+        order: tuple[Any, ...] = (candidate.created_at, candidate.id)
+        if newest_first:
+            order = tuple(column.desc() for column in order)
+        selected = (
+            select(candidate.id)
+            .where(*eligible)
+            .order_by(*order)
+            .limit(1)
+            .correlate(requested)
+            .scalar_subquery()
+        )
+        queries.append(
+            (
+                model,
+                select(EntityRow)
+                .select_from(requested)
+                .join(EntityRow, EntityRow.id == selected),
+            )
+        )
+    return tuple(queries)
 
 
 class NebulaStore:
@@ -740,12 +829,13 @@ class NebulaStore:
 
     def __init__(self, database: Database | str | Path) -> None:
         self.application_model_service: ApplicationModelService | None = None
+        self.runtime_switch_service: RuntimeSwitchService | None = None
         self.database = (
             database if isinstance(database, Database) else Database(database)
         )
         # HTTP and Butler construct separate search services over this store.
         # Hold through the repair transaction, including its freshness decision.
-        self.search_projection_lock = Lock()
+        self.search_projection_lock = asyncio.Lock()
         # Removes a deleted record's event history off the deleting thread.
         self.event_history = EventHistoryPurger(self.database)
         self._chat_activity_listeners: list[Callable[[], None]] = []
@@ -763,38 +853,46 @@ class NebulaStore:
 
         self._provider_usage_listeners.append(listener)
 
-    def _begin_run_write(self, connection: Any, run_id: str) -> None:
+    async def _begin_run_write(self, connection: Any, run_id: str) -> None:
         """Serialize sequence assignment for one run on supported databases."""
 
         dialect = self.database.engine.dialect.name
         if dialect == "sqlite":
-            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
             return
-        connection.begin()
+        (await connection.begin())
         if dialect == "postgresql":
             # Run events do not require a matching AgentRun row at the storage
             # boundary, so a row lock is not always available. A transaction-
             # scoped advisory lock keeps MAX(sequence) + 1 safe per run without
             # blocking unrelated run ledgers.
-            connection.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
-                {"run_id": run_id},
+            (
+                await connection.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
+                    {"run_id": run_id},
+                )
             )
 
-    @contextmanager
-    def transaction(self, *, immediate: bool = False) -> Iterator[StoreTransaction]:
-        with self.database.session() as session:
+    @asynccontextmanager
+    async def transaction(
+        self, *, immediate: bool = False
+    ) -> AsyncIterator[StoreTransaction]:
+        if self.database.task_session() is not None:
+            raise RuntimeError("nested writes must use the existing StoreTransaction")
+        async with self.database.session() as session:
             if immediate and self.database.engine.dialect.name == "sqlite":
                 # Report ingestion reads an absent incident before writing it.
                 # Take SQLite's writer lock first so concurrent agents cannot
                 # both conclude that they need to create the same incident.
-                session.execute(text("BEGIN IMMEDIATE"))
+                (await session.execute(text("BEGIN IMMEDIATE")))
             transaction = StoreTransaction(session)
             yield transaction
+        if self.runtime_switch_service is not None:
+            self.runtime_switch_service.schedule(transaction.chat_activity_session_ids)
         if transaction.chat_activity_changed:
             for listener in self._chat_activity_listeners:
                 try:
-                    listener()
+                    await call_async(listener)
                 except Exception as exc:
                     record_caught_exception(
                         "storage",
@@ -806,7 +904,7 @@ class NebulaStore:
         for engagement_id in transaction.oversight_projects_changed:
             for oversight_listener in self._oversight_listeners:
                 try:
-                    oversight_listener(engagement_id)
+                    await call_async(oversight_listener, engagement_id)
                 except Exception as exc:
                     record_caught_exception(
                         "storage",
@@ -818,7 +916,7 @@ class NebulaStore:
         for profile_id in transaction.provider_usage_profiles_changed:
             for provider_usage_listener in self._provider_usage_listeners:
                 try:
-                    provider_usage_listener(profile_id)
+                    await call_async(provider_usage_listener, profile_id)
                 except Exception as exc:
                     record_caught_exception(
                         "storage",
@@ -830,12 +928,12 @@ class NebulaStore:
         if transaction.deleted_event_owners:
             self.event_history.submit(transaction.deleted_event_owners)
 
-    def create(self, entity: EntityT) -> EntityT:
-        with self.transaction() as transaction:
-            transaction.add(entity)
+    async def create(self, entity: EntityT) -> EntityT:
+        async with self.transaction() as transaction:
+            (await transaction.add(entity))
         return entity
 
-    def list_session_entities(
+    async def list_session_entities(
         self,
         model: type[EntityT],
         session_id: str,
@@ -880,14 +978,15 @@ class NebulaStore:
         statement = statement.order_by(*_entity_order(newest_first))
         if limit is not None:
             statement = statement.limit(limit)
-        with self.database.session() as session:
+        async with self.database.session() as session:
             if readable_only:
-                return readable_entities(session.scalars(statement), model)
+                return readable_entities((await session.scalars(statement)), model)
             return [
-                model.model_validate(row.payload) for row in session.scalars(statement)
+                model.model_validate(row.payload)
+                for row in (await session.scalars(statement))
             ]
 
-    def list_harness_turn_tool_calls(
+    async def list_harness_turn_tool_calls(
         self,
         turn_id: str,
         *,
@@ -909,14 +1008,14 @@ class NebulaStore:
             EntityRow.engagement_id == engagement_id,
             EntityRow.tool_call_status.in_(list(statuses)),
         )
-        with self.database.session() as session:
+        async with self.database.session() as session:
             calls = [
                 ToolCall.model_validate(row.payload)
-                for row in session.scalars(statement)
+                for row in (await session.scalars(statement))
             ]
         return sorted(calls, key=lambda call: (call.created_at, call.id))
 
-    def recent_chat_messages(
+    async def recent_chat_messages(
         self, session_id: str, *, limit: int = 8
     ) -> list[ChatMessage]:
         """Read an active transcript tail without materializing its full history.
@@ -942,17 +1041,21 @@ class NebulaStore:
             .execution_options(yield_per=16)
         )
         messages = []
-        with self.database.session() as session:
-            for row in session.scalars(statement):
-                message = _row_to_entity(row, ChatMessage)
-                if not message_is_replaced(message):
-                    messages.append(message)
-                    if len(messages) == limit:
-                        break
+        async with self.database.session() as session:
+            result = await session.stream_scalars(statement)
+            try:
+                async for row in result:
+                    message = _row_to_entity(row, ChatMessage)
+                    if not message_is_replaced(message):
+                        messages.append(message)
+                        if len(messages) == limit:
+                            break
+            finally:
+                await finish_cleanup(result.close())
         messages.reverse()
         return messages
 
-    def expired_temporary_chat_ids(self, before: datetime) -> list[str]:
+    async def expired_temporary_chat_ids(self, before: datetime) -> list[str]:
         """Select expired detached popups without loading ordinary/side chats."""
 
         statement = (
@@ -969,13 +1072,15 @@ class NebulaStore:
             )
             .order_by(*_entity_order(False))
         )
-        with self.database.session() as session:
+        async with self.database.session(bulk=True) as session:
             return [
                 chat.id
-                for chat in readable_entities(session.scalars(statement), ChatSession)
+                for chat in readable_entities(
+                    (await session.scalars(statement)), ChatSession
+                )
             ]
 
-    def web_search_project_count(self) -> int:
+    async def web_search_project_count(self) -> int:
         """Count cloud-enabled search policies without hydrating their envelopes."""
 
         statement = (
@@ -989,10 +1094,10 @@ class NebulaStore:
                 ),
             )
         )
-        with self.database.session() as session:
-            return int(session.scalar(statement) or 0)
+        async with self.database.session(bulk=True) as session:
+            return int((await session.scalar(statement)) or 0)
 
-    def butler_recovery_session_ids(self, session_ids: Iterable[str]) -> set[str]:
+    async def butler_recovery_session_ids(self, session_ids: Iterable[str]) -> set[str]:
         """Find older Butler recovery chats without scanning every project goal."""
 
         ids = set(session_ids)
@@ -1005,10 +1110,10 @@ class NebulaStore:
             .as_string()
             .is_not(None),
         )
-        with self.database.session() as session:
-            return {value for value in session.scalars(statement) if value}
+        async with self.database.session() as session:
+            return {value for value in (await session.scalars(statement)) if value}
 
-    def list_tool_call_artifacts(
+    async def list_tool_call_artifacts(
         self, engagement_id: str, tool_call_id: str
     ) -> list[Artifact]:
         """Return the artifacts one tool call recorded, oldest first."""
@@ -1022,13 +1127,13 @@ class NebulaStore:
             )
             .order_by(EntityRow.created_at, EntityRow.id)
         )
-        with self.database.session() as session:
+        async with self.database.session() as session:
             return [
                 Artifact.model_validate(row.payload)
-                for row in session.scalars(statement)
+                for row in (await session.scalars(statement))
             ]
 
-    def has_entity_with_metadata(
+    async def has_entity_with_metadata(
         self, model: type[Entity], key: str, value: str
     ) -> bool:
         """Report whether any ``model`` row carries ``metadata[key] == value``.
@@ -1043,10 +1148,10 @@ class NebulaStore:
                 EntityRow.payload["metadata"][key].as_string() == value,
             )
         )
-        with self.database.session() as session:
-            return bool(session.scalar(statement))
+        async with self.database.session() as session:
+            return bool((await session.scalar(statement)))
 
-    def find_entity(
+    async def find_entity(
         self, model: type[EntityT], field: str, value: str
     ) -> EntityT | None:
         """Return the oldest ``model`` row whose top-level ``field`` equals ``value``.
@@ -1064,16 +1169,16 @@ class NebulaStore:
             .order_by(EntityRow.created_at, EntityRow.id)
             .limit(1)
         )
-        with self.database.session() as session:
-            row = session.scalar(statement)
+        async with self.database.session() as session:
+            row = await session.scalar(statement)
             return model.model_validate(row.payload) if row is not None else None
 
-    def create_many(self, entities: list[Entity]) -> list[Entity]:
-        with self.transaction() as transaction:
-            transaction.add_all(entities)
+    async def create_many(self, entities: list[Entity]) -> list[Entity]:
+        async with self.transaction() as transaction:
+            (await transaction.add_all(entities))
         return entities
 
-    def create_with_event(
+    async def create_with_event(
         self,
         entity: EntityT,
         *,
@@ -1088,15 +1193,17 @@ class NebulaStore:
 
         if not run_id or not event_type:
             raise ValueError("run_id and event_type are required")
-        connection = self.database.engine.connect()
+        connection = await self.database.connect()
         try:
-            self._begin_run_write(connection, run_id)
+            (await self._begin_run_write(connection, run_id))
             if project_workspace_binding is not None:
                 project_id, expected_path = project_workspace_binding
-                project_row = connection.execute(
-                    select(EntityRow.kind, EntityRow.payload)
-                    .where(EntityRow.id == project_id)
-                    .with_for_update()
+                project_row = (
+                    await connection.execute(
+                        select(EntityRow.kind, EntityRow.payload)
+                        .where(EntityRow.id == project_id)
+                        .with_for_update()
+                    )
                 ).one_or_none()
                 if project_row is None or project_row.kind != Engagement.entity_kind:
                     raise NotFoundError(f"engagements entity not found: {project_id}")
@@ -1107,19 +1214,21 @@ class NebulaStore:
                     raise ConflictError(
                         "Project workspace changed while preparing work; read the project and retry"
                     )
-            connection.execute(
-                insert(EntityRow).values(
-                    id=entity.id,
-                    kind=entity.entity_kind,
-                    engagement_id=entity_engagement_id(entity),
-                    revision=entity.revision,
-                    payload=_dump_entity(entity),
-                    **_entity_lookup_fields(entity),
-                    created_at=entity.created_at,
-                    updated_at=entity.updated_at,
+            (
+                await connection.execute(
+                    insert(EntityRow).values(
+                        id=entity.id,
+                        kind=entity.entity_kind,
+                        engagement_id=entity_engagement_id(entity),
+                        revision=entity.revision,
+                        payload=_dump_entity(entity),
+                        **_entity_lookup_fields(entity),
+                        created_at=entity.created_at,
+                        updated_at=entity.updated_at,
+                    )
                 )
             )
-            event = self._next_event(
+            event = await self._next_event(
                 connection,
                 run_id=run_id,
                 event_type=event_type,
@@ -1127,10 +1236,12 @@ class NebulaStore:
                 actor_id=actor_id,
                 idempotency_key=idempotency_key,
             )
-            connection.execute(
-                insert(RunEventRow).values(**event.model_dump(mode="python"))
+            (
+                await connection.execute(
+                    insert(RunEventRow).values(**event.model_dump(mode="python"))
+                )
             )
-            connection.commit()
+            (await connection.commit())
             return entity, event
         except IntegrityError as exc:
             record_caught_exception(
@@ -1140,12 +1251,12 @@ class NebulaStore:
                 exc,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise ConflictError(
                 f"entity or initial run event already exists: {entity.id}"
             ) from exc
         except (ConflictError, NotFoundError):
-            connection.rollback()
+            (await connection.rollback())
             raise
         except Exception as caught_error:
             record_caught_exception(
@@ -1155,12 +1266,12 @@ class NebulaStore:
                 caught_error,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
-    def create_with_operation_event(
+    async def create_with_operation_event(
         self,
         entity: EntityT,
         *,
@@ -1179,22 +1290,24 @@ class NebulaStore:
             raise ValueError("operation event identifiers and type are required")
         if entity_engagement_id(entity) != engagement_id:
             raise ValueError("operation event engagement must own the entity")
-        connection = self.database.engine.connect()
+        connection = await self.database.connect()
         try:
-            self._begin_run_write(connection, f"operation:{operation_id}")
-            connection.execute(
-                insert(EntityRow).values(
-                    id=entity.id,
-                    kind=entity.entity_kind,
-                    engagement_id=engagement_id,
-                    revision=entity.revision,
-                    payload=_dump_entity(entity),
-                    **_entity_lookup_fields(entity),
-                    created_at=entity.created_at,
-                    updated_at=entity.updated_at,
+            (await self._begin_run_write(connection, f"operation:{operation_id}"))
+            (
+                await connection.execute(
+                    insert(EntityRow).values(
+                        id=entity.id,
+                        kind=entity.entity_kind,
+                        engagement_id=engagement_id,
+                        revision=entity.revision,
+                        payload=_dump_entity(entity),
+                        **_entity_lookup_fields(entity),
+                        created_at=entity.created_at,
+                        updated_at=entity.updated_at,
+                    )
                 )
             )
-            event = self._next_operation_event(
+            event = await self._next_operation_event(
                 connection,
                 operation_id=operation_id,
                 operation_kind=operation_kind,
@@ -1205,10 +1318,12 @@ class NebulaStore:
                 idempotency_key=idempotency_key,
                 occurred_at=occurred_at,
             )
-            connection.execute(
-                insert(OperationEventRow).values(**event.model_dump(mode="python"))
+            (
+                await connection.execute(
+                    insert(OperationEventRow).values(**event.model_dump(mode="python"))
+                )
             )
-            connection.commit()
+            (await connection.commit())
             return entity, event
         except IntegrityError as exc:
             record_caught_exception(
@@ -1218,7 +1333,7 @@ class NebulaStore:
                 exc,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise ConflictError(
                 f"entity or operation event already exists: {entity.id}"
             ) from exc
@@ -1230,27 +1345,31 @@ class NebulaStore:
                 caught_error,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
-    def reserve_tool_call(self, call: ToolCall) -> ToolCall:
+    async def reserve_tool_call(self, call: ToolCall) -> ToolCall:
         """Atomically reserve one durable run tool-call slot and create the call."""
 
-        connection = self.database.engine.connect()
+        connection = await self.database.connect()
         try:
             if self.database.engine.dialect.name == "sqlite":
-                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                (await connection.exec_driver_sql("BEGIN IMMEDIATE"))
             else:
-                connection.begin()
+                (await connection.begin())
             existing = (
-                connection.execute(select(EntityRow).where(EntityRow.id == call.id))
+                (
+                    await connection.execute(
+                        select(EntityRow).where(EntityRow.id == call.id)
+                    )
+                )
                 .mappings()
                 .first()
             )
             if existing is not None:
-                connection.commit()
+                (await connection.commit())
                 row = EntityRow(
                     id=existing["id"],
                     kind=existing["kind"],
@@ -1266,13 +1385,15 @@ class NebulaStore:
                 ChatTurn.entity_kind if call.origin == ToolCallOrigin.CHAT else "runs"
             )
             run = (
-                connection.execute(
-                    select(EntityRow)
-                    .where(
-                        EntityRow.id == call.run_id,
-                        EntityRow.kind == owner_kind,
+                (
+                    await connection.execute(
+                        select(EntityRow)
+                        .where(
+                            EntityRow.id == call.run_id,
+                            EntityRow.kind == owner_kind,
+                        )
+                        .with_for_update()
                     )
-                    .with_for_update()
                 )
                 .mappings()
                 .first()
@@ -1286,12 +1407,16 @@ class NebulaStore:
             # therefore have committed this deterministic call ID while this
             # transaction waited. Recheck before consuming budget.
             existing = (
-                connection.execute(select(EntityRow).where(EntityRow.id == call.id))
+                (
+                    await connection.execute(
+                        select(EntityRow).where(EntityRow.id == call.id)
+                    )
+                )
                 .mappings()
                 .first()
             )
             if existing is not None:
-                connection.commit()
+                (await connection.commit())
                 row = EntityRow(
                     id=existing["id"],
                     kind=existing["kind"],
@@ -1313,10 +1438,12 @@ class NebulaStore:
             )
             maximum = int(maximum_value) if maximum_value is not None else None
             counter = (
-                connection.execute(
-                    select(RunBudgetCounterRow)
-                    .where(RunBudgetCounterRow.run_id == call.run_id)
-                    .with_for_update()
+                (
+                    await connection.execute(
+                        select(RunBudgetCounterRow)
+                        .where(RunBudgetCounterRow.run_id == call.run_id)
+                        .with_for_update()
+                    )
                 )
                 .mappings()
                 .first()
@@ -1329,36 +1456,42 @@ class NebulaStore:
                     f"{'artifact-query' if artifact_query else 'tool-call'} budget ({maximum})"
                 )
             if counter:
-                connection.execute(
-                    update(RunBudgetCounterRow)
-                    .where(RunBudgetCounterRow.run_id == call.run_id)
-                    .values(**{counter_field: current + 1, "updated_at": utc_now()})
-                )
-            else:
-                connection.execute(
-                    insert(RunBudgetCounterRow).values(
-                        run_id=call.run_id,
-                        tool_calls=0 if artifact_query else 1,
-                        artifact_queries=1 if artifact_query else 0,
-                        input_tokens=0,
-                        output_tokens=0,
-                        cost_microusd=0,
-                        updated_at=utc_now(),
+                (
+                    await connection.execute(
+                        update(RunBudgetCounterRow)
+                        .where(RunBudgetCounterRow.run_id == call.run_id)
+                        .values(**{counter_field: current + 1, "updated_at": utc_now()})
                     )
                 )
-            connection.execute(
-                insert(EntityRow).values(
-                    id=call.id,
-                    kind=call.entity_kind,
-                    engagement_id=call.engagement_id,
-                    revision=call.revision,
-                    payload=_dump_entity(call),
-                    **_entity_lookup_fields(call),
-                    created_at=call.created_at,
-                    updated_at=call.updated_at,
+            else:
+                (
+                    await connection.execute(
+                        insert(RunBudgetCounterRow).values(
+                            run_id=call.run_id,
+                            tool_calls=0 if artifact_query else 1,
+                            artifact_queries=1 if artifact_query else 0,
+                            input_tokens=0,
+                            output_tokens=0,
+                            cost_microusd=0,
+                            updated_at=utc_now(),
+                        )
+                    )
+                )
+            (
+                await connection.execute(
+                    insert(EntityRow).values(
+                        id=call.id,
+                        kind=call.entity_kind,
+                        engagement_id=call.engagement_id,
+                        revision=call.revision,
+                        payload=_dump_entity(call),
+                        **_entity_lookup_fields(call),
+                        created_at=call.created_at,
+                        updated_at=call.updated_at,
+                    )
                 )
             )
-            connection.commit()
+            (await connection.commit())
             return call
         except Exception as caught_error:
             record_caught_exception(
@@ -1368,27 +1501,27 @@ class NebulaStore:
                 caught_error,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
-    def get(self, model: type[EntityT], entity_id: str) -> EntityT:
-        with self.database.session() as session:
-            row = session.get(EntityRow, entity_id)
+    async def get(self, model: type[EntityT], entity_id: str) -> EntityT:
+        async with self.database.session() as session:
+            row = await session.get(EntityRow, entity_id)
             if row is None or row.kind != model.entity_kind:
                 raise NotFoundError(
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
             return _row_to_entity(row, model)
 
-    def get_by_kind(self, kind: str, entity_id: str) -> Entity:
+    async def get_by_kind(self, kind: str, entity_id: str) -> Entity:
         model = ENTITY_MODEL_BY_KIND.get(kind)
         if model is None:
             raise NotFoundError(f"unknown entity kind: {kind}")
-        return self.get(model, entity_id)
+        return await self.get(model, entity_id)
 
-    def mcp_catalog_candidates(
+    async def mcp_catalog_candidates(
         self,
         *,
         exclude: Collection[str] = (),
@@ -1415,13 +1548,13 @@ class NebulaStore:
             statement = statement.where(
                 or_(owner.is_(None), owner == "", owner == engagement_id)
             )
-        with self.database.session() as session:
+        async with self.database.session() as session:
             return [
                 _row_to_entity(row, McpServerProfile)
-                for row in session.scalars(statement)
+                for row in (await session.scalars(statement))
             ]
 
-    def list_entities(
+    async def list_entities(
         self,
         model: type[EntityT],
         *,
@@ -1467,10 +1600,12 @@ class NebulaStore:
             else _entity_order(newest_first)
         )
         statement = statement.order_by(*order).offset(offset).limit(limit)
-        with self.database.session() as session:
-            return [_row_to_entity(row, model) for row in session.scalars(statement)]
+        async with self.database.session(bulk=True) as session:
+            return [
+                _row_to_entity(row, model) for row in (await session.scalars(statement))
+            ]
 
-    def harness_session_title_sources(
+    async def harness_session_title_sources(
         self,
         session_ids: Sequence[str],
         *,
@@ -1485,39 +1620,21 @@ class NebulaStore:
         if not ids:
             return chat_titles, run_titles, first_turns
 
-        with self.database.session() as session:
+        async with self.database.session(bulk=True) as session:
             # Keep SQLite's bind count bounded when the API requests 1,000 rows.
             for start in range(0, len(ids), 500):
                 chunk = ids[start : start + 500]
-                for model, newest_first in (
-                    (ChatSession, True),
-                    (AgentRun, True),
-                    (HarnessTurn, False),
+                parameters = {f"requested_{i}": key for i, key in enumerate(chunk)}
+                if engagement_id is not None:
+                    parameters["engagement_id"] = engagement_id
+                # Requested keys are values, never a scan of historical IDs.
+                # Every correlated lookup stops at its first indexed match.
+                for model, statement in _harness_title_queries(
+                    self.database.engine.dialect.name,
+                    engagement_id is not None,
+                    len(chunk),
                 ):
-                    order = _entity_order(newest_first)
-                    ranked = select(
-                        EntityRow.id.label("entity_id"),
-                        func.row_number()
-                        .over(
-                            partition_by=EntityRow.harness_session_id,
-                            order_by=order,
-                        )
-                        .label("position"),
-                    ).where(
-                        EntityRow.kind == model.entity_kind,
-                        EntityRow.harness_session_id.in_(chunk),
-                    )
-                    if engagement_id is not None:
-                        ranked = ranked.where(EntityRow.engagement_id == engagement_id)
-                    if model is ChatSession:
-                        ranked = ranked.where(not_temporary_chat_session())
-                    selected = ranked.subquery()
-                    statement = (
-                        select(EntityRow)
-                        .join(selected, EntityRow.id == selected.c.entity_id)
-                        .where(selected.c.position == 1)
-                    )
-                    for row in session.scalars(statement):
+                    for row in await session.scalars(statement, parameters):
                         item = _row_to_entity(row, model)
                         if isinstance(item, ChatSession):
                             if item.harness_session_id:
@@ -1576,6 +1693,10 @@ class NebulaStore:
                 ): EntityRow.artifact_tool_call_id,
                 (ToolCall.entity_kind, "status"): EntityRow.tool_call_status,
                 (ChatTurn.entity_kind, "status"): EntityRow.chat_turn_status,
+                (
+                    ChatSession.entity_kind,
+                    "metadata.pending_runtime_switch.status",
+                ): EntityRow.runtime_switch_status,
                 (ToolCall.entity_kind, "origin"): EntityRow.tool_call_origin,
                 (
                     ToolCall.entity_kind,
@@ -1610,7 +1731,7 @@ class NebulaStore:
                 statement = statement.where(column.in_(accepted))
         return statement
 
-    def find_entities(
+    async def find_entities(
         self,
         model: type[EntityT],
         filters: Mapping[str, PayloadFilterValue],
@@ -1623,6 +1744,7 @@ class NebulaStore:
         offset: int = 0,
         limit: int | None = None,
         newest_first: bool = False,
+        bulk: bool = True,
     ) -> list[EntityT]:
         """Return the ``model`` rows whose payload matches ``filters``, filtered in SQL.
 
@@ -1658,10 +1780,12 @@ class NebulaStore:
         statement = statement.order_by(*_entity_order(newest_first)).offset(offset)
         if limit is not None:
             statement = statement.limit(limit)
-        with self.database.session() as session:
-            return [_row_to_entity(row, model) for row in session.scalars(statement)]
+        async with self.database.session(bulk=bulk) as session:
+            return [
+                _row_to_entity(row, model) for row in (await session.scalars(statement))
+            ]
 
-    def chat_turn_status_rows(
+    async def chat_turn_status_rows(
         self,
         statuses: Sequence[ChatTurnStatus],
         *,
@@ -1692,8 +1816,8 @@ class NebulaStore:
         # SQLite otherwise favors the older (kind, engagement, created_at)
         # index to satisfy ORDER BY and scans every historical turn. Sorting
         # the small matching set here leaves both status queries covering.
-        with self.database.session() as session:
-            rows = list(session.execute(statement))
+        async with self.database.session() as session:
+            rows = list((await session.execute(statement)))
             rows.sort(key=lambda row: (row.sort_created_at, row.id))
             return [
                 ChatTurnStatusRow(
@@ -1707,7 +1831,7 @@ class NebulaStore:
                 for row in rows
             ]
 
-    def chat_session_agent_rows(
+    async def chat_session_agent_rows(
         self,
         *,
         engagement_id: str | None = None,
@@ -1728,7 +1852,7 @@ class NebulaStore:
             if identifiers is not None
             else [None]
         )
-        with self.database.session() as session:
+        async with self.database.session() as session:
             for chunk in chunks:
                 statement = select(
                     EntityRow.id,
@@ -1756,11 +1880,11 @@ class NebulaStore:
                         model=row.model,
                         metadata=row.metadata or {},
                     )
-                    for row in session.execute(statement)
+                    for row in (await session.execute(statement))
                 )
         return rows
 
-    def count_entities(
+    async def count_entities(
         self,
         model: type[Entity],
         filters: Mapping[str, PayloadFilterValue] | None = None,
@@ -1774,13 +1898,17 @@ class NebulaStore:
         )
         if statement is None:
             return 0
-        with self.database.session() as session:
+        async with self.database.session() as session:
             return int(
-                session.scalar(statement.with_only_columns(func.count()).order_by(None))
+                (
+                    await session.scalar(
+                        statement.with_only_columns(func.count()).order_by(None)
+                    )
+                )
                 or 0
             )
 
-    def list_latest_entities(
+    async def list_latest_entities(
         self,
         model: type[EntityT],
         filters: Mapping[str, PayloadFilterValue] | None = None,
@@ -1800,7 +1928,7 @@ class NebulaStore:
 
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        rows = self.find_entities(
+        rows = await self.find_entities(
             model,
             filters or {},
             engagement_id=engagement_id,
@@ -1811,7 +1939,7 @@ class NebulaStore:
         rows.reverse()
         return rows
 
-    def iter_readable_entities(
+    async def iter_readable_entities(
         self,
         model: type[EntityT],
         filters: Mapping[str, PayloadFilterValue] | None = None,
@@ -1819,7 +1947,7 @@ class NebulaStore:
         engagement_id: str | None = None,
         session_id: str | None = None,
         page_size: int = 1000,
-    ) -> Iterator[EntityT]:
+    ) -> AsyncIterator[EntityT]:
         """Yield the ``model`` records matching ``filters`` oldest first, skipping unreadable rows.
 
         ``list_entities`` and ``find_entities`` raise ``CorruptRecordError``
@@ -1843,15 +1971,16 @@ class NebulaStore:
         )
         if statement is None:
             return
-        yield from self._iter_readable_statement(model, statement, page_size)
+        async for _entity in self._iter_readable_statement(model, statement, page_size):
+            yield _entity
 
-    def iter_reference_candidates(
+    async def iter_reference_candidates(
         self,
         model: type[EntityT],
         references: Sequence[tuple[str, str, bool]],
         *,
         engagement_id: str | None = None,
-    ) -> Iterator[EntityT]:
+    ) -> AsyncIterator[EntityT]:
         """Hydrate only potential references; callers still validate each match.
 
         A scalar compares exactly; an array uses JSON element equality. Never
@@ -1888,27 +2017,32 @@ class NebulaStore:
                 )
             )
         if predicates:
-            yield from self._iter_readable_statement(
+            async for _entity in self._iter_readable_statement(
                 model, statement.where(or_(*predicates)), 1000
-            )
+            ):
+                yield _entity
 
-    def _iter_readable_statement(
+    async def _iter_readable_statement(
         self, model: type[EntityT], statement: Select[tuple[EntityRow]], page_size: int
-    ) -> Iterator[EntityT]:
-        with self.database.session() as session:
+    ) -> AsyncIterator[EntityT]:
+        async with self.database.session(bulk=True) as session:
             ids = list(
-                session.scalars(
-                    statement.with_only_columns(EntityRow.id).order_by(
-                        *_entity_order(False)
+                (
+                    await session.scalars(
+                        statement.with_only_columns(EntityRow.id).order_by(
+                            *_entity_order(False)
+                        )
                     )
                 )
             )
         for start in range(0, len(ids), page_size):
             page = ids[start : start + page_size]
-            with self.database.session() as session:
+            async with self.database.session(bulk=True) as session:
                 rows = {
                     row.id: row
-                    for row in session.scalars(statement.where(EntityRow.id.in_(page)))
+                    for row in (
+                        await session.scalars(statement.where(EntityRow.id.in_(page)))
+                    )
                 }
                 # A row deleted, or no longer matching, since the ids were
                 # read is left out.
@@ -1916,9 +2050,10 @@ class NebulaStore:
                     (rows[entity_id] for entity_id in page if entity_id in rows),
                     model,
                 )
-            yield from readable
+            for _entity in readable:
+                yield _entity
 
-    def count(
+    async def count(
         self,
         model: type[Entity],
         *,
@@ -1932,10 +2067,10 @@ class NebulaStore:
             statement = statement.where(not_temporary_chat_session())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
-        with self.database.session() as session:
-            return int(session.scalar(statement) or 0)
+        async with self.database.session() as session:
+            return int((await session.scalar(statement)) or 0)
 
-    def update(
+    async def update(
         self,
         model: type[EntityT],
         entity_id: str,
@@ -1943,15 +2078,15 @@ class NebulaStore:
         *,
         expected_revision: int | None = None,
     ) -> EntityT:
-        with self.transaction() as transaction:
-            return transaction.update(
+        async with self.transaction() as transaction:
+            return await transaction.update(
                 model,
                 entity_id,
                 changes,
                 expected_revision=expected_revision,
             )
 
-    def relink_project_workspace(
+    async def relink_project_workspace(
         self, engagement_id: str, workspace_path: str, *, expected_revision: int
     ) -> Engagement:
         """Change one project's folder only when no old workspace can be reused.
@@ -2004,8 +2139,8 @@ class NebulaStore:
             ),
             ("native_hook_executions", {"running"}, "native hook"),
         )
-        with self.transaction(immediate=True) as transaction:
-            row = transaction.session.get(
+        async with self.transaction(immediate=True) as transaction:
+            row = await transaction.session.get(
                 EntityRow, engagement_id, with_for_update=True
             )
             if row is None or row.kind != Engagement.entity_kind:
@@ -2018,7 +2153,7 @@ class NebulaStore:
             if project.workspace_path == workspace_path:
                 return project
             for kind, statuses, label in in_use:
-                active = transaction.session.scalar(
+                active = await transaction.session.scalar(
                     select(EntityRow.id)
                     .where(
                         EntityRow.kind == kind,
@@ -2032,7 +2167,7 @@ class NebulaStore:
                         f"project has a {label} that can still use its current folder; "
                         "complete or close it before relinking"
                     )
-            interrupted_turns = transaction.session.scalars(
+            interrupted_turns = await transaction.session.scalars(
                 select(EntityRow).where(
                     EntityRow.kind == ChatTurn.entity_kind,
                     EntityRow.engagement_id == engagement_id,
@@ -2044,7 +2179,7 @@ class NebulaStore:
                     "project has an interrupted chat turn awaiting recovery; "
                     "complete or close it before relinking"
                 )
-            paused_goals = transaction.session.scalars(
+            paused_goals = await transaction.session.scalars(
                 select(EntityRow).where(
                     EntityRow.kind == ChatGoal.entity_kind,
                     EntityRow.engagement_id == engagement_id,
@@ -2059,7 +2194,7 @@ class NebulaStore:
                     "project has a paused goal that can resume; "
                     "complete or close it before relinking"
                 )
-            interrupted_runs = transaction.session.scalars(
+            interrupted_runs = await transaction.session.scalars(
                 select(EntityRow).where(
                     EntityRow.kind == AgentRun.entity_kind,
                     EntityRow.engagement_id == engagement_id,
@@ -2074,7 +2209,7 @@ class NebulaStore:
                     "project has an interrupted native mission that can resume; "
                     "complete or close it before relinking"
                 )
-            queues = transaction.session.scalars(
+            queues = await transaction.session.scalars(
                 select(EntityRow).where(
                     EntityRow.kind == ChatQueue.entity_kind,
                     EntityRow.engagement_id == engagement_id,
@@ -2093,14 +2228,14 @@ class NebulaStore:
                 )
             metadata = dict(project.metadata)
             metadata.pop("notebook_file_index", None)
-            return transaction.update(
+            return await transaction.update(
                 Engagement,
                 engagement_id,
                 {"workspace_path": workspace_path, "metadata": metadata},
                 expected_revision=expected_revision,
             )
 
-    def update_with_event(
+    async def update_with_event(
         self,
         model: type[EntityT],
         entity_id: str,
@@ -2119,10 +2254,10 @@ class NebulaStore:
         protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
         if protected:
             raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
-        connection = self.database.engine.connect()
+        connection = await self.database.connect()
         try:
-            self._begin_run_write(connection, run_id)
-            existing_event = self._event_for_idempotency_key(
+            (await self._begin_run_write(connection, run_id))
+            existing_event = await self._event_for_idempotency_key(
                 connection, run_id, idempotency_key
             )
             if existing_event is not None:
@@ -2142,10 +2277,12 @@ class NebulaStore:
                         "idempotency key belongs to a different entity transition"
                     )
                 current_row = (
-                    connection.execute(
-                        select(EntityRow).where(
-                            EntityRow.id == entity_id,
-                            EntityRow.kind == model.entity_kind,
+                    (
+                        await connection.execute(
+                            select(EntityRow).where(
+                                EntityRow.id == entity_id,
+                                EntityRow.kind == model.entity_kind,
+                            )
                         )
                     )
                     .mappings()
@@ -2156,12 +2293,15 @@ class NebulaStore:
                         "idempotent event exists but its transitioned entity is missing"
                     )
                 current_entity = self._mapping_to_entity(current_row, model)
-                connection.commit()
+                (await connection.commit())
                 return current_entity, existing_event
             row = (
-                connection.execute(
-                    select(EntityRow).where(
-                        EntityRow.id == entity_id, EntityRow.kind == model.entity_kind
+                (
+                    await connection.execute(
+                        select(EntityRow).where(
+                            EntityRow.id == entity_id,
+                            EntityRow.kind == model.entity_kind,
+                        )
                     )
                 )
                 .mappings()
@@ -2185,7 +2325,7 @@ class NebulaStore:
                 }
             )
             updated_entity = model.model_validate(payload)
-            result = connection.execute(
+            result = await connection.execute(
                 update(EntityRow)
                 .where(
                     EntityRow.id == entity_id,
@@ -2202,7 +2342,7 @@ class NebulaStore:
             )
             if result.rowcount != 1:
                 raise ConflictError("entity transition lost an optimistic lock race")
-            event = self._next_event(
+            event = await self._next_event(
                 connection,
                 run_id=run_id,
                 event_type=event_type,
@@ -2210,10 +2350,12 @@ class NebulaStore:
                 actor_id=actor_id,
                 idempotency_key=idempotency_key,
             )
-            connection.execute(
-                insert(RunEventRow).values(**event.model_dump(mode="python"))
+            (
+                await connection.execute(
+                    insert(RunEventRow).values(**event.model_dump(mode="python"))
+                )
             )
-            connection.commit()
+            (await connection.commit())
             return updated_entity, event
         except Exception as caught_error:
             record_caught_exception(
@@ -2223,12 +2365,12 @@ class NebulaStore:
                 caught_error,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
-    def update_with_operation_event(
+    async def update_with_operation_event(
         self,
         model: type[EntityT],
         entity_id: str,
@@ -2253,14 +2395,16 @@ class NebulaStore:
         if protected:
             raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
 
-        connection = self.database.engine.connect()
+        connection = await self.database.connect()
         try:
-            self._begin_run_write(connection, f"operation:{operation_id}")
+            (await self._begin_run_write(connection, f"operation:{operation_id}"))
             row = (
-                connection.execute(
-                    select(EntityRow).where(
-                        EntityRow.id == entity_id,
-                        EntityRow.kind == model.entity_kind,
+                (
+                    await connection.execute(
+                        select(EntityRow).where(
+                            EntityRow.id == entity_id,
+                            EntityRow.kind == model.entity_kind,
+                        )
                     )
                 )
                 .mappings()
@@ -2286,7 +2430,7 @@ class NebulaStore:
                 }
             )
             updated_entity = model.model_validate(payload)
-            result = connection.execute(
+            result = await connection.execute(
                 update(EntityRow)
                 .where(
                     EntityRow.id == entity_id,
@@ -2304,7 +2448,7 @@ class NebulaStore:
             if result.rowcount != 1:
                 raise ConflictError("entity transition lost an optimistic lock race")
 
-            event = self._next_operation_event(
+            event = await self._next_operation_event(
                 connection,
                 operation_id=operation_id,
                 operation_kind=operation_kind,
@@ -2315,10 +2459,12 @@ class NebulaStore:
                 idempotency_key=idempotency_key,
                 occurred_at=occurred_at,
             )
-            connection.execute(
-                insert(OperationEventRow).values(**event.model_dump(mode="python"))
+            (
+                await connection.execute(
+                    insert(OperationEventRow).values(**event.model_dump(mode="python"))
+                )
             )
-            connection.commit()
+            (await connection.commit())
             return updated_entity, event
         except Exception as caught_error:
             record_caught_exception(
@@ -2328,12 +2474,12 @@ class NebulaStore:
                 caught_error,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
-    def replace(
+    async def replace(
         self,
         model: type[EntityT],
         entity_id: str,
@@ -2343,35 +2489,35 @@ class NebulaStore:
     ) -> EntityT:
         if replacement.id != entity_id:
             raise ValueError("replacement id must match the resource id")
-        existing = self.get(model, entity_id)
+        existing = await self.get(model, entity_id)
         changes = replacement.model_dump(
             mode="python", exclude={"id", "created_at", "updated_at", "revision"}
         )
-        return self.update(
+        return await self.update(
             model,
             entity_id,
             changes,
             expected_revision=expected_revision or existing.revision,
         )
 
-    def delete(
+    async def delete(
         self,
         model: type[Entity],
         entity_id: str,
         *,
         expected_revision: int | None = None,
     ) -> None:
-        with self.database.session() as session:
+        async with self.database.session() as session:
             predicates = [
                 EntityRow.id == entity_id,
                 EntityRow.kind == model.entity_kind,
             ]
             if expected_revision is not None:
                 predicates.append(EntityRow.revision == expected_revision)
-            result = session.execute(delete(EntityRow).where(*predicates))
+            result = await session.execute(delete(EntityRow).where(*predicates))
             if result.rowcount != 1:
                 if expected_revision is not None:
-                    current_revision = session.scalar(
+                    current_revision = await session.scalar(
                         select(EntityRow.revision).where(
                             EntityRow.id == entity_id,
                             EntityRow.kind == model.entity_kind,
@@ -2388,7 +2534,7 @@ class NebulaStore:
         if model.entity_kind in EVENT_OWNER_ENTITY_KINDS:
             self.event_history.submit([entity_id])
 
-    def validate_chat_session_delete(
+    async def validate_chat_session_delete(
         self, session_id: str, *, expected_revision: int | None = None
     ) -> None:
         """Raise what ``delete_chat_session`` would raise, without deleting.
@@ -2398,13 +2544,15 @@ class NebulaStore:
         the surviving conversation untouched.
         """
 
-        with self.database.session() as session:
-            self._chat_session_delete_scope(
-                session, session_id, expected_revision=expected_revision
+        async with self.database.session() as session:
+            (
+                await self._chat_session_delete_scope(
+                    session, session_id, expected_revision=expected_revision
+                )
             )
 
-    def _chat_session_delete_scope(
-        self, session: Session, session_id: str, *, expected_revision: int | None
+    async def _chat_session_delete_scope(
+        self, session: AsyncSession, session_id: str, *, expected_revision: int | None
     ) -> tuple[EntityRow, list[str]]:
         """The conversation row and the chat ids its delete removes.
 
@@ -2412,7 +2560,7 @@ class NebulaStore:
         refused: a stale revision, a running subagent, or an active turn.
         """
 
-        row = session.scalar(
+        row = await session.scalar(
             select(EntityRow).where(
                 EntityRow.id == session_id,
                 EntityRow.kind == "chat_sessions",
@@ -2425,10 +2573,12 @@ class NebulaStore:
                 f"revision conflict: expected {expected_revision}, found {row.revision}"
             )
         # Subagent conversations belong to their parent and go with it.
-        subagent_rows = session.scalars(
-            select(EntityRow).where(
-                EntityRow.kind == "chat_subagents",
-                EntityRow.payload["parent_session_id"].as_string() == session_id,
+        subagent_rows = (
+            await session.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == "chat_subagents",
+                    EntityRow.payload["parent_session_id"].as_string() == session_id,
+                )
             )
         ).all()
         if any(item.payload.get("status") == "running" for item in subagent_rows):
@@ -2461,14 +2611,14 @@ class NebulaStore:
                 )
             ),
         )
-        interrupted = session.scalars(
+        interrupted = await session.scalars(
             select(EntityRow.payload).where(
                 EntityRow.kind == "chat_turns",
                 EntityRow.chat_session_id.in_(session_ids),
                 EntityRow.payload["status"].as_string() == "interrupted",
             )
         )
-        if session.scalar(select(exists().where(active_turn))) or any(
+        if (await session.scalar(select(exists().where(active_turn)))) or any(
             _recovery_pending(payload) for payload in interrupted
         ):
             raise ConflictError(
@@ -2481,13 +2631,13 @@ class NebulaStore:
             .as_string()
             .in_(("queued", "running", "waiting_approval")),
         )
-        if session.scalar(select(exists().where(active_harness_turn))):
+        if await session.scalar(select(exists().where(active_harness_turn))):
             raise ConflictError(
                 "conversation cannot be deleted while a harness turn is active"
             )
         return row, session_ids
 
-    def delete_chat_session(
+    async def delete_chat_session(
         self, session_id: str, *, expected_revision: int | None = None
     ) -> None:
         """Atomically remove one conversation and its private derived records.
@@ -2495,8 +2645,8 @@ class NebulaStore:
         Its turns' event history follows in the background.
         """
 
-        with self.database.session() as session:
-            row, session_ids = self._chat_session_delete_scope(
+        async with self.database.session() as session:
+            row, session_ids = await self._chat_session_delete_scope(
                 session, session_id, expected_revision=expected_revision
             )
             # Vendor (harness) sessions belong to the conversations that opened
@@ -2506,16 +2656,18 @@ class NebulaStore:
             # a session any run references is left in place.
             harness_session_ids = {
                 str(item.payload["harness_session_id"])
-                for item in session.scalars(
-                    select(EntityRow).where(
-                        EntityRow.kind == "chat_sessions",
-                        EntityRow.id.in_(session_ids),
+                for item in (
+                    await session.scalars(
+                        select(EntityRow).where(
+                            EntityRow.kind == "chat_sessions",
+                            EntityRow.id.in_(session_ids),
+                        )
                     )
                 )
                 if item.payload.get("harness_session_id")
             }
             if harness_session_ids:
-                shared_with_runs = session.scalars(
+                shared_with_runs = await session.scalars(
                     select(EntityRow).where(
                         EntityRow.kind == "runs",
                         EntityRow.payload["harness_session_id"]
@@ -2600,30 +2752,36 @@ class NebulaStore:
                 EntityRow.kind == "chat_turns",
                 EntityRow.chat_session_id.in_(session_ids),
             )
-            session.execute(
-                delete(RunBudgetCounterRow).where(
-                    RunBudgetCounterRow.run_id.in_(chat_turn_ids)
+            (
+                await session.execute(
+                    delete(RunBudgetCounterRow).where(
+                        RunBudgetCounterRow.run_id.in_(chat_turn_ids)
+                    )
                 )
             )
             # Admission rows are keyed by turn id; one left behind names a turn
             # that no longer exists.
-            session.execute(
-                delete(ProviderTurnQueueRow).where(
-                    ProviderTurnQueueRow.turn_id.in_(chat_turn_ids)
-                )
-            )
-            _delete_chat_turn_ledgers(session, chat_turn_ids)
-            # The chat and harness turns' run and operation events go once
-            # they are gone; the triggers refuse while the owners exist.
-            event_owner_ids = list(
-                session.scalars(
-                    select(EntityRow.id).where(
-                        owned_records, EntityRow.kind.in_(EVENT_OWNER_ENTITY_KINDS)
+            (
+                await session.execute(
+                    delete(ProviderTurnQueueRow).where(
+                        ProviderTurnQueueRow.turn_id.in_(chat_turn_ids)
                     )
                 )
             )
-            session.execute(delete(EntityRow).where(owned_records))
-            result = session.execute(
+            (await _delete_chat_turn_ledgers(session, chat_turn_ids))
+            # The chat and harness turns' run and operation events go once
+            # they are gone; the triggers refuse while the owners exist.
+            event_owner_ids = list(
+                (
+                    await session.scalars(
+                        select(EntityRow.id).where(
+                            owned_records, EntityRow.kind.in_(EVENT_OWNER_ENTITY_KINDS)
+                        )
+                    )
+                )
+            )
+            (await session.execute(delete(EntityRow).where(owned_records)))
+            result = await session.execute(
                 delete(EntityRow).where(
                     EntityRow.id == session_id,
                     EntityRow.kind == "chat_sessions",
@@ -2634,14 +2792,16 @@ class NebulaStore:
                 raise ConflictError("conversation changed while it was being deleted")
         self.event_history.submit(event_owner_ids)
 
-    def delete_run(self, run_id: str, *, expected_revision: int | None = None) -> None:
+    async def delete_run(
+        self, run_id: str, *, expected_revision: int | None = None
+    ) -> None:
         """Atomically remove a terminal mission and its execution records.
 
         Its event history follows in the background.
         """
 
-        with self.database.session() as session:
-            row = session.scalar(
+        async with self.database.session() as session:
+            row = await session.scalar(
                 select(EntityRow).where(
                     EntityRow.id == run_id,
                     EntityRow.kind == "runs",
@@ -2660,8 +2820,12 @@ class NebulaStore:
                     "mission must be completed, failed, cancelled, or interrupted before deletion"
                 )
 
-            session.execute(
-                delete(RunBudgetCounterRow).where(RunBudgetCounterRow.run_id == run_id)
+            (
+                await session.execute(
+                    delete(RunBudgetCounterRow).where(
+                        RunBudgetCounterRow.run_id == run_id
+                    )
+                )
             )
             owned_records = or_(
                 and_(
@@ -2692,14 +2856,16 @@ class NebulaStore:
             # Their event history goes once they are gone.
             event_owner_ids = [
                 run_id,
-                *session.scalars(
-                    select(EntityRow.id).where(
-                        owned_records, EntityRow.kind.in_(EVENT_OWNER_ENTITY_KINDS)
+                *(
+                    await session.scalars(
+                        select(EntityRow.id).where(
+                            owned_records, EntityRow.kind.in_(EVENT_OWNER_ENTITY_KINDS)
+                        )
                     )
                 ),
             ]
-            session.execute(delete(EntityRow).where(owned_records))
-            result = session.execute(
+            (await session.execute(delete(EntityRow).where(owned_records)))
+            result = await session.execute(
                 delete(EntityRow).where(
                     EntityRow.id == run_id,
                     EntityRow.kind == "runs",
@@ -2710,7 +2876,7 @@ class NebulaStore:
                 raise ConflictError("mission changed while it was being deleted")
         self.event_history.submit(event_owner_ids)
 
-    def delete_archived_engagement(
+    async def delete_archived_engagement(
         self, engagement_id: str, *, expected_revision: int
     ) -> None:
         """Remove an idle archive atomically, never its files.
@@ -2721,12 +2887,12 @@ class NebulaStore:
         from .database import ResourceRelationRow
         from .terminal_history import TerminalCommandRow, TerminalCommandPreferenceRow
 
-        with self.database.session() as session:
+        async with self.database.session() as session:
             # Acquire the writer lock before inspecting children; a concurrent
             # restore or new turn cannot interleave with the checked deletion.
             if self.database.engine.dialect.name == "sqlite":
-                session.execute(text("BEGIN IMMEDIATE"))
-            row = session.get(EntityRow, engagement_id, with_for_update=True)
+                (await session.execute(text("BEGIN IMMEDIATE")))
+            row = await session.get(EntityRow, engagement_id, with_for_update=True)
             if row is None or row.kind != "engagements":
                 raise NotFoundError(f"engagements entity not found: {engagement_id}")
             if row.revision != expected_revision:
@@ -2737,7 +2903,7 @@ class NebulaStore:
                 raise ConflictError(
                     "Archive the project before permanently deleting it."
                 )
-            # Session envelopes can remain starting before their first turn or
+            # AsyncSession envelopes can remain starting before their first turn or
             # after restart. Only turn records establish unfinished harness work.
             terminal_states = {
                 "runs": {"complete", "failed", "cancelled", "interrupted"},
@@ -2762,7 +2928,7 @@ class NebulaStore:
                 "automation_sessions": {"closed", "failed", "interrupted"},
             }
             for kind, allowed in terminal_states.items():
-                busy = session.scalar(
+                busy = await session.scalar(
                     select(EntityRow.id)
                     .where(
                         EntityRow.engagement_id == engagement_id,
@@ -2777,7 +2943,7 @@ class NebulaStore:
                         "Stop or finish its work and close command sessions before deleting; "
                         "restore the project to access those controls."
                     )
-            queues = session.scalars(
+            queues = await session.scalars(
                 select(EntityRow).where(
                     EntityRow.engagement_id == engagement_id,
                     EntityRow.kind == "chat_queues",
@@ -2797,28 +2963,34 @@ class NebulaStore:
                 EntityRow.engagement_id == engagement_id,
                 EntityRow.kind.in_(("runs", "chat_turns")),
             )
-            session.execute(
-                delete(RunBudgetCounterRow).where(
-                    RunBudgetCounterRow.run_id.in_(counter_owner_ids)
+            (
+                await session.execute(
+                    delete(RunBudgetCounterRow).where(
+                        RunBudgetCounterRow.run_id.in_(counter_owner_ids)
+                    )
                 )
             )
             project_chat_turn_ids = select(EntityRow.id).where(
                 EntityRow.engagement_id == engagement_id,
                 EntityRow.kind == "chat_turns",
             )
-            session.execute(
-                delete(ProviderTurnQueueRow).where(
-                    ProviderTurnQueueRow.turn_id.in_(project_chat_turn_ids)
+            (
+                await session.execute(
+                    delete(ProviderTurnQueueRow).where(
+                        ProviderTurnQueueRow.turn_id.in_(project_chat_turn_ids)
+                    )
                 )
             )
-            _delete_chat_turn_ledgers(session, project_chat_turn_ids)
+            (await _delete_chat_turn_ledgers(session, project_chat_turn_ids))
             # Run events are keyed by Missions, chat and harness turns; every
             # operation event carries the project.
             run_owner_ids = list(
-                session.scalars(
-                    select(EntityRow.id).where(
-                        EntityRow.engagement_id == engagement_id,
-                        EntityRow.kind.in_(RUN_EVENT_OWNER_KINDS),
+                (
+                    await session.scalars(
+                        select(EntityRow.id).where(
+                            EntityRow.engagement_id == engagement_id,
+                            EntityRow.kind.in_(RUN_EVENT_OWNER_KINDS),
+                        )
                     )
                 )
             )
@@ -2833,13 +3005,15 @@ class NebulaStore:
                     TerminalCommandPreferenceRow.engagement_id,
                 ),
             ):
-                session.execute(delete(table).where(column == engagement_id))
-            session.execute(
-                delete(EntityRow).where(EntityRow.engagement_id == engagement_id)
+                (await session.execute(delete(table).where(column == engagement_id)))
+            (
+                await session.execute(
+                    delete(EntityRow).where(EntityRow.engagement_id == engagement_id)
+                )
             )
         self.event_history.submit(run_owner_ids, [engagement_id])
 
-    def engagement_has_dependents(
+    async def engagement_has_dependents(
         self,
         engagement_id: str,
         *,
@@ -2853,10 +3027,10 @@ class NebulaStore:
         )
         if exclude_entity_ids:
             predicate = and_(predicate, EntityRow.id.not_in(exclude_entity_ids))
-        with self.database.session() as session:
-            return bool(session.scalar(select(exists().where(predicate))))
+        async with self.database.session() as session:
+            return bool((await session.scalar(select(exists().where(predicate)))))
 
-    def provider_has_history_references(self, provider_id: str) -> bool:
+    async def provider_has_history_references(self, provider_id: str) -> bool:
         """Return whether durable chat or run history references a provider."""
 
         predicate = or_(
@@ -2871,10 +3045,10 @@ class NebulaStore:
                 EntityRow.payload["provider_profile_id"].as_string() == provider_id,
             ),
         )
-        with self.database.session() as session:
-            return bool(session.scalar(select(exists().where(predicate))))
+        async with self.database.session() as session:
+            return bool((await session.scalar(select(exists().where(predicate)))))
 
-    def overview(self, engagement_id: str | None = None) -> dict[str, Any]:
+    async def overview(self, engagement_id: str | None = None) -> dict[str, Any]:
         # Temporary popup and side-chat sessions are hidden from the conversation list,
         # so the conversation count must leave them out as well.
         statement = (
@@ -2884,15 +3058,17 @@ class NebulaStore:
         )
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
-        with self.database.session() as session:
-            counts = {kind: int(count) for kind, count in session.execute(statement)}
+        async with self.database.session(bulk=True) as session:
+            counts = {
+                kind: int(count) for kind, count in (await session.execute(statement))
+            }
         return {
             "engagement_id": engagement_id,
             "counts": {kind: counts.get(kind, 0) for kind in ENTITY_MODEL_BY_KIND},
-            "schema_version": self.database.current_schema_version(),
+            "schema_version": (await self.database.current_schema_version()),
         }
 
-    def append_event(
+    async def append_event(
         self,
         run_id: str,
         event_type: str,
@@ -2911,11 +3087,11 @@ class NebulaStore:
 
         if not run_id or not event_type:
             raise ValueError("run_id and event_type are required")
-        connection = self.database.engine.connect()
+        connection = await self.database.connect()
         try:
-            self._begin_run_write(connection, run_id)
+            (await self._begin_run_write(connection, run_id))
 
-            existing_event = self._event_for_idempotency_key(
+            existing_event = await self._event_for_idempotency_key(
                 connection, run_id, idempotency_key
             )
             if existing_event is not None:
@@ -2925,10 +3101,10 @@ class NebulaStore:
                     payload=payload,
                     actor_id=actor_id,
                 )
-                connection.commit()
+                (await connection.commit())
                 return existing_event
 
-            event = self._next_event(
+            event = await self._next_event(
                 connection,
                 run_id=run_id,
                 event_type=event_type,
@@ -2937,10 +3113,12 @@ class NebulaStore:
                 idempotency_key=idempotency_key,
                 occurred_at=occurred_at or utc_now(),
             )
-            connection.execute(
-                insert(RunEventRow).values(**event.model_dump(mode="python"))
+            (
+                await connection.execute(
+                    insert(RunEventRow).values(**event.model_dump(mode="python"))
+                )
             )
-            connection.commit()
+            (await connection.commit())
             return event
         except Exception as caught_error:
             record_caught_exception(
@@ -2950,12 +3128,12 @@ class NebulaStore:
                 caught_error,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
-    def replay_events(
+    async def replay_events(
         self,
         run_id: str,
         *,
@@ -2988,11 +3166,11 @@ class NebulaStore:
                 RunEventRow.payload[field_name].as_string().in_(list(accepted))
             )
         statement = statement.order_by(RunEventRow.sequence).limit(limit)
-        with self.database.session() as session:
-            rows = session.scalars(statement).all()
+        async with self.database.session(bulk=True) as session:
+            rows = (await session.scalars(statement)).all()
             return [self._row_to_event(row) for row in rows]
 
-    def append_operation_event(
+    async def append_operation_event(
         self,
         operation_id: str,
         operation_kind: str,
@@ -3008,15 +3186,17 @@ class NebulaStore:
 
         if not all((operation_id, operation_kind, engagement_id, event_type)):
             raise ValueError("operation event identifiers and type are required")
-        connection = self.database.engine.connect()
+        connection = await self.database.connect()
         try:
-            self._begin_run_write(connection, f"operation:{operation_id}")
+            (await self._begin_run_write(connection, f"operation:{operation_id}"))
             if idempotency_key:
                 existing = (
-                    connection.execute(
-                        select(OperationEventRow).where(
-                            OperationEventRow.operation_id == operation_id,
-                            OperationEventRow.idempotency_key == idempotency_key,
+                    (
+                        await connection.execute(
+                            select(OperationEventRow).where(
+                                OperationEventRow.operation_id == operation_id,
+                                OperationEventRow.idempotency_key == idempotency_key,
+                            )
                         )
                     )
                     .mappings()
@@ -3034,9 +3214,9 @@ class NebulaStore:
                         raise ConflictError(
                             "idempotency key was reused for a different operation event"
                         )
-                    connection.commit()
+                    (await connection.commit())
                     return event
-            last_sequence = connection.scalar(
+            last_sequence = await connection.scalar(
                 select(func.max(OperationEventRow.sequence)).where(
                     OperationEventRow.operation_id == operation_id
                 )
@@ -3052,10 +3232,12 @@ class NebulaStore:
                 occurred_at=occurred_at or utc_now(),
                 idempotency_key=idempotency_key,
             )
-            connection.execute(
-                insert(OperationEventRow).values(**event.model_dump(mode="python"))
+            (
+                await connection.execute(
+                    insert(OperationEventRow).values(**event.model_dump(mode="python"))
+                )
             )
-            connection.commit()
+            (await connection.commit())
             return event
         except Exception as caught_error:
             record_caught_exception(
@@ -3065,12 +3247,12 @@ class NebulaStore:
                 caught_error,
                 stage="storage",
             )
-            connection.rollback()
+            (await connection.rollback())
             raise
         finally:
-            connection.close()
+            (await connection.close())
 
-    def replay_operation_events(
+    async def replay_operation_events(
         self,
         operation_id: str,
         *,
@@ -3113,22 +3295,22 @@ class NebulaStore:
                 OperationEventRow.payload[field_name].as_string().in_(list(accepted))
             )
         statement = statement.order_by(OperationEventRow.sequence).limit(limit)
-        with self.database.session() as session:
+        async with self.database.session() as session:
             return [
                 self._row_to_operation_event(row)
-                for row in session.scalars(statement).all()
+                for row in (await session.scalars(statement)).all()
             ]
 
-    def last_operation_event_sequence(self, operation_id: str) -> int:
+    async def last_operation_event_sequence(self, operation_id: str) -> int:
         """Return the newest sequence recorded for an operation, or 0."""
 
         statement = select(func.max(OperationEventRow.sequence)).where(
             OperationEventRow.operation_id == operation_id
         )
-        with self.database.session() as session:
-            return int(session.scalar(statement) or 0)
+        async with self.database.session() as session:
+            return int((await session.scalar(statement)) or 0)
 
-    def unsettled_operation_events(
+    async def unsettled_operation_events(
         self, operation_kind: str, settled_event_type: str
     ) -> list[OperationEvent]:
         """Return the newest event of each unsettled ``operation_kind`` operation.
@@ -3167,13 +3349,13 @@ class NebulaStore:
             )
             .order_by(OperationEventRow.engagement_id, OperationEventRow.operation_id)
         )
-        with self.database.session() as session:
+        async with self.database.session() as session:
             return [
                 self._row_to_operation_event(row)
-                for row in session.scalars(statement).all()
+                for row in (await session.scalars(statement)).all()
             ]
 
-    def list_operation_events(
+    async def list_operation_events(
         self, engagement_id: str, *, offset: int = 0, limit: int = 1000
     ) -> list[OperationEvent]:
         if offset < 0 or not 1 <= limit <= 10_000:
@@ -3185,10 +3367,10 @@ class NebulaStore:
             .offset(offset)
             .limit(limit)
         )
-        with self.database.session() as session:
+        async with self.database.session() as session:
             return [
                 self._row_to_operation_event(row)
-                for row in session.scalars(statement).all()
+                for row in (await session.scalars(statement)).all()
             ]
 
     @staticmethod
@@ -3281,16 +3463,18 @@ class NebulaStore:
             )
             raise CorruptRecordError(f"record {row['id']} failed validation") from exc
 
-    def _event_for_idempotency_key(
+    async def _event_for_idempotency_key(
         self, connection: Any, run_id: str, idempotency_key: str | None
     ) -> RunEvent | None:
         if not idempotency_key:
             return None
         existing = (
-            connection.execute(
-                select(RunEventRow).where(
-                    RunEventRow.run_id == run_id,
-                    RunEventRow.idempotency_key == idempotency_key,
+            (
+                await connection.execute(
+                    select(RunEventRow).where(
+                        RunEventRow.run_id == run_id,
+                        RunEventRow.idempotency_key == idempotency_key,
+                    )
                 )
             )
             .mappings()
@@ -3314,7 +3498,7 @@ class NebulaStore:
             raise ConflictError("idempotency key was reused for a different run event")
 
     @staticmethod
-    def _next_event(
+    async def _next_event(
         connection: Any,
         *,
         run_id: str,
@@ -3324,7 +3508,7 @@ class NebulaStore:
         idempotency_key: str | None,
         occurred_at: datetime | None = None,
     ) -> RunEvent:
-        last_sequence = connection.scalar(
+        last_sequence = await connection.scalar(
             select(func.max(RunEventRow.sequence)).where(RunEventRow.run_id == run_id)
         )
         return RunEvent(
@@ -3339,7 +3523,7 @@ class NebulaStore:
         )
 
     @staticmethod
-    def _next_operation_event(
+    async def _next_operation_event(
         connection: Any,
         *,
         operation_id: str,
@@ -3351,7 +3535,7 @@ class NebulaStore:
         idempotency_key: str | None,
         occurred_at: datetime | None = None,
     ) -> OperationEvent:
-        last_sequence = connection.scalar(
+        last_sequence = await connection.scalar(
             select(func.max(OperationEventRow.sequence)).where(
                 OperationEventRow.operation_id == operation_id
             )

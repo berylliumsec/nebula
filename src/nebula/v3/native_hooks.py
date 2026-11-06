@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import async_done_callback
+
 import asyncio
 import functools
 import hashlib
@@ -345,11 +347,11 @@ class NativeHookRunner:
             started_at=started,
         )
         if project_workspace_binding is None:
-            execution = self.store.create(pending_execution)
+            execution = await self.store.create(pending_execution)
         else:
-            with self.store.transaction(immediate=True) as admission:
-                admission.assert_project_workspace(*project_workspace_binding)
-                admission.add(pending_execution)
+            async with self.store.transaction(immediate=True) as admission:
+                (await admission.assert_project_workspace(*project_workspace_binding))
+                (await admission.add(pending_execution))
                 execution = pending_execution
         envelope = json.dumps(
             {
@@ -365,11 +367,13 @@ class NativeHookRunner:
                     "id": (
                         workspace_provenance.get("actor_id")
                         if workspace_provenance
-                        else actor_id_for(
-                            self.store,
-                            owner_kind=owner_kind,
-                            owner_id=owner_id,
-                            chat_session_id=chat_session_id,
+                        else (
+                            await actor_id_for(
+                                self.store,
+                                owner_kind=owner_kind,
+                                owner_id=owner_id,
+                                chat_session_id=chat_session_id,
+                            )
                         )
                     ),
                     "owner_kind": owner_kind,
@@ -408,15 +412,17 @@ class NativeHookRunner:
             # in its worker thread. Record its real outcome when it exits
             # instead of leaving the execution "running" forever.
             work.add_done_callback(
-                functools.partial(self._persist_late_outcome, execution.id)
+                async_done_callback(
+                    functools.partial(self._persist_late_outcome, execution.id)
+                )
             )
             raise
-        return self._persist_outcome(execution, outcome)
+        return await self._persist_outcome(execution, outcome)
 
-    def _persist_outcome(
+    async def _persist_outcome(
         self, execution: NativeHookExecution, outcome: _HookProcessOutcome
     ) -> NativeHookExecution:
-        return self.store.update(
+        return await self.store.update(
             NativeHookExecution,
             execution.id,
             {
@@ -434,7 +440,7 @@ class NativeHookRunner:
             expected_revision=execution.revision,
         )
 
-    def _persist_late_outcome(
+    async def _persist_late_outcome(
         self, execution_id: str, work: asyncio.Future[_HookProcessOutcome]
     ) -> None:
         """Record the outcome of a hook whose turn ended while it ran."""
@@ -443,30 +449,32 @@ class NativeHookRunner:
             return
         try:
             outcome = work.result()
-            latest = self.store.get(NativeHookExecution, execution_id)
+            latest = await self.store.get(NativeHookExecution, execution_id)
             # An interrupted turn keeps its fence, but the process can still
             # finish in the old worker. Save that observation separately so
             # recovery can adopt a successful outcome without re-running it.
             if latest.status == "running":
-                self._persist_outcome(latest, outcome)
+                (await self._persist_outcome(latest, outcome))
             elif latest.status == "interrupted":
-                self.store.update(
-                    NativeHookExecution,
-                    latest.id,
-                    {
-                        "late_outcome": NativeHookLateOutcome(
-                            status=outcome["status"],
-                            exit_code=outcome["exit_code"],
-                            stdout=outcome["stdout"][:MAX_HOOK_OUTPUT_BYTES].decode(
-                                "utf-8", "replace"
-                            ),
-                            stderr=outcome["stderr"][:MAX_HOOK_OUTPUT_BYTES].decode(
-                                "utf-8", "replace"
-                            ),
-                            error=outcome["error"],
-                        )
-                    },
-                    expected_revision=latest.revision,
+                (
+                    await self.store.update(
+                        NativeHookExecution,
+                        latest.id,
+                        {
+                            "late_outcome": NativeHookLateOutcome(
+                                status=outcome["status"],
+                                exit_code=outcome["exit_code"],
+                                stdout=outcome["stdout"][:MAX_HOOK_OUTPUT_BYTES].decode(
+                                    "utf-8", "replace"
+                                ),
+                                stderr=outcome["stderr"][:MAX_HOOK_OUTPUT_BYTES].decode(
+                                    "utf-8", "replace"
+                                ),
+                                error=outcome["error"],
+                            )
+                        },
+                        expected_revision=latest.revision,
+                    )
                 )
         except Exception as exc:
             record_caught_exception(
@@ -493,7 +501,7 @@ async def run_project_tool_hooks(
 ) -> list[NativeHookExecution]:
     """Run automatically selected project hooks at one command-tool boundary."""
 
-    project = store.get(Engagement, engagement_id)
+    project = await store.get(Engagement, engagement_id)
     if (
         project.workspace_path is not None
         and Path(project.workspace_path).expanduser().resolve() != workspace.resolve()
@@ -508,7 +516,7 @@ async def run_project_tool_hooks(
     ]
     if not snapshots:
         return []
-    actor_id = actor_id_for(
+    actor_id = await actor_id_for(
         store,
         owner_kind=owner_kind,
         owner_id=owner_id,
@@ -526,31 +534,25 @@ async def run_project_tool_hooks(
             }
         elif event_name == "tool.before":
             # Git status and dirty-file hashing run off the event loop.
-            observation = await asyncio.to_thread(
-                functools.partial(
-                    provenance.begin,
-                    workspace,
-                    engagement_id=engagement_id,
-                    scope_kind="tool",
-                    scope_id=scope_id,
-                    actor_id=actor_id,
-                    owner_kind=owner_kind,
-                    owner_id=owner_id,
-                    chat_session_id=chat_session_id,
-                    chat_turn_id=chat_turn_id,
-                )
+            observation = await provenance.begin(
+                workspace,
+                engagement_id=engagement_id,
+                scope_kind="tool",
+                scope_id=scope_id,
+                actor_id=actor_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
             )
             workspace_receipt = provenance.receipt(observation)
         else:
             try:
-                observation = await asyncio.to_thread(
-                    functools.partial(
-                        provenance.finish,
-                        workspace,
-                        engagement_id=engagement_id,
-                        scope_kind="tool",
-                        scope_id=scope_id,
-                    )
+                observation = await provenance.finish(
+                    workspace,
+                    engagement_id=engagement_id,
+                    scope_kind="tool",
+                    scope_id=scope_id,
                 )
             except NotFoundError:  # diagnostic-expected: an after-only tool hook reports the missing baseline explicitly
                 workspace_receipt = {
@@ -598,14 +600,11 @@ async def run_project_tool_hooks(
         ):
             if event_name == "tool.before" and scope_id:
                 try:
-                    await asyncio.to_thread(
-                        functools.partial(
-                            provenance.finish,
-                            workspace,
-                            engagement_id=engagement_id,
-                            scope_kind="tool",
-                            scope_id=scope_id,
-                        )
+                    await provenance.finish(
+                        workspace,
+                        engagement_id=engagement_id,
+                        scope_kind="tool",
+                        scope_id=scope_id,
                     )
                 except Exception as exc:
                     record_caught_exception(

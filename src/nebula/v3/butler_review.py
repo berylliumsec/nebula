@@ -169,8 +169,8 @@ class ProviderButlerReviewer:
 
     async def review(self, packet: ButlerReviewPacket) -> ButlerReviewResult:
         try:
-            session = self.store.get(ChatSession, packet.session_id)
-            project = self.store.get(Engagement, packet.project_id)
+            session = await self.store.get(ChatSession, packet.session_id)
+            project = await self.store.get(Engagement, packet.project_id)
         except NotFoundError as exc:
             raise ReviewUnavailable("runtime_unavailable") from exc
         if session.engagement_id != packet.project_id:
@@ -180,7 +180,7 @@ class ProviderButlerReviewer:
         if session.backend != ChatBackend.PROVIDER or not session.provider_profile_id:
             raise ReviewUnavailable("provider_review_unsupported")
         try:
-            profile = self.store.get(ProviderProfile, session.provider_profile_id)
+            profile = await self.store.get(ProviderProfile, session.provider_profile_id)
         except NotFoundError as exc:
             raise ReviewUnavailable("runtime_unavailable") from exc
         if not profile.enabled or (
@@ -192,7 +192,7 @@ class ProviderButlerReviewer:
         if not profile.is_local and not profile.privacy.permits_sensitive_data:
             raise ReviewUnavailable("provider_privacy_not_authorized")
         provider = self.provider_factory(profile)
-        validate_engagement_provider_privacy(self.store, project, provider)
+        (await validate_engagement_provider_privacy(self.store, project, provider))
         request = ModelRequest(
             model=session.model,
             instructions=(
@@ -254,7 +254,7 @@ class ProviderButlerReviewer:
         if self.harness_runtime is None or not session.harness_profile_id:
             raise ReviewUnavailable("harness_review_unavailable")
         try:
-            profile = self.store.get(HarnessProfile, session.harness_profile_id)
+            profile = await self.store.get(HarnessProfile, session.harness_profile_id)
         except NotFoundError as exc:
             raise ReviewUnavailable("runtime_unavailable") from exc
         if (
@@ -329,7 +329,7 @@ def is_meaningful_event(event: OperationEvent) -> bool:
     return event.event_type in MEANINGFUL_EVENTS
 
 
-def build_review_packet(
+async def build_review_packet(
     store: NebulaStore, project_id: str, event: OperationEvent
 ) -> ButlerReviewPacket:
     if event.engagement_id != project_id or event.operation_id != project_stream_id(
@@ -344,8 +344,8 @@ def build_review_packet(
     ):
         raise ConflictError("review event has no project-bound goal")
     try:
-        goal = store.get(ChatGoal, payload.goal_id)
-        session = store.get(ChatSession, payload.session_id)
+        goal = await store.get(ChatGoal, payload.goal_id)
+        session = await store.get(ChatSession, payload.session_id)
     except NotFoundError:
         if payload.actor_role == "core":
             raise ConflictError("review event has no project-bound actor") from None
@@ -393,8 +393,8 @@ def build_review_packet(
         )
         if turn_ref is not None:
             try:
-                turn = store.get(ChatTurn, turn_ref.id)
-                message = store.get(ChatMessage, turn.final_message_id or "")
+                turn = await store.get(ChatTurn, turn_ref.id)
+                message = await store.get(ChatMessage, turn.final_message_id or "")
             except NotFoundError:
                 # diagnostic-expected: a saved turn or reply was removed before review.
                 pass
@@ -411,7 +411,7 @@ def build_review_packet(
                         message.content, 470
                     )
     reports = []
-    for report in store.find_entities(
+    for report in await store.find_entities(
         ButlerAgentReport,
         {"goal_id": goal.id},
         engagement_id=project_id,
@@ -466,12 +466,14 @@ def build_review_packet(
             "summary": item.summary[:250],
             "reason": item.reason[:350],
         }
-        for item in store.find_entities(
-            ButlerDecision,
-            {"goal_id": goal.id, "status": "reviewed"},
-            engagement_id=project_id,
-            newest_first=True,
-            limit=2,
+        for item in (
+            await store.find_entities(
+                ButlerDecision,
+                {"goal_id": goal.id, "status": "reviewed"},
+                engagement_id=project_id,
+                newest_first=True,
+                limit=2,
+            )
         )
     ]
     return ButlerReviewPacket(
@@ -508,10 +510,10 @@ def build_review_packet(
     )
 
 
-def _owned_state(
+async def _owned_state(
     transaction: Any, project_id: str, worker_id: str
 ) -> ButlerProjectState | None:
-    state = _entity_in_transaction(
+    state = await _entity_in_transaction(
         transaction, ButlerProjectState, project_state_id(project_id)
     )
     now = utc_now()
@@ -525,23 +527,25 @@ def _owned_state(
     return state
 
 
-def _advance_cursor(
+async def _advance_cursor(
     store: NebulaStore, project_id: str, worker_id: str, sequence: int
 ) -> bool:
-    with store.transaction() as transaction:
-        state = _owned_state(transaction, project_id, worker_id)
+    async with store.transaction() as transaction:
+        state = await _owned_state(transaction, project_id, worker_id)
         if state is None:
             return False
         if state.last_review_sequence >= sequence:
             return True
-        transaction.update(
-            ButlerProjectState,
-            state.id,
-            {
-                "last_review_sequence": sequence,
-                "lease_expires_at": utc_now() + LEASE_DURATION,
-            },
-            expected_revision=state.revision,
+        (
+            await transaction.update(
+                ButlerProjectState,
+                state.id,
+                {
+                    "last_review_sequence": sequence,
+                    "lease_expires_at": utc_now() + LEASE_DURATION,
+                },
+                expected_revision=state.revision,
+            )
         )
     return True
 
@@ -558,7 +562,7 @@ def _semantic_incident_key(event: OperationEvent, packet: ButlerReviewPacket) ->
     return f"semantic:{event.event_type}:{goal_digest}"
 
 
-def _record_escalation(
+async def _record_escalation(
     transaction: Any,
     *,
     project_id: str,
@@ -571,7 +575,7 @@ def _record_escalation(
 
     key = _semantic_incident_key(event, packet)
     record_id = incident_id(project_id, key)
-    previous = _entity_in_transaction(transaction, ButlerIncident, record_id)
+    previous = await _entity_in_transaction(transaction, ButlerIncident, record_id)
     if previous is not None and previous.engagement_id != project_id:
         raise ConflictError("review escalation incident belongs to another project")
     decision_ref = ButlerEvidenceRef(
@@ -605,7 +609,7 @@ def _record_escalation(
             session_ids=[packet.session_id],
             observed_at=now,
         )
-        transaction.add(incident)
+        (await transaction.add(incident))
         event_type = "incident.opened"
     else:
         prior_refs = [
@@ -647,40 +651,42 @@ def _record_escalation(
             event_type = "incident.reopened"
         else:
             event_type = "incident.updated"
-        incident = transaction.update(
+        incident = await transaction.update(
             ButlerIncident,
             previous.id,
             changes,
             expected_revision=previous.revision,
         )
-    _append_project_event(
-        transaction,
-        engagement_id=project_id,
-        event_type=event_type,
-        payload=ButlerEventPayload(
-            project_id=project_id,
-            goal_id=packet.goal_id,
-            session_id=packet.session_id,
-            source="core",
-            actor_role="core",
-            summary="Butler recorded a model-assessed concern for operator attention.",
-            metrics={"incident_status": incident.status},
-            verification_state="core_observed",
-            evidence_refs=[
-                ButlerEvidenceRef(
-                    kind="incident", id=incident.id, project_id=project_id
-                ),
-                decision_ref,
-            ],
-            incident_key=key,
-        ),
-        idempotency_key=f"incident:{incident.id}:review:{decision.id}",
-        now=now,
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=project_id,
+            event_type=event_type,
+            payload=ButlerEventPayload(
+                project_id=project_id,
+                goal_id=packet.goal_id,
+                session_id=packet.session_id,
+                source="core",
+                actor_role="core",
+                summary="Butler recorded a model-assessed concern for operator attention.",
+                metrics={"incident_status": incident.status},
+                verification_state="core_observed",
+                evidence_refs=[
+                    ButlerEvidenceRef(
+                        kind="incident", id=incident.id, project_id=project_id
+                    ),
+                    decision_ref,
+                ],
+                incident_key=key,
+            ),
+            idempotency_key=f"incident:{incident.id}:review:{decision.id}",
+            now=now,
+        )
     )
     return incident
 
 
-def _persist_decision(
+async def _persist_decision(
     store: NebulaStore,
     project_id: str,
     worker_id: str,
@@ -698,12 +704,12 @@ def _persist_decision(
             result = None
             unavailable_reason = "invalid_evidence_citation"
     now = utc_now()
-    with store.transaction() as transaction:
-        state = _owned_state(transaction, project_id, worker_id)
+    async with store.transaction() as transaction:
+        state = await _owned_state(transaction, project_id, worker_id)
         if state is None or state.last_review_sequence >= event.sequence:
             return None
         record_id = decision_id(project_id, event.id)
-        decision = _entity_in_transaction(transaction, ButlerDecision, record_id)
+        decision = await _entity_in_transaction(transaction, ButlerDecision, record_id)
         if decision is None:
             decision = ButlerDecision(
                 id=record_id,
@@ -749,59 +755,65 @@ def _persist_decision(
                 ),
                 reviewed_at=now,
             )
-            transaction.add(decision)
-        transaction.update(
-            ButlerProjectState,
-            state.id,
-            {
-                "last_review_sequence": event.sequence,
-                "last_review_requested_at": now,
-                "lease_expires_at": now + LEASE_DURATION,
-            },
-            expected_revision=state.revision,
+            (await transaction.add(decision))
+        (
+            await transaction.update(
+                ButlerProjectState,
+                state.id,
+                {
+                    "last_review_sequence": event.sequence,
+                    "last_review_requested_at": now,
+                    "lease_expires_at": now + LEASE_DURATION,
+                },
+                expected_revision=state.revision,
+            )
         )
-        _append_project_event(
-            transaction,
-            engagement_id=project_id,
-            event_type="butler.decision_recorded",
-            payload=ButlerEventPayload(
-                project_id=project_id,
-                goal_id=packet.goal_id,
-                session_id=packet.session_id,
-                source="core",
-                actor_role="core",
-                summary=(
-                    "Butler identified an agent reply requesting operator review."
-                    if event.event_type == "agent.turn_completed"
-                    and decision.status == "reviewed"
-                    and decision.choice == "escalate"
-                    else "Butler recorded a semantic review decision."
-                ),
-                metrics={"choice": decision.choice, "status": decision.status},
-                verification_state="core_observed",
-                evidence_refs=[
-                    ButlerEvidenceRef(
-                        kind="decision", id=decision.id, project_id=project_id
-                    ),
-                    *(
-                        ref
-                        for ref in packet.evidence_refs
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=project_id,
+                event_type="butler.decision_recorded",
+                payload=ButlerEventPayload(
+                    project_id=project_id,
+                    goal_id=packet.goal_id,
+                    session_id=packet.session_id,
+                    source="core",
+                    actor_role="core",
+                    summary=(
+                        "Butler identified an agent reply requesting operator review."
                         if event.event_type == "agent.turn_completed"
-                        and ref.kind == "chat_turn"
+                        and decision.status == "reviewed"
+                        and decision.choice == "escalate"
+                        else "Butler recorded a semantic review decision."
                     ),
-                ],
-            ),
-            idempotency_key=f"decision:{decision.id}",
-            now=now,
+                    metrics={"choice": decision.choice, "status": decision.status},
+                    verification_state="core_observed",
+                    evidence_refs=[
+                        ButlerEvidenceRef(
+                            kind="decision", id=decision.id, project_id=project_id
+                        ),
+                        *(
+                            ref
+                            for ref in packet.evidence_refs
+                            if event.event_type == "agent.turn_completed"
+                            and ref.kind == "chat_turn"
+                        ),
+                    ],
+                ),
+                idempotency_key=f"decision:{decision.id}",
+                now=now,
+            )
         )
         if decision.status == "reviewed" and decision.choice == "escalate":
-            _record_escalation(
-                transaction,
-                project_id=project_id,
-                event=event,
-                packet=packet,
-                decision=decision,
-                now=now,
+            (
+                await _record_escalation(
+                    transaction,
+                    project_id=project_id,
+                    event=event,
+                    packet=packet,
+                    decision=decision,
+                    now=now,
+                )
             )
     return decision
 
@@ -816,9 +828,7 @@ async def review_pending(
     """Consume at most one meaningful event under the oversight worker lease."""
 
     for _ in range(MAX_SCAN_PAGES):
-        state = await asyncio.to_thread(
-            store.find_entity, ButlerProjectState, "engagement_id", project_id
-        )
+        state = await store.find_entity(ButlerProjectState, "engagement_id", project_id)
         if (
             state is None
             or state.lease_owner != worker_id
@@ -827,8 +837,7 @@ async def review_pending(
             return None
         if state.lease_expires_at <= utc_now():
             return None
-        page = await asyncio.to_thread(
-            store.replay_operation_events,
+        page = await store.replay_operation_events(
             project_stream_id(project_id),
             after_sequence=state.last_review_sequence,
             limit=100,
@@ -837,8 +846,8 @@ async def review_pending(
             return None
         candidate = next((event for event in page if is_meaningful_event(event)), None)
         if candidate is None:
-            if not await asyncio.to_thread(
-                _advance_cursor, store, project_id, worker_id, page[-1].sequence
+            if not await _advance_cursor(
+                store, project_id, worker_id, page[-1].sequence
             ):
                 return None
             continue
@@ -879,15 +888,12 @@ async def review_pending(
             and utc_now() - state.last_review_requested_at < REVIEW_INTERVAL
         ):
             return None
-        packet = await asyncio.to_thread(
-            build_review_packet, store, project_id, candidate
-        )
+        packet = await build_review_packet(store, project_id, candidate)
         result: ButlerReviewResult | None = None
         unavailable_reason: str | None = None
         try:
             if memory_service is not None:
-                snapshot = await asyncio.to_thread(
-                    read_precedents,
+                snapshot = await read_precedents(
                     memory_service,
                     project_id,
                     candidate.event_type,
@@ -904,7 +910,7 @@ async def review_pending(
                 raise ReviewUnavailable("source_unavailable")
             if reviewer is None:
                 raise ReviewUnavailable("reviewer_unconfigured")
-            session = await asyncio.to_thread(store.get, ChatSession, packet.session_id)
+            session = await store.get(ChatSession, packet.session_id)
             timeout = (
                 HARNESS_REVIEW_TIMEOUT_SECONDS
                 if session.backend == ChatBackend.HARNESS
@@ -926,8 +932,7 @@ async def review_pending(
                 if memory_service is not None and packet.precedent_digest is None
                 else "model_unavailable"
             )
-        return await asyncio.to_thread(
-            _persist_decision,
+        return await _persist_decision(
             store,
             project_id,
             worker_id,

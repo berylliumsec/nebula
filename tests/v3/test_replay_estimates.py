@@ -9,7 +9,12 @@ crossed its target to its watermark, so the request changes only at crossings.
 Capacity checks count JSON as sent.
 """
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 import httpx
@@ -138,7 +143,9 @@ def _cleared(result: ModelToolResult) -> bool:
     return isinstance(result.output, dict) and bool(result.output.get("output_cleared"))
 
 
-def test_earlier_reasoning_is_the_last_thing_a_crossing_lets_go(tmp_path, monkeypatch):
+async def test_earlier_reasoning_is_the_last_thing_a_crossing_lets_go(
+    tmp_path, monkeypatch
+):
     """Replayed thoughts are billed, and they are often the model's only note
     of what a cleared result held: they go only when clearing every earlier
     result could not bring the request to its watermark, at that crossing,
@@ -156,9 +163,9 @@ def test_earlier_reasoning_is_the_last_thing_a_crossing_lets_go(tmp_path, monkey
     monkeypatch.setattr(chat_module, "record_diagnostic", record)
     broker = ScanBroker()
     provider = ThinkingLongTurn(calls=24)
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     routing = [
@@ -223,7 +230,7 @@ def _batch_request(model: str) -> ModelRequest:
     )
 
 
-def test_routes_accept_earlier_steps_without_their_reasoning(monkeypatch):
+async def test_routes_accept_earlier_steps_without_their_reasoning(monkeypatch):
     """DeepSeek V4 gets its empty placeholder; Claude keeps the last thinking."""
 
     openrouter = OpenAICompatibleProvider(
@@ -280,14 +287,14 @@ def test_routes_accept_earlier_steps_without_their_reasoning(monkeypatch):
         "model": claude,
         "thinking_blocks": thinking,
     }
-    asyncio.run(anthropic.complete(request))
+    (await anthropic.complete(request))
     (payload,) = sent
     assistants = [m for m in payload["messages"] if m["role"] == "assistant"]
     assert [block["type"] for block in assistants[0]["content"]] == ["tool_use"]
     assert assistants[1]["content"][: len(thinking)] == thinking
 
 
-def test_an_earlier_step_keeps_its_call_signatures():
+async def test_an_earlier_step_keeps_its_call_signatures():
     """Gemini 3 validates the signature of every step in the current turn.
 
     Letting a step's reasoning go keeps its stamp, so the signature each of
@@ -367,7 +374,7 @@ def test_an_earlier_step_keeps_its_call_signatures():
         ),
         transport=httpx.MockTransport(answer),
     )
-    asyncio.run(gemini.complete(request))
+    (await gemini.complete(request))
     (payload,) = sent
     signatures = [
         part.get("thoughtSignature")
@@ -475,7 +482,7 @@ def test_a_capacity_check_scales_tool_history_up_but_never_down():
     )
 
 
-def test_a_prose_calibrated_tool_turn_clears_at_its_target(tmp_path, monkeypatch):
+async def test_a_prose_calibrated_tool_turn_clears_at_its_target(tmp_path, monkeypatch):
     """Clearing counts the request as the capacity check does.
 
     A conversation whose calibration was learnt from prose (DeepSeek, 0.6)
@@ -499,10 +506,10 @@ def test_a_prose_calibrated_tool_turn_clears_at_its_target(tmp_path, monkeypatch
     monkeypatch.setattr(chat_module, "record_diagnostic", record)
     broker = ScanBroker()
     provider = LongTurnProvider(calls=24)
-    store, service, prepared = _long_turn(tmp_path, provider, broker)
+    store, service, prepared = await _long_turn(tmp_path, provider, broker)
     prepared.estimate_calibration = 0.6
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == ANSWER
     assert "chat.tool_history.cleared" in recorded
@@ -518,3 +525,6 @@ def test_a_prose_calibrated_tool_turn_clears_at_its_target(tmp_path, monkeypatch
         assert calibrated_request_estimate(request, 0.6, hard=True) <= _capacity(
             prepared, request
         )
+
+
+pytestmark = pytest.mark.anyio

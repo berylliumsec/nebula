@@ -14,8 +14,11 @@ Core could not read ever reaches the broker.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import json
 from typing import Any
 
@@ -137,9 +140,9 @@ class _Wire:
         )
 
 
-def _turn(tmp_path, script: list[Any]):
+async def _turn(tmp_path, script: list[Any]):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [], broker)
+    store, service, prepared, _ = await _prepared(tmp_path, [], broker)
     wire = _Wire(script)
     prepared.provider = OpenAICompatibleProvider(
         ProviderConfig(
@@ -163,8 +166,10 @@ def _tool_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [message for message in payload["messages"] if message["role"] == "tool"]
 
 
-def test_unreadable_routing_call_is_answered_and_the_call_beside_it_runs(tmp_path):
-    store, service, prepared, broker, wire = _turn(
+async def test_unreadable_routing_call_is_answered_and_the_call_beside_it_runs(
+    tmp_path,
+):
+    store, service, prepared, broker, wire = await _turn(
         tmp_path,
         [
             _routing(
@@ -177,13 +182,13 @@ def test_unreadable_routing_call_is_answered_and_the_call_beside_it_runs(tmp_pat
         ],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read a and b."
     # The unreadable call never reached the broker; the one beside it ran,
     # and so did the call the model re-issued.
     assert [call.arguments for call in broker.calls] == [{"value": "a"}, {"value": "b"}]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == [
         "complete",
@@ -212,8 +217,10 @@ def test_unreadable_routing_call_is_answered_and_the_call_beside_it_runs(tmp_pat
     assert replayed["call-2"] == "{}"
 
 
-def test_an_unreadable_call_cut_off_by_the_output_limit_is_a_cut_off_call(tmp_path):
-    store, service, prepared, broker, wire = _turn(
+async def test_an_unreadable_call_cut_off_by_the_output_limit_is_a_cut_off_call(
+    tmp_path,
+):
+    store, service, prepared, broker, wire = await _turn(
         tmp_path,
         [
             _routing(_call("call-1", "safe_read", '{"value": "aaaa'), finish="length"),
@@ -223,11 +230,11 @@ def test_an_unreadable_call_cut_off_by_the_output_limit_is_a_cut_off_call(tmp_pa
         ],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read aaaa."
     assert [call.arguments for call in broker.calls] == [{"value": "aaaa"}]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     [answered] = _tool_messages(wire.payloads[1])
     # The output limit is the cause, so the model is told that, not that it
@@ -236,8 +243,8 @@ def test_an_unreadable_call_cut_off_by_the_output_limit_is_a_cut_off_call(tmp_pa
     assert "not valid JSON" not in answered["content"]
 
 
-def test_a_call_naming_no_tool_is_answered_with_the_offered_tools(tmp_path):
-    store, service, prepared, broker, wire = _turn(
+async def test_a_call_naming_no_tool_is_answered_with_the_offered_tools(tmp_path):
+    store, service, prepared, broker, wire = await _turn(
         tmp_path,
         [
             _routing(_call("call-1", "Bash", '{"command":"id"}')),
@@ -247,22 +254,22 @@ def test_a_call_naming_no_tool_is_answered_with_the_offered_tools(tmp_path):
         ],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read a."
     # A case variant of a declared tool is that tool.
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         ("safe_read", {"value": "a"})
     ]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     [answered] = _tool_messages(wire.payloads[1])
     assert "'Bash' is not the name of a tool" in answered["content"]
     assert "safe_read" in answered["content"]
 
 
-def test_repeated_unreadable_calls_end_routing_through_synthesis(tmp_path):
-    store, service, prepared, broker, wire = _turn(
+async def test_repeated_unreadable_calls_end_routing_through_synthesis(tmp_path):
+    store, service, prepared, broker, wire = await _turn(
         tmp_path,
         [
             _routing(_call(f"call-{index}", "safe_read", '{"value": "a'))
@@ -271,21 +278,21 @@ def test_repeated_unreadable_calls_end_routing_through_synthesis(tmp_path):
         + [_text("I could not read the value.")],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # The #487 deviation cap bounds the loop: three refused routing responses
     # in a row, then the synthesis answers from what the turn has.
     assert completion.message.content == "I could not read the value."
     assert broker.calls == []
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == ["failed"] * 3
     assert turn.execution_tool_calls == 0
     assert len(wire.payloads) == 4
 
 
-def test_finish_response_with_unreadable_arguments_still_finishes(tmp_path):
-    store, service, prepared, broker, _ = _turn(
+async def test_finish_response_with_unreadable_arguments_still_finishes(tmp_path):
+    store, service, prepared, broker, _ = await _turn(
         tmp_path,
         [
             _routing(_call("fin-1", "finish_response", '{"response": "Do')),
@@ -293,12 +300,12 @@ def test_finish_response_with_unreadable_arguments_still_finishes(tmp_path):
         ],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # The finish tool takes no arguments, so unreadable ones carry nothing.
     assert completion.message.content == "Done."
     assert broker.calls == []
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.tool_history == []
 
@@ -334,8 +341,8 @@ def test_finish_response_with_unreadable_arguments_still_finishes(tmp_path):
     ],
     ids=["live-stray-tail", "nameless-fragment", "unreadable-arguments"],
 )
-def test_a_malformed_call_in_the_final_synthesis_is_recovered(tmp_path, attempt):
-    store, service, prepared, broker, wire = _turn(
+async def test_a_malformed_call_in_the_final_synthesis_is_recovered(tmp_path, attempt):
+    store, service, prepared, broker, wire = await _turn(
         tmp_path,
         [
             _routing(_call("call-1", "safe_read", '{"value":"a"}')),
@@ -345,21 +352,23 @@ def test_a_malformed_call_in_the_final_synthesis_is_recovered(tmp_path, attempt)
         ],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     # The synthesis offered no tools, so the call is an attempted tool call:
     # the answer is asked for again instead of the turn failing.
     assert completion.message.content == "Value is a."
     assert [call.arguments for call in broker.calls] == [{"value": "a"}]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
     assert len(wire.payloads) == 4
 
 
-def test_an_unreadable_call_after_the_synthesis_routes_again_is_answered(tmp_path):
+async def test_an_unreadable_call_after_the_synthesis_routes_again_is_answered(
+    tmp_path,
+):
     """The synthesis asks for a tool the turn can run, so the turn routes once
     more (#493); the call that routing step returns cannot be read."""
 
-    store, service, prepared, broker, wire = _turn(
+    store, service, prepared, broker, wire = await _turn(
         tmp_path,
         [
             _routing(_call("call-1", "safe_read", '{"value":"a"}')),
@@ -379,14 +388,14 @@ def test_an_unreadable_call_after_the_synthesis_routes_again_is_answered(tmp_pat
         ],
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "Read a and b."
     assert [call.arguments for call in broker.calls] == [
         {"value": "a"},
         {"value": "b"},
     ]
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["status"] for entry in turn.tool_history] == [
         "complete",
@@ -397,7 +406,7 @@ def test_an_unreadable_call_after_the_synthesis_routes_again_is_answered(tmp_pat
     assert not wire.script
 
 
-def test_a_specialist_never_runs_a_call_it_could_not_read(tmp_path):
+async def test_a_specialist_never_runs_a_call_it_could_not_read(tmp_path):
     provider = _ScriptedSpecialistProvider(
         [
             [
@@ -420,8 +429,8 @@ def test_a_specialist_never_runs_a_call_it_could_not_read(tmp_path):
     broker = SpecialistBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    first = asyncio.run(specialist.run(_context()))
-    second = asyncio.run(specialist.run(_context(prior_turns=[first])))
+    first = await specialist.run(_context())
+    second = await specialist.run(_context(prior_turns=[first]))
 
     assert [invocation.tool_name for invocation in broker.calls] == ["nmap.tcp"]
     assert first.tool_calls == 1
@@ -467,3 +476,6 @@ class _ScriptedSpecialistProvider(providers.ModelProvider):
 
     async def health(self):
         return providers.ProviderHealth(provider_id=self.config.id, healthy=True)
+
+
+pytestmark = pytest.mark.anyio

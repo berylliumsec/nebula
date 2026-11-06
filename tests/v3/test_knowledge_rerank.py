@@ -1,6 +1,10 @@
 """The local relevance gate for project knowledge (``knowledge_rerank``)."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import base64
 import hashlib
@@ -12,7 +16,7 @@ from typing import Any
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.chat as chat_module
 import nebula.v3.knowledge_rerank as rerank_module
@@ -431,14 +435,14 @@ def keyword_scorer(pairs):
     return scores
 
 
-def _knowledge_project(tmp_path, reranker):
+async def _knowledge_project(tmp_path, reranker):
     index = ChromaKnowledgeIndex(
         tmp_path / "knowledge-index",
         embedding_function=SecurityEmbeddingFunction(),
         reranker=reranker,
     )
     store = NebulaStore(tmp_path / "nebula.db")
-    store.create(Engagement(id="eng-a", name="A"))
+    (await store.create(Engagement(id="eng-a", name="A")))
     client = TestClient(
         create_app(
             store,
@@ -449,7 +453,7 @@ def _knowledge_project(tmp_path, reranker):
     )
     ids: dict[str, str] = {}
     for filename, content in (("access.txt", ACCESS), ("harbor.md", HARBOR)):
-        response = client.post(
+        response = await client.post(
             "/api/v1/knowledge/ingest",
             headers={"Authorization": "Bearer test-token"},
             json={
@@ -463,36 +467,44 @@ def _knowledge_project(tmp_path, reranker):
     return store, index, client, ids
 
 
-def test_unrelated_questions_attach_no_knowledge_and_paraphrases_still_do(tmp_path):
+async def test_unrelated_questions_attach_no_knowledge_and_paraphrases_still_do(
+    tmp_path,
+):
     reranker = FakeReranker(keyword_scorer)
-    store, index, client, ids = _knowledge_project(tmp_path, reranker)
+    store, index, client, ids = await _knowledge_project(tmp_path, reranker)
     chat = ChatService(store, knowledge_index=index)
     # Ingesting knowledge is when the relevance model is fetched.
     assert reranker.started == 2
 
-    unrelated = chat.harness_knowledge_context("eng-a", RUNNER_QUESTION)
-    paraphrase = chat.harness_knowledge_context("eng-a", "How does a user log in?")
+    unrelated = await chat.harness_knowledge_context("eng-a", RUNNER_QUESTION)
+    paraphrase = await chat.harness_knowledge_context(
+        "eng-a", "How does a user log in?"
+    )
 
     assert unrelated.citations == []
     assert [citation.source_id for citation in paraphrase.citations] == [
         ids["access.txt"]
     ]
-    status = client.get(
-        "/api/v1/knowledge/index-status",
-        headers={"Authorization": "Bearer test-token"},
+    status = (
+        await client.get(
+            "/api/v1/knowledge/index-status",
+            headers={"Authorization": "Bearer test-token"},
+        )
     ).json()
     assert status["reranker"]["state"] == "ready"
     assert status["reranker"]["model"] == "mixedbread-ai/mxbai-rerank-xsmall-v1"
 
 
-def test_an_explicit_search_is_ranked_and_labelled_rather_than_gated(tmp_path):
-    store, index, _, ids = _knowledge_project(tmp_path, FakeReranker(keyword_scorer))
+async def test_an_explicit_search_is_ranked_and_labelled_rather_than_gated(tmp_path):
+    store, index, _, ids = await _knowledge_project(
+        tmp_path, FakeReranker(keyword_scorer)
+    )
     chat = ChatService(store, knowledge_index=index)
 
-    paraphrase = chat.harness_knowledge_search(
+    paraphrase = await chat.harness_knowledge_search(
         "eng-a", "How does a user log in?", allow_local_only=True
     )
-    unrelated = chat.harness_knowledge_search(
+    unrelated = await chat.harness_knowledge_search(
         "eng-a", RUNNER_QUESTION, allow_local_only=True
     )
 
@@ -506,15 +518,15 @@ def test_an_explicit_search_is_ranked_and_labelled_rather_than_gated(tmp_path):
     assert {match.relevance for match in unrelated.matches} == {"weak"}
 
 
-def test_until_the_model_is_ready_retrieval_is_unchanged_and_it_is_prepared(
+async def test_until_the_model_is_ready_retrieval_is_unchanged_and_it_is_prepared(
     tmp_path,
 ):
     reranker = FakeReranker(keyword_scorer, ready=False)
-    store, index, _, ids = _knowledge_project(tmp_path, reranker)
+    store, index, _, ids = await _knowledge_project(tmp_path, reranker)
     chat = ChatService(store, knowledge_index=index)
     started = reranker.started
 
-    unrelated = chat.harness_knowledge_search(
+    unrelated = await chat.harness_knowledge_search(
         "eng-a", RUNNER_QUESTION, allow_local_only=True
     )
 
@@ -526,26 +538,26 @@ def test_until_the_model_is_ready_retrieval_is_unchanged_and_it_is_prepared(
     assert reranker.started == started + 1
 
 
-def test_a_scoring_failure_falls_back_to_the_retrieval_ranking(tmp_path):
+async def test_a_scoring_failure_falls_back_to_the_retrieval_ranking(tmp_path):
     def broken(pairs):
         raise RuntimeError("onnx session failed")
 
-    store, index, _, _ = _knowledge_project(tmp_path, FakeReranker(broken))
+    store, index, _, _ = await _knowledge_project(tmp_path, FakeReranker(broken))
     chat = ChatService(store, knowledge_index=index)
 
-    result = chat.harness_knowledge_search(
+    result = await chat.harness_knowledge_search(
         "eng-a", RUNNER_QUESTION, allow_local_only=True
     )
 
     assert result.matches
 
 
-def _prepare(tmp_path, monkeypatch, reranker, content):
-    store, index, _, ids = _knowledge_project(tmp_path, reranker)
-    profile = store.create(_profile(local=True))
+async def _prepare(tmp_path, monkeypatch, reranker, content):
+    store, index, _, ids = await _knowledge_project(tmp_path, reranker)
+    profile = await store.create(_profile(local=True))
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
-    prepared = ChatService(store, knowledge_index=index).prepare(
+    prepared = await ChatService(store, knowledge_index=index).prepare(
         ChatCompletionRequest(
             provider_id=profile.id,
             engagement_id="eng-a",
@@ -561,8 +573,10 @@ def _prepare(tmp_path, monkeypatch, reranker, content):
     return prepared, planned, ids
 
 
-def test_a_chat_turn_carries_only_knowledge_that_answers_it(tmp_path, monkeypatch):
-    unrelated, planned, ids = _prepare(
+async def test_a_chat_turn_carries_only_knowledge_that_answers_it(
+    tmp_path, monkeypatch
+):
+    unrelated, planned, ids = await _prepare(
         tmp_path / "a", monkeypatch, FakeReranker(keyword_scorer), RUNNER_QUESTION
     )
     assert planned
@@ -573,7 +587,7 @@ def test_a_chat_turn_carries_only_knowledge_that_answers_it(tmp_path, monkeypatc
         unrelated.model_request.model_dump(mode="json")
     )
 
-    relevant, _, ids = _prepare(
+    relevant, _, ids = await _prepare(
         tmp_path / "b",
         monkeypatch,
         FakeReranker(keyword_scorer),
@@ -586,8 +600,8 @@ def test_a_chat_turn_carries_only_knowledge_that_answers_it(tmp_path, monkeypatc
     ] == [ids["harbor.md"]]
 
 
-def test_a_turn_with_no_subject_plans_and_attaches_nothing(tmp_path, monkeypatch):
-    prepared, planned, ids = _prepare(
+async def test_a_turn_with_no_subject_plans_and_attaches_nothing(tmp_path, monkeypatch):
+    prepared, planned, ids = await _prepare(
         tmp_path, monkeypatch, FakeReranker(keyword_scorer, ready=False), "ok, thanks"
     )
 
@@ -671,3 +685,6 @@ def test_the_pinned_model_meets_its_calibration():  # pragma: no cover - local o
     assert all(outcome["lexical"])
     assert all(outcome["paraphrase"])
     assert sum(outcome["unrelated"]) >= 12
+
+
+pytestmark = pytest.mark.anyio

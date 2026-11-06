@@ -55,9 +55,9 @@ class AgentSecuritySessions:
         A failed startup leaves a paused, durable session that can be retried.
         """
         async with self._project_locks.setdefault(project_id, asyncio.Lock()):
-            self.store.get(Engagement, project_id)
-            self.security._scope(project_id)
-            existing = self.store.find_entities(
+            (await self.store.get(Engagement, project_id))
+            (await self.security._scope(project_id))
+            existing = await self.store.find_entities(
                 BrowserSession,
                 {"runtime_kind": "agent_security"},
                 engagement_id=project_id,
@@ -88,15 +88,17 @@ class AgentSecuritySessions:
                     (identity, "agent_security.identity_created"),
                     (session, "agent_security.session_created"),
                 ):
-                    self.store.create_with_operation_event(
-                        entity,
-                        operation_id=entity.id,
-                        operation_kind=entity.entity_kind,
-                        engagement_id=project_id,
-                        event_type=event_type,
-                        event_payload={"entity_id": entity.id},
-                        actor_id="core",
-                        idempotency_key=f"create:{entity.id}",
+                    (
+                        await self.store.create_with_operation_event(
+                            entity,
+                            operation_id=entity.id,
+                            operation_kind=entity.entity_kind,
+                            engagement_id=project_id,
+                            event_type=event_type,
+                            event_payload={"entity_id": entity.id},
+                            actor_id="core",
+                            idempotency_key=f"create:{entity.id}",
+                        )
                     )
             try:
                 adapter = await self.host.adapter()
@@ -110,28 +112,30 @@ class AgentSecuritySessions:
                 if not isinstance(tab_ids, list) or not tab_ids or len(tab_ids) > 16:
                     raise ValueError("The headless browser returned no usable tab")
             except Exception as exc:
-                latest = self.store.get(BrowserSession, session.id)
-                self.store.update_with_operation_event(
-                    BrowserSession,
-                    session.id,
-                    {
-                        "status": BrowserSessionStatus.PAUSED.value,
-                        "metadata": {
-                            **latest.metadata,
-                            "last_start_error": str(exc)[:500],
+                latest = await self.store.get(BrowserSession, session.id)
+                (
+                    await self.store.update_with_operation_event(
+                        BrowserSession,
+                        session.id,
+                        {
+                            "status": BrowserSessionStatus.PAUSED.value,
+                            "metadata": {
+                                **latest.metadata,
+                                "last_start_error": str(exc)[:500],
+                            },
                         },
-                    },
-                    expected_revision=latest.revision,
-                    operation_id=session.id,
-                    operation_kind="browser_session",
-                    engagement_id=project_id,
-                    event_type="agent_security.session_start_failed",
-                    event_payload={"reason": type(exc).__name__},
-                    actor_id="core",
+                        expected_revision=latest.revision,
+                        operation_id=session.id,
+                        operation_kind="browser_session",
+                        engagement_id=project_id,
+                        event_type="agent_security.session_start_failed",
+                        event_payload={"reason": type(exc).__name__},
+                        actor_id="core",
+                    )
                 )
                 raise
-            latest = self.store.get(BrowserSession, session.id)
-            updated, _ = self.store.update_with_operation_event(
+            latest = await self.store.get(BrowserSession, session.id)
+            updated, _ = await self.store.update_with_operation_event(
                 BrowserSession,
                 session.id,
                 {
@@ -163,7 +167,7 @@ class AgentSecuritySessions:
         self, project_id: str, request: BrowserdSecurityRequest
     ) -> BrowserdSecurityResponse:
         """Run one headless HTTP request after a fresh Core scope decision."""
-        sessions = self.store.find_entities(
+        sessions = await self.store.find_entities(
             BrowserSession,
             {"identity_id": request.identity_id, "runtime_kind": "agent_security"},
             engagement_id=project_id,
@@ -175,7 +179,7 @@ class AgentSecuritySessions:
         if session.status != BrowserSessionStatus.ACTIVE:
             raise ValueError("the agent security session has stopped")
         self.security._require_in_scope(
-            self.security._scope(project_id),
+            (await self.security._scope(project_id)),
             request.url,
             "agent_security.request",
             RiskClass.ACTIVE_SCAN,
@@ -191,9 +195,9 @@ class AgentSecuritySessions:
     async def stop(self, project_id: str, *, reason: str) -> int:
         """Close every live headless context for a Project and durably pause it."""
         async with self._project_locks.setdefault(project_id, asyncio.Lock()):
-            self.store.get(Engagement, project_id)
+            (await self.store.get(Engagement, project_id))
             stopped = 0
-            for session in self.store.find_entities(
+            for session in await self.store.find_entities(
                 BrowserSession,
                 {"runtime_kind": "agent_security"},
                 engagement_id=project_id,
@@ -213,79 +217,92 @@ class AgentSecuritySessions:
                     # A dead private bridge cannot keep its proxy or Chromium
                     # context alive. Close the whole security host fail-closed.
                     await self.host.close()
-                for attack in self.store.find_entities(
+                for attack in await self.store.find_entities(
                     BrowserAttack,
                     {"session_id": session.id},
                     engagement_id=project_id,
                 ):
                     if attack.state in {"queued", "running", "paused"}:
-                        self.research.transition_attack(
-                            attack.id,
-                            AttackStateRequest(
-                                expected_revision=attack.revision,
-                                action="cancel",
-                                actor_id="core",
-                                error=reason[:3000],
-                            ),
+                        (
+                            await self.research.transition_attack(
+                                attack.id,
+                                AttackStateRequest(
+                                    expected_revision=attack.revision,
+                                    action="cancel",
+                                    actor_id="core",
+                                    error=reason[:3000],
+                                ),
+                            )
                         )
-                for crawl in self.store.find_entities(
+                for crawl in await self.store.find_entities(
                     BrowserCrawlJob,
                     {"session_id": session.id},
                     engagement_id=project_id,
                 ):
                     if crawl.state in {"queued", "running", "paused"}:
-                        self.research.transition_crawl(
-                            crawl.id,
-                            CrawlStateRequest(
-                                expected_revision=crawl.revision,
-                                action="cancel",
-                                actor_id="core",
-                                error=reason[:3000],
-                            ),
+                        (
+                            await self.research.transition_crawl(
+                                crawl.id,
+                                CrawlStateRequest(
+                                    expected_revision=crawl.revision,
+                                    action="cancel",
+                                    actor_id="core",
+                                    error=reason[:3000],
+                                ),
+                            )
                         )
-                for tab in self.store.find_entities(
+                for tab in await self.store.find_entities(
                     BrowserRepeaterTab,
                     {"session_id": session.id},
                     engagement_id=project_id,
                 ):
                     if tab.state in {"queued", "running"}:
-                        self.research.transition_repeater_tab(
-                            tab.id,
-                            RepeaterStateRequest(
-                                expected_revision=tab.revision,
-                                action="cancel",
-                                actor_id="core",
-                                error=reason[:3000],
-                            ),
+                        (
+                            await self.research.transition_repeater_tab(
+                                tab.id,
+                                RepeaterStateRequest(
+                                    expected_revision=tab.revision,
+                                    action="cancel",
+                                    actor_id="core",
+                                    error=reason[:3000],
+                                ),
+                            )
                         )
-                for item in self.store.find_entities(
+                for item in await self.store.find_entities(
                     BrowserInterceptItem,
                     {"session_id": session.id, "state": "paused"},
                     engagement_id=project_id,
                 ):
-                    self.research._transition_intercept(
-                        item,
-                        item.revision,
-                        "interrupted",
-                        "core",
-                        reason[:3000],
+                    (
+                        await self.research._transition_intercept(
+                            item,
+                            item.revision,
+                            "interrupted",
+                            "core",
+                            reason[:3000],
+                        )
                     )
                 if session.status == BrowserSessionStatus.PAUSED:
                     continue
-                self.store.update_with_operation_event(
-                    BrowserSession,
-                    session.id,
-                    {
-                        "status": BrowserSessionStatus.PAUSED.value,
-                        "metadata": {**session.metadata, "stop_reason": reason[:500]},
-                    },
-                    expected_revision=session.revision,
-                    operation_id=session.id,
-                    operation_kind="browser_session",
-                    engagement_id=project_id,
-                    event_type="agent_security.session_stopped",
-                    event_payload={"reason": reason[:500]},
-                    actor_id="core",
+                (
+                    await self.store.update_with_operation_event(
+                        BrowserSession,
+                        session.id,
+                        {
+                            "status": BrowserSessionStatus.PAUSED.value,
+                            "metadata": {
+                                **session.metadata,
+                                "stop_reason": reason[:500],
+                            },
+                        },
+                        expected_revision=session.revision,
+                        operation_id=session.id,
+                        operation_kind="browser_session",
+                        engagement_id=project_id,
+                        event_type="agent_security.session_stopped",
+                        event_payload={"reason": reason[:500]},
+                        actor_id="core",
+                    )
                 )
                 stopped += 1
             return stopped

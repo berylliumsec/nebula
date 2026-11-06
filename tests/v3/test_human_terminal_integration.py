@@ -1,4 +1,8 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import os
@@ -37,7 +41,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
+async def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
     assert RUNTIME is not None
     workspace = tmp_path / "workspace"
     workspace.mkdir(mode=0o777)
@@ -72,7 +76,7 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
         profile = profile.model_copy(update={"context": context_name})
     runner = ContainerSandboxRunner(profile=profile, workspace_roots=[tmp_path])
     store = NebulaStore(tmp_path / "terminal-audit.db")
-    project = store.create(Engagement(name="Real Kali selective recording"))
+    project = await store.create(Engagement(name="Real Kali selective recording"))
     artifacts = ArtifactStore(tmp_path / "artifacts")
     history = TerminalCommandHistory(
         store.database,
@@ -121,11 +125,13 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
                 output.extend(parsed.passthrough if parsed is not None else chunk)
                 if parsed is not None:
                     for capture in parsed.captures:
-                        history.record_capture(
-                            engagement_id=project.id,
-                            session_id=name,
-                            operator_id="integration-test",
-                            capture=capture,
+                        (
+                            await history.record_capture(
+                                engagement_id=project.id,
+                                session_id=name,
+                                operator_id="integration-test",
+                                capture=capture,
+                            )
                         )
             assert await asyncio.wait_for(process.wait(), timeout=10) == 0
             if parser is not None:
@@ -135,11 +141,13 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
                     detail="integration shell exited before its final prompt"
                 )
                 if interrupted is not None:
-                    history.record_capture(
-                        engagement_id=project.id,
-                        session_id=name,
-                        operator_id="integration-test",
-                        capture=interrupted,
+                    (
+                        await history.record_capture(
+                            engagement_id=project.id,
+                            session_id=name,
+                            operator_id="integration-test",
+                            capture=interrupted,
+                        )
                     )
             return bytes(output)
         finally:
@@ -206,7 +214,9 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
         )
         assert b"unselected-result" in audited
         assert b"Nmap version" in audited
-        records = {record.command: record for record in history.all_records(project.id)}
+        records = {
+            record.command: record for record in (await history.all_records(project.id))
+        }
         plain = records["printf 'unselected-result\\n'"]
         selected = records["nmap --version"]
         assert plain.capture_decision == "not_selected"
@@ -216,7 +226,7 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
         assert selected.raw_output_available is True
         assert (
             b"Nmap version"
-            in history.output_bytes(project.id, selected.id, raw=True)[0]
+            in (await history.output_bytes(project.id, selected.id, raw=True))[0]
         )
 
         second = await terminal(
@@ -236,4 +246,7 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
         assert return_code == 0
         assert "nebula-terminal-kali-integration" not in names
 
-    asyncio.run(scenario())
+    (await scenario())
+
+
+pytestmark = [pytestmark, pytest.mark.anyio]

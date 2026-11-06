@@ -12,7 +12,6 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .domain import ChatBackend, ChatSession, Engagement, HarnessSession, utc_now
-from .read_workers import read_in_worker
 from .storage import NotFoundError
 
 logger = logging.getLogger(__name__)
@@ -47,7 +46,7 @@ class TemporaryChatRequest(BaseModel):
 def temporary_chat_router(store, chat_service, harness_runtime):
     async def discard(session_id, *, expired_only=False):
         try:
-            chat = store.get(ChatSession, session_id)
+            chat = await store.get(ChatSession, session_id)
         except NotFoundError:
             # diagnostic-expected: an already-discarded temporary chat needs no cleanup.
             return
@@ -57,7 +56,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
             raise HTTPException(
                 409, "Only temporary conversations can be discarded here"
             )
-        turn = chat_service().pending_turn(chat.id)
+        turn = await chat_service().pending_turn(chat.id)
         if turn:
             if turn.harness_turn_id:
                 await harness_runtime.cancel_turn(
@@ -67,18 +66,18 @@ def temporary_chat_router(store, chat_service, harness_runtime):
                 await chat_service().stop_provider_turn(turn.id)
         if chat.harness_session_id:
             await harness_runtime.close_session(chat.harness_session_id)
-        store.delete_chat_session(chat.id)
+        (await store.delete_chat_session(chat.id))
         # The temporary session owns its vendor runtime, never the source chat.
         if chat.harness_session_id:
             with suppress(NotFoundError):
-                store.delete(HarnessSession, chat.harness_session_id)
+                (await store.delete(HarnessSession, chat.harness_session_id))
 
     async def collect():
         while True:
             # An unreadable conversation is skipped and recorded; it must not
             # end this sweep for good.
-            expired = await read_in_worker(
-                store.expired_temporary_chat_ids, utc_now() - timedelta(days=1)
+            expired = await store.expired_temporary_chat_ids(
+                utc_now() - timedelta(days=1)
             )
             for session_id in expired:
                 try:
@@ -104,18 +103,20 @@ def temporary_chat_router(store, chat_service, harness_runtime):
     @router.get(
         "/chat/sessions/{session_id}/side-chats", response_model=list[ChatSession]
     )
-    def list_side_chats(session_id: str):
+    async def list_side_chats(session_id: str):
         try:
-            parent = store.get(ChatSession, session_id)
+            parent = await store.get(ChatSession, session_id)
         except NotFoundError:
             raise HTTPException(404, "Conversation not found") from None
         return [
             chat
-            for chat in store.find_entities(
-                ChatSession,
-                {"parent_session_id": session_id},
-                engagement_id=parent.engagement_id,
-                newest_first=True,
+            for chat in (
+                await store.find_entities(
+                    ChatSession,
+                    {"parent_session_id": session_id},
+                    engagement_id=parent.engagement_id,
+                    newest_first=True,
+                )
             )
             if chat.metadata.get("side_chat") is True
         ]
@@ -124,9 +125,11 @@ def temporary_chat_router(store, chat_service, harness_runtime):
         "/chat/temporary-sessions", response_model=ChatSession, status_code=201
     )
     async def create(request: TemporaryChatRequest):
-        store.get(Engagement, request.engagement_id)
+        (await store.get(Engagement, request.engagement_id))
         source = (
-            store.get(ChatSession, request.session_id) if request.session_id else None
+            (await store.get(ChatSession, request.session_id))
+            if request.session_id
+            else None
         )
         if source and source.engagement_id != request.engagement_id:
             raise HTTPException(409, "Conversation is not in this project")
@@ -169,30 +172,32 @@ def temporary_chat_router(store, chat_service, harness_runtime):
         )
         # The hidden marker and snapshot are committed together: no visible chat
         # is created and then hidden, even while another client refreshes.
-        with store.transaction() as transaction:
-            transaction.add(chat)
+        async with store.transaction() as transaction:
+            (await transaction.add(chat))
             for message in messages:
-                transaction.add(
-                    message.model_copy(
-                        update={
-                            "id": str(uuid4()),
-                            "session_id": chat.id,
-                            "source_message_id": message.id,
-                        }
+                (
+                    await transaction.add(
+                        message.model_copy(
+                            update={
+                                "id": str(uuid4()),
+                                "session_id": chat.id,
+                                "source_message_id": message.id,
+                            }
+                        )
                     )
                 )
         if source and messages:
             from .chat_decisions import fork_decisions
 
-            fork_decisions(store, source, chat, messages[-1].sequence)
+            (await fork_decisions(store, source, chat, messages[-1].sequence))
         return chat
 
     @router.post("/chat/temporary-sessions/{session_id}/keepalive", status_code=204)
     async def keepalive(session_id: str):
-        chat = store.get(ChatSession, session_id)
+        chat = await store.get(ChatSession, session_id)
         if not is_temporary_chat(chat):
             raise HTTPException(409, "Only temporary conversations can be renewed here")
-        store.update(ChatSession, chat.id, {"metadata": chat.metadata})
+        (await store.update(ChatSession, chat.id, {"metadata": chat.metadata}))
         return Response(status_code=204)
 
     @router.delete("/chat/temporary-sessions/{session_id}", status_code=204)

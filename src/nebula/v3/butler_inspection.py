@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import call_async
+
 import hashlib
 import json
 from typing import Any
@@ -49,17 +51,17 @@ def _part(value: Any, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 class ButlerInspection(ButlerData):
-    def _turn(self, session_id: str, turn_id: str) -> ChatTurn:
-        self._chat(session_id)
-        turn = self.store.get(ChatTurn, turn_id)
+    async def _turn(self, session_id: str, turn_id: str) -> ChatTurn:
+        (await self._chat(session_id))
+        turn = await self.store.get(ChatTurn, turn_id)
         if turn.engagement_id != self.project_id or turn.session_id != session_id:
             raise ValueError("choose a turn from the selected chat")
         return turn
 
-    def turns(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        session = self._chat(arguments["session_id"])
+    async def turns(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        session = await self._chat(arguments["session_id"])
         offset = arguments.get("offset", 0)
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             ChatTurn,
             {"session_id": session.id},
             engagement_id=self.project_id,
@@ -81,11 +83,11 @@ class ButlerInspection(ButlerData):
         }
 
     async def chat(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        session = self._chat(arguments["session_id"])
+        session = await self._chat(arguments["session_id"])
         base = f"/api/v1/chat/sessions/{quote(session.id, safe='')}"
         kind = arguments["kind"]
         if kind in {"reasoning", "evidence"}:
-            message = self.store.get(ChatMessage, arguments["message_id"])
+            message = await self.store.get(ChatMessage, arguments["message_id"])
             if (
                 message.engagement_id != self.project_id
                 or message.session_id != session.id
@@ -93,7 +95,7 @@ class ButlerInspection(ButlerData):
                 raise ValueError("choose a saved message from this chat")
             path = f"{base}/messages/{quote(message.id, safe='')}/{kind}"
         elif kind in {"turn_summary", "turn_hooks"}:
-            turn = self._turn(session.id, arguments["turn_id"])
+            turn = await self._turn(session.id, arguments["turn_id"])
             path = (
                 f"{base}/turns/{quote(turn.id, safe='')}/summary"
                 if kind == "turn_summary"
@@ -113,31 +115,31 @@ class ButlerInspection(ButlerData):
             else None,
         }
 
-    def _call(self, call_id: str) -> ToolCall:
-        call = self.store.get(ToolCall, call_id)
+    async def _call(self, call_id: str) -> ToolCall:
+        call = await self.store.get(ToolCall, call_id)
         if call.engagement_id != self.project_id:
             raise ValueError("choose a tool call from the selected project")
         if call.origin == ToolCallOrigin.CHAT:
             if not call.chat_session_id:
                 raise ValueError("tool call has no visible conversation owner")
-            self._chat(call.chat_session_id)
+            (await self._chat(call.chat_session_id))
         else:
-            run = self.store.get(AgentRun, call.run_id)
+            run = await self.store.get(AgentRun, call.run_id)
             if run.engagement_id != self.project_id:
                 raise ValueError("choose a mission from the selected project")
         return call
 
-    def calls(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def calls(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if "session_id" in arguments:
-            session = self._chat(arguments["session_id"])
+            session = await self._chat(arguments["session_id"])
             filters = {"chat_session_id": session.id}
         else:
-            run = self.store.get(AgentRun, arguments["run_id"])
+            run = await self.store.get(AgentRun, arguments["run_id"])
             if run.engagement_id != self.project_id:
                 raise ValueError("choose a mission from the selected project")
             filters = {"run_id": run.id}
         offset = arguments.get("offset", 0)
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             ToolCall,
             filters,
             engagement_id=self.project_id,
@@ -171,12 +173,12 @@ class ButlerInspection(ButlerData):
             "redacted": artifact.redacted,
         }
 
-    def artifacts(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        call = self._call(arguments["tool_call_id"])
+    async def artifacts(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        call = await self._call(arguments["tool_call_id"])
         offset = arguments.get("offset", 0)
         # The SQL query restricts the page before serialization and never
         # returns storage paths, raw output, call arguments or private metadata.
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             Artifact,
             {"metadata.tool_call_id": call.id},
             engagement_id=self.project_id,
@@ -188,9 +190,9 @@ class ButlerInspection(ButlerData):
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def _tool_artifact(self, call_id: str, artifact_id: str) -> Artifact:
-        call = self._call(call_id)
-        artifact = self.store.get(Artifact, artifact_id)
+    async def _tool_artifact(self, call_id: str, artifact_id: str) -> Artifact:
+        call = await self._call(call_id)
+        artifact = await self.store.get(Artifact, artifact_id)
         if (
             artifact.engagement_id != self.project_id
             or artifact.metadata.get("tool_call_id") != call.id
@@ -199,7 +201,7 @@ class ButlerInspection(ButlerData):
         return artifact
 
     async def output(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        artifact = self._tool_artifact(
+        artifact = await self._tool_artifact(
             arguments["tool_call_id"], arguments["artifact_id"]
         )
         # The existing Core service redacts complete lines before pagination.
@@ -216,7 +218,7 @@ class ButlerInspection(ButlerData):
         return value
 
     async def search_output(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        call = self._call(arguments["tool_call_id"])
+        call = await self._call(arguments["tool_call_id"])
         return await self._request(
             "POST",
             f"/api/v1/tool-calls/{quote(call.id, safe='')}/output/search",
@@ -234,8 +236,8 @@ class ButlerInspection(ButlerData):
             },
         )
 
-    def _execution(self, execution_id: str) -> OperatorExecution:
-        execution = self.store.get(OperatorExecution, execution_id)
+    async def _execution(self, execution_id: str) -> OperatorExecution:
+        execution = await self.store.get(OperatorExecution, execution_id)
         if execution.engagement_id != self.project_id:
             raise ValueError("choose an execution from the selected project")
         return execution
@@ -265,9 +267,9 @@ class ButlerInspection(ButlerData):
             },
         }
 
-    def executions(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def executions(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
-        rows = self.store.find_entities(
+        rows = await self.store.find_entities(
             OperatorExecution,
             {},
             engagement_id=self.project_id,
@@ -280,12 +282,14 @@ class ButlerInspection(ButlerData):
             "next_offset": offset + 50 if len(rows) > 50 else None,
         }
 
-    def execution(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self._execution_summary(self._execution(arguments["execution_id"]))
+    async def execution(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._execution_summary(
+            (await self._execution(arguments["execution_id"]))
+        )
 
-    def execution_artifact(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        execution = self._execution(arguments["execution_id"])
-        artifact = self.store.get(Artifact, arguments["artifact_id"])
+    async def execution_artifact(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        execution = await self._execution(arguments["execution_id"])
+        artifact = await self.store.get(Artifact, arguments["artifact_id"])
         if (
             artifact.engagement_id != self.project_id
             or artifact.id
@@ -296,7 +300,7 @@ class ButlerInspection(ButlerData):
         return self._artifact_summary(artifact)
 
     async def execution_output(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        execution = self._execution(arguments["execution_id"])
+        execution = await self._execution(arguments["execution_id"])
         if self.core_api is None:
             raise ValueError(
                 "reconnect Butler to Core before inspecting execution output"
@@ -332,7 +336,7 @@ class ButlerInspection(ButlerData):
         }
 
     async def cancel_execution(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        execution = self._execution(arguments["execution_id"])
+        execution = await self._execution(arguments["execution_id"])
         if execution.revision != arguments["expected_revision"]:
             raise ValueError(
                 "execution changed; read its current revision before cancellation"
@@ -341,7 +345,7 @@ class ButlerInspection(ButlerData):
             "POST",
             f"/api/v1/executions/{quote(execution.id, safe='')}/cancel?expected_revision={execution.revision}",
         )
-        observed = self._execution(execution.id)
+        observed = await self._execution(execution.id)
         if observed.status.value in {"queued", "running"}:
             raise ValueError(
                 "Core did not confirm cancellation; read execution status before retrying"
@@ -357,14 +361,14 @@ class ButlerInspection(ButlerData):
             },
         }
 
-    def download_artifact(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        artifact = self.store.get(Artifact, arguments["artifact_id"])
+    async def download_artifact(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        artifact = await self.store.get(Artifact, arguments["artifact_id"])
         owner_kind = arguments["owner_kind"]
         owner_id = arguments["owner_id"]
         if owner_kind == "tool_call":
-            self._tool_artifact(owner_id, artifact.id)
+            (await self._tool_artifact(owner_id, artifact.id))
         else:
-            execution = self._execution(owner_id)
+            execution = await self._execution(owner_id)
             if (
                 artifact.id
                 not in self._execution_summary(execution)["artifacts"].values()
@@ -581,10 +585,10 @@ class ButlerInspection(ButlerData):
             ) -> dict[str, Any]:
                 handler = getattr(self, operation)
                 if operation in asynchronous:
-                    return await handler(arguments)
+                    return await call_async(handler, arguments)
                 if selected_read:
                     return await read_in_worker(handler, arguments)
-                return handler(arguments)
+                return await call_async(handler, arguments)
 
             actions.append(
                 AnalysisTool(

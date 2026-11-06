@@ -111,7 +111,7 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) and number >= 0 else None
 
 
-def _recorded(
+async def _recorded(
     store: NebulaStore, providers: set[str], harnesses: set[str]
 ) -> dict[tuple[str, str], RecordedUsage]:
     rows: dict[tuple[str, str], RecordedUsage] = {}
@@ -139,22 +139,22 @@ def _recorded(
         row.cached_input_tokens += getattr(usage, "cached_input_tokens", 0)
         row.turns += 1
 
-    for turn in store.iter_readable_entities(ChatTurn):
+    async for turn in store.iter_readable_entities(ChatTurn):
         if turn.backend.value == "provider" and turn.usage.total_tokens:
             add("provider", turn.provider_profile_id, turn.usage)
     native_runs = {
         run.id: run.supervisor_provider_id
-        for run in store.iter_readable_entities(AgentRun)
+        async for run in store.iter_readable_entities(AgentRun)
         if run.backend == RunBackend.NATIVE and run.supervisor_provider_id in providers
     }
     counted_runs: set[str] = set()
-    for attempt in store.iter_readable_entities(AgentAttempt):
+    async for attempt in store.iter_readable_entities(AgentAttempt):
         if attempt.tokens_used:
             profile_id = attempt.provider_profile_id or native_runs.get(attempt.run_id)
             if profile_id in providers:
                 add("provider", profile_id, None, total_only=attempt.tokens_used)
                 counted_runs.add(attempt.run_id)
-    for snapshot in store.iter_readable_entities(ContextSnapshot):
+    async for snapshot in store.iter_readable_entities(ContextSnapshot):
         if snapshot.usage.total_tokens:
             # Native attempt totals already include their run's compaction use.
             if (
@@ -165,10 +165,10 @@ def _recorded(
             add("provider", snapshot.provider_profile_id, snapshot.usage)
     sessions = {
         session.id: session.harness_profile_id
-        for session in store.iter_readable_entities(HarnessSession)
+        async for session in store.iter_readable_entities(HarnessSession)
         if session.harness_profile_id in harnesses
     }
-    for harness_turn in store.iter_readable_entities(HarnessTurn):
+    async for harness_turn in store.iter_readable_entities(HarnessTurn):
         if harness_turn.usage.total_tokens:
             add(
                 "harness",
@@ -500,7 +500,7 @@ class RuntimeUsageService:
     ) -> HarnessQuotaRead:
         """Read one harness profile without scanning unrelated provider accounts."""
 
-        profile = self.store.get(HarnessProfile, profile_id)
+        profile = await self.store.get(HarnessProfile, profile_id)
         vendor = await self._vendor(profile, refresh=refresh)
         state = (
             "unavailable"
@@ -525,10 +525,13 @@ class RuntimeUsageService:
         )
 
     async def read(self, *, refresh: bool = False) -> RuntimeUsageResponse:
-        providers = list(self.store.iter_readable_entities(ProviderProfile))
-        harnesses = list(self.store.iter_readable_entities(HarnessProfile))
-        recorded = await asyncio.to_thread(
-            _recorded,
+        providers = list(
+            [item async for item in self.store.iter_readable_entities(ProviderProfile)]
+        )
+        harnesses = list(
+            [item async for item in self.store.iter_readable_entities(HarnessProfile)]
+        )
+        recorded = await _recorded(
             self.store,
             {item.id for item in providers},
             {item.id for item in harnesses},

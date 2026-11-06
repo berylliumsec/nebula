@@ -16,6 +16,11 @@ BigModel. Each case below is a shape those APIs send or require:
   verified limits of every other endpoint.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 from pathlib import Path
@@ -596,7 +601,7 @@ def test_strict_is_kept_for_openai_routes(flavor, model):
         "https://open.bigmodel.cn/api/paas/v4/",
     ],
 )
-def test_versioned_base_paths_are_not_given_v1(base_url):
+async def test_versioned_base_paths_are_not_given_v1(base_url):
     handler, seen = _scripted(
         _completion("3 hosts are up.", "stop"),
         {"object": "list", "data": [{"id": "glm-5.3-flash"}]},
@@ -606,7 +611,7 @@ def test_versioned_base_paths_are_not_given_v1(base_url):
     )
 
     response = _complete(provider)
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     prefix = base_url.rstrip("/")
     assert str(seen[0].url) == f"{prefix}/chat/completions"
@@ -711,7 +716,7 @@ def test_endpoint_with_an_invalid_completion_limit_is_still_rejected(max_complet
         )
 
 
-def test_openrouter_route_limits_keep_every_endpoint_with_a_null_cap():
+async def test_openrouter_route_limits_keep_every_endpoint_with_a_null_cap():
     model = "deepseek/deepseek-v4.1-flash"
     handler, seen = _scripted(
         {
@@ -726,7 +731,10 @@ def test_openrouter_route_limits_keep_every_endpoint_with_a_null_cap():
     )
     provider = _provider(ProviderFlavor.OPENROUTER, model, handler=handler)
 
-    routes = asyncio.run(provider.openrouter_route_limits(model))
+    routes = await provider.openrouter_route_limits(model)
 
     assert seen[0].url.path == "/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints"
     assert [route.max_output_tokens for route in routes] == [384_000, 1_048_576]
+
+
+pytestmark = pytest.mark.anyio

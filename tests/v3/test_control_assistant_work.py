@@ -1,10 +1,14 @@
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.chat import (
@@ -80,9 +84,11 @@ def _app(tmp_path):
     return store, app, runtime
 
 
-def test_work_tools_are_bound_to_control_assistant_and_not_ordinary_chat(tmp_path):
+async def test_work_tools_are_bound_to_control_assistant_and_not_ordinary_chat(
+    tmp_path,
+):
     store, app, runtime = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     common = dict(
         engagement_id=project.id,
         turn_id="turn",
@@ -90,8 +96,8 @@ def test_work_tools_are_bound_to_control_assistant_and_not_ordinary_chat(tmp_pat
         model="model-a",
         allow_empty=True,
     )
-    ordinary = runtime.chat_components(**common)
-    control = runtime.chat_components(**common, settings_assistant=True)
+    ordinary = await runtime.chat_components(**common)
+    control = await runtime.chat_components(**common, settings_assistant=True)
     expected = BUTLER_TOOL_NAMES
     assert not expected.intersection(ordinary.specs)
     assert expected.issubset(control.specs)
@@ -101,32 +107,30 @@ def test_work_tools_are_bound_to_control_assistant_and_not_ordinary_chat(tmp_pat
     )
 
 
-def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(tmp_path):
+async def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(
+    tmp_path,
+):
     store, app, runtime = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
+    project = await store.create(Engagement(name="Selected"))
     work = app.state.control_assistant_work
     names = {name for name, *_ in WORK_TOOLS}
     assert "nebula.work.manage" in names
     assert "nebula.work.goals" not in names
-    descriptor = asyncio.run(
-        dispatch_work_tool(
-            work, project.id, "nebula.work.catalog", {"operation": "nebula.work.goals"}
-        )
+    descriptor = await dispatch_work_tool(
+        work, project.id, "nebula.work.catalog", {"operation": "nebula.work.goals"}
     )
     assert descriptor["name"] == "nebula.work.goals"
     assert descriptor["read_only"] is True
-    update = asyncio.run(
-        dispatch_work_tool(
-            work,
-            project.id,
-            "nebula.work.catalog",
-            {"operation": "nebula.work.update_goal"},
-        )
+    update = await dispatch_work_tool(
+        work,
+        project.id,
+        "nebula.work.catalog",
+        {"operation": "nebula.work.update_goal"},
     )
     assert "resume_instruction" in update["parameters"]["properties"]
     assert "resume instruction" in update["description"]
-    assert asyncio.run(
-        dispatch_work_tool(
+    assert (
+        await dispatch_work_tool(
             work,
             project.id,
             "nebula.work.manage",
@@ -134,8 +138,8 @@ def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(tm
         )
     ) == work.goals_overview(project.id, 0)
     with pytest.raises(ValueError, match="managed operation"):
-        asyncio.run(
-            dispatch_work_tool(
+        (
+            await dispatch_work_tool(
                 work,
                 project.id,
                 "nebula.work.manage",
@@ -144,12 +148,12 @@ def test_managed_goal_tools_are_discoverable_without_advertising_every_schema(tm
         )
 
 
-def test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_not(
+async def test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_not(
     tmp_path,
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Local fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -181,21 +185,23 @@ def test_harness_control_session_advertises_work_tools_but_ordinary_chat_does_no
     )
     expected = BUTLER_TOOL_NAMES
     ordinary = harness._gateway_catalog(
-        store.get(HarnessSession, ordinary_turn.harness_session_id), turn=ordinary_turn
+        (await store.get(HarnessSession, ordinary_turn.harness_session_id)),
+        turn=ordinary_turn,
     )
     control = harness._gateway_catalog(
-        store.get(HarnessSession, control_turn.harness_session_id), turn=control_turn
+        (await store.get(HarnessSession, control_turn.harness_session_id)),
+        turn=control_turn,
     )
     assert not expected.intersection(item["name"] for item in ordinary["tools"])
     assert expected.issubset(item["name"] for item in control["tools"])
     assert not any(item["name"].startswith("nebula.work.") for item in control["tools"])
 
 
-def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path):
+async def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -203,7 +209,7 @@ def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path
             model_allowlist=["model-a"],
         )
     )
-    own = store.create(
+    own = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Investigate",
@@ -211,7 +217,7 @@ def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path
             model="model-a",
         )
     )
-    private = store.create(
+    private = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Nebula assistant",
@@ -220,7 +226,7 @@ def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path
             metadata={"control_assistant": True},
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Other chat",
@@ -228,8 +234,12 @@ def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path
             model="model-a",
         )
     )
-    run = store.create(AgentRun(engagement_id=selected.id, objective="Check status"))
-    foreign_run = store.create(AgentRun(engagement_id=other.id, objective="Other work"))
+    run = await store.create(
+        AgentRun(engagement_id=selected.id, objective="Check status")
+    )
+    foreign_run = await store.create(
+        AgentRun(engagement_id=other.id, objective="Other work")
+    )
     work = app.state.control_assistant_work
     overview = work.overview(selected.id)
     assert [item["id"] for item in overview["chats"]] == [own.id]
@@ -245,10 +255,10 @@ def test_work_roster_and_details_reject_another_project_or_control_chat(tmp_path
         work.mission_detail(selected.id, foreign_run.id)
 
 
-def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
+async def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -256,7 +266,7 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main researcher",
@@ -264,7 +274,7 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
             model="model-a",
         )
     )
-    child = store.create(
+    child = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Subagent · files",
@@ -274,7 +284,7 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
             metadata={"subagent_id": "child-1"},
         )
     )
-    record = store.create(
+    record = await store.create(
         ChatSubagent(
             id="child-1",
             engagement_id=project.id,
@@ -285,7 +295,7 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
             task="Inspect files",
         )
     )
-    goal_child = store.create(
+    goal_child = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Goal child",
@@ -295,22 +305,26 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
             metadata={"delegated_from_goal_id": "parent-goal"},
         )
     )
-    store.create(
-        ChatGoal(
-            id="parent-goal",
-            engagement_id=project.id,
-            session_id=parent.id,
-            objective="Review project",
-            completion_criteria=["Report ready"],
+    (
+        await store.create(
+            ChatGoal(
+                id="parent-goal",
+                engagement_id=project.id,
+                session_id=parent.id,
+                objective="Review project",
+                completion_criteria=["Report ready"],
+            )
         )
     )
-    store.create(
-        ChatGoal(
-            engagement_id=project.id,
-            session_id=goal_child.id,
-            parent_goal_id="parent-goal",
-            objective="Review child topic",
-            completion_criteria=["Child report ready"],
+    (
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=goal_child.id,
+                parent_goal_id="parent-goal",
+                objective="Review child topic",
+                completion_criteria=["Child report ready"],
+            )
         )
     )
     work = app.state.control_assistant_work
@@ -328,11 +342,11 @@ def test_work_roster_separates_main_chats_subagents_and_goal_children(tmp_path):
     }
 
 
-def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
+async def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -340,7 +354,7 @@ def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Research",
@@ -349,19 +363,23 @@ def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
         )
     )
     messages = [
-        store.create(
-            ChatMessage(
-                engagement_id=selected.id,
-                session_id=session.id,
-                sequence=index,
-                role=ChatRole.USER if index % 2 else ChatRole.ASSISTANT,
-                content=f"Message {index} " + ("x" * 520 if index == 5 else "body"),
-                metadata={"retracted_at": "2026-01-01T00:00:00Z"} if index == 4 else {},
+        (
+            await store.create(
+                ChatMessage(
+                    engagement_id=selected.id,
+                    session_id=session.id,
+                    sequence=index,
+                    role=ChatRole.USER if index % 2 else ChatRole.ASSISTANT,
+                    content=f"Message {index} " + ("x" * 520 if index == 5 else "body"),
+                    metadata={"retracted_at": "2026-01-01T00:00:00Z"}
+                    if index == 4
+                    else {},
+                )
             )
         )
         for index in range(1, 36)
     ]
-    foreign = store.create(
+    foreign = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Foreign",
@@ -369,7 +387,7 @@ def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
             model="model-a",
         )
     )
-    foreign_message = store.create(
+    foreign_message = await store.create(
         ChatMessage(
             engagement_id=other.id,
             session_id=foreign.id,
@@ -378,7 +396,7 @@ def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
             content="Foreign text",
         )
     )
-    child = store.create(
+    child = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Delegated child",
@@ -432,19 +450,19 @@ def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
         "before_message_id": messages[4].id,
     }
     with pytest.raises(ValueError, match="active user message"):
-        asyncio.run(rewind({**base, "before_message_id": messages[5].id}))
+        (await rewind({**base, "before_message_id": messages[5].id}))
     with pytest.raises(ValueError, match="active user message"):
-        asyncio.run(rewind({**base, "before_message_id": foreign_message.id}))
+        (await rewind({**base, "before_message_id": foreign_message.id}))
     with pytest.raises(ValueError, match="chat changed"):
-        asyncio.run(rewind({**base, "expected_revision": session.revision + 1}))
+        (await rewind({**base, "expected_revision": session.revision + 1}))
     with pytest.raises(ValueError, match="child goal chat"):
-        asyncio.run(rewind({**base, "session_id": child.id}))
+        (await rewind({**base, "session_id": child.id}))
     assert (
         len(work.chat_messages(selected.id, {"session_id": session.id})["messages"])
         == 30
     )
 
-    changed = asyncio.run(rewind(base))
+    changed = await rewind(base)
     assert changed["session_id"] == session.id
     assert changed["revision"] > session.revision
     assert changed["active_message_count"] == 3
@@ -454,19 +472,18 @@ def test_butler_pages_and_rewinds_main_chat_with_core_readback(tmp_path):
         item.id for item in messages[:3]
     ]
     assert work.chat_detail(selected.id, session.id)["revision"] == changed["revision"]
-    assert (
-        store.get(ChatMessage, messages[4].id).metadata["retracted_reason"]
-        == "operator_edit"
-    )
+    assert (await store.get(ChatMessage, messages[4].id)).metadata[
+        "retracted_reason"
+    ] == "operator_edit"
     with pytest.raises(ValueError, match="chat changed"):
-        asyncio.run(rewind(base))
+        (await rewind(base))
 
 
-def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
+async def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -474,7 +491,7 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    source = store.create(
+    source = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Research",
@@ -483,7 +500,7 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             metadata={"butler_initiated": True},
         )
     )
-    message = store.create(
+    message = await store.create(
         ChatMessage(
             engagement_id=selected.id,
             session_id=source.id,
@@ -492,7 +509,7 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             content="Investigate the issue",
         )
     )
-    deletable = store.create(
+    deletable = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Old work",
@@ -500,7 +517,7 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             model="model-a",
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Other work",
@@ -540,10 +557,9 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
             },
         )
         assert fork["parent_session_id"] == source.id
-        assert (
-            store.get(ChatSession, fork["session_id"]).metadata["butler_initiated"]
-            is True
-        )
+        assert (await store.get(ChatSession, fork["session_id"])).metadata[
+            "butler_initiated"
+        ] is True
         ordinary_fork = work.chat.fork_session(source.id, through_message_id=message.id)
         assert ordinary_fork.metadata.get("butler_initiated") is not True
         assert work.chat_detail(selected.id, fork["session_id"])["kind"] == "main"
@@ -581,18 +597,18 @@ def test_chat_fork_and_delete_are_project_bound_and_revision_guarded(tmp_path):
         )
         assert deleted["deleted"] is True
         with pytest.raises(NotFoundError):
-            store.get(ChatSession, deletable.id)
+            (await store.get(ChatSession, deletable.id))
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_retry_chat_turn_reads_exact_target_and_reuses_saved_retry(
+async def test_retry_chat_turn_reads_exact_target_and_reuses_saved_retry(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    source = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    source = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Failed chat",
@@ -602,7 +618,7 @@ def test_retry_chat_turn_reads_exact_target_and_reuses_saved_retry(
             harness_session_id="harness-session",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         HarnessTurn(
             engagement_id=selected.id,
             harness_session_id="harness-session",
@@ -622,7 +638,7 @@ def test_retry_chat_turn_reads_exact_target_and_reuses_saved_retry(
 
     async def fake_request(method, path, body, **kwargs):
         requests.append((method, path, body))
-        replacement = store.create(
+        replacement = await store.create(
             HarnessTurn(
                 engagement_id=selected.id,
                 harness_session_id="harness-session",
@@ -682,14 +698,16 @@ def test_retry_chat_turn_reads_exact_target_and_reuses_saved_retry(
         assert reused["status"] == "queued"
         assert len(requests) == 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(tmp_path):
+async def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(
+    tmp_path,
+):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    provider = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -697,7 +715,7 @@ def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(tmp_p
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Goal chat",
@@ -705,7 +723,7 @@ def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(tmp_p
             model="model-a",
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Foreign chat",
@@ -779,13 +797,13 @@ def test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets(tmp_p
                 },
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_new_goal_conversation_is_draft_until_explicit_start(tmp_path):
+async def test_new_goal_conversation_is_draft_until_explicit_start(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -812,19 +830,18 @@ def test_new_goal_conversation_is_draft_until_explicit_start(tmp_path):
         assert created["goal"]["status"] == "draft"
         assert work.overview(project.id)["chats"][0]["id"] == created["session_id"]
         assert work.goals_overview(project.id)["goals"][0]["status"] == "draft"
-        assert (
-            store.get(ChatSession, created["session_id"]).metadata["butler_initiated"]
-            is True
-        )
+        assert (await store.get(ChatSession, created["session_id"])).metadata[
+            "butler_initiated"
+        ] is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_goal_child_creation_keeps_lineage_and_project_scope(tmp_path):
+async def test_goal_child_creation_keeps_lineage_and_project_scope(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    provider = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -832,7 +849,7 @@ def test_goal_child_creation_keeps_lineage_and_project_scope(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Parent",
@@ -840,14 +857,16 @@ def test_goal_child_creation_keeps_lineage_and_project_scope(tmp_path):
             model="model-a",
         )
     )
-    store.create(
-        ChatGoal(
-            engagement_id=selected.id,
-            session_id=parent.id,
-            objective="Investigate",
-            completion_criteria=["Report ready"],
-            status="running",
-            child_budget=1,
+    (
+        await store.create(
+            ChatGoal(
+                engagement_id=selected.id,
+                session_id=parent.id,
+                objective="Investigate",
+                completion_criteria=["Report ready"],
+                status="running",
+                child_budget=1,
+            )
         )
     )
     work = app.state.control_assistant_work
@@ -877,24 +896,24 @@ def test_goal_child_creation_keeps_lineage_and_project_scope(tmp_path):
         assert created["kind"] == "goal_child"
         assert created["goal"]["status"] == "draft"
         assert (
-            store.get(ChatSession, created["session_id"]).parent_session_id == parent.id
-        )
+            await store.get(ChatSession, created["session_id"])
+        ).parent_session_id == parent.id
         assert (
             work.goal_detail(selected.id, parent.id)["children"][0]["session_id"]
             == created["session_id"]
         )
         assert work.overview(selected.id)["chats"][0]["id"] == parent.id
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_targets(
+async def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_targets(
     tmp_path,
 ):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    provider = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -902,7 +921,7 @@ def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_targets
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Recurring review",
@@ -910,7 +929,7 @@ def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_targets
             model="model-a",
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Foreign",
@@ -958,14 +977,14 @@ def test_schedule_control_reads_saved_state_and_rejects_stale_or_foreign_targets
         with pytest.raises(ValueError, match="this project's work roster"):
             work.schedule_detail(selected.id, foreign.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
+async def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    provider = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -973,7 +992,7 @@ def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Main",
@@ -981,7 +1000,7 @@ def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
             model="model-a",
         )
     )
-    child = store.create(
+    child = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Subagent · review",
@@ -991,7 +1010,7 @@ def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
             metadata={"subagent_id": "sub-1"},
         )
     )
-    record = store.create(
+    record = await store.create(
         ChatSubagent(
             id="sub-1",
             engagement_id=selected.id,
@@ -1021,14 +1040,14 @@ def test_subagent_stop_reads_back_and_rejects_another_project(tmp_path):
             == "stopped"
         )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
+async def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    provider = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -1036,7 +1055,7 @@ def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Queued chat",
@@ -1044,7 +1063,7 @@ def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
             model="model-a",
         )
     )
-    foreign = store.create(
+    foreign = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Foreign chat",
@@ -1060,7 +1079,7 @@ def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
         model="model-a",
         messages=[ChatRequestMessage(role="user", content="First wording")],
     )
-    queue = store.create(
+    queue = await store.create(
         ChatQueue(
             id="chat-queue-" + chat.id,
             engagement_id=selected.id,
@@ -1098,10 +1117,9 @@ def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
         },
     )
     assert edited["items"][0]["text"] == "Revised wording"
-    assert (
-        store.get(ChatQueue, queue.id).items[0]["request"]["messages"][0]["content"]
-        == "Revised wording"
-    )
+    assert (await store.get(ChatQueue, queue.id)).items[0]["request"]["messages"][0][
+        "content"
+    ] == "Revised wording"
     with pytest.raises(ValueError, match="queue changed"):
         work.queue_action(
             selected.id,
@@ -1115,11 +1133,11 @@ def test_queue_control_is_revision_guarded_and_keeps_project_boundary(tmp_path):
         work.queue_detail(selected.id, foreign.id)
 
 
-def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
+async def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -1127,7 +1145,7 @@ def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Working chat",
@@ -1135,7 +1153,7 @@ def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=selected.id,
             session_id=chat.id,
@@ -1144,7 +1162,7 @@ def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
             status="waiting_approval",
         )
     )
-    approval = store.create(
+    approval = await store.create(
         Approval(
             engagement_id=selected.id,
             run_id=turn.id,
@@ -1162,10 +1180,10 @@ def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
             requested_by="Working chat",
         )
     )
-    foreign_run = store.create(
+    foreign_run = await store.create(
         AgentRun(engagement_id=other.id, objective="Foreign mission")
     )
-    foreign = store.create(
+    foreign = await store.create(
         Approval(
             engagement_id=other.id,
             run_id=foreign_run.id,
@@ -1197,7 +1215,7 @@ def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
                     "decision": "approve",
                 },
             )
-        assert store.get(Approval, approval.id).status == ApprovalStatus.PENDING
+        assert (await store.get(Approval, approval.id)).status == ApprovalStatus.PENDING
         return await dispatch_work_tool(
             work,
             selected.id,
@@ -1210,30 +1228,31 @@ def test_control_assistant_reviews_and_decides_exact_project_approval(tmp_path):
             },
         )
 
-    result = asyncio.run(scenario())
+    result = await scenario()
     assert result["status"] == "approved"
     assert result["decision_recorded"] is True
     assert "session=" + chat.id in result["url"]
     assert work.attention(selected.id)["count"] == 0
     assert (
-        store.get(Approval, approval.id).decision_note
-        == "Operator approved this exact file write"
-    )
+        await store.get(Approval, approval.id)
+    ).decision_note == "Operator approved this exact file write"
 
 
-def test_control_assistant_answers_pending_harness_question_without_leaking_secret(
+async def test_control_assistant_answers_pending_harness_question_without_leaking_secret(
     tmp_path,
 ):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    run = store.create(AgentRun(engagement_id=selected.id, objective="Audit scope"))
-    harness_session = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    run = await store.create(
+        AgentRun(engagement_id=selected.id, objective="Audit scope")
+    )
+    harness_session = await store.create(
         HarnessSession(
             engagement_id=selected.id, harness_profile_id="fixture", model="model-a"
         )
     )
-    harness_turn = store.create(
+    harness_turn = await store.create(
         HarnessTurn(
             engagement_id=selected.id,
             harness_session_id=harness_session.id,
@@ -1242,7 +1261,7 @@ def test_control_assistant_answers_pending_harness_question_without_leaking_secr
             prompt="Audit scope",
         )
     )
-    question = store.create(
+    question = await store.create(
         HarnessInteraction(
             engagement_id=selected.id,
             harness_turn_id=harness_turn.id,
@@ -1255,7 +1274,7 @@ def test_control_assistant_answers_pending_harness_question_without_leaking_secr
             questions=[{"id": "area", "header": "Area", "options": ["UI", "API"]}],
         )
     )
-    secret = store.create(
+    secret = await store.create(
         HarnessInteraction(
             engagement_id=selected.id,
             harness_turn_id=harness_turn.id,
@@ -1316,7 +1335,7 @@ def test_control_assistant_answers_pending_harness_question_without_leaking_secr
         )
         return result, future.result(), declined, secret_future.result()
 
-    result, delivered, declined, secret_delivery = asyncio.run(scenario())
+    result, delivered, declined, secret_delivery = await scenario()
     assert result["status"] == "answered"
     assert delivered == {"action": "answer", "response": {"area": "API"}}
     assert declined["status"] == "declined"
@@ -1324,13 +1343,13 @@ def test_control_assistant_answers_pending_harness_question_without_leaking_secr
     assert work.question_detail(selected.id, question.id)["status"] == "answered"
 
 
-def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
+async def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -1338,7 +1357,7 @@ def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Old title",
@@ -1346,7 +1365,7 @@ def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
             model="model-a",
         )
     )
-    run = store.create(
+    run = await store.create(
         AgentRun(engagement_id=selected.id, objective="Review scope", status="failed")
     )
     work = app.state.control_assistant_work
@@ -1364,15 +1383,15 @@ def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
             },
         )
 
-    changed = asyncio.run(update())
+    changed = await update()
     assert changed["title"] == "New title"
     assert changed["archived"] is True
     assert work.chat_detail(selected.id, chat.id)["archived"] is True
     with pytest.raises(ValueError, match="chat changed"):
-        asyncio.run(update())
+        (await update())
     with pytest.raises(ValueError, match="this project's work roster"):
-        asyncio.run(
-            work.update_chat(
+        (
+            await work.update_chat(
                 other.id,
                 {
                     "session_id": chat.id,
@@ -1386,7 +1405,7 @@ def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
 
     async def fake_retry(method, path, body):
         calls.append((method, path, body))
-        saved = store.create(
+        saved = await store.create(
             AgentRun(
                 engagement_id=selected.id,
                 objective=run.objective,
@@ -1397,18 +1416,18 @@ def test_control_assistant_updates_chat_and_reuses_saved_mission_retry(
 
     monkeypatch.setattr(work, "_request", fake_retry)
     retry = {"run_id": run.id, "expected_revision": run.revision}
-    first = asyncio.run(work.retry_mission(selected.id, retry))
-    second = asyncio.run(work.retry_mission(selected.id, retry))
+    first = await work.retry_mission(selected.id, retry)
+    second = await work.retry_mission(selected.id, retry)
     assert first["run_id"] == second["run_id"]
     assert len(calls) == 1
     assert calls[0][2] == {"allow_cloud_tool_results": False}
     assert second["result"] == "an existing retry is already saved in Core"
 
 
-def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
+async def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -1417,23 +1436,27 @@ def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
         )
     )
     chats = [
-        store.create(
-            ChatSession(
-                engagement_id=project.id,
-                title=f"Chat {index}",
-                provider_profile_id=profile.id,
-                model="model-a",
+        (
+            await store.create(
+                ChatSession(
+                    engagement_id=project.id,
+                    title=f"Chat {index}",
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                )
             )
         )
         for index in range(34)
     ]
-    store.create(
-        ChatSession(
-            engagement_id=project.id,
-            title="Butler",
-            provider_profile_id=profile.id,
-            model="model-a",
-            metadata={"control_assistant": True},
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Butler",
+                provider_profile_id=profile.id,
+                model="model-a",
+                metadata={"control_assistant": True},
+            )
         )
     )
     for excluded_metadata in (
@@ -1441,17 +1464,19 @@ def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
         {"temporary_assistant": True},
         {"delegated_from_goal_id": "goal-1"},
     ):
-        store.create(
-            ChatSession(
-                engagement_id=project.id,
-                title="Excluded",
-                provider_profile_id=profile.id,
-                model="model-a",
-                metadata=excluded_metadata,
+        (
+            await store.create(
+                ChatSession(
+                    engagement_id=project.id,
+                    title="Excluded",
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    metadata=excluded_metadata,
+                )
             )
         )
-    other_project = store.create(Engagement(name="Other"))
-    other_chat = store.create(
+    other_project = await store.create(Engagement(name="Other"))
+    other_chat = await store.create(
         ChatSession(
             engagement_id=other_project.id,
             title="Other project's private chat",
@@ -1472,8 +1497,8 @@ def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
             {"operation": "nebula.work.chats", "arguments": {"offset": offset}},
         )
 
-    first = asyncio.run(page(0))
-    second = asyncio.run(page(first["next_offset"]))
+    first = await page(0)
+    second = await page(first["next_offset"])
     assert first["next_offset"] == 30
     assert second["next_offset"] is None
     assert {item["id"] for item in first["chats"] + second["chats"]} == {
@@ -1499,7 +1524,7 @@ def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
             },
         )
 
-    pinned = asyncio.run(change(target.revision, pinned=True, flag_color="purple"))
+    pinned = await change(target.revision, pinned=True, flag_color="purple")
     assert (pinned["pinned"], pinned["flag_color"]) == (True, "purple")
     assert (
         work.chat_detail(project.id, target.id)["pinned"],
@@ -1510,22 +1535,22 @@ def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
         for item in work.chats(project.id, 30)["chats"]
     )
     with pytest.raises(ValueError, match="chat changed"):
-        asyncio.run(change(target.revision, pinned=False))
-    cleared = asyncio.run(change(pinned["revision"], pinned=False, flag_color=None))
+        (await change(target.revision, pinned=False))
+    cleared = await change(pinned["revision"], pinned=False, flag_color=None)
     assert (cleared["pinned"], cleared["flag_color"]) == (False, None)
-    assert "pinned" not in store.get(ChatSession, target.id).metadata
-    assert "flag_color" not in store.get(ChatSession, target.id).metadata
+    assert "pinned" not in (await store.get(ChatSession, target.id)).metadata
+    assert "flag_color" not in (await store.get(ChatSession, target.id)).metadata
     with pytest.raises(ValueError, match="pinned must be true or false"):
-        asyncio.run(change(cleared["revision"], pinned="yes"))
+        (await change(cleared["revision"], pinned="yes"))
     with pytest.raises(ValueError, match="listed flag color"):
-        asyncio.run(change(cleared["revision"], flag_color="magenta"))
+        (await change(cleared["revision"], flag_color="magenta"))
 
 
-def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
+async def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    assigned = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    assigned = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Assigned agent",
@@ -1533,7 +1558,7 @@ def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
             model="model-a",
         )
     )
-    other_agent = store.create(
+    other_agent = await store.create(
         ChatSession(
             engagement_id=other.id,
             title="Other agent",
@@ -1543,14 +1568,16 @@ def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
     )
     service = WorkService(store)
     seeded = [
-        service.create(
-            project.id,
-            WorkCreate(title=f"Task {index}"),
-            actor_id="operator",
+        (
+            await service.create(
+                project.id,
+                WorkCreate(title=f"Task {index}"),
+                actor_id="operator",
+            )
         )
         for index in range(32)
     ]
-    private = service.create(
+    private = await service.create(
         other.id, WorkCreate(title="Other project's task"), actor_id="operator"
     )
     work = app.state.control_assistant_work
@@ -1673,12 +1700,12 @@ def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
                     "request_id": "butler-work-check-2",
                 },
             )
-        assert store.get(WorkItem, item_id).status == "review"
+        assert (await store.get(WorkItem, item_id)).status == "review"
 
-    asyncio.run(scenario())
+    (await scenario())
 
     long_description = "🔎" * 20_000
-    long_item = service.create(
+    long_item = await service.create(
         project.id,
         WorkCreate(title="Large Unicode description", description=long_description),
         actor_id="operator",
@@ -1697,36 +1724,40 @@ def test_butler_manages_project_work_items_with_saved_revisions(tmp_path):
     assert "".join(chunks) == long_description
 
 
-def test_butler_controls_work_agent_access_and_reads_complete_check_in_history(
+async def test_butler_controls_work_agent_access_and_reads_complete_check_in_history(
     tmp_path,
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
     service = WorkService(store)
-    item = service.create(project.id, WorkCreate(title="History"), actor_id="operator")
-    other_item = service.create(
+    item = await service.create(
+        project.id, WorkCreate(title="History"), actor_id="operator"
+    )
+    other_item = await service.create(
         other.id, WorkCreate(title="Private"), actor_id="operator"
     )
     long_summary = "🔎" * 4_000
     long_next_step = "🧭" * 2_000
     long_blocker = "⛔" * 2_000
     saved = [
-        store.create(
-            WorkUpdate(
-                engagement_id=project.id,
-                item_id=item.id,
-                summary=long_summary if index == 0 else f"Check-in {index}",
-                next_step=long_next_step if index == 0 else None,
-                blocker=long_blocker if index == 0 else None,
-                status="in_progress",
-                actor_kind="operator",
-                actor_id="seed",
+        (
+            await store.create(
+                WorkUpdate(
+                    engagement_id=project.id,
+                    item_id=item.id,
+                    summary=long_summary if index == 0 else f"Check-in {index}",
+                    next_step=long_next_step if index == 0 else None,
+                    blocker=long_blocker if index == 0 else None,
+                    status="in_progress",
+                    actor_kind="operator",
+                    actor_id="seed",
+                )
             )
         )
         for index in range(205)
     ]
-    private = store.create(
+    private = await store.create(
         WorkUpdate(
             engagement_id=other.id,
             item_id=other_item.id,
@@ -1764,14 +1795,16 @@ def test_butler_controls_work_agent_access_and_reads_complete_check_in_history(
                 "set_work_setting",
                 {"enabled": False, "expected_revision": setting["revision"] + 1},
             )
-        assert store.get(Engagement, project.id).work_enabled is True
+        assert (await store.get(Engagement, project.id)).work_enabled is True
         disabled = await invoke(
             "set_work_setting",
             {"enabled": False, "expected_revision": setting["revision"]},
         )
         assert disabled["saved"] is True
         assert disabled["enabled"] is False
-        assert store.get(Engagement, project.id).revision == disabled["revision"]
+        assert (await store.get(Engagement, project.id)).revision == disabled[
+            "revision"
+        ]
         with pytest.raises(ValueError, match="project Work setting changed"):
             await invoke(
                 "set_work_setting",
@@ -1782,7 +1815,7 @@ def test_butler_controls_work_agent_access_and_reads_complete_check_in_history(
                 "set_work_setting",
                 {"enabled": "false", "expected_revision": disabled["revision"]},
             )
-        assert service.get(project.id, item.id).id == item.id
+        assert (await service.get(project.id, item.id)).id == item.id
 
         ids = []
         offset = 0
@@ -1834,14 +1867,14 @@ def test_butler_controls_work_agent_access_and_reads_complete_check_in_history(
                 {"item_id": item.id, "update_id": saved[0].id, "content_offset": 4_001},
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
+async def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -1849,7 +1882,7 @@ def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Investigate",
@@ -1890,15 +1923,15 @@ def test_chat_follow_up_is_durable_and_project_bound(tmp_path):
                 {"session_id": session.id, "text": "Interrupt", "delivery": "steer"},
             )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_queue(
+async def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_queue(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -1906,7 +1939,7 @@ def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_que
             model_allowlist=["model-a"],
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main",
@@ -1914,13 +1947,15 @@ def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_que
             model="model-a",
         )
     )
-    store.create(
-        ChatQueue(
-            id="chat-queue-" + session.id,
-            engagement_id=project.id,
-            session_id=session.id,
-            paused=True,
-            items=[{"id": "old", "key": "old", "status": "queued"}],
+    (
+        await store.create(
+            ChatQueue(
+                id="chat-queue-" + session.id,
+                engagement_id=project.id,
+                session_id=session.id,
+                paused=True,
+                items=[{"id": "old", "key": "old", "status": "queued"}],
+            )
         )
     )
     work = app.state.control_assistant_work
@@ -1936,15 +1971,13 @@ def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_que
         "start_provider_turn",
         lambda prepared: calls.append(prepared.turn.id),
     )
-    result = asyncio.run(
-        work.message_chat(
-            project.id,
-            {
-                "session_id": session.id,
-                "text": "Check the checkpoint",
-                "delivery": "immediate",
-            },
-        )
+    result = await work.message_chat(
+        project.id,
+        {
+            "session_id": session.id,
+            "text": "Check the checkpoint",
+            "delivery": "immediate",
+        },
     )
     assert result == {
         "session_id": session.id,
@@ -1956,12 +1989,12 @@ def test_immediate_parent_guidance_starts_idle_turn_without_replaying_paused_que
     assert [item["id"] for item in work.queue.get(session.id).items] == ["old"]
 
 
-def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
+async def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    old_profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    old_profile = await store.create(
         HarnessProfile(
             name="Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -1970,7 +2003,7 @@ def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
             capabilities=HarnessCapabilities(models=["old-model"], mcp=True),
         )
     )
-    grok = store.create(
+    grok = await store.create(
         HarnessProfile(
             name="Grok",
             kind=HarnessKind.GROK_ACP,
@@ -1979,7 +2012,7 @@ def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
             capabilities=HarnessCapabilities(models=["grok-model"], mcp=True),
         )
     )
-    child = store.create(
+    child = await store.create(
         ProviderProfile(
             name="DeepSeek",
             provider_type="ollama",
@@ -1987,14 +2020,14 @@ def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
             model_allowlist=["child-model"],
         )
     )
-    old_session = store.create(
+    old_session = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=old_profile.id,
             model="old-model",
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Research",
@@ -2033,15 +2066,13 @@ def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
 
     monkeypatch.setattr(work.harness, "prepare_chat", prepare_chat)
     monkeypatch.setattr(work.harness, "start_chat_turn", lambda _: None)
-    result = asyncio.run(
-        work.message_chat(
-            project.id,
-            {
-                "session_id": chat.id,
-                "text": "Reload AGENTS.md before resuming",
-                "delivery": "immediate",
-            },
-        )
+    result = await work.message_chat(
+        project.id,
+        {
+            "session_id": chat.id,
+            "text": "Reload AGENTS.md before resuming",
+            "delivery": "immediate",
+        },
     )
     assert result["delivery"] == "started"
     assert len(prepared) == 1
@@ -2054,14 +2085,14 @@ def test_immediate_harness_guidance_preserves_saved_plan_mcp_and_subagent(
     }
 
 
-def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path):
+async def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path):
     async def scenario() -> None:
         store, app, _ = _app(tmp_path)
         adapter = FakeAdapter()
         work = app.state.control_assistant_work
         work.harness.adapter_factory = lambda _: adapter
-        project = store.create(Engagement(name="Disposable switch check"))
-        old_profile = store.create(
+        project = await store.create(Engagement(name="Disposable switch check"))
+        old_profile = await store.create(
             HarnessProfile(
                 name="Codex fixture",
                 kind=HarnessKind.CODEX_APP_SERVER,
@@ -2071,7 +2102,7 @@ def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path)
                 privacy={"local_only": True, "permits_sensitive_data": True},
             )
         )
-        next_profile = store.create(
+        next_profile = await store.create(
             HarnessProfile(
                 name="Grok fixture",
                 kind=HarnessKind.GROK_ACP,
@@ -2081,14 +2112,14 @@ def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path)
                 privacy={"local_only": True, "permits_sensitive_data": True},
             )
         )
-        old_harness = store.create(
+        old_harness = await store.create(
             HarnessSession(
                 engagement_id=project.id,
                 harness_profile_id=old_profile.id,
                 model="old-model",
             )
         )
-        chat = store.create(
+        chat = await store.create(
             ChatSession(
                 engagement_id=project.id,
                 title="Disposable chat",
@@ -2112,20 +2143,24 @@ def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path)
             },
         )
         assert saved["settings"]["profile_id"] == next_profile.id
-        assert store.get(ChatSession, chat.id).harness_session_id == old_harness.id
+        assert (
+            await store.get(ChatSession, chat.id)
+        ).harness_session_id == old_harness.id
         sent = await work.message_chat(
             project.id,
             {"session_id": chat.id, "text": "Continue here", "delivery": "immediate"},
         )
         assert sent["delivery"] == "started"
-        rebound = store.get(ChatSession, chat.id)
+        rebound = await store.get(ChatSession, chat.id)
         assert rebound.id == chat.id
         assert rebound.harness_session_id != old_harness.id
         assert rebound.harness_profile_id == next_profile.id
         assert rebound.model == "next-model"
-        assert store.get(ChatTurn, sent["turn_id"]).session_id == chat.id
+        assert (await store.get(ChatTurn, sent["turn_id"])).session_id == chat.id
         for _ in range(300):
-            if store.get(ChatTurn, sent["turn_id"]).status == ChatTurnStatus.COMPLETE:
+            if (
+                await store.get(ChatTurn, sent["turn_id"])
+            ).status == ChatTurnStatus.COMPLETE:
                 break
             await asyncio.sleep(0.01)
         else:
@@ -2133,29 +2168,29 @@ def test_saved_harness_switch_binds_on_next_message_in_disposable_core(tmp_path)
         assert adapter.connections[0].request.profile.id == next_profile.id
         await work.harness.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
+async def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    harness = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    harness = await store.create(
         HarnessProfile(
             name="Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
             executable="/bin/true",
         )
     )
-    harness_session = store.create(
+    harness_session = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=harness.id,
             model="model-a",
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Main",
@@ -2165,7 +2200,7 @@ def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
             model="model-a",
         )
     )
-    harness_turn = store.create(
+    harness_turn = await store.create(
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=harness_session.id,
@@ -2187,21 +2222,19 @@ def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
         seen.append((turn_id, text, kwargs["title"]))
 
     monkeypatch.setattr(work.harness, "steer_turn", steer)
-    steered = asyncio.run(
-        work.message_chat(
-            project.id,
-            {
-                "session_id": session.id,
-                "text": "Focus on saved evidence",
-                "delivery": "immediate",
-            },
-        )
+    steered = await work.message_chat(
+        project.id,
+        {
+            "session_id": session.id,
+            "text": "Focus on saved evidence",
+            "delivery": "immediate",
+        },
     )
     assert steered["delivery"] == "steered" and steered["turn_id"] == "turn"
     assert seen == [(harness_turn.id, "Focus on saved evidence", "Butler guidance")]
     assert work.queue.get(session.id).items == []
 
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -2209,7 +2242,7 @@ def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
             model_allowlist=["model-a"],
         )
     )
-    provider_session = store.create(
+    provider_session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Provider",
@@ -2217,40 +2250,38 @@ def test_immediate_guidance_steers_active_harness_and_holds_active_provider(
             model="model-a",
         )
     )
-    held = asyncio.run(
-        work.message_chat(
-            project.id,
-            {
-                "session_id": provider_session.id,
-                "text": "Check evidence",
-                "delivery": "immediate",
-            },
-        )
+    held = await work.message_chat(
+        project.id,
+        {
+            "session_id": provider_session.id,
+            "text": "Check evidence",
+            "delivery": "immediate",
+        },
     )
     assert held["delivery"] == "held" and held["reason"] == "active_turn_cannot_steer"
     assert work.queue.get(provider_session.id).items == []
 
 
-def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
+async def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Grok",
             kind=HarnessKind.GROK_ACP,
             executable="/bin/true",
         )
     )
-    harness_session = store.create(
+    harness_session = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
             model="grok-model",
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Research",
@@ -2260,7 +2291,7 @@ def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
             model="grok-model",
         )
     )
-    harness_turn = store.create(
+    harness_turn = await store.create(
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=harness_session.id,
@@ -2282,15 +2313,13 @@ def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
 
     monkeypatch.setattr(work.harness, "steer_turn", unexpected_steer)
     for delivery in ("immediate", "steer"):
-        held = asyncio.run(
-            work.message_chat(
-                project.id,
-                {
-                    "session_id": chat.id,
-                    "text": "Reload AGENTS.md",
-                    "delivery": delivery,
-                },
-            )
+        held = await work.message_chat(
+            project.id,
+            {
+                "session_id": chat.id,
+                "text": "Reload AGENTS.md",
+                "delivery": delivery,
+            },
         )
         assert held == {
             "session_id": chat.id,
@@ -2299,18 +2328,22 @@ def test_immediate_guidance_holds_busy_grok_without_attempting_steer_or_queue(
             "turn_id": "chat-turn",
         }
     assert work.queue.get(chat.id).items == []
-    assert store.find_entities(ChatMessage, {"session_id": chat.id}) == []
+    assert (await store.find_entities(ChatMessage, {"session_id": chat.id})) == []
 
 
-def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypatch):
+async def test_start_chat_saves_a_separate_turn_for_core_owned_work(
+    tmp_path, monkeypatch
+):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    store.create(
-        ProviderProfile(
-            name="Local",
-            provider_type="ollama",
-            is_local=True,
-            model_allowlist=["model-a"],
+    project = await store.create(Engagement(name="Selected"))
+    (
+        await store.create(
+            ProviderProfile(
+                name="Local",
+                provider_type="ollama",
+                is_local=True,
+                model_allowlist=["model-a"],
+            )
         )
     )
     work = app.state.control_assistant_work
@@ -2354,7 +2387,7 @@ def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypa
         assert result["status"] == "queued"
         assert result["url"].endswith(f"session={result['session_id']}")
         assert starts == [result["turn_id"]]
-        saved = store.get(ChatSession, result["session_id"])
+        saved = await store.get(ChatSession, result["session_id"])
         assert saved.engagement_id == project.id
         assert saved.metadata.get("control_assistant") is not True
         assert saved.metadata["butler_initiated"] is True
@@ -2363,13 +2396,15 @@ def test_start_chat_saves_a_separate_turn_for_core_owned_work(tmp_path, monkeypa
             == result["turn_id"]
         )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_start_remote_harness_chat_keeps_peer_messaging_off(tmp_path, monkeypatch):
+async def test_start_remote_harness_chat_keeps_peer_messaging_off(
+    tmp_path, monkeypatch
+):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Remote Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -2396,30 +2431,34 @@ def test_start_remote_harness_chat_keeps_peer_messaging_off(tmp_path, monkeypatc
         )
         assert result["backend"] == "harness"
         assert started
-        session = store.get(ChatSession, result["session_id"])
+        session = await store.get(ChatSession, result["session_id"])
         assert session.metadata.get("allow_agent_messaging") is False
         assert session.metadata.get("control_assistant") is not True
         assert session.metadata["butler_initiated"] is True
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_mission_start_uses_existing_core_route_and_reads_back(tmp_path, monkeypatch):
+async def test_mission_start_uses_existing_core_route_and_reads_back(
+    tmp_path, monkeypatch
+):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    store.create(
-        ProviderProfile(
-            name="Local",
-            provider_type="ollama",
-            is_local=True,
-            model_allowlist=["model-a"],
+    selected = await store.create(Engagement(name="Selected"))
+    (
+        await store.create(
+            ProviderProfile(
+                name="Local",
+                provider_type="ollama",
+                is_local=True,
+                model_allowlist=["model-a"],
+            )
         )
     )
     calls = []
 
     async def start_mission(**kwargs):
         calls.append(kwargs)
-        return store.create(
+        return await store.create(
             AgentRun(
                 engagement_id=kwargs["engagement_id"],
                 objective=kwargs["objective"],
@@ -2441,34 +2480,40 @@ def test_mission_start_uses_existing_core_route_and_reads_back(tmp_path, monkeyp
         assert calls[0]["tool_names"] == []
         assert work.mission_detail(selected.id, result["run_id"])["name"] == "Survey"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_butler_discovers_project_browser_and_starts_scoped_mission(
+async def test_butler_discovers_project_browser_and_starts_scoped_mission(
     tmp_path, monkeypatch
 ):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    scope = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    scope = await store.create(
         ScopePolicy(engagement_id=selected.id, allowed_domains=["example.test"])
     )
-    store.update(
-        Engagement,
-        selected.id,
-        {"scope_policy_id": scope.id},
-        expected_revision=selected.revision,
-    )
-    store.create(
-        ProviderProfile(
-            name="Local",
-            provider_type="ollama",
-            is_local=True,
-            model_allowlist=["model-a"],
+    (
+        await store.update(
+            Engagement,
+            selected.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=selected.revision,
         )
     )
-    identity = store.create(BrowserIdentity(engagement_id=selected.id, name="Research"))
-    session = store.create(
+    (
+        await store.create(
+            ProviderProfile(
+                name="Local",
+                provider_type="ollama",
+                is_local=True,
+                model_allowlist=["model-a"],
+            )
+        )
+    )
+    identity = await store.create(
+        BrowserIdentity(engagement_id=selected.id, name="Research")
+    )
+    session = await store.create(
         BrowserSession(
             engagement_id=selected.id,
             identity_id=identity.id,
@@ -2476,10 +2521,10 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
             runtime_kind="agent_security",
         )
     )
-    foreign_identity = store.create(
+    foreign_identity = await store.create(
         BrowserIdentity(engagement_id=other.id, name="Other identity")
     )
-    foreign = store.create(
+    foreign = await store.create(
         BrowserSession(
             engagement_id=other.id,
             identity_id=foreign_identity.id,
@@ -2494,7 +2539,7 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
         saved_autonomy = kwargs["browser_autonomy"].model_dump(mode="json")
         if kwargs["name"] == "Mismatched lease":
             saved_autonomy["allowed_risk_classes"] = ["passive", "active_scan"]
-        return store.create(
+        return await store.create(
             AgentRun(
                 engagement_id=kwargs["engagement_id"],
                 objective=kwargs["objective"],
@@ -2642,31 +2687,31 @@ def test_butler_discovers_project_browser_and_starts_scoped_mission(
             await work.start_mission(
                 selected.id, {**request, "name": "Mismatched lease"}
             )
-        store.delete(BrowserIdentity, identity.id)
+        (await store.delete(BrowserIdentity, identity.id))
         stale = work.browser_sessions(selected.id)["sessions"][0]
         assert stale["id"] == session.id
         assert stale["eligible_for_autonomy"] is False
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch):
+async def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex", kind=HarnessKind.CODEX_APP_SERVER, executable="/bin/true"
         )
     )
-    harness_session = store.create(
+    harness_session = await store.create(
         HarnessSession(
             engagement_id=selected.id,
             harness_profile_id=profile.id,
             model="model-a",
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=selected.id,
             title="Running chat",
@@ -2676,7 +2721,7 @@ def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch)
             model="model-a",
         )
     )
-    harness_turn = store.create(
+    harness_turn = await store.create(
         HarnessTurn(
             engagement_id=selected.id,
             harness_session_id=harness_session.id,
@@ -2732,14 +2777,14 @@ def test_selected_harness_chat_can_be_steered_and_stopped(tmp_path, monkeypatch)
         assert stopped["stopped"] is True
         assert calls[1][:2] == ("stop", harness_turn.id)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_mission_interrupt_uses_core_route_and_rejects_foreign_target(tmp_path):
+async def test_mission_interrupt_uses_core_route_and_rejects_foreign_target(tmp_path):
     store, app, _ = _app(tmp_path)
-    selected = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    run = store.create(
+    selected = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    run = await store.create(
         AgentRun(
             engagement_id=selected.id,
             objective="Inspect synthetic data",
@@ -2760,16 +2805,16 @@ def test_mission_interrupt_uses_core_route_and_rejects_foreign_target(tmp_path):
         assert stopped["stopped"] is True
         assert work.mission_detail(selected.id, run.id)["status"] == "cancelled"
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message(
+async def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_message(
     tmp_path,
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -2777,7 +2822,7 @@ def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_messa
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Research",
@@ -2814,12 +2859,9 @@ def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_messa
     )
     assert changed["revision"] > chat.revision
     assert changed["settings"]["reasoning_effort"] == "high"
-    assert (
-        store.get(ChatSession, chat.id).metadata["assistant_config"][
-            "include_knowledge"
-        ]
-        is False
-    )
+    assert (await store.get(ChatSession, chat.id)).metadata["assistant_config"][
+        "include_knowledge"
+    ] is False
 
     async def queue_next():
         await work.message_chat(
@@ -2827,20 +2869,20 @@ def test_chat_settings_are_project_bound_revision_guarded_and_used_by_next_messa
             {"session_id": chat.id, "text": "Continue with the new settings"},
         )
 
-    asyncio.run(queue_next())
+    (await queue_next())
     request = work.queue.get(chat.id).items[0]["request"]
     assert request["reasoning_effort"] == "high"
     assert request["include_knowledge"] is False
     assert request["allow_agent_messaging"] is True
 
 
-def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
+async def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
     tmp_path,
 ):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -2849,14 +2891,14 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
             capabilities=HarnessCapabilities(models=["model-a"]),
         )
     )
-    harness = store.create(
+    harness = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
             model="model-a",
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Research",
@@ -2899,69 +2941,67 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
     )
     assert saved["settings"]["mcp_server_ids"] == [security.id]
     assert saved["settings"]["tools_enabled"] is False
-    queued = asyncio.run(
-        work.message_chat(
-            project.id,
-            {"session_id": chat.id, "text": "Use the browser tool to find the result"},
-        )
+    queued = await work.message_chat(
+        project.id,
+        {"session_id": chat.id, "text": "Use the browser tool to find the result"},
     )
     assert queued["delivery"] == "queued"
     assert work.queue.get(chat.id).items[0]["request"]["mcp_server_ids"] == [
         security.id
     ]
-    pending = asyncio.run(
-        work.await_chat_result(
-            project.id,
-            {
-                "session_id": chat.id,
-                "item_id": queued["item_id"],
-                "timeout_seconds": 0,
-            },
-        )
+    pending = await work.await_chat_result(
+        project.id,
+        {
+            "session_id": chat.id,
+            "item_id": queued["item_id"],
+            "timeout_seconds": 0,
+        },
     )
     assert pending["result"] == "still in progress"
     assert "saved_reply" not in pending
     queue = work.queue.get(chat.id)
-    store.update(
-        ChatQueue,
-        queue.id,
-        {
-            "items": [
-                {
-                    **queue.items[0],
-                    "status": "complete",
-                    "turn_id": "retry-turn",
-                    "harness_turn_id": "harness-retry-turn",
-                }
-            ]
-        },
-        expected_revision=queue.revision,
-    )
-    store.create(
-        ChatMessage(
-            engagement_id=project.id,
-            session_id=chat.id,
-            sequence=1,
-            role=ChatRole.ASSISTANT,
-            content="The search found a result with a source.",
-            metadata={"harness_turn_id": "harness-retry-turn"},
-        )
-    )
-    completed = asyncio.run(
-        work.await_chat_result(
-            project.id,
+    (
+        await store.update(
+            ChatQueue,
+            queue.id,
             {
-                "session_id": chat.id,
-                "item_id": queued["item_id"],
-                "timeout_seconds": 0,
+                "items": [
+                    {
+                        **queue.items[0],
+                        "status": "complete",
+                        "turn_id": "retry-turn",
+                        "harness_turn_id": "harness-retry-turn",
+                    }
+                ]
             },
+            expected_revision=queue.revision,
         )
+    )
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=project.id,
+                session_id=chat.id,
+                sequence=1,
+                role=ChatRole.ASSISTANT,
+                content="The search found a result with a source.",
+                metadata={"harness_turn_id": "harness-retry-turn"},
+            )
+        )
+    )
+    completed = await work.await_chat_result(
+        project.id,
+        {
+            "session_id": chat.id,
+            "item_id": queued["item_id"],
+            "timeout_seconds": 0,
+        },
     )
     assert completed["queue_status"] == "complete"
     assert completed["saved_reply"] == "The search found a result with a source."
     with pytest.raises(ValueError, match="work roster"):
-        asyncio.run(
-            work.await_chat_result(
+        (
+            await work.await_chat_result(
                 other.id,
                 {
                     "session_id": chat.id,
@@ -2972,14 +3012,14 @@ def test_butler_can_discover_and_attach_browser_mcp_before_retrying_main_agent(
         )
 
 
-def test_await_chat_result_reads_exact_immediate_turn_reply(tmp_path):
+async def test_await_chat_result_reads_exact_immediate_turn_reply(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    other = store.create(Engagement(name="Other"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    other = await store.create(Engagement(name="Other"))
+    profile = await store.create(
         ProviderProfile(name="Local", provider_type="ollama", is_local=True)
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Research agent",
@@ -2987,7 +3027,7 @@ def test_await_chat_result_reads_exact_immediate_turn_reply(tmp_path):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=chat.id,
@@ -3000,51 +3040,55 @@ def test_await_chat_result_reads_exact_immediate_turn_reply(tmp_path):
     assert "turn_id" in advertised["parameters"]["properties"]
     assert {"required": ["turn_id"]} in advertised["parameters"]["oneOf"]
     target = {"session_id": chat.id, "turn_id": turn.id, "timeout_seconds": 0}
-    pending = asyncio.run(work.await_chat_result(project.id, target))
+    pending = await work.await_chat_result(project.id, target)
     assert pending["turn_status"] == "routing"
     assert "saved_reply" not in pending
 
-    store.create(
-        ChatMessage(
-            engagement_id=project.id,
-            session_id=chat.id,
-            sequence=1,
-            role=ChatRole.ASSISTANT,
-            content="What evidence is still missing?",
-            metadata={"chat_turn_id": turn.id, "kind": "turn_outcome"},
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=project.id,
+                session_id=chat.id,
+                sequence=1,
+                role=ChatRole.ASSISTANT,
+                content="What evidence is still missing?",
+                metadata={"chat_turn_id": turn.id, "kind": "turn_outcome"},
+            )
         )
     )
-    store.create(
-        ChatMessage(
-            engagement_id=project.id,
-            session_id=chat.id,
-            sequence=2,
-            role=ChatRole.ASSISTANT,
-            content="I need access to the saved trace to make progress.",
-            metadata={"chat_turn_id": turn.id},
+    (
+        await store.create(
+            ChatMessage(
+                engagement_id=project.id,
+                session_id=chat.id,
+                sequence=2,
+                role=ChatRole.ASSISTANT,
+                content="I need access to the saved trace to make progress.",
+                metadata={"chat_turn_id": turn.id},
+            )
         )
     )
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"status": ChatTurnStatus.COMPLETE},
-        expected_revision=turn.revision,
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"status": ChatTurnStatus.COMPLETE},
+            expected_revision=turn.revision,
+        )
     )
-    answer = asyncio.run(work.await_chat_result(project.id, target))
+    answer = await work.await_chat_result(project.id, target)
     assert answer["turn_status"] == "complete"
     assert answer["saved_reply"] == "I need access to the saved trace to make progress."
     with pytest.raises(ValueError, match="work roster"):
-        asyncio.run(work.await_chat_result(other.id, target))
+        (await work.await_chat_result(other.id, target))
     with pytest.raises(ValueError, match="exactly one"):
-        asyncio.run(
-            work.await_chat_result(project.id, {**target, "item_id": "queue-item"})
-        )
+        (await work.await_chat_result(project.id, {**target, "item_id": "queue-item"}))
 
 
-def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
+async def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -3066,14 +3110,14 @@ def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
             ),
         )
     )
-    harness = store.create(
+    harness = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
             model="model-a",
         )
     )
-    control = store.create(
+    control = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Nebula assistant",
@@ -3114,7 +3158,7 @@ def test_nebula_can_change_its_own_advertised_harness_choices(tmp_path):
         )
 
 
-def test_control_tool_scope_bypass_is_limited_to_product_control_names(tmp_path):
+async def test_control_tool_scope_bypass_is_limited_to_product_control_names(tmp_path):
     project = Engagement(name="Selected")
     scope = ScopePolicy(engagement_id=project.id, bypass_permissions=False)
     observed = []
@@ -3132,17 +3176,17 @@ def test_control_tool_scope_bypass_is_limited_to_product_control_names(tmp_path)
         )
         await broker.execute(SimpleNamespace(tool_name="mcp.other.change"), scope)
 
-    asyncio.run(run())
+    (await run())
     assert observed == [
         ("nebula.work.chat_settings", True),
         ("mcp.other.change", False),
     ]
 
 
-def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
+async def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    provider = await store.create(
         ProviderProfile(
             name="Local",
             provider_type="ollama",
@@ -3150,7 +3194,7 @@ def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
             model_allowlist=["model-a"],
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Research",
@@ -3160,11 +3204,11 @@ def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
     )
     client = TestClient(app)
     url = f"/api/v1/chat-sessions/{chat.id}/assistant-config"
-    assert client.get(url).status_code == 401
+    assert (await client.get(url)).status_code == 401
     headers = {"Authorization": "Bearer test-token"}
-    before = client.get(url, headers=headers)
+    before = await client.get(url, headers=headers)
     assert before.status_code == 200, before.text
-    changed = client.patch(
+    changed = await client.patch(
         url,
         headers=headers,
         json={
@@ -3173,10 +3217,10 @@ def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
         },
     )
     assert changed.status_code == 200, changed.text
-    after = client.get(url, headers=headers).json()
+    after = (await client.get(url, headers=headers)).json()
     assert after["settings"]["reasoning_effort"] == "high"
     assert after["settings"]["include_knowledge"] is False
-    stale = client.patch(
+    stale = await client.patch(
         url,
         headers=headers,
         json={
@@ -3187,10 +3231,10 @@ def test_chat_settings_api_reads_back_durable_next_turn_choice(tmp_path):
     assert stale.status_code in {400, 409, 422}
 
 
-def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
+async def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
     store, app, _ = _app(tmp_path)
-    project = store.create(Engagement(name="Selected"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Selected"))
+    profile = await store.create(
         HarnessProfile(
             name="Codex fixture",
             kind=HarnessKind.CODEX_APP_SERVER,
@@ -3211,7 +3255,7 @@ def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
             ),
         )
     )
-    harness = store.create(
+    harness = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id=profile.id,
@@ -3219,7 +3263,7 @@ def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
             metadata={"runtime_options": {"reasoning_effort": "low"}},
         )
     )
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Butler",
@@ -3232,11 +3276,11 @@ def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
     )
     headers = {"Authorization": "Bearer test-token"}
     url = f"/api/v1/chat-sessions/{chat.id}/assistant-config"
-    with TestClient(app) as client:
-        before = client.get(url, headers=headers)
+    async with TestClient(app) as client:
+        before = await client.get(url, headers=headers)
         assert before.status_code == 200
         assert before.json()["settings"]["harness_reasoning_effort"] == "low"
-        concurrent = client.patch(
+        concurrent = await client.patch(
             url,
             headers=headers,
             json={
@@ -3245,7 +3289,7 @@ def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
             },
         )
         assert concurrent.status_code == 200, concurrent.text
-        stale = client.patch(
+        stale = await client.patch(
             url,
             headers=headers,
             json={
@@ -3254,26 +3298,23 @@ def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
             },
         )
         assert stale.status_code in {400, 409, 422}
-        changed = client.patch(
+        changed = await client.patch(
             url,
             headers=headers,
             json={
-                "expected_revision": client.get(url, headers=headers).json()[
+                "expected_revision": (await client.get(url, headers=headers)).json()[
                     "revision"
                 ],
                 "settings": {"harness_reasoning_effort": "max"},
             },
         )
         assert changed.status_code == 200, changed.text
-        assert (
-            client.get(url, headers=headers).json()["settings"][
-                "harness_reasoning_effort"
-            ]
-            == "max"
-        )
-    assert (
-        store.get(HarnessSession, harness.id).metadata["runtime_options"][
-            "reasoning_effort"
-        ]
-        == "low"
-    )
+        assert (await client.get(url, headers=headers)).json()["settings"][
+            "harness_reasoning_effort"
+        ] == "max"
+    assert (await store.get(HarnessSession, harness.id)).metadata["runtime_options"][
+        "reasoning_effort"
+    ] == "low"
+
+
+pytestmark = pytest.mark.anyio

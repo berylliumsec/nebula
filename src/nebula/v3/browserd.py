@@ -17,7 +17,7 @@ import json
 import os
 from pathlib import Path
 import re
-import sqlite3
+import aiosqlite
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -197,9 +197,16 @@ class ActionLedger:
         os.chmod(path.parent, 0o700)
         self.path = path
         self._lock = asyncio.Lock()
-        with sqlite3.connect(path) as connection:
-            connection.execute(
-                """
+        self._initialize_lock = asyncio.Lock()
+        self._ready = False
+
+    async def initialize(self) -> None:
+        async with self._initialize_lock:
+            if self._ready:
+                return
+            async with aiosqlite.connect(self.path) as connection:
+                await connection.execute(
+                    """
                 CREATE TABLE IF NOT EXISTS browser_actions (
                     action_token TEXT PRIMARY KEY,
                     payload_sha256 TEXT NOT NULL,
@@ -207,8 +214,10 @@ class ActionLedger:
                     receipt_json TEXT
                 )
                 """
-            )
-        os.chmod(path, 0o600)
+                )
+                await connection.commit()
+            os.chmod(self.path, 0o600)
+            self._ready = True
 
     @staticmethod
     def payload_digest(action: BrowserEngineAction) -> str:
@@ -219,17 +228,21 @@ class ActionLedger:
 
     async def claim(self, action: BrowserEngineAction) -> BrowserEngineReceipt | None:
         digest = self.payload_digest(action)
+        await self.initialize()
         async with self._lock:
-            with sqlite3.connect(self.path) as connection:
-                row = connection.execute(
+            async with aiosqlite.connect(self.path) as connection:
+                await connection.execute("BEGIN IMMEDIATE")
+                cursor = await connection.execute(
                     "SELECT payload_sha256, state, receipt_json FROM browser_actions WHERE action_token = ?",
                     (action.action_token,),
-                ).fetchone()
+                )
+                row = await cursor.fetchone()
                 if row is None:
-                    connection.execute(
+                    await connection.execute(
                         "INSERT INTO browser_actions(action_token, payload_sha256, state) VALUES (?, ?, 'executing')",
                         (action.action_token, digest),
                     )
+                    await connection.commit()
                     return None
                 if not hmac.compare_digest(row[0], digest):
                     raise ValueError("action token was reused with different arguments")
@@ -249,9 +262,10 @@ class ActionLedger:
                 )
 
     async def finish(self, receipt: BrowserEngineReceipt) -> BrowserEngineReceipt:
+        await self.initialize()
         async with self._lock:
-            with sqlite3.connect(self.path) as connection:
-                result = connection.execute(
+            async with aiosqlite.connect(self.path) as connection:
+                result = await connection.execute(
                     "UPDATE browser_actions SET state = ?, receipt_json = ? WHERE action_token = ?",
                     (
                         receipt.state,
@@ -261,6 +275,7 @@ class ActionLedger:
                 )
                 if result.rowcount != 1:
                     raise RuntimeError("action token was not claimed")
+                await connection.commit()
         return receipt
 
 
@@ -291,6 +306,7 @@ class BrowserdManager:
             raise RuntimeError("browserd profile root cannot be a symbolic link")
         self.settings.profile_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.settings.profile_root, 0o700)
+        await self._ledger.initialize()
         try:
             if self._playwright_factory is None:
                 self._playwright_factory = async_playwright

@@ -1,6 +1,12 @@
 """Saturation must not amplify relation queries or occupy Core's request loop."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
+import inspect
 from contextlib import suppress
 import threading
 
@@ -28,13 +34,17 @@ from nebula.v3.relations import ResourceRelationService
 AUTH = {"Authorization": "Bearer synthetic-capability-test"}
 
 
-def test_artifact_read_keeps_acknowledgement_integrity_and_authorization(tmp_path):
-    store, artifacts, artifact, app = _fixture(tmp_path)
-    store.update(
-        type(artifact),
-        artifact.id,
-        {"metadata": {"tool_call_id": "synthetic-call"}},
-        expected_revision=artifact.revision,
+async def test_artifact_read_keeps_acknowledgement_integrity_and_authorization(
+    tmp_path,
+):
+    store, artifacts, artifact, app = await _fixture(tmp_path)
+    (
+        await store.update(
+            type(artifact),
+            artifact.id,
+            {"metadata": {"tool_call_id": "synthetic-call"}},
+            expected_revision=artifact.revision,
+        )
     )
 
     async def exercise():
@@ -56,33 +66,35 @@ def test_artifact_read_keeps_acknowledgement_integrity_and_authorization(tmp_pat
             assert "integrity verification" in damaged.json()["detail"]
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        store.database.engine.dispose()
+        (await store.database.engine.dispose())
 
 
-def _fixture(tmp_path):
+async def _fixture(tmp_path):
     store = NebulaStore(tmp_path / "stress.db")
-    store.create_many(
-        [
-            Engagement(id="project", name="Synthetic project"),
-            Observation(
-                id="note",
-                engagement_id="project",
-                observation_type="note",
-                title="Synthetic note λ",
-            ),
-            AgentRun(
-                id="run",
-                engagement_id="project",
-                objective="Synthetic replay",
-                status="complete",
-            ),
-        ]
+    (
+        await store.create_many(
+            [
+                Engagement(id="project", name="Synthetic project"),
+                Observation(
+                    id="note",
+                    engagement_id="project",
+                    observation_type="note",
+                    title="Synthetic note λ",
+                ),
+                AgentRun(
+                    id="run",
+                    engagement_id="project",
+                    objective="Synthetic replay",
+                    status="complete",
+                ),
+            ]
+        )
     )
-    store.append_event("run", "synthetic.progress", {"step": 1})
+    (await store.append_event("run", "synthetic.progress", {"step": 1}))
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    artifact = store.create(
+    artifact = await store.create(
         artifacts.put_bytes(
             b"Synthetic evidence\n" * 10_000,
             engagement_id="project",
@@ -102,10 +114,10 @@ def _fixture(tmp_path):
     "boundary",
     ["overview-global", "overview-project", "event-replay", "artifact-download"],
 )
-def test_slow_saved_state_read_leaves_unrelated_settings_responsive(
+async def test_slow_saved_state_read_leaves_unrelated_settings_responsive(
     tmp_path, monkeypatch, boundary
 ):
-    store, artifacts, artifact, app = _fixture(tmp_path)
+    store, artifacts, artifact, app = await _fixture(tmp_path)
     owner, method, path = {
         "overview-global": (store, "overview", "/overview"),
         "overview-project": (store, "overview", "/engagements/project/overview"),
@@ -117,13 +129,22 @@ def test_slow_saved_state_read_leaves_unrelated_settings_responsive(
     loop_thread = threading.get_ident()
     readers = []
 
-    def hold(*args, **kwargs):
-        readers.append(threading.get_ident())
-        entered.set()
-        # A failing baseline must report loop ownership without deadlocking it.
-        if threading.get_ident() != loop_thread:
+    if inspect.iscoroutinefunction(original):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def hold(*args, **kwargs):
+            readers.append(asyncio.current_task())
+            entered.set()
+            await asyncio.wait_for(release.wait(), timeout=3)
+            return await original(*args, **kwargs)
+    else:
+
+        def hold(*args, **kwargs):
+            readers.append(threading.get_ident())
+            entered.set()
+            assert threading.get_ident() != loop_thread
             assert release.wait(3), "saved state reader was never released"
-        return original(*args, **kwargs)
+            return original(*args, **kwargs)
 
     monkeypatch.setattr(owner, method, hold)
 
@@ -140,9 +161,10 @@ def test_slow_saved_state_read_leaves_unrelated_settings_responsive(
                         break
                     await asyncio.sleep(0.005)
                 assert entered.is_set()
-                assert loop_thread not in readers, (
-                    "saved state read occupied Core's loop"
-                )
+                if inspect.iscoroutinefunction(original):
+                    assert all(task is not asyncio.current_task() for task in readers)
+                else:
+                    assert loop_thread not in readers
                 fast = await asyncio.wait_for(
                     client.get("/engagements/project/assistant-defaults"), timeout=0.5
                 )
@@ -167,19 +189,21 @@ def test_slow_saved_state_read_leaves_unrelated_settings_responsive(
                     await slow
 
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        store.database.engine.dispose()
+        (await store.database.engine.dispose())
 
 
 @pytest.mark.parametrize("kind", ["observations", "findings", "evidence", "reports"])
-def test_list_relation_cost_does_not_grow_with_result_count(tmp_path, kind):
+async def test_list_relation_cost_does_not_grow_with_result_count(tmp_path, kind):
     store = NebulaStore(tmp_path / "projection.db")
-    store.create_many(
-        [
-            Engagement(id="project", name="Synthetic"),
-            Engagement(id="foreign", name="Other project"),
-        ]
+    (
+        await store.create_many(
+            [
+                Engagement(id="project", name="Synthetic"),
+                Engagement(id="foreign", name="Other project"),
+            ]
+        )
     )
     entities = []
     edges = []
@@ -260,8 +284,8 @@ def test_list_relation_cost_does_not_grow_with_result_count(tmp_path, kind):
                 updated_at=now,
             )
         )
-    store.create_many(entities)
-    with store.database.session() as session:
+    (await store.create_many(entities))
+    async with store.database.session() as session:
         session.add_all(edges)
     app = create_app(
         store, auth_token="synthetic-capability-test", execution_data_root=tmp_path
@@ -310,15 +334,15 @@ def test_list_relation_cost_does_not_grow_with_result_count(tmp_path, kind):
                 "each result added another relationship query"
             )
 
-    event.listen(store.database.engine, "before_cursor_execute", record)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", record)
     try:
-        asyncio.run(exercise())
+        (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", record)
-        store.database.engine.dispose()
+        event.remove(store.database.engine.sync_engine, "before_cursor_execute", record)
+        (await store.database.engine.dispose())
 
 
-def test_projection_preserves_large_mixed_page_and_more_than_500_edges(tmp_path):
+async def test_projection_preserves_large_mixed_page_and_more_than_500_edges(tmp_path):
     store = NebulaStore(tmp_path / "large-page.db")
     notes = [
         Observation(
@@ -344,17 +368,19 @@ def test_projection_preserves_large_mixed_page_and_more_than_500_edges(tmp_path)
         )
         for i in range(505)
     ]
-    store.create_many(
-        [
-            Engagement(id="project", name="Synthetic"),
-            Engagement(id="foreign", name="Other"),
-            *notes,
-            foreign,
-            *evidence,
-        ]
+    (
+        await store.create_many(
+            [
+                Engagement(id="project", name="Synthetic"),
+                Engagement(id="foreign", name="Other"),
+                *notes,
+                foreign,
+                *evidence,
+            ]
+        )
     )
     now = utc_now()
-    with store.database.session() as session:
+    async with store.database.session() as session:
         session.add_all(
             [
                 ResourceRelationRow(
@@ -378,9 +404,12 @@ def test_projection_preserves_large_mixed_page_and_more_than_500_edges(tmp_path)
         )
     ordered = [notes[0], foreign, *reversed(notes[1:])]
     try:
-        projected = ResourceRelationService(store).project_legacy_many(ordered)
+        projected = await ResourceRelationService(store).project_legacy_many(ordered)
         assert [item.id for item in projected] == [item.id for item in ordered]
         assert projected[0].evidence_ids == [item.id for item in evidence]
         assert all(not item.evidence_ids for item in projected[1:])
     finally:
-        store.database.engine.dispose()
+        (await store.database.engine.dispose())
+
+
+pytestmark = pytest.mark.anyio

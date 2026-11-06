@@ -2758,11 +2758,19 @@ test("runtime usage real Core shows persisted provider and harness turns on LAN"
       "import sys",
       "from nebula.v3.domain import ChatTokenUsage, ChatTurn, HarnessSession, HarnessTurn, HarnessTurnOrigin",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "provider, harness = sys.argv[2:]",
-      "store.create(ChatTurn(id='usage-chat-turn', engagement_id='usage-project', session_id='usage-chat', provider_profile_id=provider, model='fixture-model', usage=ChatTokenUsage(input_tokens=40, output_tokens=10, total_tokens=50)))",
-      "store.create(HarnessSession(id='usage-harness-session', engagement_id='usage-project', harness_profile_id=harness, model='fixture-model'))",
-      "store.create(HarnessTurn(id='usage-harness-turn', engagement_id='usage-project', harness_session_id='usage-harness-session', origin=HarnessTurnOrigin.ANALYSIS, prompt='Inspect', usage=ChatTokenUsage(input_tokens=24, output_tokens=6, total_tokens=30)))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        provider, harness = sys.argv[2:]",
+      "        (await store.create(ChatTurn(id='usage-chat-turn', engagement_id='usage-project', session_id='usage-chat', provider_profile_id=provider, model='fixture-model', usage=ChatTokenUsage(input_tokens=40, output_tokens=10, total_tokens=50))))",
+      "        (await store.create(HarnessSession(id='usage-harness-session', engagement_id='usage-project', harness_profile_id=harness, model='fixture-model')))",
+      "        (await store.create(HarnessTurn(id='usage-harness-turn', engagement_id='usage-project', harness_session_id='usage-harness-session', origin=HarnessTurnOrigin.ANALYSIS, prompt='Inspect', usage=ChatTokenUsage(input_tokens=24, output_tokens=6, total_tokens=30))))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db"), provider.id, harness.id], {
       encoding: "utf8", env: { ...process.env, PYTHONPATH: path.join(repository, "src") }, timeout: 30_000,
     });
@@ -4343,15 +4351,23 @@ test("assistant upgrade running tool details survive a production LAN chat reloa
     "from nebula.v3.chat import ChatService",
     "from nebula.v3.domain import ChatMessage, ChatRole, ChatSession, ChatTurn, ChatTurnStatus, Engagement, ProviderProfile",
     "from nebula.v3.storage import NebulaStore",
-    "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
-    "project = store.create(Engagement(id='running-tool-project', name='Running tool project'))",
-    "provider = store.create(ProviderProfile(id='running-tool-provider', name='Local tool provider', provider_type='vllm', endpoint='http://127.0.0.1:1/v1', is_local=True, model_allowlist=['security-model']))",
-    "session = store.create(ChatSession(id='running-tool-session', engagement_id=project.id, title='Inspect the simulation corpus', provider_profile_id=provider.id, model='security-model', metadata={'message_count': 1, 'last_sequence': 1}))",
-    "store.create(ChatMessage(id='running-tool-prompt', engagement_id=project.id, session_id=session.id, sequence=1, role=ChatRole.USER, content='Inspect the simulation corpus.'))",
-    "turn = store.create(ChatTurn(id='running-tool-turn', engagement_id=project.id, session_id=session.id, provider_profile_id=provider.id, model='security-model', status=ChatTurnStatus.WAITING_CALLBACK, tools_enabled=True, next_step=2))",
-    "ledger = ChatService(store).turn_ledger",
-    "ledger.append(turn.id, {'step': 0, 'tool_call_id': 'finished-read', 'name': 'tool_output.read', 'display_name': 'Read tool output', 'arguments': {'artifact_id': 'previous-output'}, 'status': 'complete', 'result_summary': 'Read the previous output.'}, event_type='complete')",
-    "ledger.append(turn.id, {'step': 1, 'tool_call_id': 'running-command', 'name': 'ssh.simulation-host.run_command', 'display_name': 'Command runtime', 'arguments': {'command': 'python3 inspect.py --index corpus_index.json'}, 'status': 'running'}, event_type='started')",
+    "import asyncio",
+    "from nebula.v3.async_utils import close_store_resources",
+    "async def _seed():",
+    "    store = None",
+    "    try:",
+    "        store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+    "        project = (await store.create(Engagement(id='running-tool-project', name='Running tool project')))",
+    "        provider = (await store.create(ProviderProfile(id='running-tool-provider', name='Local tool provider', provider_type='vllm', endpoint='http://127.0.0.1:1/v1', is_local=True, model_allowlist=['security-model'])))",
+    "        session = (await store.create(ChatSession(id='running-tool-session', engagement_id=project.id, title='Inspect the simulation corpus', provider_profile_id=provider.id, model='security-model', metadata={'message_count': 1, 'last_sequence': 1})))",
+    "        (await store.create(ChatMessage(id='running-tool-prompt', engagement_id=project.id, session_id=session.id, sequence=1, role=ChatRole.USER, content='Inspect the simulation corpus.')))",
+    "        turn = (await store.create(ChatTurn(id='running-tool-turn', engagement_id=project.id, session_id=session.id, provider_profile_id=provider.id, model='security-model', status=ChatTurnStatus.WAITING_CALLBACK, tools_enabled=True, next_step=2)))",
+    "        ledger = ChatService(store).turn_ledger",
+    "        (await ledger.append(turn.id, {'step': 0, 'tool_call_id': 'finished-read', 'name': 'tool_output.read', 'display_name': 'Read tool output', 'arguments': {'artifact_id': 'previous-output'}, 'status': 'complete', 'result_summary': 'Read the previous output.'}, event_type='complete'))",
+    "        (await ledger.append(turn.id, {'step': 1, 'tool_call_id': 'running-command', 'name': 'ssh.simulation-host.run_command', 'display_name': 'Command runtime', 'arguments': {'command': 'python3 inspect.py --index corpus_index.json'}, 'status': 'running'}, event_type='started'))",
+    "    finally:",
+    "        await close_store_resources([item for item in [store] if item is not None])",
+    "asyncio.run(_seed())"
   ].join("\n"), dataDir], {
     cwd: repository,
     env: { ...process.env, PYTHONPATH: path.join(repository, "src") },
@@ -4580,11 +4596,19 @@ test("production LAN mission ledger survives failure, retry, restart recovery, a
       "from pathlib import Path",
       "from nebula.v3.domain import AgentRun, RiskClass, RunStatus, ToolCall, ToolCallStatus, utc_now",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
-      "run = store.get(AgentRun, sys.argv[2])",
-      "metadata = {key: value for key, value in run.metadata.items() if key not in {'error', 'restart_recovery'}}",
-      "store.update(AgentRun, run.id, {'status': RunStatus.RUNNING, 'completed_at': None, 'metadata': metadata}, expected_revision=run.revision)",
-      "store.create(ToolCall(id='playwright-mission-restart-effect', engagement_id=run.engagement_id, run_id=run.id, tool_name='write_file', status=ToolCallStatus.RUNNING, risk_class=RiskClass.WORKSPACE_WRITE, arguments={'path': 'recovery-proof.txt'}, started_at=utc_now()))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+      "        run = (await store.get(AgentRun, sys.argv[2]))",
+      "        metadata = {key: value for key, value in run.metadata.items() if key not in {'error', 'restart_recovery'}}",
+      "        (await store.update(AgentRun, run.id, {'status': RunStatus.RUNNING, 'completed_at': None, 'metadata': metadata}, expected_revision=run.revision))",
+      "        (await store.create(ToolCall(id='playwright-mission-restart-effect', engagement_id=run.engagement_id, run_id=run.id, tool_name='write_file', status=ToolCallStatus.RUNNING, risk_class=RiskClass.WORKSPACE_WRITE, arguments={'path': 'recovery-proof.txt'}, started_at=utc_now())))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), dataDir, failedMission.id], {
       cwd: repository,
       env: { ...process.env, PYTHONPATH: path.join(repository, "src") },
@@ -6935,18 +6959,25 @@ test("assistant upgrade large side chat opens from a recent page on real Core", 
     const coreBinary = [process.env.NEBULA_TEST_CORE_BIN, process.env.NEBULA_CORE_BINARY, path.join(repository, ".venv/bin/nebula-core"), commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined].find(candidate => candidate && existsSync(candidate));
     expect(coreBinary, "A Python environment matching the real Core binary is required").toBeTruthy();
     const python = path.join(path.dirname(coreBinary!), "python");
-    const seed = spawnSync(python, ["-c", `
-import sys
+    const seed = spawnSync(python, ["-c", `import sys
 import random
 from nebula.v3.domain import ChatMessage
 from nebula.v3.storage import NebulaStore
-store = NebulaStore(sys.argv[1])
-def content(index):
-    raw = random.Random(index).randbytes(9600).hex()
-    return f"Saved research message {index} " + " ".join(raw[offset:offset + 16] for offset in range(0, len(raw), 16))
-messages = [ChatMessage(id=f"perf-message-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=index, role="user" if index % 2 else "assistant", content=content(index), reasoning=("Private reasoning details. " * 1040) if index % 2 == 0 else "", provider_profile_id=sys.argv[4], model="security-model") for index in range(3, 455)]
-with store.transaction() as transaction:
-    transaction.add_chat_messages(messages)
+import asyncio
+from nebula.v3.async_utils import close_store_resources
+async def _seed():
+    store = None
+    try:
+        store = NebulaStore(sys.argv[1])
+        def content(index):
+            raw = random.Random(index).randbytes(9600).hex()
+            return f"Saved research message {index} " + " ".join(raw[offset:offset + 16] for offset in range(0, len(raw), 16))
+        messages = [ChatMessage(id=f"perf-message-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=index, role="user" if index % 2 else "assistant", content=content(index), reasoning=("Private reasoning details. " * 1040) if index % 2 == 0 else "", provider_profile_id=sys.argv[4], model="security-model") for index in range(3, 455)]
+        async with (await store.transaction()) as transaction:
+            (await transaction.add_chat_messages(messages))
+    finally:
+        await close_store_resources([item for item in [store] if item is not None])
+asyncio.run(_seed())
 `, path.join(core.dataDir, "nebula.db"), projects[0].id, parent.session_id, provider.id], {encoding: "utf8", env: {...process.env, PYTHONPATH: path.resolve(import.meta.dirname, "../../src")}, timeout: 30_000});
     expect(seed.status, seed.error?.message ?? seed.stderr).toBe(0);
     const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
@@ -10479,15 +10510,22 @@ test("assistant upgrade Butler shows live work and restores it after reload on p
     expect(coreBinary, "A Python environment matching the real Core binary is required").toBeTruthy();
     const python = process.env.NEBULA_TEST_PYTHON || path.join(path.dirname(coreBinary!), "python");
     expect(existsSync(python), "The real-Core test interpreter must be available").toBe(true);
-    const seed = spawnSync(python, ["-c", `
-import sys
+    const seed = spawnSync(python, ["-c", `import sys
 from nebula.v3.domain import ChatMessage
 from nebula.v3.storage import NebulaStore
-store = NebulaStore(sys.argv[1])
-start = int(sys.argv[4])
-messages = [ChatMessage(id=f"butler-scroll-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=start + index, role="user" if index % 2 else "assistant", content=f"Saved Butler message {index}. " + "A detailed project update. " * 5, provider_profile_id=sys.argv[5], model="security-model") for index in range(80)]
-with store.transaction() as transaction:
-    transaction.add_chat_messages(messages)
+import asyncio
+from nebula.v3.async_utils import close_store_resources
+async def _seed():
+    store = None
+    try:
+        store = NebulaStore(sys.argv[1])
+        start = int(sys.argv[4])
+        messages = [ChatMessage(id=f"butler-scroll-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=start + index, role="user" if index % 2 else "assistant", content=f"Saved Butler message {index}. " + "A detailed project update. " * 5, provider_profile_id=sys.argv[5], model="security-model") for index in range(80)]
+        async with (await store.transaction()) as transaction:
+            (await transaction.add_chat_messages(messages))
+    finally:
+        await close_store_resources([item for item in [store] if item is not None])
+asyncio.run(_seed())
 `, path.join(core.dataDir, "nebula.db"), projectId, session.id, String(Math.max(...saved.map(item => item.sequence)) + 1), provider.id], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.resolve(import.meta.dirname, "../../src")}, timeout: 30_000,
     });
@@ -10751,10 +10789,18 @@ test("assistant upgrade Butler saved table stays readable after reload on produc
       "import sys",
       "from nebula.v3.domain import ChatMessage, ChatSession",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "project_id, session_id = sys.argv[2:]",
-      "store.create(ChatSession(id=session_id, engagement_id=project_id, title='Butler', provider_profile_id='fixture-provider', model='fixture-model', metadata={'control_assistant': True, 'message_count': 1, 'last_sequence': 1}))",
-      "store.create(ChatMessage(id='butler-mobile-table-answer', engagement_id=project_id, session_id=session_id, sequence=1, role='assistant', content=sys.stdin.read()))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        project_id, session_id = sys.argv[2:]",
+      "        (await store.create(ChatSession(id=session_id, engagement_id=project_id, title='Butler', provider_profile_id='fixture-provider', model='fixture-model', metadata={'control_assistant': True, 'message_count': 1, 'last_sequence': 1})))",
+      "        (await store.create(ChatMessage(id='butler-mobile-table-answer', engagement_id=project_id, session_id=session_id, sequence=1, role='assistant', content=sys.stdin.read())))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId, sessionId], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, input: answer, timeout: 30_000,
     });
@@ -11510,14 +11556,22 @@ test("assistant upgrade Butler scheduled retry shows both saved attempts after r
       "import sys",
       "from nebula.v3.domain import ButlerAuthorityPolicy, ButlerRecoveryCase, ChatSession, HarnessSession, HarnessTurn, HarnessTurnOrigin, HarnessTurnStatus",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "project_id = sys.argv[2]",
-      "store.create(ButlerAuthorityPolicy(id='butler-authority-' + project_id, engagement_id=project_id, authority='act'))",
-      "store.create(ChatSession(id='butler-retry-chat', engagement_id=project_id, title='Butler', model='fixture-model', provider_profile_id='fixture-provider', metadata={'control_assistant': True}))",
-      "store.create(HarnessSession(id='butler-retry-harness', engagement_id=project_id, harness_profile_id='fixture-harness', model='gpt-6-sol'))",
-      "store.create(HarnessTurn(id='butler-overloaded-turn', engagement_id=project_id, harness_session_id='butler-retry-harness', origin=HarnessTurnOrigin.ANALYSIS, prompt='Check Core', status=HarnessTurnStatus.INTERRUPTED, error='Selected model is at capacity'))",
-      "store.create(HarnessTurn(id='butler-retry-turn', engagement_id=project_id, harness_session_id='butler-retry-harness', origin=HarnessTurnOrigin.ANALYSIS, prompt='Retry check', status=HarnessTurnStatus.COMPLETE, response='Core state inspected on retry.'))",
-      "store.create(ButlerRecoveryCase(id='butler-retry-case', engagement_id=project_id, trigger='periodic', signal='butler.global_periodic_check', source_event_id='fixture-event', source_event_sequence=1, authority_revision=1, status='resolved', summary='Scheduled work check', outcome='Core state inspected on retry.', model_backend='harness', model_turn_id='butler-retry-turn', model_turn_ids=['butler-overloaded-turn', 'butler-retry-turn'], capacity_retry_count=1))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        project_id = sys.argv[2]",
+      "        (await store.create(ButlerAuthorityPolicy(id='butler-authority-' + project_id, engagement_id=project_id, authority='act')))",
+      "        (await store.create(ChatSession(id='butler-retry-chat', engagement_id=project_id, title='Butler', model='fixture-model', provider_profile_id='fixture-provider', metadata={'control_assistant': True})))",
+      "        (await store.create(HarnessSession(id='butler-retry-harness', engagement_id=project_id, harness_profile_id='fixture-harness', model='gpt-6-sol')))",
+      "        (await store.create(HarnessTurn(id='butler-overloaded-turn', engagement_id=project_id, harness_session_id='butler-retry-harness', origin=HarnessTurnOrigin.ANALYSIS, prompt='Check Core', status=HarnessTurnStatus.INTERRUPTED, error='Selected model is at capacity')))",
+      "        (await store.create(HarnessTurn(id='butler-retry-turn', engagement_id=project_id, harness_session_id='butler-retry-harness', origin=HarnessTurnOrigin.ANALYSIS, prompt='Retry check', status=HarnessTurnStatus.COMPLETE, response='Core state inspected on retry.')))",
+      "        (await store.create(ButlerRecoveryCase(id='butler-retry-case', engagement_id=project_id, trigger='periodic', signal='butler.global_periodic_check', source_event_id='fixture-event', source_event_sequence=1, authority_revision=1, status='resolved', summary='Scheduled work check', outcome='Core state inspected on retry.', model_backend='harness', model_turn_id='butler-retry-turn', model_turn_ids=['butler-overloaded-turn', 'butler-retry-turn'], capacity_retry_count=1)))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db"), project.id], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
     });
@@ -11592,10 +11646,18 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
       "import sys",
       "from nebula.v3.domain import HarnessProfile, HarnessKind, McpServerProfile, McpTransport, McpCapabilitySnapshot, McpToolSnapshot",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "store.create(HarnessProfile(id='butler-ui-codex', name='Fixture Codex', kind=HarnessKind.CODEX_APP_SERVER, executable='/usr/bin/true', default_model='codex-test', enabled=True))",
-      "tools = [McpToolSnapshot(name=name, input_schema={'type': 'object'}) for name in ('issue_target', 'issue_find', 'issue_create')]",
-      "store.create(McpServerProfile(id='butler-ui-mcp', name='fixture_issues', transport=McpTransport.STDIO, command='/usr/bin/true', enabled=True, trusted_stdio=True, capabilities=McpCapabilitySnapshot(tools=tools)))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        (await store.create(HarnessProfile(id='butler-ui-codex', name='Fixture Codex', kind=HarnessKind.CODEX_APP_SERVER, executable='/usr/bin/true', default_model='codex-test', enabled=True)))",
+      "        tools = [McpToolSnapshot(name=name, input_schema={'type': 'object'}) for name in ('issue_target', 'issue_find', 'issue_create')]",
+      "        (await store.create(McpServerProfile(id='butler-ui-mcp', name='fixture_issues', transport=McpTransport.STDIO, command='/usr/bin/true', enabled=True, trusted_stdio=True, capabilities=McpCapabilitySnapshot(tools=tools))))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db")], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
     });
@@ -11659,10 +11721,18 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
       "import sys",
       "from nebula.v3.domain import ButlerIssueCandidate",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "common = dict(engagement_id=sys.argv[2], destination_id=sys.argv[3], source_kind='chat_turn', source_id='fixture-turn', confidence='hypothesis', public_independent=False, body='A saved selection disappears after a refresh in the sample workflow.', reproduction='Create a sample item, select it, then refresh the browser.')",
-      "store.create(ButlerIssueCandidate(**common, dedup_key='a'*64, problem_key='selection-refresh', title='Selection disappears on refresh', status='held', reason='public_reproduction_not_independent'))",
-      "store.create(ButlerIssueCandidate(**common, dedup_key='b'*64, problem_key='export-sample', title='Sample export fails', status='published', issue_id='1', issue_url='https://github.com/fixture/private/issues/1'))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        common = dict(engagement_id=sys.argv[2], destination_id=sys.argv[3], source_kind='chat_turn', source_id='fixture-turn', confidence='hypothesis', public_independent=False, body='A saved selection disappears after a refresh in the sample workflow.', reproduction='Create a sample item, select it, then refresh the browser.')",
+      "        (await store.create(ButlerIssueCandidate(**common, dedup_key='a'*64, problem_key='selection-refresh', title='Selection disappears on refresh', status='held', reason='public_reproduction_not_independent')))",
+      "        (await store.create(ButlerIssueCandidate(**common, dedup_key='b'*64, problem_key='export-sample', title='Sample export fails', status='published', issue_id='1', issue_url='https://github.com/fixture/private/issues/1')))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId, issueDestination!.id], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
     });
@@ -11746,8 +11816,16 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
       "import sys",
       "from nebula.v3.domain import Approval, RiskClass, ToolCallOrigin",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "store.create(Approval(id=sys.argv[3], engagement_id=sys.argv[2], run_id='synthetic-run', origin=ToolCallOrigin.CHAT, chat_session_id=sys.argv[4], risk_class=RiskClass.WORKSPACE_WRITE, exact_request={'tool_name': 'fixture.write'}, policy_rationale='Fixture review', requested_by='fixture-agent'))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        (await store.create(Approval(id=sys.argv[3], engagement_id=sys.argv[2], run_id='synthetic-run', origin=ToolCallOrigin.CHAT, chat_session_id=sys.argv[4], risk_class=RiskClass.WORKSPACE_WRITE, exact_request={'tool_name': 'fixture.write'}, policy_rationale='Fixture review', requested_by='fixture-agent')))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId, approvalId, created.session.id], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
     });
@@ -11769,9 +11847,17 @@ test("assistant upgrade Butler watches a goal and surfaces an agent-reported mac
       "import sys",
       "from nebula.v3.domain import Approval, ApprovalStatus, utc_now",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "item = store.get(Approval, sys.argv[2])",
-      "store.update(Approval, item.id, {'status': ApprovalStatus.REJECTED, 'decided_at': utc_now()}, expected_revision=item.revision)",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        item = (await store.get(Approval, sys.argv[2]))",
+      "        (await store.update(Approval, item.id, {'status': ApprovalStatus.REJECTED, 'decided_at': utc_now()}, expected_revision=item.revision))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db"), approvalId], {
       encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
     });
@@ -12337,11 +12423,19 @@ reliabilityTest("assistant upgrade harness catalog refresh preserves mounted Wor
       "import sys",
       "from nebula.v3.storage import NebulaStore",
       "from nebula.v3.domain import ChatSession, ChatMessage, HarnessSession",
-      "store = NebulaStore(sys.argv[1])",
-      "project = sys.argv[2]",
-      "store.create(HarnessSession(id='catalog-vendor', engagement_id=project, harness_profile_id='inert-fixture', model='fixture'))",
-      "store.create(ChatSession(id='catalog-chat', engagement_id=project, title='Catalog saved conversation', backend='harness', harness_profile_id='inert-fixture', harness_session_id='catalog-vendor', model='fixture'))",
-      "store.create(ChatMessage(engagement_id=project, session_id='catalog-chat', sequence=1, role='assistant', content='Saved catalog regression context.'))",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(sys.argv[1])",
+      "        project = sys.argv[2]",
+      "        (await store.create(HarnessSession(id='catalog-vendor', engagement_id=project, harness_profile_id='inert-fixture', model='fixture')))",
+      "        (await store.create(ChatSession(id='catalog-chat', engagement_id=project, title='Catalog saved conversation', backend='harness', harness_profile_id='inert-fixture', harness_session_id='catalog-vendor', model='fixture')))",
+      "        (await store.create(ChatMessage(engagement_id=project, session_id='catalog-chat', sequence=1, role='assistant', content='Saved catalog regression context.')))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), path.join(core.dataDir, "nebula.db"), projectId], {cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8"});
     expect(seed.status, seed.stderr || seed.stdout).toBe(0);
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Catalog regression"}})).json();
@@ -12876,29 +12970,37 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
       "from nebula.v3.domain import ChatMessage, ChatRole, ChatSession, ChatSubagent, ChatSubagentStatus, ChatTurn, ChatTurnStatus, utc_now",
       "from nebula.v3.providers import ModelRequest",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
-      "project_id, provider_id, parent_session_id = sys.argv[2:]",
-      "parent_session = store.get(ChatSession, parent_session_id)",
-      "parent_turn_id = 'restart-recovery-parent-turn'",
-      "subagent_id = 'restart-recovery-subagent'",
-      "child_session_id = 'restart-recovery-child-session'",
-      "child_turn_id = 'restart-recovery-child-turn'",
-      "false_message_id = 'restart-recovery-false-terminal-message'",
-      "now = utc_now()",
-      "sequence = int(parent_session.metadata.get('last_sequence') or 0) + 1",
-      "parent_turn = ChatTurn(id=parent_turn_id, engagement_id=project_id, session_id=parent_session_id, provider_profile_id=provider_id, model='security-model', status=ChatTurnStatus.COMPLETE)",
-      "child_session = ChatSession(id=child_session_id, engagement_id=project_id, title='Subagent · Restart investigator', provider_profile_id=provider_id, model='security-model', parent_session_id=parent_session_id, metadata={'subagent_id': subagent_id})",
-      "child_turn = ChatTurn(id=child_turn_id, engagement_id=project_id, session_id=child_session_id, provider_profile_id=provider_id, model='security-model', status=ChatTurnStatus.INTERRUPTED, error='Core restarted before this response completed. Core will resume it automatically.', request_snapshot={'subagent_child': True, 'model_request': ModelRequest(model='security-model', messages=[{'role': 'user', 'content': 'Finish the recovered child report.'}], stream=False).model_dump(mode='json'), 'context_usage': {}, 'recovery': {'required': True, 'cause': 'core_restart', 'unknown_tool_call_ids': [], 'unknown_hook_execution_ids': [], 'interrupted_at': now.isoformat()}})",
-      "record = ChatSubagent(id=subagent_id, engagement_id=project_id, parent_session_id=parent_session_id, parent_turn_id=parent_turn_id, child_session_id=child_session_id, child_turn_id=child_turn_id, provider_profile_id=provider_id, model='security-model', name='Restart investigator', task='Finish after Core restart.', status=ChatSubagentStatus.INTERRUPTED, finished_at=now, error='Core shut down while this subagent was running.', result_message_id=false_message_id, reported_at=now)",
-      "record = record.model_copy(update={'parent_request': {'capabilities': {'tool_names': [], 'mcp_server_ids': [], 'skills': []}}})",
-      "false_message = ChatMessage(id=false_message_id, engagement_id=project_id, session_id=parent_session_id, sequence=sequence, role=ChatRole.ASSISTANT, content='Subagent interrupted: Restart investigator\\n\\nError: Core shut down while this subagent was running.', provider_profile_id=provider_id, model='security-model', metadata={'kind': 'subagent_result', 'subagent_id': subagent_id, 'subagent_name': 'Restart investigator', 'child_session_id': child_session_id, 'subagent_status': 'interrupted', 'subagent_round': 1})",
-      "with store.transaction() as transaction:",
-      "    transaction.add(parent_turn)",
-      "    transaction.add(child_session)",
-      "    transaction.add(child_turn)",
-      "    transaction.add(record)",
-      "    transaction.add(false_message)",
-      "    transaction.update(ChatSession, parent_session_id, {'metadata': {**parent_session.metadata, 'message_count': sequence, 'last_sequence': sequence}}, expected_revision=parent_session.revision)",
+      "import asyncio",
+      "from nebula.v3.async_utils import close_store_resources",
+      "async def _seed():",
+      "    store = None",
+      "    try:",
+      "        store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+      "        project_id, provider_id, parent_session_id = sys.argv[2:]",
+      "        parent_session = (await store.get(ChatSession, parent_session_id))",
+      "        parent_turn_id = 'restart-recovery-parent-turn'",
+      "        subagent_id = 'restart-recovery-subagent'",
+      "        child_session_id = 'restart-recovery-child-session'",
+      "        child_turn_id = 'restart-recovery-child-turn'",
+      "        false_message_id = 'restart-recovery-false-terminal-message'",
+      "        now = utc_now()",
+      "        sequence = int(parent_session.metadata.get('last_sequence') or 0) + 1",
+      "        parent_turn = ChatTurn(id=parent_turn_id, engagement_id=project_id, session_id=parent_session_id, provider_profile_id=provider_id, model='security-model', status=ChatTurnStatus.COMPLETE)",
+      "        child_session = ChatSession(id=child_session_id, engagement_id=project_id, title='Subagent · Restart investigator', provider_profile_id=provider_id, model='security-model', parent_session_id=parent_session_id, metadata={'subagent_id': subagent_id})",
+      "        child_turn = ChatTurn(id=child_turn_id, engagement_id=project_id, session_id=child_session_id, provider_profile_id=provider_id, model='security-model', status=ChatTurnStatus.INTERRUPTED, error='Core restarted before this response completed. Core will resume it automatically.', request_snapshot={'subagent_child': True, 'model_request': ModelRequest(model='security-model', messages=[{'role': 'user', 'content': 'Finish the recovered child report.'}], stream=False).model_dump(mode='json'), 'context_usage': {}, 'recovery': {'required': True, 'cause': 'core_restart', 'unknown_tool_call_ids': [], 'unknown_hook_execution_ids': [], 'interrupted_at': now.isoformat()}})",
+      "        record = ChatSubagent(id=subagent_id, engagement_id=project_id, parent_session_id=parent_session_id, parent_turn_id=parent_turn_id, child_session_id=child_session_id, child_turn_id=child_turn_id, provider_profile_id=provider_id, model='security-model', name='Restart investigator', task='Finish after Core restart.', status=ChatSubagentStatus.INTERRUPTED, finished_at=now, error='Core shut down while this subagent was running.', result_message_id=false_message_id, reported_at=now)",
+      "        record = record.model_copy(update={'parent_request': {'capabilities': {'tool_names': [], 'mcp_server_ids': [], 'skills': []}}})",
+      "        false_message = ChatMessage(id=false_message_id, engagement_id=project_id, session_id=parent_session_id, sequence=sequence, role=ChatRole.ASSISTANT, content='Subagent interrupted: Restart investigator\\n\\nError: Core shut down while this subagent was running.', provider_profile_id=provider_id, model='security-model', metadata={'kind': 'subagent_result', 'subagent_id': subagent_id, 'subagent_name': 'Restart investigator', 'child_session_id': child_session_id, 'subagent_status': 'interrupted', 'subagent_round': 1})",
+      "        async with (await store.transaction()) as transaction:",
+      "            (await transaction.add(parent_turn))",
+      "            (await transaction.add(child_session))",
+      "            (await transaction.add(child_turn))",
+      "            (await transaction.add(record))",
+      "            (await transaction.add(false_message))",
+      "            (await transaction.update(ChatSession, parent_session_id, {'metadata': {**parent_session.metadata, 'message_count': sequence, 'last_sequence': sequence}}, expected_revision=parent_session.revision))",
+      "    finally:",
+      "        await close_store_resources([item for item in [store] if item is not None])",
+      "asyncio.run(_seed())"
     ].join("\n"), core.dataDir, projectId!, provider.id, parent.session_id], {
       cwd: repository,
       env: {...process.env, PYTHONPATH: path.join(repository, "src")},
@@ -14172,9 +14274,17 @@ test("assistant upgrade real Core Grok harness deletion survives conflict, retry
         "import sys",
         "from nebula.v3.domain import HarnessSession",
         "from nebula.v3.storage import NebulaStore",
-        "store = NebulaStore(sys.argv[1])",
-        "action, session_id, project_id, profile_id = sys.argv[2:]",
-        "store.create(HarnessSession(id=session_id, engagement_id=project_id, harness_profile_id=profile_id, model='fixture-model')) if action == 'create' else store.delete(HarnessSession, session_id)",
+        "import asyncio",
+        "from nebula.v3.async_utils import close_store_resources",
+        "async def _seed():",
+        "    store = None",
+        "    try:",
+        "        store = NebulaStore(sys.argv[1])",
+        "        action, session_id, project_id, profile_id = sys.argv[2:]",
+        "        (await store.create(HarnessSession(id=session_id, engagement_id=project_id, harness_profile_id=profile_id, model='fixture-model'))) if action == 'create' else (await store.delete(HarnessSession, session_id))",
+        "    finally:",
+        "        await close_store_resources([item for item in [store] if item is not None])",
+        "asyncio.run(_seed())"
       ].join("\n"), path.join(core.dataDir, "nebula.db"), action, sessionId, project.id, profile.id], {
         encoding: "utf8", env: {...process.env, PYTHONPATH: path.join(repository, "src")}, timeout: 30_000,
       });
@@ -15054,10 +15164,7 @@ test("assistant upgrade saved harness chat switches to provider in the same prod
   test.setTimeout(120_000);
   const model = await startLocalModelStub({responseContent: "Provider continuation saved in the same chat.", streamDelayMs: 0});
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
-  const api = await playwrightRequest.newContext({
-    baseURL: `${core.origin}/api/v1/`,
-    extraHTTPHeaders: {Authorization: `Bearer ${core.token}`},
-  });
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   await withOwnedCleanup(async () => {
     const manifest = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {assets: Record<string, string>; builtAt: string};
     const entry = Object.keys(manifest.assets).find(name => name.startsWith("assets/index-") && name.endsWith(".js"));
@@ -15065,31 +15172,30 @@ test("assistant upgrade saved harness chat switches to provider in the same prod
     expect(createHash("sha256").update(await (await page.request.get(`${core.origin}/${entry}`)).body()).digest("hex")).toBe(manifest.assets[entry!]);
     const project = (await (await api.get("engagements")).json() as Array<{id: string}>)[0];
     expect(project?.id).toBeTruthy();
-    const providerResponse = await api.post("providers", {data: {
-      name: "Local continuation model", provider_type: "vllm", endpoint: `${model.origin}/v1`,
-      enabled: true, is_local: true, model_allowlist: ["security-model"],
-      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
-      metadata: {default_model: "security-model"},
-    }});
-    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
-    const provider = await providerResponse.json() as {id: string};
+    const response = await api.post("providers", {data: {name: "Local continuation model", provider_type: "vllm", endpoint: `${model.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const provider = await response.json() as {id: string};
     const repository = path.resolve(import.meta.dirname, "../..");
-    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
-    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(repository, ".venv/bin/python");
     const seed = spawnSync(python, ["-c", [
-      "import sys",
-      "from nebula.v3.domain import ChatBackend, ChatGoal, ChatGoalStatus, ChatMessage, ChatRole, ChatSession, HarnessProfile, HarnessSession",
+      "import asyncio, sys",
+      "from nebula.v3.domain import ChatBackend, ChatGoal, ChatGoalStatus, ChatMessage, ChatRole, ChatSession, ChatTurn, ChatTurnStatus, HarnessProfile, HarnessSession",
       "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "project = sys.argv[2]",
-      "store.create(HarnessProfile(id='saved-harness-fixture', name='Saved harness fixture', kind='codex_app_server', executable='/bin/true', default_model='harness-model', capabilities={'models': ['harness-model']}))",
-      "store.create(HarnessSession(id='saved-vendor-fixture', engagement_id=project, harness_profile_id='saved-harness-fixture', model='harness-model'))",
-      "store.create(ChatSession(id='saved-harness-provider-chat', engagement_id=project, title='Saved harness conversation', backend=ChatBackend.HARNESS, harness_profile_id='saved-harness-fixture', harness_session_id='saved-vendor-fixture', model='harness-model', metadata={'message_count': 1, 'last_sequence': 1}))",
-      "store.create(ChatMessage(id='prior-harness-message', engagement_id=project, session_id='saved-harness-provider-chat', sequence=1, role=ChatRole.USER, content='Earlier harness context is still here.'))",
-      "store.create(ChatGoal(id='saved-harness-goal', engagement_id=project, session_id='saved-harness-provider-chat', objective='Continue the same goal', completion_criteria=['Provider reply is saved'], status=ChatGoalStatus.BLOCKED, blocked_reason='Fixture hold', step_budget=3))",
-    ].join("\n"), path.join(core.dataDir, "nebula.db"), project.id], {
-      cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8",
-    });
+      "async def seed():",
+      "    store = NebulaStore(sys.argv[1])",
+      "    project = sys.argv[2]",
+      "    try:",
+      "        await store.create(HarnessProfile(id='saved-harness-fixture', name='Saved harness fixture', kind='codex_app_server', executable='/bin/true', default_model='harness-model', capabilities={'models': ['harness-model']}))",
+      "        await store.create(HarnessSession(id='saved-vendor-fixture', engagement_id=project, harness_profile_id='saved-harness-fixture', model='harness-model'))",
+      "        await store.create(ChatSession(id='saved-harness-provider-chat', engagement_id=project, title='Saved harness conversation', backend=ChatBackend.HARNESS, harness_profile_id='saved-harness-fixture', harness_session_id='saved-vendor-fixture', model='harness-model', metadata={'message_count': 1, 'last_sequence': 1}))",
+      "        await store.create(ChatMessage(id='prior-harness-message', engagement_id=project, session_id='saved-harness-provider-chat', sequence=1, role=ChatRole.USER, content='Earlier harness context is still here.'))",
+      "        await store.create(ChatGoal(id='saved-harness-goal', engagement_id=project, session_id='saved-harness-provider-chat', objective='Continue the same goal', completion_criteria=['Provider reply is saved'], status=ChatGoalStatus.BLOCKED, blocked_reason='Fixture hold', step_budget=1))",
+      "        await store.create(ChatTurn(id='switch-active-turn', engagement_id=project, session_id='saved-harness-provider-chat', backend=ChatBackend.HARNESS, model='harness-model', status=ChatTurnStatus.WAITING_APPROVAL))",
+      "    finally:",
+      "        await store.event_history.close()",
+      "        await store.database.dispose()",
+      "asyncio.run(seed())"
+    ].join("\n"), path.join(core.dataDir, "nebula.db"), project.id], {cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8"});
     expect(seed.status, seed.stderr || seed.stdout).toBe(0);
     await pairRealCoreBrowser(page, core, "Runtime switch LAN browser");
     await page.goto(`${core.origin}/?view=chat&session=saved-harness-provider-chat`);
@@ -15099,47 +15205,52 @@ test("assistant upgrade saved harness chat switches to provider in the same prod
     const runtime = settings.getByRole("combobox", {name: "Chat runtime"});
     await expect(runtime).toHaveValue("harness");
     await runtime.selectOption("provider");
-    await expect(settings.getByRole("status").filter({hasText: "resolve its block"})).toBeVisible();
-    await expect(runtime).toHaveValue("harness");
-    const before = await (await api.get("chat-sessions/saved-harness-provider-chat")).json() as {backend: string};
-    expect(before.backend).toBe("harness");
-    const release = spawnSync(python, ["-c", [
-      "import sys",
-      "from nebula.v3.domain import ChatGoal, ChatGoalStatus",
-      "from nebula.v3.storage import NebulaStore",
-      "store = NebulaStore(sys.argv[1])",
-      "goal = store.get(ChatGoal, 'saved-harness-goal')",
-      "store.update(ChatGoal, goal.id, {'status': ChatGoalStatus.PAUSED, 'blocked_reason': None}, expected_revision=goal.revision)",
-    ].join("\n"), path.join(core.dataDir, "nebula.db")], {
-      cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}, encoding: "utf8",
-    });
-    expect(release.status, release.stderr || release.stdout).toBe(0);
-    await runtime.selectOption("provider");
-    await expect(settings.getByRole("status").filter({hasText: "Provider saved on this conversation"})).toBeVisible({timeout: 20_000});
-    await expect(runtime).toHaveValue("provider");
-    await expect(settings.getByRole("combobox", {name: "Chat model"})).toHaveValue("security-model");
-    const switched = await (await api.get("chat-sessions/saved-harness-provider-chat")).json() as {id: string; backend: string; provider_profile_id: string; harness_session_id: string | null; model: string};
-    expect(switched).toMatchObject({id: "saved-harness-provider-chat", backend: "provider", provider_profile_id: provider.id, harness_session_id: null, model: "security-model"});
-    await settings.getByRole("button", {name: "Close assistant settings"}).click();
-    await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Continue in this conversation.");
-    await page.getByRole("button", {name: "Send message", exact: true}).click();
-    await expect(page.getByText("Provider continuation saved in the same chat.")).toBeVisible({timeout: 20_000});
-    expect(model.requests.some(request => request.model === "security-model"
-      && Array.isArray(request.messages)
-      && request.messages.some((message: {content?: unknown}) => message.content === "Earlier harness context is still here.")
-      && request.messages.some((message: {content?: unknown}) => message.content === "Continue in this conversation."))).toBe(true);
+    await expect(page.getByRole("status").filter({hasText: "Next runtime:"})).toBeVisible({timeout: 20_000});
+    let saved = await (await api.get("chat-sessions/saved-harness-provider-chat")).json();
+    expect(saved.backend).toBe("harness");
+    expect(saved.metadata.pending_runtime_switch.binding.provider_profile_id).toBe(provider.id);
+    await page.reload();
+    await expect(page.getByRole("status").filter({hasText: "Next runtime:"})).toBeVisible();
+    const stopped = await api.post("chat/turns/switch-active-turn/cancel");
+    expect(stopped.ok(), await stopped.text()).toBe(true);
+    await expect.poll(async () => (await (await api.get("chat-sessions/saved-harness-provider-chat")).json()).backend).toBe("provider");
+    const beforeResume = await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json();
+    expect(beforeResume).toMatchObject({id: "saved-harness-goal", status: "blocked", blocked_reason: "Fixture hold"});
+    await expect(page.getByRole("status").filter({hasText: "Next runtime:"})).toHaveCount(0);
+    const goalPanel = page.getByRole("region", {name: "Conversation goal"});
+    const pointerFine = await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches);
+    if (pointerFine) await page.locator(".chat-composer").hover();
+    if (!await goalPanel.isVisible()) {
+      const openGoal = page.getByRole("button", {name: "Open goal", exact: true});
+      const rail = page.getByRole("region", {name: "Goal", exact: true});
+      if (await openGoal.isVisible()) await openGoal.click();
+      else if (await rail.isVisible()) {
+        if (pointerFine) await page.locator(".chat-studio-rail").hover();
+        await rail.getByRole("button", {name: "View full goal and evidence gates", exact: true}).click();
+      }
+    }
+    await expect(goalPanel).toBeVisible({timeout: 15_000});
+    const expand = goalPanel.getByRole("button", {name: "Expand goal controls", exact: true});
+    if (await expand.isVisible()) await expand.click();
+    await expect(goalPanel.getByText("Continue the same goal", {exact: true}).first()).toBeVisible();
+    const resume = goalPanel.getByRole("button", {name: "Resume", exact: true});
+    await expect(resume).toBeEnabled();
+    await resume.click();
+    await expect(page.getByText("Provider continuation saved in the same chat.").first()).toBeVisible({timeout: 30_000});
+    await expect.poll(async () => (await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json()).status).toBe("paused");
+    const goal = await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json();
+    expect(goal).toMatchObject({id: "saved-harness-goal", current_step: 1, status: "paused"});
     const messages = await (await api.get("chat/sessions/saved-harness-provider-chat/messages")).json() as Array<{content: string}>;
     expect(messages.map(message => message.content)).toContain("Earlier harness context is still here.");
     expect(messages.map(message => message.content)).toContain("Provider continuation saved in the same chat.");
-    const goal = await (await api.get("chat/sessions/saved-harness-provider-chat/goal")).json() as {id: string; status: string};
-    expect(goal).toMatchObject({id: "saved-harness-goal", status: "paused"});
     await page.reload();
     await expect(page.getByText("Earlier harness context is still here.")).toBeVisible();
-    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Provider continuation saved in the same chat.");
+    await expect(page.getByText("Provider continuation saved in the same chat.").first()).toBeVisible();
     await clickAssistantSettings(page);
     await expect(page.getByRole("combobox", {name: "Chat runtime"})).toHaveValue("provider");
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
-    await testInfo.attach("harness-provider-switch-lan", {body: JSON.stringify({origin: core.origin, build: "ui/dist production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), sessionId: switched.id, goalId: goal.id, outcome: "blocked, retry, saved provider turn, reload"}), contentType: "application/json"});
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await testInfo.attach("harness-provider-switch-lan", {body: JSON.stringify({origin: core.origin, build: "ui/dist production", builtAt: manifest.builtAt, project: testInfo.project.name, viewport: page.viewportSize(), sessionId: "saved-harness-provider-chat", goalId: goal.id, outcome: "pending survives reload, safe activation, explicit same-goal resume, reload"}), contentType: "application/json"});
   }, [{name: "API context", dispose: () => api.dispose()}, {name: "Core fixture", dispose: () => stopRealCore(core)}, {name: "model stub", dispose: () => stopLocalModelStub(model)}]);
 });
 

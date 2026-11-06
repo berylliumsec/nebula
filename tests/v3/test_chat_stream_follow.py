@@ -5,11 +5,15 @@ name the runtime that produced them, a runtime's last frames stay readable for a
 reconnecting viewer, and the authorities agree on an interrupted turn.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 import nebula.v3.api as api_module
 from nebula.v3.api import create_app
@@ -38,26 +42,32 @@ def _frames(response) -> list[dict]:
     ]
 
 
-def _conversation(tmp_path) -> NebulaStore:
+async def _conversation(tmp_path) -> NebulaStore:
     store = NebulaStore(tmp_path / "core.db")
-    store.create(Engagement(id="project", name="Project"))
-    store.create(
-        ProviderProfile(id="provider", name="Provider", provider_type="openrouter")
+    (await store.create(Engagement(id="project", name="Project")))
+    (
+        await store.create(
+            ProviderProfile(id="provider", name="Provider", provider_type="openrouter")
+        )
     )
-    store.create(
-        ChatSession(
-            id="chat",
-            engagement_id="project",
-            title="Follow",
-            provider_profile_id="provider",
-            model="model",
+    (
+        await store.create(
+            ChatSession(
+                id="chat",
+                engagement_id="project",
+                title="Follow",
+                provider_profile_id="provider",
+                model="model",
+            )
         )
     )
     return store
 
 
-def _interrupted_turn(store: NebulaStore, recovery: dict, goal_id: str | None = None):
-    return store.create(
+async def _interrupted_turn(
+    store: NebulaStore, recovery: dict, goal_id: str | None = None
+):
+    return await store.create(
         ChatTurn(
             id="turn",
             engagement_id="project",
@@ -72,7 +82,7 @@ def _interrupted_turn(store: NebulaStore, recovery: dict, goal_id: str | None = 
     )
 
 
-def test_a_cursor_from_another_runtime_replays_this_runtime_from_its_first_frame(
+async def test_a_cursor_from_another_runtime_replays_this_runtime_from_its_first_frame(
     tmp_path,
 ):
     async def scenario():
@@ -111,10 +121,12 @@ def test_a_cursor_from_another_runtime_replays_this_runtime_from_its_first_frame
         assert _ActiveProviderTurn().epoch != runtime.epoch
         await service.shutdown()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_a_reconnecting_viewer_receives_the_retained_pause_frame(tmp_path, monkeypatch):
+async def test_a_reconnecting_viewer_receives_the_retained_pause_frame(
+    tmp_path, monkeypatch
+):
     services: list[ChatService] = []
 
     class RecordedChatService(ChatService):
@@ -123,18 +135,20 @@ def test_a_reconnecting_viewer_receives_the_retained_pause_frame(tmp_path, monke
             services.append(self)
 
     monkeypatch.setattr(api_module, "ChatService", RecordedChatService)
-    store = _conversation(tmp_path)
-    store.create(
-        ChatTurn(
-            id="turn",
-            engagement_id="project",
-            session_id="chat",
-            provider_profile_id="provider",
-            model="model",
-            status=ChatTurnStatus.WAITING_CALLBACK,
+    store = await _conversation(tmp_path)
+    (
+        await store.create(
+            ChatTurn(
+                id="turn",
+                engagement_id="project",
+                session_id="chat",
+                provider_profile_id="provider",
+                model="model",
+                status=ChatTurnStatus.WAITING_CALLBACK,
+            )
         )
     )
-    with TestClient(create_app(store, auth_token="test-token")) as client:
+    async with TestClient(create_app(store, auth_token="test-token")) as client:
         # The turn parked on a subagent wait; its runtime ended right after
         # the pause frame, which the viewer's dropped connection never got.
         runtime = _ActiveProviderTurn(
@@ -155,7 +169,9 @@ def test_a_reconnecting_viewer_receives_the_retained_pause_frame(tmp_path, monke
         )
         services[0]._active_provider_turns["turn"] = runtime
 
-        response = client.get("/api/v1/chat/turns/turn/events?after=1", headers=AUTH)
+        response = await client.get(
+            "/api/v1/chat/turns/turn/events?after=1", headers=AUTH
+        )
         assert response.status_code == 200, response.text
         frames = _frames(response)
         assert [frame["type"] for frame in frames] == ["callback_required"]
@@ -163,21 +179,25 @@ def test_a_reconnecting_viewer_receives_the_retained_pause_frame(tmp_path, monke
         epoch = frames[0]["epoch"]
         assert (
             _frames(
-                client.get(
-                    f"/api/v1/chat/turns/turn/events?after=2&epoch={epoch}",
-                    headers=AUTH,
+                (
+                    await client.get(
+                        f"/api/v1/chat/turns/turn/events?after=2&epoch={epoch}",
+                        headers=AUTH,
+                    )
                 )
             )
             == []
         )
 
         # Another tab attaching after that viewer left still reads the frames.
-        again = client.get("/api/v1/chat/turns/turn/events?after=0", headers=AUTH)
+        again = await client.get("/api/v1/chat/turns/turn/events?after=0", headers=AUTH)
         assert [frame["type"] for frame in _frames(again)] == [
             "started",
             "callback_required",
         ]
-        assert store.get(ChatTurn, "turn").status == ChatTurnStatus.WAITING_CALLBACK
+        assert (
+            await store.get(ChatTurn, "turn")
+        ).status == ChatTurnStatus.WAITING_CALLBACK
 
 
 @pytest.mark.parametrize(
@@ -206,13 +226,13 @@ def test_a_reconnecting_viewer_receives_the_retained_pause_frame(tmp_path, monke
         ),
     ],
 )
-def test_an_interrupted_turn_awaiting_recovery_is_busy_and_stoppable(
+async def test_an_interrupted_turn_awaiting_recovery_is_busy_and_stoppable(
     tmp_path, recovery, execution, activity
 ):
-    store = _conversation(tmp_path)
-    _interrupted_turn(store, recovery)
+    store = await _conversation(tmp_path)
+    (await _interrupted_turn(store, recovery))
 
-    state = session_state(store, store.get(ChatSession, "chat"))
+    state = await session_state(store, (await store.get(ChatSession, "chat")))
     assert state["turn_id"] == "turn"
     assert state["execution"] == execution
     assert state["busy"] is True
@@ -220,20 +240,24 @@ def test_an_interrupted_turn_awaiting_recovery_is_busy_and_stoppable(
 
     # Lifespan is left out: its startup pass would try to resume the turn.
     client = TestClient(create_app(store, auth_token="test-token"))
-    listed = client.get(
-        "/api/v1/chat/session-activity?engagement_id=project", headers=AUTH
+    listed = (
+        await client.get(
+            "/api/v1/chat/session-activity?engagement_id=project", headers=AUTH
+        )
     ).json()
     assert [(item["session_id"], item["state"]) for item in listed] == [
         ("chat", activity)
     ]
-    pending = client.get("/api/v1/chat/sessions/chat/pending-turn", headers=AUTH)
+    pending = await client.get("/api/v1/chat/sessions/chat/pending-turn", headers=AUTH)
     assert pending.json()["id"] == "turn"
     assert pending.json()["recoverable"] is (execution == "recovering")
 
 
-def test_a_waiting_turn_says_whether_it_waits_for_subagents_or_a_command(tmp_path):
-    store = _conversation(tmp_path)
-    turn = store.create(
+async def test_a_waiting_turn_says_whether_it_waits_for_subagents_or_a_command(
+    tmp_path,
+):
+    store = await _conversation(tmp_path)
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id="project",
@@ -254,30 +278,36 @@ def test_a_waiting_turn_says_whether_it_waits_for_subagents_or_a_command(tmp_pat
         )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
-    waiting = client.get("/api/v1/chat/sessions/chat/pending-turn", headers=AUTH).json()
+    waiting = (
+        await client.get("/api/v1/chat/sessions/chat/pending-turn", headers=AUTH)
+    ).json()
     assert waiting["wait_kind"] == "subagents"
     assert waiting["wait_summary"] == "Waiting for 2 subagents to report."
     assert waiting["subagent_ids"] == ["child-a", "child-b"]
     assert waiting["results_url"] is None
 
-    store.update(
-        ChatTurn,
-        turn.id,
-        {
-            "tool_history": [
-                {
-                    "step": 0,
-                    "tool_call_id": "command-call",
-                    "name": "run_command",
-                    "status": "waiting_callback",
-                    "process_id": "process",
-                    "results_url": "http://core/api/v1/automation-processes/p/results",
-                }
-            ]
-        },
-        expected_revision=turn.revision,
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {
+                "tool_history": [
+                    {
+                        "step": 0,
+                        "tool_call_id": "command-call",
+                        "name": "run_command",
+                        "status": "waiting_callback",
+                        "process_id": "process",
+                        "results_url": "http://core/api/v1/automation-processes/p/results",
+                    }
+                ]
+            },
+            expected_revision=turn.revision,
+        )
     )
-    command = client.get("/api/v1/chat/sessions/chat/pending-turn", headers=AUTH).json()
+    command = (
+        await client.get("/api/v1/chat/sessions/chat/pending-turn", headers=AUTH)
+    ).json()
     assert command["wait_kind"] == "process"
     assert command["wait_summary"] is None
     assert command["subagent_ids"] == []
@@ -285,10 +315,12 @@ def test_a_waiting_turn_says_whether_it_waits_for_subagents_or_a_command(tmp_pat
 
 
 @pytest.mark.parametrize("policy", ["goal cancelled", "time budget spent"])
-def test_restart_recovery_settles_a_goal_turn_it_will_never_resume(tmp_path, policy):
-    store = _conversation(tmp_path)
+async def test_restart_recovery_settles_a_goal_turn_it_will_never_resume(
+    tmp_path, policy
+):
+    store = await _conversation(tmp_path)
     goals = ChatGoalService(store)
-    goal = goals.create(
+    goal = await goals.create(
         "chat",
         GoalCreate(
             objective="Continue",
@@ -296,57 +328,78 @@ def test_restart_recovery_settles_a_goal_turn_it_will_never_resume(tmp_path, pol
             time_budget_seconds=1800,
         ),
     )
-    goal = goals.write(
+    goal = await goals.write(
         "chat", GoalWrite(expected_revision=goal.revision, action="start")
     )
-    goal = goals.write(
+    goal = await goals.write(
         "chat", GoalWrite(expected_revision=goal.revision, action="pause")
     )
-    _interrupted_turn(store, {"required": True, "cause": "core_restart"}, goal.id)
+    (
+        await _interrupted_turn(
+            store, {"required": True, "cause": "core_restart"}, goal.id
+        )
+    )
     if policy == "goal cancelled":
-        goals.write("chat", GoalWrite(expected_revision=goal.revision, action="cancel"))
+        (
+            await goals.write(
+                "chat", GoalWrite(expected_revision=goal.revision, action="cancel")
+            )
+        )
     else:
-        store.update(
-            ChatGoal,
-            goal.id,
-            {"elapsed_seconds": 1800},
-            expected_revision=goal.revision,
+        (
+            await store.update(
+                ChatGoal,
+                goal.id,
+                {"elapsed_seconds": 1800},
+                expected_revision=goal.revision,
+            )
         )
     service = ChatService(store)
-    assert service.pending_turn("chat") is not None
+    assert (await service.pending_turn("chat")) is not None
 
-    assert service.resume_turns_stopped_by_core() == []
+    assert (await service.resume_turns_stopped_by_core()) == []
 
-    settled = store.get(ChatTurn, "turn")
+    settled = await store.get(ChatTurn, "turn")
     assert settled.status == ChatTurnStatus.CANCELLED
     assert settled.error is not None
     assert settled.error.startswith("Core did not resume this interrupted response")
-    assert service.pending_turn("chat") is None
+    assert (await service.pending_turn("chat")) is None
     notes = [
         message
-        for message in store.list_session_entities(ChatMessage, "chat")
+        for message in (await store.list_session_entities(ChatMessage, "chat"))
         if message.metadata.get("chat_turn_id") == "turn"
     ]
     assert len(notes) == 1
     assert "Core did not resume this interrupted response" in notes[0].content
     # A later pass has nothing left to settle or resume.
-    assert service.resume_turns_stopped_by_core() == []
-    assert store.get(ChatTurn, "turn").revision == settled.revision
+    assert (await service.resume_turns_stopped_by_core()) == []
+    assert (await store.get(ChatTurn, "turn")).revision == settled.revision
 
 
-def test_restart_recovery_still_resumes_a_paused_goal_with_budget_left(tmp_path):
-    store = _conversation(tmp_path)
+async def test_restart_recovery_still_resumes_a_paused_goal_with_budget_left(tmp_path):
+    store = await _conversation(tmp_path)
     goals = ChatGoalService(store)
-    goal = goals.create(
+    goal = await goals.create(
         "chat", GoalCreate(objective="Continue", completion_criteria=["Done"])
     )
-    goal = goals.write(
+    goal = await goals.write(
         "chat", GoalWrite(expected_revision=goal.revision, action="start")
     )
-    goals.write("chat", GoalWrite(expected_revision=goal.revision, action="pause"))
-    _interrupted_turn(store, {"required": True, "cause": "core_restart"}, goal.id)
+    (
+        await goals.write(
+            "chat", GoalWrite(expected_revision=goal.revision, action="pause")
+        )
+    )
+    (
+        await _interrupted_turn(
+            store, {"required": True, "cause": "core_restart"}, goal.id
+        )
+    )
 
-    ChatService(store).resume_turns_stopped_by_core()
+    (await ChatService(store).resume_turns_stopped_by_core())
 
     # Resuming may fail here (no provider), but the turn is never settled.
-    assert store.get(ChatTurn, "turn").status != ChatTurnStatus.CANCELLED
+    assert (await store.get(ChatTurn, "turn")).status != ChatTurnStatus.CANCELLED
+
+
+pytestmark = pytest.mark.anyio

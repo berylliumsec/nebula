@@ -9,8 +9,11 @@ through the real OpenAI-compatible adapter and chat's answer checks.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 import json
 from typing import Any
 
@@ -70,7 +73,7 @@ async def _collect(events: Any) -> list[ModelStreamEvent]:
     return [event async for event in events]
 
 
-def _reply(
+async def _reply(
     model: str,
     content: list[str],
     *,
@@ -114,8 +117,8 @@ def _reply(
     provider = _provider(model, wire)
     request = ModelRequest(messages=[ModelMessage(role="user", content="value?")])
     if not streamed:
-        return asyncio.run(provider.complete(request)), []
-    events = asyncio.run(_collect(provider.stream(request)))
+        return (await provider.complete(request)), []
+    events = await _collect(provider.stream(request))
     assert events[-1].type == StreamEventType.COMPLETED, events[-1]
     assert events[-1].response is not None
     return events[-1].response, events
@@ -174,8 +177,8 @@ def _pieces(text: str, size: int = 5) -> list[str]:
 
 @NATIVE_CALLS
 @MODES
-def test_native_tool_markup_is_recovered_as_a_tool_call(model, markup, streamed):
-    response, _ = _reply(model, _pieces(markup), streamed=streamed)
+async def test_native_tool_markup_is_recovered_as_a_tool_call(model, markup, streamed):
+    response, _ = await _reply(model, _pieces(markup), streamed=streamed)
 
     assert _calls(response) == [("safe_read", {"value": "a"})]
     assert response.text == ""
@@ -187,10 +190,10 @@ def test_native_tool_markup_is_recovered_as_a_tool_call(model, markup, streamed)
 
 @NATIVE_CALLS
 @MODES
-def test_an_answer_before_native_markup_stands_and_the_call_is_recovered(
+async def test_an_answer_before_native_markup_stands_and_the_call_is_recovered(
     model, markup, streamed
 ):
-    response, _ = _reply(
+    response, _ = await _reply(
         model, ["The value is a.", "\n\n", *_pieces(markup, 7)], streamed=streamed
     )
 
@@ -200,7 +203,7 @@ def test_an_answer_before_native_markup_stands_and_the_call_is_recovered(
 
 
 @MODES
-def test_every_native_call_in_a_reply_is_recovered_with_its_values(streamed):
+async def test_every_native_call_in_a_reply_is_recovered_with_its_values(streamed):
     glm = (
         "<tool_call>safe_read\n<arg_key>path</arg_key>\n<arg_value>notes.md</arg_value>\n"
         "<arg_key>limit</arg_key>\n<arg_value>20</arg_value>\n"
@@ -216,8 +219,8 @@ def test_every_native_call_in_a_reply_is_recovered_with_its_values(streamed):
         "<｜tool▁calls▁end｜>"
     )
 
-    glm_response, _ = _reply(GLM, _pieces(glm), streamed=streamed)
-    deepseek_response, _ = _reply(DEEPSEEK, _pieces(deepseek), streamed=streamed)
+    glm_response, _ = await _reply(GLM, _pieces(glm), streamed=streamed)
+    deepseek_response, _ = await _reply(DEEPSEEK, _pieces(deepseek), streamed=streamed)
 
     assert _calls(glm_response) == [
         ("safe_read", {"path": "notes.md", "limit": 20, "options": {"raw": True}}),
@@ -279,10 +282,10 @@ UNREADABLE = pytest.mark.parametrize(
 
 @UNREADABLE
 @MODES
-def test_native_markup_core_cannot_read_is_quarantined_not_answered(
+async def test_native_markup_core_cannot_read_is_quarantined_not_answered(
     model, frame, streamed
 ):
-    response, _ = _reply(model, _pieces(frame), streamed=streamed)
+    response, _ = await _reply(model, _pieces(frame), streamed=streamed)
 
     assert response.tool_calls == []
     assert _final_answer_problem(response) == "provider_control_frame"
@@ -290,10 +293,10 @@ def test_native_markup_core_cannot_read_is_quarantined_not_answered(
 
 @UNREADABLE
 @MODES
-def test_the_answer_before_unreadable_native_markup_is_all_that_is_kept(
+async def test_the_answer_before_unreadable_native_markup_is_all_that_is_kept(
     model, frame, streamed
 ):
-    response, _ = _reply(
+    response, _ = await _reply(
         model, ["The value is a.", "\n\n", *_pieces(frame)], streamed=streamed
     )
 
@@ -303,12 +306,12 @@ def test_the_answer_before_unreadable_native_markup_is_all_that_is_kept(
 
 
 @NATIVE_CALLS
-def test_native_markup_in_a_routing_step_runs_like_any_other_tool_call(
+async def test_native_markup_in_a_routing_step_runs_like_any_other_tool_call(
     tmp_path, model, markup
 ):
     del model
     broker = RecordingBroker()
-    store, service, prepared, _provider = _prepared(
+    store, service, prepared, _provider = await _prepared(
         tmp_path,
         [
             _response(text=markup),
@@ -320,23 +323,23 @@ def test_native_markup_in_a_routing_step_runs_like_any_other_tool_call(
         broker,
     )
 
-    completion = asyncio.run(service.complete(prepared))
+    completion = await service.complete(prepared)
 
     assert completion.message.content == "The safe tool returned a."
     # The broker saw an ordinary invocation with the arguments the model wrote.
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         ("safe_read", {"value": "a"})
     ]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
 @UNREADABLE
-def test_final_synthesis_keeps_only_the_answer_before_unreadable_native_markup(
+async def test_final_synthesis_keeps_only_the_answer_before_unreadable_native_markup(
     tmp_path, model, frame
 ):
     del model
     answer = "The stored value is a."
-    store, service, prepared, _provider = _prepared(
+    store, service, prepared, _provider = await _prepared(
         tmp_path,
         [
             _response(
@@ -355,7 +358,7 @@ def test_final_synthesis_keeps_only_the_answer_before_unreadable_native_markup(
     async def scenario():
         return [event async for event in service.stream(prepared)]
 
-    events = asyncio.run(scenario())
+    events = await scenario()
 
     visible = "".join(payload["delta"] for name, payload in events if name == "delta")
     assert visible == answer
@@ -364,7 +367,7 @@ def test_final_synthesis_keeps_only_the_answer_before_unreadable_native_markup(
     serialized = json.dumps(events, ensure_ascii=False)
     assert "<tool_call>" not in serialized
     assert "tool\u2581" not in serialized
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert (await store.get(ChatTurn, "turn")).status == ChatTurnStatus.COMPLETE
 
 
 @pytest.mark.parametrize(
@@ -410,10 +413,12 @@ def test_text_that_mentions_markup_is_an_answer(text):
 @pytest.mark.parametrize("size", [1, 3, 200])
 @pytest.mark.parametrize("tag", ["think", "thinking"])
 @MODES
-def test_leading_think_block_is_reasoning_not_text(tag, size, streamed):
+async def test_leading_think_block_is_reasoning_not_text(tag, size, streamed):
     content = f"  <{tag}>\nplan the answer\n</{tag}>\n\nThe host has 3 open ports."
     # Tags split across pieces are the case a stream has to wait out.
-    response, events = _reply("local-model", _pieces(content, size), streamed=streamed)
+    response, events = await _reply(
+        "local-model", _pieces(content, size), streamed=streamed
+    )
 
     assert response.reasoning == "plan the answer"
     assert response.text == "The host has 3 open ports."
@@ -426,8 +431,10 @@ def test_leading_think_block_is_reasoning_not_text(tag, size, streamed):
 
 
 @MODES
-def test_a_think_block_beside_a_routing_tool_call_leaves_no_routing_prose(streamed):
-    response, events = _reply(
+async def test_a_think_block_beside_a_routing_tool_call_leaves_no_routing_prose(
+    streamed,
+):
+    response, events = await _reply(
         "local-model",
         [
             "<think>\nThe user wants the asset. ",
@@ -445,8 +452,8 @@ def test_a_think_block_beside_a_routing_tool_call_leaves_no_routing_prose(stream
 
 
 @MODES
-def test_an_unclosed_leading_think_block_is_all_reasoning(streamed):
-    response, _ = _reply(
+async def test_an_unclosed_leading_think_block_is_all_reasoning(streamed):
+    response, _ = await _reply(
         "local-model",
         ["<think>I should check the ", "ports first and then"],
         streamed=streamed,
@@ -470,13 +477,13 @@ def test_an_unclosed_leading_think_block_is_all_reasoning(streamed):
 )
 @pytest.mark.parametrize("size", [1, 4])
 @MODES
-def test_closing_only_think_is_reasoning_for_template_thinking_models(
+async def test_closing_only_think_is_reasoning_for_template_thinking_models(
     model, size, streamed
 ):
     """Their chat templates write the opening ``<think>`` into the prompt."""
 
     content = "The operator wants the value, I should answer briefly.\n</think>\n\nThe value is a."
-    response, events = _reply(model, _pieces(content, size), streamed=streamed)
+    response, events = await _reply(model, _pieces(content, size), streamed=streamed)
 
     assert (
         response.reasoning == "The operator wants the value, I should answer briefly."
@@ -487,9 +494,9 @@ def test_closing_only_think_is_reasoning_for_template_thinking_models(
 
 
 @MODES
-def test_closing_only_think_is_left_alone_for_other_models(streamed):
+async def test_closing_only_think_is_left_alone_for_other_models(streamed):
     content = "Close your thought with </think> and then answer."
-    response, events = _reply(
+    response, events = await _reply(
         "meta-llama/llama-3.3-70b-instruct", _pieces(content, 4), streamed=streamed
     )
 
@@ -501,11 +508,11 @@ def test_closing_only_think_is_left_alone_for_other_models(streamed):
 
 
 @MODES
-def test_closing_only_think_is_left_alone_when_the_route_sent_reasoning(streamed):
+async def test_closing_only_think_is_left_alone_when_the_route_sent_reasoning(streamed):
     """A route that parsed the thought never leaves the template's close."""
 
     content = "Close your thought with </think> and then answer."
-    response, events = _reply(
+    response, events = await _reply(
         DEEPSEEK,
         _pieces(content, 4),
         streamed=streamed,
@@ -519,16 +526,16 @@ def test_closing_only_think_is_left_alone_when_the_route_sent_reasoning(streamed
 
 
 @MODES
-def test_think_tags_mentioned_in_an_answer_stay_in_it(streamed):
+async def test_think_tags_mentioned_in_an_answer_stay_in_it(streamed):
     content = "Models wrap thoughts as <think>…</think>; the answer follows."
-    response, _ = _reply(DEEPSEEK, _pieces(content, 4), streamed=streamed)
+    response, _ = await _reply(DEEPSEEK, _pieces(content, 4), streamed=streamed)
 
     assert response.text == content
     assert response.reasoning == ""
 
 
 @MODES
-def test_a_think_block_then_native_markup_is_reasoning_and_a_call(streamed):
+async def test_a_think_block_then_native_markup_is_reasoning_and_a_call(streamed):
     """A route with neither parser leaks both; markup in the thought is not a call."""
 
     content = (
@@ -536,7 +543,7 @@ def test_a_think_block_then_native_markup_is_reasoning_and_a_call(streamed):
         "<arg_value>1</arg_value></tool_call> but safe_read fits.</think>\n"
         + GLM_COMPACT
     )
-    response, events = _reply(GLM, _pieces(content, 6), streamed=streamed)
+    response, events = await _reply(GLM, _pieces(content, 6), streamed=streamed)
 
     assert _calls(response) == [("safe_read", {"value": "a"})]
     assert response.text == ""
@@ -545,3 +552,6 @@ def test_a_think_block_then_native_markup_is_reasoning_and_a_call(streamed):
         assert not any(
             "think" in delta for delta in _deltas(events, StreamEventType.TEXT_DELTA)
         )
+
+
+pytestmark = pytest.mark.anyio

@@ -1,6 +1,10 @@
 """Real Core observations, private resource boundaries and saved guide progress."""
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 from pathlib import Path
 import re
@@ -21,15 +25,15 @@ from nebula.v3.tools import CapabilityInputError, GuidedToolError
 
 
 @pytest.fixture
-def administration(tmp_path):
+async def administration(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    project = store.create(Engagement(name="Selected metadata project"))
-    foreign = store.create(Engagement(name="Foreign metadata project"))
+    project = await store.create(Engagement(name="Selected metadata project"))
+    foreign = await store.create(Engagement(name="Foreign metadata project"))
     platform = RuntimePlatform(
         store=store, artifact_store=artifacts, data_root=tmp_path
     )
-    platform.workspace_for(project.id).mkdir(parents=True, exist_ok=True)
+    (await platform.workspace_for(project.id)).mkdir(parents=True, exist_ok=True)
     diagnostics = DiagnosticManager(tmp_path, watch_settings=False)
     app = create_app(
         store,
@@ -39,7 +43,7 @@ def administration(tmp_path):
         auth_token="fixture-token",
     )
     gateway = SettingsAssistantApi(app, "fixture-token")
-    capabilities = ButlerCapabilities(
+    capabilities = await ButlerCapabilities.create(
         store, artifacts, project.id, settings_api=gateway
     )
     yield store, project, foreign, platform, diagnostics, gateway, capabilities
@@ -69,58 +73,64 @@ async def invoke(capabilities, name, arguments=None, *, change=False):
         "workspace_reset_status",
     ],
 )
-def test_butler_reads_fixed_core_metadata_without_process_or_account_actions(
+async def test_butler_reads_fixed_core_metadata_without_process_or_account_actions(
     administration, kind
 ):
     _, _, _, _, _, _, capabilities = administration
-    result = asyncio.run(invoke(capabilities, "system", {"kind": kind}))
+    result = await invoke(capabilities, "system", {"kind": kind})
     assert result["read_back"] is True and result["kind"] == kind
     assert len(result["text"]) <= 4096 and len(result["sha256"]) == 64
     assert result["next_offset"] is None or result["total_characters"] > 4096
 
 
-def test_butler_terminal_egress_reports_no_terminal_without_creating_one(
+async def test_butler_terminal_egress_reports_no_terminal_without_creating_one(
     administration,
 ):
     _, _, _, _, _, gateway, capabilities = administration
     with pytest.raises(GuidedToolError, match="Core did not confirm"):
-        asyncio.run(invoke(capabilities, "system", {"kind": "terminal_public_ip"}))
+        (await invoke(capabilities, "system", {"kind": "terminal_public_ip"}))
     assert gateway.app.state.container_terminal_service._sessions == {}
 
 
-def test_butler_search_excludes_private_and_foreign_chats_before_pagination(
+async def test_butler_search_excludes_private_and_foreign_chats_before_pagination(
     administration,
 ):
     store, project, foreign, _, _, _, capabilities = administration
     for index in range(25):
-        store.create(
-            ChatSession(
-                provider_profile_id="fixture-provider",
-                engagement_id=project.id,
-                title="Find this private chat",
-                model="fixture",
-                metadata={"control_assistant": True},
+        (
+            await store.create(
+                ChatSession(
+                    provider_profile_id="fixture-provider",
+                    engagement_id=project.id,
+                    title="Find this private chat",
+                    model="fixture",
+                    metadata={"control_assistant": True},
+                )
             )
         )
     for key in ("side_chat", "temporary_assistant"):
-        store.create(
-            ChatSession(
-                provider_profile_id="fixture-provider",
-                engagement_id=project.id,
-                title="Find this private chat",
-                model="fixture",
-                metadata={key: True},
+        (
+            await store.create(
+                ChatSession(
+                    provider_profile_id="fixture-provider",
+                    engagement_id=project.id,
+                    title="Find this private chat",
+                    model="fixture",
+                    metadata={key: True},
+                )
             )
         )
-    store.create(
-        ChatSession(
-            provider_profile_id="fixture-provider",
-            engagement_id=foreign.id,
-            title="Find this foreign chat",
-            model="fixture",
+    (
+        await store.create(
+            ChatSession(
+                provider_profile_id="fixture-provider",
+                engagement_id=foreign.id,
+                title="Find this foreign chat",
+                model="fixture",
+            )
         )
     )
-    visible = store.create(
+    visible = await store.create(
         ChatSession(
             provider_profile_id="fixture-provider",
             engagement_id=project.id,
@@ -128,7 +138,7 @@ def test_butler_search_excludes_private_and_foreign_chats_before_pagination(
             model="fixture",
         )
     )
-    note = store.create(
+    note = await store.create(
         Observation(
             observation_type="note",
             engagement_id=project.id,
@@ -155,24 +165,26 @@ def test_butler_search_excludes_private_and_foreign_chats_before_pagination(
             text += part["text"]
         return first, text
 
-    result, observed_text = asyncio.run(read_all())
+    result, observed_text = await read_all()
     data = json.loads(observed_text)
     assert {row["ref"]["id"] for row in data["items"]} == {visible.id, note.id}
     assert result["page_next_cursor"] is None
     assert "private chat" not in observed_text and "foreign chat" not in observed_text
 
 
-def test_butler_search_chunks_are_digest_bound_and_do_not_execute_actions(
+async def test_butler_search_chunks_are_digest_bound_and_do_not_execute_actions(
     administration,
 ):
     store, project, _, _, _, _, capabilities = administration
     for index in range(20):
-        store.create(
-            Observation(
-                observation_type="note",
-                engagement_id=project.id,
-                title=f"Saved note {index}",
-                body="Source " * 300,
+        (
+            await store.create(
+                Observation(
+                    observation_type="note",
+                    engagement_id=project.id,
+                    title=f"Saved note {index}",
+                    body="Source " * 300,
+                )
             )
         )
 
@@ -192,13 +204,15 @@ def test_butler_search_chunks_are_digest_bound_and_do_not_execute_actions(
         )
         assert second["sha256"] == first["sha256"]
 
-    asyncio.run(journey())
-    assert store.count(Observation, engagement_id=project.id) == 20
+    (await journey())
+    assert (await store.count(Observation, engagement_id=project.id)) == 20
 
 
-def test_butler_harness_roster_filters_private_owners_before_paging(administration):
+async def test_butler_harness_roster_filters_private_owners_before_paging(
+    administration,
+):
     store, project, foreign, _, _, _, capabilities = administration
-    visible = store.create(
+    visible = await store.create(
         HarnessSession(
             engagement_id=project.id,
             harness_profile_id="profile",
@@ -206,16 +220,18 @@ def test_butler_harness_roster_filters_private_owners_before_paging(administrati
             display_name="Visible session",
         )
     )
-    store.create(
-        HarnessSession(
-            engagement_id=foreign.id,
-            harness_profile_id="profile",
-            model="fixture",
-            display_name="Foreign session",
+    (
+        await store.create(
+            HarnessSession(
+                engagement_id=foreign.id,
+                harness_profile_id="profile",
+                model="fixture",
+                display_name="Foreign session",
+            )
         )
     )
     for index in range(23):
-        session = store.create(
+        session = await store.create(
             HarnessSession(
                 engagement_id=project.id,
                 harness_profile_id="profile",
@@ -224,18 +240,20 @@ def test_butler_harness_roster_filters_private_owners_before_paging(administrati
                 metadata={"token": "never-returned"},
             )
         )
-        store.create(
-            ChatSession(
-                engagement_id=project.id,
-                title="Private harness owner",
-                harness_session_id=session.id,
-                backend="harness",
-                harness_profile_id="profile",
-                model="fixture",
-                metadata={"control_assistant": True},
+        (
+            await store.create(
+                ChatSession(
+                    engagement_id=project.id,
+                    title="Private harness owner",
+                    harness_session_id=session.id,
+                    backend="harness",
+                    harness_profile_id="profile",
+                    model="fixture",
+                    metadata={"control_assistant": True},
+                )
             )
         )
-    result = asyncio.run(invoke(capabilities, "system", {"kind": "harness_sessions"}))
+    result = await invoke(capabilities, "system", {"kind": "harness_sessions"})
     data = json.loads(result["text"])
     assert [row["id"] for row in data["sessions"]] == [visible.id]
     assert data["next_offset"] is None
@@ -245,9 +263,11 @@ def test_butler_harness_roster_filters_private_owners_before_paging(administrati
 @pytest.mark.parametrize(
     "private", ["control_assistant", "side_chat", "temporary_assistant"]
 )
-def test_butler_side_chat_inspection_requires_a_visible_parent(administration, private):
+async def test_butler_side_chat_inspection_requires_a_visible_parent(
+    administration, private
+):
     store, project, foreign, _, _, _, capabilities = administration
-    chat = store.create(
+    chat = await store.create(
         ChatSession(
             provider_profile_id="fixture-provider",
             engagement_id=project.id,
@@ -256,7 +276,7 @@ def test_butler_side_chat_inspection_requires_a_visible_parent(administration, p
             metadata={private: True},
         )
     )
-    other = store.create(
+    other = await store.create(
         ChatSession(
             provider_profile_id="fixture-provider",
             engagement_id=foreign.id,
@@ -266,8 +286,8 @@ def test_butler_side_chat_inspection_requires_a_visible_parent(administration, p
     )
     for session in (chat, other):
         with pytest.raises(ValueError, match="visible chat"):
-            asyncio.run(
-                invoke(
+            (
+                await invoke(
                     capabilities,
                     "system",
                     {"kind": "side_chats", "session_id": session.id},
@@ -275,9 +295,9 @@ def test_butler_side_chat_inspection_requires_a_visible_parent(administration, p
             )
 
 
-def test_butler_lists_only_side_chat_labels_not_private_messages(administration):
+async def test_butler_lists_only_side_chat_labels_not_private_messages(administration):
     store, project, _, _, _, _, capabilities = administration
-    parent = store.create(
+    parent = await store.create(
         ChatSession(
             provider_profile_id="fixture-provider",
             engagement_id=project.id,
@@ -285,7 +305,7 @@ def test_butler_lists_only_side_chat_labels_not_private_messages(administration)
             model="fixture",
         )
     )
-    side = store.create(
+    side = await store.create(
         ChatSession(
             provider_profile_id="fixture-provider",
             engagement_id=project.id,
@@ -295,8 +315,8 @@ def test_butler_lists_only_side_chat_labels_not_private_messages(administration)
             metadata={"side_chat": True, "private": "never-returned"},
         )
     )
-    result = asyncio.run(
-        invoke(capabilities, "system", {"kind": "side_chats", "session_id": parent.id})
+    result = await invoke(
+        capabilities, "system", {"kind": "side_chats", "session_id": parent.id}
     )
     assert json.loads(result["text"]) == [
         {
@@ -309,7 +329,7 @@ def test_butler_lists_only_side_chat_labels_not_private_messages(administration)
     assert "never-returned" not in result["text"]
 
 
-def test_butler_metadata_rejects_unlisted_urls_queries_and_sensitive_detail(
+async def test_butler_metadata_rejects_unlisted_urls_queries_and_sensitive_detail(
     administration,
 ):
     *_, capabilities = administration
@@ -319,7 +339,7 @@ def test_butler_metadata_rejects_unlisted_urls_queries_and_sensitive_detail(
         {"kind": "diagnostic_incidents", "records": [{"error_id": "fabricated"}]},
     ):
         with pytest.raises(CapabilityInputError):
-            asyncio.run(invoke(capabilities, "system", arguments))
+            (await invoke(capabilities, "system", arguments))
 
 
 def test_butler_guide_catalog_matches_actual_named_ui_guides():
@@ -334,10 +354,10 @@ def test_butler_guide_catalog_matches_actual_named_ui_guides():
     assert list(GUIDES) == expected
 
 
-def test_butler_guide_progress_is_operator_and_revision_bound(administration):
+async def test_butler_guide_progress_is_operator_and_revision_bound(administration):
     store, _, _, _, _, _, capabilities = administration
     operators = OperatorProfileService(store)
-    first = operators.create_profile(display_name="First guide operator")
+    first = await operators.create_profile(display_name="First guide operator")
 
     async def journey():
         before = await invoke(capabilities, "guides")
@@ -362,8 +382,8 @@ def test_butler_guide_progress_is_operator_and_revision_bound(administration):
                 {**args, "step_index": 64, "expected_revision": 1},
                 change=True,
             )
-        second = operators.create_profile(display_name="Second guide operator")
-        operators.activate_profile(second.id)
+        second = await operators.create_profile(display_name="Second guide operator")
+        (await operators.activate_profile(second.id))
         with pytest.raises(ValueError, match="operator changed"):
             await invoke(
                 capabilities,
@@ -373,11 +393,11 @@ def test_butler_guide_progress_is_operator_and_revision_bound(administration):
             )
         assert (await invoke(capabilities, "guides"))["progress"] == []
 
-    asyncio.run(journey())
+    (await journey())
 
 
 @pytest.mark.parametrize("kind", ["skill", "agents_md"])
-def test_butler_starter_templates_are_fixed_verified_and_never_overwrite(
+async def test_butler_starter_templates_are_fixed_verified_and_never_overwrite(
     administration, kind
 ):
     _, project, _, platform, _, _, capabilities = administration
@@ -391,7 +411,7 @@ def test_butler_starter_templates_are_fixed_verified_and_never_overwrite(
         )
         assert result["read_back"] is True
         for path in result["paths"]:
-            assert (platform.workspace_for(project.id) / path).is_file()
+            assert ((await platform.workspace_for(project.id)) / path).is_file()
         with pytest.raises(GuidedToolError):
             await invoke(
                 capabilities,
@@ -407,13 +427,16 @@ def test_butler_starter_templates_are_fixed_verified_and_never_overwrite(
                 change=True,
             )
 
-    asyncio.run(journey())
+    (await journey())
 
 
-def test_butler_observations_use_core_authentication(administration):
+async def test_butler_observations_use_core_authentication(administration):
     store, project, _, _, _, gateway, _ = administration
     observer = ButlerAdministration(
         store, project.id, SettingsAssistantApi(gateway.app, "wrong-token")
     )
     with pytest.raises(GuidedToolError):
-        asyncio.run(observer.system({"kind": "health"}))
+        (await observer.system({"kind": "health"}))
+
+
+pytestmark = pytest.mark.anyio

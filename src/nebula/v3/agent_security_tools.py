@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import async_done_callback
+
 import asyncio
 import base64
 import html
@@ -422,12 +424,12 @@ class SecurityToolsRuntime:
             ],
         )
 
-    def register_profile(self) -> McpServerProfile:
+    async def register_profile(self) -> McpServerProfile:
         try:
-            profile = self.store.get(McpServerProfile, PROFILE_ID)
+            profile = await self.store.get(McpServerProfile, PROFILE_ID)
         except NotFoundError:
             # diagnostic-expected: first registration creates this optional built-in profile.
-            return self.store.create(
+            return await self.store.create(
                 McpServerProfile(
                     id=PROFILE_ID,
                     name=PROFILE_NAME,
@@ -450,7 +452,7 @@ class SecurityToolsRuntime:
             for tool in profile.capabilities.tools
         ] != [tool.model_dump(exclude={"checked_at"}) for tool in fresh.tools]
         if profile.name != PROFILE_NAME or definition_changed:
-            profile = self.store.update(
+            profile = await self.store.update(
                 McpServerProfile,
                 PROFILE_ID,
                 {"name": PROFILE_NAME, "capabilities": fresh.model_dump(mode="json")},
@@ -468,15 +470,17 @@ class SecurityToolsRuntime:
             "isError": False,
         }
 
-    def _active(self, project_id: str) -> BrowserSession | None:
+    async def _active(self, project_id: str) -> BrowserSession | None:
         return next(
             (
                 session
-                for session in self.store.find_entities(
-                    BrowserSession,
-                    {"runtime_kind": "agent_security"},
-                    engagement_id=project_id,
-                    newest_first=True,
+                for session in (
+                    await self.store.find_entities(
+                        BrowserSession,
+                        {"runtime_kind": "agent_security"},
+                        engagement_id=project_id,
+                        newest_first=True,
+                    )
                 )
                 if session.status == BrowserSessionStatus.ACTIVE
             ),
@@ -495,7 +499,7 @@ class SecurityToolsRuntime:
                 "evidence_from_exchange",
                 "finding_candidate",
             }
-            and self._active(project_id) is None
+            and (await self._active(project_id)) is None
         ):
             raise GuidedToolError(
                 "headless security session is not active",
@@ -535,23 +539,25 @@ class SecurityToolsRuntime:
         self, project_id: str, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         if name == "status":
-            session = self._active(project_id)
+            session = await self._active(project_id)
             if session is None:
                 session = next(
                     (
                         item
-                        for item in self.store.find_entities(
-                            BrowserSession,
-                            {"runtime_kind": "agent_security"},
-                            engagement_id=project_id,
-                            newest_first=True,
+                        for item in (
+                            await self.store.find_entities(
+                                BrowserSession,
+                                {"runtime_kind": "agent_security"},
+                                engagement_id=project_id,
+                                newest_first=True,
+                            )
                         )
                         if item.status != BrowserSessionStatus.CLOSED
                     ),
                     None,
                 )
-            security = self.security.workspace(project_id)
-            research = self.research.workspace(project_id)
+            security = await self.security.workspace(project_id)
+            research = await self.research.workspace(project_id)
 
             def owned(item: Any) -> bool:
                 return session is not None and item.session_id == session.id
@@ -603,8 +609,10 @@ class SecurityToolsRuntime:
             stopped = await self.stop(project_id, reason="Security Tools MCP stop")
             return self._result({"stopped_sessions": stopped})
         if name == "intercept_decide":
-            item = self.store.get(BrowserInterceptItem, str(arguments["intercept_id"]))
-            active = self._active(project_id)
+            item = await self.store.get(
+                BrowserInterceptItem, str(arguments["intercept_id"])
+            )
+            active = await self._active(project_id)
             if (
                 active is None
                 or item.session_id != active.id
@@ -613,7 +621,7 @@ class SecurityToolsRuntime:
                 raise ValueError(
                     "intercept is not in the active Project security session"
                 )
-            updated = self.research.decide_intercept(
+            updated = await self.research.decide_intercept(
                 item.id,
                 InterceptDecisionRequest(
                     expected_revision=item.revision,
@@ -631,7 +639,7 @@ class SecurityToolsRuntime:
             "evidence_from_exchange",
             "finding_candidate",
         }:
-            session = self._active(project_id)
+            session = await self._active(project_id)
             if session is None:
                 raise ValueError(
                     "Start the headless security session before reading or saving research"
@@ -640,7 +648,7 @@ class SecurityToolsRuntime:
                 limit = int(arguments.get("limit", 30))
                 if not 1 <= limit <= 100:
                     raise ValueError("traffic limit must be between 1 and 100")
-                exchanges = self.store.find_entities(
+                exchanges = await self.store.find_entities(
                     BrowserTrafficExchange,
                     {"session_id": session.id},
                     engagement_id=project_id,
@@ -672,7 +680,9 @@ class SecurityToolsRuntime:
                 limit = int(arguments.get("limit", 100))
                 if not 1 <= limit <= 500:
                     raise ValueError("HAR limit must be between 1 and 500")
-                har = self.research.export_har(project_id, session.id, limit=limit)
+                har = await self.research.export_har(
+                    project_id, session.id, limit=limit
+                )
                 truncated = har.pop("truncated")
                 return self._result(
                     {
@@ -682,10 +692,12 @@ class SecurityToolsRuntime:
                     }
                 )
             if name == "token_analysis":
-                self._require_headless_exchanges(
-                    session, arguments.get("source_exchange_ids", [])
+                (
+                    await self._require_headless_exchanges(
+                        session, arguments.get("source_exchange_ids", [])
+                    )
                 )
-                analysis = self.research.analyze_tokens(
+                analysis = await self.research.analyze_tokens(
                     TokenAnalysisRequest.model_validate(
                         {
                             **arguments,
@@ -703,8 +715,10 @@ class SecurityToolsRuntime:
                     }
                 )
             if name == "evidence_from_exchange":
-                exchange = self._require_headless_exchanges(
-                    session, [arguments["exchange_id"]]
+                exchange = (
+                    await self._require_headless_exchanges(
+                        session, [arguments["exchange_id"]]
+                    )
                 )[0]
                 evidence = Evidence(
                     engagement_id=project_id,
@@ -720,7 +734,7 @@ class SecurityToolsRuntime:
                         "redacted": True,
                     },
                 )
-                saved, _ = self.store.create_with_operation_event(
+                saved, _ = await self.store.create_with_operation_event(
                     evidence,
                     operation_id=evidence.id,
                     operation_kind="evidence",
@@ -733,10 +747,12 @@ class SecurityToolsRuntime:
                 return self._result(
                     {"evidence_id": saved.id, "exchange_id": exchange.id}
                 )
-            self._require_headless_exchanges(
-                session, arguments.get("source_exchange_ids", [])
+            (
+                await self._require_headless_exchanges(
+                    session, arguments.get("source_exchange_ids", [])
+                )
             )
-            finding = self.research.promote_finding(
+            finding = await self.research.promote_finding(
                 project_id, FindingPromotionRequest.model_validate(arguments), _ACTOR
             )
             return self._result(
@@ -746,7 +762,7 @@ class SecurityToolsRuntime:
         if name == "navigate":
             url = str(arguments["url"])
             self.security._require_in_scope(
-                self.security._scope(project_id),
+                (await self.security._scope(project_id)),
                 url,
                 "agent_security.navigate",
                 RiskClass.ACTIVE_SCAN,
@@ -781,7 +797,7 @@ class SecurityToolsRuntime:
                 raise ValueError(
                     "Redacted body capture requires the Project artifact store"
                 )
-            capture_settings_session = self.security.update_capture_settings(
+            capture_settings_session = await self.security.update_capture_settings(
                 session.id,
                 BrowserCaptureSettingsRequest(
                     expected_revision=session.revision,
@@ -802,7 +818,7 @@ class SecurityToolsRuntime:
                 }
             )
         if name == "intercept":
-            capture_session = self.security.update_capture_settings(
+            capture_session = await self.security.update_capture_settings(
                 session.id,
                 BrowserCaptureSettingsRequest(
                     expected_revision=session.revision,
@@ -827,7 +843,7 @@ class SecurityToolsRuntime:
                 raise ValueError(
                     "Stop active security work before changing the upstream proxy"
                 )
-            paused = self.store.find_entities(
+            paused = await self.store.find_entities(
                 BrowserInterceptItem,
                 {"session_id": session.id, "state": "paused"},
                 engagement_id=project_id,
@@ -858,19 +874,21 @@ class SecurityToolsRuntime:
                         "The protected upstream proxy credential is unavailable"
                     )
                 parse_upstream_settings(proxy_url, credential)
-            self.security.update_capture_settings(
-                session.id,
-                BrowserCaptureSettingsRequest(
-                    expected_revision=session.revision,
-                    capture_mode=session.capture_mode,
-                    proxy_enabled=True,
-                    trust_acknowledged=True,
-                    interception_enabled=session.interception_enabled,
-                    upstream_proxy_enabled=enabled,
-                    upstream_proxy_url=proxy_url,
-                    upstream_proxy_credential_ref=reference,
-                ),
-                _ACTOR,
+            (
+                await self.security.update_capture_settings(
+                    session.id,
+                    BrowserCaptureSettingsRequest(
+                        expected_revision=session.revision,
+                        capture_mode=session.capture_mode,
+                        proxy_enabled=True,
+                        trust_acknowledged=True,
+                        interception_enabled=session.interception_enabled,
+                        upstream_proxy_enabled=enabled,
+                        upstream_proxy_url=proxy_url,
+                        upstream_proxy_credential_ref=reference,
+                    ),
+                    _ACTOR,
+                )
             )
             try:
                 await self.sessions.host.close_identity(session.identity_id)
@@ -884,7 +902,7 @@ class SecurityToolsRuntime:
                 {"session_id": session.id, "upstream_proxy_configured": enabled}
             )
         if name == "repeater":
-            tab = self.research.create_repeater_tab(
+            tab = await self.research.create_repeater_tab(
                 RepeaterTabCreateRequest(
                     session_id=session.id,
                     identity_id=session.identity_id,
@@ -895,7 +913,7 @@ class SecurityToolsRuntime:
                 ),
                 _ACTOR,
             )
-            tab = self.research.transition_repeater_tab(
+            tab = await self.research.transition_repeater_tab(
                 tab.id,
                 RepeaterStateRequest(
                     expected_revision=tab.revision,
@@ -903,7 +921,7 @@ class SecurityToolsRuntime:
                     actor_id=_ACTOR,
                 ),
             )
-            tab = self.research.transition_repeater_tab(
+            tab = await self.research.transition_repeater_tab(
                 tab.id,
                 RepeaterStateRequest(
                     expected_revision=tab.revision,
@@ -930,7 +948,7 @@ class SecurityToolsRuntime:
                     and self.security.artifact_store is not None
                 ):
                     try:
-                        artifact = self.security.upload_body_artifact(
+                        artifact = await self.security.upload_body_artifact(
                             session.id,
                             BrowserBodyArtifactUploadRequest(
                                 direction="response",
@@ -966,7 +984,7 @@ class SecurityToolsRuntime:
                     actor_id=_ACTOR,
                     error=f"{type(exc).__name__}: {str(exc)[:3000]}",
                 )
-            repeater_result = self.research.record_repeater_result(tab.id, result)
+            repeater_result = await self.research.record_repeater_result(tab.id, result)
             return self._result(
                 {
                     "repeater_id": tab.id,
@@ -985,8 +1003,8 @@ class SecurityToolsRuntime:
                     "identity_id": session.identity_id,
                 }
             )
-            attack = self.research.create_attack(attack_request, _ACTOR)
-            attack = self.research.transition_attack(
+            attack = await self.research.create_attack(attack_request, _ACTOR)
+            attack = await self.research.transition_attack(
                 attack.id,
                 AttackStateRequest(
                     expected_revision=attack.revision,
@@ -1010,8 +1028,8 @@ class SecurityToolsRuntime:
                     "identity_id": session.identity_id,
                 }
             )
-            job = self.research.create_crawl(crawl_request, _ACTOR)
-            job = self.research.transition_crawl(
+            job = await self.research.create_crawl(crawl_request, _ACTOR)
+            job = await self.research.transition_crawl(
                 job.id,
                 CrawlStateRequest(
                     expected_revision=job.revision,
@@ -1029,12 +1047,12 @@ class SecurityToolsRuntime:
             )
         raise ValueError("unknown Security Tools operation")
 
-    def _require_headless_exchanges(
+    async def _require_headless_exchanges(
         self, session: BrowserSession, exchange_ids: list[str]
     ) -> list[BrowserTrafficExchange]:
         exchanges = []
         for exchange_id in exchange_ids:
-            exchange = self.store.get(BrowserTrafficExchange, exchange_id)
+            exchange = await self.store.get(BrowserTrafficExchange, exchange_id)
             if (
                 exchange.engagement_id != session.engagement_id
                 or exchange.session_id != session.id
@@ -1070,7 +1088,7 @@ class SecurityToolsRuntime:
                         metadata={"project_id": project_id},
                     )
 
-        task.add_done_callback(forget)
+        task.add_done_callback(async_done_callback(forget))
 
     async def stop(self, project_id: str, *, reason: str) -> int:
         tasks = list(self._project_tasks.get(project_id, ()))
@@ -1086,9 +1104,9 @@ class SecurityToolsRuntime:
         self._tasks.clear()
 
     async def _run_attack(self, project_id: str, attack_id: str) -> None:
-        attack = self.store.get(BrowserAttack, attack_id)
+        attack = await self.store.get(BrowserAttack, attack_id)
         try:
-            attack = self.research.transition_attack(
+            attack = await self.research.transition_attack(
                 attack.id,
                 AttackStateRequest(
                     expected_revision=attack.revision,
@@ -1099,17 +1117,19 @@ class SecurityToolsRuntime:
             while (
                 attack.state == "running" and attack.request_count < attack.max_requests
             ):
-                if self._active(project_id) is None:
+                if (await self._active(project_id)) is None:
                     raise ValueError("the security session stopped")
                 values = _attack_payloads(attack, attack.request_count)
                 if values is None:
-                    self.research.transition_attack(
-                        attack.id,
-                        AttackStateRequest(
-                            expected_revision=attack.revision,
-                            action="complete",
-                            actor_id=_ACTOR,
-                        ),
+                    (
+                        await self.research.transition_attack(
+                            attack.id,
+                            AttackStateRequest(
+                                expected_revision=attack.revision,
+                                action="complete",
+                                actor_id=_ACTOR,
+                            ),
+                        )
                     )
                     return
                 sequence = attack.request_count
@@ -1136,42 +1156,44 @@ class SecurityToolsRuntime:
                         response_bytes=response.body_bytes,
                     )
                 except Exception as exc:
-                    if self._active(project_id) is None:
+                    if (await self._active(project_id)) is None:
                         raise
                     result = AttackResultRequest(
                         sequence=sequence,
                         payloads=[values[name] for name in attack.positions],
                         error=f"{type(exc).__name__}: {str(exc)[:3000]}",
                     )
-                self.research.add_attack_result(attack.id, result, _ACTOR)
-                attack = self.store.get(BrowserAttack, attack.id)
+                (await self.research.add_attack_result(attack.id, result, _ACTOR))
+                attack = await self.store.get(BrowserAttack, attack.id)
                 if attack.state == "running":
                     await asyncio.sleep(1 / attack.requests_per_second)
         except (Exception, asyncio.CancelledError) as exc:
-            latest = self.store.get(BrowserAttack, attack_id)
+            latest = await self.store.get(BrowserAttack, attack_id)
             if latest.state in {"queued", "running", "paused"}:
                 action: Literal["cancel", "fail"] = (
                     "cancel"
                     if isinstance(exc, asyncio.CancelledError)
-                    or self._active(project_id) is None
+                    or (await self._active(project_id)) is None
                     else "fail"
                 )
-                self.research.transition_attack(
-                    latest.id,
-                    AttackStateRequest(
-                        expected_revision=latest.revision,
-                        action=action,
-                        actor_id=_ACTOR,
-                        error=str(exc)[:3000] or "Security session stopped",
-                    ),
+                (
+                    await self.research.transition_attack(
+                        latest.id,
+                        AttackStateRequest(
+                            expected_revision=latest.revision,
+                            action=action,
+                            actor_id=_ACTOR,
+                            error=str(exc)[:3000] or "Security session stopped",
+                        ),
+                    )
                 )
             if isinstance(exc, asyncio.CancelledError):
                 raise
 
     async def _run_crawl(self, project_id: str, crawl_id: str) -> None:
-        job = self.store.get(BrowserCrawlJob, crawl_id)
+        job = await self.store.get(BrowserCrawlJob, crawl_id)
         try:
-            job = self.research.transition_crawl(
+            job = await self.research.transition_crawl(
                 job.id,
                 CrawlStateRequest(
                     expected_revision=job.revision,
@@ -1184,7 +1206,7 @@ class SecurityToolsRuntime:
                 and job.frontier
                 and job.requests_completed < job.max_requests
             ):
-                if self._active(project_id) is None:
+                if (await self._active(project_id)) is None:
                     raise ValueError("the security session stopped")
                 url, depth = job.frontier[0]
                 response = await self.sessions.request(
@@ -1196,15 +1218,17 @@ class SecurityToolsRuntime:
                         max_body_bytes=job.max_body_bytes,
                     ),
                 )
-                self.research.record_site_node(
-                    SiteNodeRecordRequest(
-                        session_id=job.session_id,
-                        url=url,
-                        discovery_source="crawl",
-                        status_code=response.status_code,
-                        content_type=response.headers.get("content-type"),
-                    ),
-                    _ACTOR,
+                (
+                    await self.research.record_site_node(
+                        SiteNodeRecordRequest(
+                            session_id=job.session_id,
+                            url=url,
+                            discovery_source="crawl",
+                            status_code=response.status_code,
+                            content_type=response.headers.get("content-type"),
+                        ),
+                        _ACTOR,
+                    )
                 )
                 visited = list(dict.fromkeys([*job.visited_urls, url]))[-10_000:]
                 frontier = job.frontier[1:]
@@ -1223,7 +1247,7 @@ class SecurityToolsRuntime:
                             continue
                         try:
                             self.security._require_in_scope(
-                                self.security._scope(project_id),
+                                (await self.security._scope(project_id)),
                                 target,
                                 "agent_security.crawl",
                                 RiskClass.ACTIVE_SCAN,
@@ -1238,7 +1262,7 @@ class SecurityToolsRuntime:
                 complete = (
                     not frontier or job.requests_completed + 1 >= job.max_requests
                 )
-                job = self.research.transition_crawl(
+                job = await self.research.transition_crawl(
                     job.id,
                     CrawlStateRequest(
                         expected_revision=job.revision,
@@ -1252,22 +1276,24 @@ class SecurityToolsRuntime:
                     ),
                 )
         except (Exception, asyncio.CancelledError) as exc:
-            latest = self.store.get(BrowserCrawlJob, crawl_id)
+            latest = await self.store.get(BrowserCrawlJob, crawl_id)
             if latest.state in {"queued", "running", "paused"}:
                 action: Literal["cancel", "fail"] = (
                     "cancel"
                     if isinstance(exc, asyncio.CancelledError)
-                    or self._active(project_id) is None
+                    or (await self._active(project_id)) is None
                     else "fail"
                 )
-                self.research.transition_crawl(
-                    latest.id,
-                    CrawlStateRequest(
-                        expected_revision=latest.revision,
-                        action=action,
-                        actor_id=_ACTOR,
-                        error=str(exc)[:3000] or "Security session stopped",
-                    ),
+                (
+                    await self.research.transition_crawl(
+                        latest.id,
+                        CrawlStateRequest(
+                            expected_revision=latest.revision,
+                            action=action,
+                            actor_id=_ACTOR,
+                            error=str(exc)[:3000] or "Security session stopped",
+                        ),
+                    )
                 )
             if isinstance(exc, asyncio.CancelledError):
                 raise

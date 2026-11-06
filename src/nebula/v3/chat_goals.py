@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync, call_async
+
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Literal
+from typing import Awaitable, Callable, Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .harnesses import HarnessRuntimeService
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -188,25 +193,29 @@ def active_time_changes(goal: ChatGoal, *, working: bool, now: datetime) -> dict
 
 
 class ChatGoalService:
-    def __init__(self, store: NebulaStore, harness_runtime: Any | None = None):
+    def __init__(
+        self, store: NebulaStore, harness_runtime: HarnessRuntimeService | None = None
+    ):
         self.store = store
         self.harness_runtime = harness_runtime
 
-    def _validate_token_budget(self, session: ChatSession, budget: int | None) -> None:
+    async def _validate_token_budget(
+        self, session: ChatSession, budget: int | None
+    ) -> None:
         if session.backend != ChatBackend.HARNESS or budget is None:
             return
-        profile = self.store.get(HarnessProfile, session.harness_profile_id or "")
+        profile = await self.store.get(HarnessProfile, session.harness_profile_id or "")
         if not profile.capabilities.detailed_usage:
             raise ConflictError(
                 "this harness does not report token usage; use a step or time limit"
             )
 
-    def has_working_subagents(self, session_id: str) -> bool:
+    async def has_working_subagents(self, session_id: str) -> bool:
         """Whether this conversation has a running child at any depth."""
 
-        project_id = self.store.get(ChatSession, session_id).engagement_id
+        project_id = (await self.store.get(ChatSession, session_id)).engagement_id
         children_by_parent: dict[str, list[ChatSubagent]] = {}
-        for child in self.store.find_entities(
+        for child in await self.store.find_entities(
             ChatSubagent, {}, engagement_id=project_id
         ):
             children_by_parent.setdefault(child.parent_session_id, []).append(child)
@@ -222,7 +231,7 @@ class ChatGoalService:
                 pending.append(child.child_session_id)
         return False
 
-    def settle_active_time(self, session_id: str) -> None:
+    async def settle_active_time(self, session_id: str) -> None:
         """Bank or reopen active time after a conversation's work changed.
 
         Claiming and releasing a goal turn update the stretch in the same
@@ -233,7 +242,7 @@ class ChatGoalService:
         last_error: ConflictError | None = None
         for _ in range(3):
             try:
-                goal = self.get(session_id)
+                goal = await self.get(session_id)
             except (
                 NotFoundError
             ):  # diagnostic-expected: most conversations have no goal
@@ -241,14 +250,16 @@ class ChatGoalService:
             if goal.status != ChatGoalStatus.RUNNING:
                 return
             working = goal.execution_claim_id is not None or (
-                self.has_working_subagents(session_id)
+                await self.has_working_subagents(session_id)
             )
             changes = active_time_changes(goal, working=working, now=utc_now())
             if not changes:
                 return
             try:
-                self.store.update(
-                    ChatGoal, goal.id, changes, expected_revision=goal.revision
+                (
+                    await self.store.update(
+                        ChatGoal, goal.id, changes, expected_revision=goal.revision
+                    )
                 )
                 return
             except (
@@ -264,18 +275,18 @@ class ChatGoalService:
                 stage="goal-active-time",
             )
 
-    def get(self, session_id: str) -> ChatGoal:
-        self.store.get(ChatSession, session_id)
-        goals = self.store.list_session_entities(ChatGoal, session_id)
+    async def get(self, session_id: str) -> ChatGoal:
+        (await self.store.get(ChatSession, session_id))
+        goals = await self.store.list_session_entities(ChatGoal, session_id)
         if not goals:
             raise NotFoundError(f"chat goal not found for session: {session_id}")
         if len(goals) > 1:
             raise ConflictError("conversation has more than one authoritative goal")
         return goals[0]
 
-    def read(self, session_id: str) -> ChatGoal:
+    async def read(self, session_id: str) -> ChatGoal:
         """Return current presentation state without advancing durable revision."""
-        goal = self.get(session_id)
+        goal = await self.get(session_id)
         if goal.status != ChatGoalStatus.RUNNING or goal.active_since is None:
             return goal
         # The open stretch is reported as banked up to now and still open from
@@ -289,18 +300,18 @@ class ChatGoalService:
             }
         )
 
-    def create(self, session_id: str, body: GoalCreate) -> ChatGoal:
-        session = self.store.get(ChatSession, session_id)
-        self._validate_token_budget(session, body.token_budget)
+    async def create(self, session_id: str, body: GoalCreate) -> ChatGoal:
+        session = await self.store.get(ChatSession, session_id)
+        (await self._validate_token_budget(session, body.token_budget))
         try:
-            self.get(session_id)
+            (await self.get(session_id))
         except (
             NotFoundError
         ):  # diagnostic-expected: absence is the precondition for creating a goal
             pass
         else:
             raise ConflictError("conversation already has a goal")
-        return self.store.create(
+        return await self.store.create(
             ChatGoal(
                 id=str(uuid4()),
                 engagement_id=session.engagement_id,
@@ -317,16 +328,20 @@ class ChatGoalService:
             )
         )
 
-    def create_conversation(
+    async def create_conversation(
         self, body: GoalConversationCreate
     ) -> GoalConversationCreated:
         """Persist an empty conversation and its goal draft as one unit."""
 
-        self.store.get(Engagement, body.engagement_id)
+        (await self.store.get(Engagement, body.engagement_id))
         recovery_metadata: dict[str, str] = {}
         if body.butler_recovery_case_id:
-            case = self.store.get(ButlerRecoveryCase, body.butler_recovery_case_id)
-            source = self.store.get(ChatGoal, body.butler_recovery_source_goal_id or "")
+            case = await self.store.get(
+                ButlerRecoveryCase, body.butler_recovery_case_id
+            )
+            source = await self.store.get(
+                ChatGoal, body.butler_recovery_source_goal_id or ""
+            )
             if (
                 case.signal != "butler.global_periodic_check"
                 or case.status != "investigating"
@@ -342,7 +357,9 @@ class ChatGoalService:
         if body.backend == ChatBackend.HARNESS:
             if self.harness_runtime is None:
                 raise ConflictError("harness goals are unavailable in this Core")
-            profile = self.store.get(HarnessProfile, body.harness_profile_id or "")
+            profile = await self.store.get(
+                HarnessProfile, body.harness_profile_id or ""
+            )
             if (
                 body.token_budget is not None
                 and not profile.capabilities.detailed_usage
@@ -350,14 +367,14 @@ class ChatGoalService:
                 raise ConflictError(
                     "this harness does not report token usage; use a step or time limit"
                 )
-            with self.store.transaction() as transaction:
+            async with self.store.transaction() as transaction:
                 if body.butler_recovery_case_id:
                     from .butler_oversight import _entity_in_transaction
 
-                    current_case = _entity_in_transaction(
+                    current_case = await _entity_in_transaction(
                         transaction, ButlerRecoveryCase, body.butler_recovery_case_id
                     )
-                    current_source = _entity_in_transaction(
+                    current_source = await _entity_in_transaction(
                         transaction, ChatGoal, body.butler_recovery_source_goal_id or ""
                     )
                     if (
@@ -370,7 +387,7 @@ class ChatGoalService:
                         raise ConflictError(
                             "Butler recovery source or scheduled case changed"
                         )
-                harness_session = self.harness_runtime.create_session(
+                harness_session = await self.harness_runtime.create_session(
                     engagement_id=body.engagement_id,
                     profile_id=profile.id,
                     model=body.model,
@@ -431,36 +448,38 @@ class ChatGoalService:
                     child_budget=body.child_budget,
                     metadata=recovery_metadata,
                 )
-                transaction.add_all([session, goal])
+                (await transaction.add_all([session, goal]))
                 if body.butler_recovery_case_id:
                     assert current_case is not None
                     if len(current_case.recovery_goal_ids) >= 20:
                         raise ConflictError(
                             "scheduled Butler check already linked 20 recovery goals"
                         )
-                    transaction.update(
-                        ButlerRecoveryCase,
-                        current_case.id,
-                        {
-                            "recovery_goal_ids": [
-                                *current_case.recovery_goal_ids,
-                                goal.id,
-                            ]
-                        },
-                        expected_revision=current_case.revision,
+                    (
+                        await transaction.update(
+                            ButlerRecoveryCase,
+                            current_case.id,
+                            {
+                                "recovery_goal_ids": [
+                                    *current_case.recovery_goal_ids,
+                                    goal.id,
+                                ]
+                            },
+                            expected_revision=current_case.revision,
+                        )
                     )
             return GoalConversationCreated(session=session, goal=goal)
-        session, goal = self._provider_conversation_entities(body)
-        with self.store.transaction() as transaction:
-            transaction.add_all([session, goal])
+        session, goal = await self._provider_conversation_entities(body)
+        async with self.store.transaction() as transaction:
+            (await transaction.add_all([session, goal]))
         return GoalConversationCreated(session=session, goal=goal)
 
-    def _provider_conversation_entities(
+    async def _provider_conversation_entities(
         self, body: GoalConversationCreate
     ) -> tuple[ChatSession, ChatGoal]:
         """Build a provider draft for an ordinary create or an atomic handoff."""
 
-        provider = self.store.get(ProviderProfile, body.provider_id or "")
+        provider = await self.store.get(ProviderProfile, body.provider_id or "")
         if not provider.enabled:
             raise ConflictError("the selected provider is disabled")
         if provider.model_allowlist and body.model not in provider.model_allowlist:
@@ -468,7 +487,7 @@ class ChatGoalService:
                 f"model {body.model!r} is not allowed by provider {provider.id!r}"
             )
         for profile_id in body.mcp_server_ids:
-            mcp_profile = self.store.get(McpServerProfile, profile_id)
+            mcp_profile = await self.store.get(McpServerProfile, profile_id)
             if not mcp_profile.enabled:
                 raise ConflictError(
                     f"MCP server {mcp_profile.name!r} is disabled and cannot be selected"
@@ -505,8 +524,10 @@ class ChatGoalService:
                     else None
                 ),
                 "subagent_reasoning_effort": body.subagent_reasoning_effort,
-                "allow_agent_messaging": resolve_agent_messaging_choice(
-                    self.store, body.engagement_id, None, body.allow_agent_messaging
+                "allow_agent_messaging": (
+                    await resolve_agent_messaging_choice(
+                        self.store, body.engagement_id, None, body.allow_agent_messaging
+                    )
                 ),
                 "max_active_subagents": body.max_active_subagents,
                 "message_count": 0,
@@ -531,7 +552,7 @@ class ChatGoalService:
         )
         return session, goal
 
-    def handoff_to_provider(
+    async def handoff_to_provider(
         self, session_id: str, body: GoalHandoffRequest
     ) -> GoalHandoffCreated:
         """Keep a failed harness goal paused and atomically link one provider draft.
@@ -541,28 +562,28 @@ class ChatGoalService:
         revisioned action, which Butler can safely retry after a lost response.
         """
 
-        source = self.get(session_id)
+        source = await self.get(session_id)
         existing_id = source.metadata.get("handoff_target_session_id")
         if isinstance(existing_id, str):
-            target = self.store.get(ChatSession, existing_id)
+            target = await self.store.get(ChatSession, existing_id)
             return GoalHandoffCreated(
                 session=target,
-                goal=self.get(target.id),
+                goal=(await self.get(target.id)),
                 source_goal=source,
                 already_exists=True,
             )
         if source.revision != body.expected_revision:
             raise ConflictError("source goal changed; read it again before handoff")
-        old_session = self.store.get(ChatSession, session_id)
+        old_session = await self.store.get(ChatSession, session_id)
         if (
             source.status != ChatGoalStatus.PAUSED
             or source.parent_goal_id is not None
             or old_session.backend != ChatBackend.HARNESS
         ):
             raise ConflictError("only a paused harness goal can be handed off")
-        if source.execution_claim_id or self.has_working_subagents(session_id):
+        if source.execution_claim_id or (await self.has_working_subagents(session_id)):
             raise ConflictError("the source goal still has active work")
-        latest = self.store.list_session_entities(
+        latest = await self.store.list_session_entities(
             ChatTurn, session_id, newest_first=True, limit=1
         )
         if not latest or not (
@@ -580,7 +601,7 @@ class ChatGoalService:
                 "handoff requires a pre-admission harness planning failure with no tool calls"
             )
         for affected_session_id in (session_id, *source.child_session_ids):
-            if self.store.find_entities(
+            if await self.store.find_entities(
                 Approval,
                 {
                     "chat_session_id": affected_session_id,
@@ -592,7 +613,7 @@ class ChatGoalService:
                 raise ConflictError(
                     "resolve the source goal's pending approval before handoff"
                 )
-        queues = self.store.list_session_entities(ChatQueue, session_id)
+        queues = await self.store.list_session_entities(ChatQueue, session_id)
         if queues and any(
             any(
                 item.get("status") in {"claiming", "sending", "needs_review"}
@@ -613,7 +634,7 @@ class ChatGoalService:
         from .context import resolve_context_limits
         from .mcp import resolve_mcp_profiles
 
-        selected = chat_assistant_config(self.store, old_session)
+        selected = await chat_assistant_config(self.store, old_session)
         if (
             selected.get("backend") != "provider"
             or selected.get("planning_enabled") is not True
@@ -623,7 +644,7 @@ class ChatGoalService:
         model = selected.get("model")
         if not isinstance(profile_id, str) or not isinstance(model, str):
             raise ConflictError("saved provider and model are missing")
-        provider = self.store.get(ProviderProfile, profile_id)
+        provider = await self.store.get(ProviderProfile, profile_id)
         if (
             not provider.enabled
             or (provider.model_allowlist and model not in provider.model_allowlist)
@@ -632,9 +653,9 @@ class ChatGoalService:
             raise ConflictError(
                 "the saved provider model is not enabled and tool verified"
             )
-        project = self.store.get(Engagement, source.engagement_id)
+        project = await self.store.get(Engagement, source.engagement_id)
         scope = (
-            self.store.get(ScopePolicy, project.scope_policy_id)
+            (await self.store.get(ScopePolicy, project.scope_policy_id))
             if project.scope_policy_id
             else None
         )
@@ -647,11 +668,13 @@ class ChatGoalService:
                 "the saved provider is outside the project privacy scope"
             )
         mcp_ids = selected.get("mcp_server_ids") or []
-        resolve_mcp_profiles(
-            self.store,
-            mcp_ids,
-            engagement_id=project.id,
-            bypass_permissions=bool(scope and scope.bypass_permissions),
+        (
+            await resolve_mcp_profiles(
+                self.store,
+                mcp_ids,
+                engagement_id=project.id,
+                bypass_permissions=bool(scope and scope.bypass_permissions),
+            )
         )
         resolve_context_limits(
             provider,
@@ -686,7 +709,7 @@ class ChatGoalService:
             raise ConflictError(
                 "source goal budget is exhausted or too short for a new goal"
             )
-        recent = self.store.list_session_entities(
+        recent = await self.store.list_session_entities(
             ChatMessage, session_id, newest_first=True, limit=20
         )
         summary = next(
@@ -737,7 +760,7 @@ class ChatGoalService:
             allow_agent_messaging=selected.get("allow_agent_messaging"),
             max_active_subagents=selected.get("max_active_subagents"),
         )
-        target, goal = self._provider_conversation_entities(draft)
+        target, goal = await self._provider_conversation_entities(draft)
         target.title = f"Continue: {old_session.title}"[:300]
         target.metadata["handoff_source_session_id"] = old_session.id
         if body.butler_initiated:
@@ -748,8 +771,8 @@ class ChatGoalService:
         goal.metadata["handoff_reason"] = body.reason
         from .butler_oversight import _entity_in_transaction
 
-        with self.store.transaction() as transaction:
-            current_session = _entity_in_transaction(
+        async with self.store.transaction() as transaction:
+            current_session = await _entity_in_transaction(
                 transaction, ChatSession, old_session.id
             )
             if (
@@ -759,8 +782,8 @@ class ChatGoalService:
                 raise ConflictError(
                     "source chat settings changed; read them again before handoff"
                 )
-            transaction.add_all([target, goal])
-            updated = transaction.update(
+            (await transaction.add_all([target, goal]))
+            updated = await transaction.update(
                 ChatGoal,
                 source.id,
                 {
@@ -775,10 +798,10 @@ class ChatGoalService:
             )
         return GoalHandoffCreated(session=target, goal=goal, source_goal=updated)
 
-    def write(
+    async def write(
         self, session_id: str, body: GoalWrite, *, allow_pending_recovery: bool = False
     ) -> ChatGoal:
-        goal = self.get(session_id)
+        goal = await self.get(session_id)
         if body.expected_revision != goal.revision:
             raise ConflictError(
                 "goal changed on another device; reload before retrying"
@@ -824,7 +847,9 @@ class ChatGoalService:
                 )
             interrupted = [
                 turn
-                for turn in self.store.list_session_entities(ChatTurn, session_id)
+                for turn in (
+                    await self.store.list_session_entities(ChatTurn, session_id)
+                )
                 if turn.status == ChatTurnStatus.INTERRUPTED
                 and turn.request_snapshot.get("recovery", {}).get("required")
             ]
@@ -837,6 +862,14 @@ class ChatGoalService:
                 and goal.elapsed_seconds >= goal.time_budget_seconds
             ):
                 raise ConflictError("goal time budget is exhausted")
+            switcher = self.store.runtime_switch_service
+            if (
+                switcher is not None
+                and await switcher.settle(session_id, explicit=True) is None
+            ):
+                raise ConflictError(
+                    "Review the pending runtime switch or finish its outstanding work before resuming."
+                )
             changes = {
                 "status": ChatGoalStatus.RUNNING,
                 "paused_at": None,
@@ -892,19 +925,27 @@ class ChatGoalService:
         # it, after the parent's guarded update: a revision conflict on either
         # side rolls the whole stop back instead of leaving children changed
         # under an unchanged parent.
-        children = self.list_children(session_id) if propagate is not None else []
-        with self.store.transaction() as transaction:
-            updated = transaction.update(
+        children = (
+            (await self.list_children(session_id)) if propagate is not None else []
+        )
+        async with self.store.transaction() as transaction:
+            updated = await transaction.update(
                 ChatGoal, goal.id, changes, expected_revision=goal.revision
             )
             if propagate is not None:
-                self._propagate_parent_stop(transaction, children, propagate, now)
+                (
+                    await self._propagate_parent_stop(
+                        transaction, children, propagate, now
+                    )
+                )
         return updated
 
-    def update(self, session_id: str, body: GoalUpdate) -> ChatGoal:
-        goal = self.get(session_id)
-        self._validate_token_budget(
-            self.store.get(ChatSession, session_id), body.token_budget
+    async def update(self, session_id: str, body: GoalUpdate) -> ChatGoal:
+        goal = await self.get(session_id)
+        (
+            await self._validate_token_budget(
+                (await self.store.get(ChatSession, session_id)), body.token_budget
+            )
         )
         if body.token_budget is not None and goal.metadata.get("usage_unknown") is True:
             raise ConflictError(
@@ -932,8 +973,8 @@ class ChatGoalService:
             and body.token_budget < goal.usage.total_tokens
         ):
             raise ConflictError("token budget cannot be lower than tokens already used")
-        with self.store.transaction() as transaction:
-            updated = transaction.update(
+        async with self.store.transaction() as transaction:
+            updated = await transaction.update(
                 ChatGoal,
                 goal.id,
                 {
@@ -955,13 +996,13 @@ class ChatGoalService:
             if goal.status != ChatGoalStatus.DRAFT:
                 from .butler_oversight import record_goal_plan_change
 
-                record_goal_plan_change(transaction, goal, updated)
+                (await record_goal_plan_change(transaction, goal, updated))
         return updated
 
-    def reserve_child(self, goal_id: str, *, expected_revision: int) -> ChatGoal:
+    async def reserve_child(self, goal_id: str, *, expected_revision: int) -> ChatGoal:
         """Reserve one cumulative child slot before delegation begins."""
 
-        goal = self.store.get(ChatGoal, goal_id)
+        goal = await self.store.get(ChatGoal, goal_id)
         if goal.revision != expected_revision:
             raise ConflictError("goal changed before child capacity was reserved")
         if goal.status != ChatGoalStatus.RUNNING:
@@ -974,15 +1015,15 @@ class ChatGoalService:
             raise ConflictError(
                 f"goal cannot list more than {CHAT_GOAL_CHILD_LIMIT} children"
             )
-        return self.store.update(
+        return await self.store.update(
             ChatGoal,
             goal.id,
             {"children_started": goal.children_started + 1},
             expected_revision=goal.revision,
         )
 
-    def start_child(self, session_id: str, body: GoalCreate) -> ChatGoal:
-        parent = self.get(session_id)
+    async def start_child(self, session_id: str, body: GoalCreate) -> ChatGoal:
+        parent = await self.get(session_id)
         if parent.status != ChatGoalStatus.RUNNING or parent.child_budget is None:
             raise ConflictError(
                 "child work requires a running goal with a child budget"
@@ -992,17 +1033,17 @@ class ChatGoalService:
             or len(parent.child_session_ids) >= CHAT_GOAL_CHILD_LIMIT
         ):
             raise ConflictError("goal child budget is exhausted")
-        parent_session = self.store.get(ChatSession, session_id)
-        self._validate_token_budget(parent_session, body.token_budget)
-        with self.store.transaction() as transaction:
+        parent_session = await self.store.get(ChatSession, session_id)
+        (await self._validate_token_budget(parent_session, body.token_budget))
+        async with self.store.transaction() as transaction:
             harness_session = None
             if parent_session.backend == ChatBackend.HARNESS:
                 if self.harness_runtime is None:
                     raise ConflictError("harness goals are unavailable in this Core")
-                source = self.store.get(
+                source = await self.store.get(
                     HarnessSession, parent_session.harness_session_id or ""
                 )
-                harness_session = self.harness_runtime._fork_session(
+                harness_session = await self.harness_runtime._fork_session(
                     source, reason="goal child", transaction=transaction
                 )
             child_session = ChatSession(
@@ -1033,8 +1074,10 @@ class ChatGoalService:
                 },
             )
             skill_entries, skill_parts = split_skill_snapshots(
-                resolve_skill_snapshots(
-                    self.store, parent.skill_snapshots, session_id=parent.session_id
+                (
+                    await resolve_skill_snapshots(
+                        self.store, parent.skill_snapshots, session_id=parent.session_id
+                    )
                 ),
                 engagement_id=parent.engagement_id,
                 session_id=child_session.id,
@@ -1055,34 +1098,39 @@ class ChatGoalService:
                 skill_snapshots=skill_entries,
                 status=ChatGoalStatus.DRAFT,
             )
-            transaction.add(child_session)
-            stage_snapshot_parts(transaction, skill_parts)
-            transaction.add(child)
-            transaction.update(
-                ChatGoal,
-                parent.id,
-                {
-                    "children_started": parent.children_started + 1,
-                    "child_session_ids": [*parent.child_session_ids, child_session.id],
-                },
-                expected_revision=parent.revision,
+            (await transaction.add(child_session))
+            (await stage_snapshot_parts(transaction, skill_parts))
+            (await transaction.add(child))
+            (
+                await transaction.update(
+                    ChatGoal,
+                    parent.id,
+                    {
+                        "children_started": parent.children_started + 1,
+                        "child_session_ids": [
+                            *parent.child_session_ids,
+                            child_session.id,
+                        ],
+                    },
+                    expected_revision=parent.revision,
+                )
             )
         return child
 
-    def list_children(self, session_id: str) -> list[ChatGoal]:
+    async def list_children(self, session_id: str) -> list[ChatGoal]:
         try:
-            parent = self.get(session_id)
+            parent = await self.get(session_id)
         except (
             NotFoundError
         ):  # diagnostic-expected: a conversation without a goal has no children
             return []
-        return self.store.find_entities(
+        return await self.store.find_entities(
             ChatGoal,
             {"parent_goal_id": parent.id},
             engagement_id=parent.engagement_id,
         )
 
-    def _propagate_parent_stop(
+    async def _propagate_parent_stop(
         self,
         transaction: StoreTransaction,
         children: list[ChatGoal],
@@ -1097,29 +1145,31 @@ class ChatGoalService:
             # having started. Cancelling still retires drafts.
             if status == ChatGoalStatus.PAUSED and child.status == ChatGoalStatus.DRAFT:
                 continue
-            transaction.update(
-                ChatGoal,
-                child.id,
-                {
-                    "status": status,
-                    "paused_at": now
-                    if status == ChatGoalStatus.PAUSED
-                    else child.paused_at,
-                    "completed_at": now
-                    if status == ChatGoalStatus.CANCELLED
-                    else child.completed_at,
-                    "active_since": None,
-                    "elapsed_seconds": child.active_elapsed_seconds(now),
-                    "blocked_reason": (
-                        "Parent goal paused; child work is paused."
+            (
+                await transaction.update(
+                    ChatGoal,
+                    child.id,
+                    {
+                        "status": status,
+                        "paused_at": now
                         if status == ChatGoalStatus.PAUSED
-                        else child.blocked_reason
-                    ),
-                },
-                expected_revision=child.revision,
+                        else child.paused_at,
+                        "completed_at": now
+                        if status == ChatGoalStatus.CANCELLED
+                        else child.completed_at,
+                        "active_since": None,
+                        "elapsed_seconds": child.active_elapsed_seconds(now),
+                        "blocked_reason": (
+                            "Parent goal paused; child work is paused."
+                            if status == ChatGoalStatus.PAUSED
+                            else child.blocked_reason
+                        ),
+                    },
+                    expected_revision=child.revision,
+                )
             )
 
-    def replace_skills(
+    async def replace_skills(
         self,
         session_id: str,
         *,
@@ -1128,7 +1178,7 @@ class ChatGoalService:
     ) -> ChatGoal:
         """Atomically replace attached immutable skills at a safe goal boundary."""
 
-        goal = self.get(session_id)
+        goal = await self.get(session_id)
         if goal.revision != expected_revision:
             raise ConflictError(
                 "goal changed on another device; reload before retrying"
@@ -1149,22 +1199,24 @@ class ChatGoalService:
             engagement_id=goal.engagement_id,
             session_id=goal.session_id,
         )
-        with self.store.transaction() as transaction:
-            stage_snapshot_parts(transaction, parts)
-            return transaction.update(
+        async with self.store.transaction() as transaction:
+            (await stage_snapshot_parts(transaction, parts))
+            return await transaction.update(
                 ChatGoal,
                 goal.id,
                 {"skill_snapshots": entries},
                 expected_revision=goal.revision,
             )
 
-    def skill_snapshots(self, goal: ChatGoal) -> list[SkillSnapshot]:
+    async def skill_snapshots(self, goal: ChatGoal) -> list[SkillSnapshot]:
         """The goal's attached skills in full, however they were stored."""
 
         return [
             SkillSnapshot.model_validate(item)
-            for item in resolve_skill_snapshots(
-                self.store, goal.skill_snapshots, session_id=goal.session_id
+            for item in (
+                await resolve_skill_snapshots(
+                    self.store, goal.skill_snapshots, session_id=goal.session_id
+                )
             )
         ]
 
@@ -1173,11 +1225,13 @@ def goals_router(
     store: NebulaStore,
     *,
     goal_dispatcher: Callable[[str, str], Awaitable[str | None]] | None = None,
-    harness_runtime: Any | None = None,
-    skill_snapshot_resolver: Callable[
-        [str, list[SkillSelection], list[SkillSnapshot]], list[SkillSnapshot]
-    ]
-    | None = None,
+    harness_runtime: HarnessRuntimeService | None = None,
+    skill_snapshot_resolver: (
+        MaybeAsync[
+            [str, list[SkillSelection], list[SkillSnapshot]], list[SkillSnapshot]
+        ]
+        | None
+    ) = None,
 ) -> APIRouter:
     router = APIRouter(tags=["chat"])
     service = ChatGoalService(store, harness_runtime)
@@ -1187,34 +1241,36 @@ def goals_router(
         response_model=GoalConversationCreated,
         status_code=201,
     )
-    def create_goal_conversation(
+    async def create_goal_conversation(
         body: GoalConversationCreate,
     ) -> GoalConversationCreated:
-        return service.create_conversation(body)
+        return await service.create_conversation(body)
 
     @router.post(
         "/chat/sessions/{session_id}/goal/handoff",
         response_model=GoalHandoffCreated,
         status_code=201,
     )
-    def handoff_goal(session_id: str, body: GoalHandoffRequest) -> GoalHandoffCreated:
-        return service.handoff_to_provider(session_id, body)
+    async def handoff_goal(
+        session_id: str, body: GoalHandoffRequest
+    ) -> GoalHandoffCreated:
+        return await service.handoff_to_provider(session_id, body)
 
     @router.get("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
-    def get_goal(session_id: str) -> ChatGoal:
-        return service.read(session_id)
+    async def get_goal(session_id: str) -> ChatGoal:
+        return await service.read(session_id)
 
     @router.post("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
-    def create_goal(session_id: str, body: GoalCreate) -> ChatGoal:
-        return service.create(session_id, body)
+    async def create_goal(session_id: str, body: GoalCreate) -> ChatGoal:
+        return await service.create(session_id, body)
 
     @router.patch("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
-    def update_goal(session_id: str, body: GoalUpdate) -> ChatGoal:
-        return service.update(session_id, body)
+    async def update_goal(session_id: str, body: GoalUpdate) -> ChatGoal:
+        return await service.update(session_id, body)
 
     @router.post("/chat/sessions/{session_id}/goal/actions", response_model=ChatGoal)
     async def write_goal(session_id: str, body: GoalWrite) -> ChatGoal:
-        updated = service.write(session_id, body)
+        updated = await service.write(session_id, body)
         if goal_dispatcher is not None and body.action in {"start", "resume"}:
             instruction = (
                 "Begin work on the active conversation goal now. Review the goal "
@@ -1224,30 +1280,32 @@ def goals_router(
                 else updated.resume_instruction
             )
             await goal_dispatcher(session_id, instruction)
-            return service.read(session_id)
+            return await service.read(session_id)
         return updated
 
     @router.get(
         "/chat/sessions/{session_id}/goal/children", response_model=list[ChatGoal]
     )
-    def list_goal_children(session_id: str) -> list[ChatGoal]:
-        return service.list_children(session_id)
+    async def list_goal_children(session_id: str) -> list[ChatGoal]:
+        return await service.list_children(session_id)
 
     @router.post("/chat/sessions/{session_id}/goal/children", response_model=ChatGoal)
-    def start_goal_child(session_id: str, body: GoalCreate) -> ChatGoal:
-        return service.start_child(session_id, body)
+    async def start_goal_child(session_id: str, body: GoalCreate) -> ChatGoal:
+        return await service.start_child(session_id, body)
 
     @router.put("/chat/sessions/{session_id}/goal/skills", response_model=ChatGoal)
-    def replace_goal_skills(session_id: str, body: GoalSkillWrite) -> ChatGoal:
+    async def replace_goal_skills(session_id: str, body: GoalSkillWrite) -> ChatGoal:
         if skill_snapshot_resolver is None:
             raise HTTPException(503, "skill discovery is unavailable")
         try:
-            goal = service.get(session_id)
-            existing = service.skill_snapshots(goal)
-            snapshots = skill_snapshot_resolver(session_id, body.skills, existing)
+            goal = await service.get(session_id)
+            existing = await service.skill_snapshots(goal)
+            snapshots = await call_async(
+                skill_snapshot_resolver, session_id, body.skills, existing
+            )
         except (OSError, ValueError) as error:
             raise HTTPException(422, str(error)) from error
-        return service.replace_skills(
+        return await service.replace_skills(
             session_id,
             expected_revision=body.expected_revision,
             snapshots=snapshots,

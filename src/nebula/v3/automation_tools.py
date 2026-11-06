@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from .async_utils import resolve_workspace
+
 from copy import deepcopy
 
 import json
-import asyncio
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -46,7 +47,7 @@ from .missions import MissionComponents, MissionConfigurationError
 from .native_hooks import NativeHookBlocked, NativeHookError, run_project_tool_hooks
 from .orchestration import SpecialistRole
 from .providers import ModelProvider
-from .storage import NebulaStore
+from .storage import NebulaStore, StoreTransaction
 from .tool_results import (
     ArtifactKind,
     ToolResultReceipt,
@@ -367,7 +368,7 @@ class AutomationBroker:
             )
         self.ledger = StoreToolLedger(store)
 
-    def _hook_payload(
+    async def _hook_payload(
         self,
         invocation: ToolInvocation,
         call_id: str,
@@ -399,7 +400,7 @@ class AutomationBroker:
                     or invocation.chat_session_id
                     or invocation.run_id
                 )
-                process_context = self.manager.native_hook_process_context(
+                process_context = await self.manager.native_hook_process_context(
                     process_id,
                     engagement_id=invocation.engagement_id,
                     owner_id=owner_id,
@@ -431,12 +432,14 @@ class AutomationBroker:
             invocation.workspace,
             engagement_id=invocation.engagement_id,
             event_name=event_name,
-            payload=self._hook_payload(
-                invocation,
-                call_id,
-                status=status,
-                exit_code=exit_code,
-                error=error,
+            payload=(
+                await self._hook_payload(
+                    invocation,
+                    call_id,
+                    status=status,
+                    exit_code=exit_code,
+                    error=error,
+                )
             ),
             owner_kind=owner_kind,
             owner_id=owner_id,
@@ -527,7 +530,7 @@ class AutomationBroker:
         if retrieval:
             running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
             try:
-                output = await asyncio.to_thread(self._retrieve, invocation)
+                output = await self._retrieve(invocation)
             except Exception as exc:
                 await self.ledger.transition(
                     running, ToolCallStatus.FAILED, error=str(exc)
@@ -619,11 +622,13 @@ class AutomationBroker:
             if exc.approval.task_id is None and invocation.task_id is not None:
                 links["task_id"] = invocation.task_id
             updated = (
-                self.store.update(
-                    Approval,
-                    exc.approval.id,
-                    links,
-                    expected_revision=exc.approval.revision,
+                (
+                    await self.store.update(
+                        Approval,
+                        exc.approval.id,
+                        links,
+                        expected_revision=exc.approval.revision,
+                    )
                 )
                 if links
                 else exc.approval
@@ -652,7 +657,7 @@ class AutomationBroker:
                 invocation, call.id, status="failed", error=str(exc)
             )
             raise
-        receipt = self._receipt(call.id, invocation.tool_name, result)
+        receipt = await self._receipt(call.id, invocation.tool_name, result)
         waiting_callback = bool(result.results_url and result.results_api_key)
         if waiting_callback:
             # The key reaches only the process, as NEBULA_RESULTS_KEY. The
@@ -709,20 +714,20 @@ class AutomationBroker:
             raise ApprovalRequired(durable)
         return durable
 
-    def _retrieve(self, invocation: ToolInvocation) -> dict[str, Any]:
+    async def _retrieve(self, invocation: ToolInvocation) -> dict[str, Any]:
         if invocation.tool_name.startswith("research_result_"):
             return ResearchResultService().query(
                 invocation.tool_name.removeprefix("research_result_"),
                 invocation.arguments,
             )
         if invocation.tool_name == "tool_output.search":
-            return self.output_service.search(
+            return await self.output_service.search(
                 engagement_id=invocation.engagement_id,
                 owner_id=invocation.run_id,
                 **invocation.arguments,
             )
         if invocation.tool_name == "tool_output.read":
-            return self.output_service.read(
+            return await self.output_service.read(
                 engagement_id=invocation.engagement_id,
                 owner_id=invocation.run_id,
                 **invocation.arguments,
@@ -734,8 +739,8 @@ class AutomationBroker:
             return workspace.search(**invocation.arguments)
         return workspace.read(**invocation.arguments)
 
-    def _receipt(self, call_id: str, name: str, result: Any) -> ToolResultReceipt:
-        execution = self.store.get(CommandExecution, result.execution_id)
+    async def _receipt(self, call_id: str, name: str, result: Any) -> ToolResultReceipt:
+        execution = await self.store.get(CommandExecution, result.execution_id)
         source_call_id = execution.metadata.get("tool_call_id")
         receipt_call_id = (
             source_call_id
@@ -751,7 +756,7 @@ class AutomationBroker:
         for identifier, kind in artifact_streams:
             if identifier is None:
                 continue
-            artifact = self.store.get(Artifact, identifier)
+            artifact = await self.store.get(Artifact, identifier)
             ref = artifact_ref(
                 artifact,
                 kind=kind,
@@ -787,7 +792,7 @@ class AutomationBroker:
         running = execution.status == CommandExecutionStatus.RUNNING
         unreadable = False
         if execution.exit_code and execution.stderr_artifact_id:
-            artifact = self.store.get(Artifact, execution.stderr_artifact_id)
+            artifact = await self.store.get(Artifact, execution.stderr_artifact_id)
             try:
                 with self.output_service.artifact_store.open(artifact) as stream:
                     unreadable = b"permission denied" in stream.read(64 * 1024).lower()
@@ -889,23 +894,27 @@ class AutomationToolPlatform:
         self.mcp_platform = mcp_platform
         self.browser_automation = browser_automation
 
-    def project_execution_mode(self, engagement_id: str) -> Literal["docker", "host"]:
-        return self.manager.project_policy(engagement_id).execution_mode
+    async def project_execution_mode(
+        self, engagement_id: str, *, transaction: StoreTransaction | None = None
+    ) -> Literal["docker", "host"]:
+        return (
+            await self.manager.project_policy(engagement_id, transaction=transaction)
+        ).execution_mode
 
-    def chat_components(
+    async def chat_components(
         self,
         *,
         engagement_id: str,
         extra_components: Any | None = None,
     ) -> AutomationToolComponents:
-        runtime_digest = self.manager.project_runtime_digest(engagement_id)
+        runtime_digest = await self.manager.project_runtime_digest(engagement_id)
         if not runtime_digest:
             raise AutomationRuntimeUnavailable(
                 "prepare the existing Kali headless runtime before enabling commands"
             )
-        engagement = self.store.get(Engagement, engagement_id)
+        engagement = await self.store.get(Engagement, engagement_id)
         scope = (
-            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            (await self.store.get(ScopePolicy, engagement.scope_policy_id))
             if engagement.scope_policy_id is not None
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
@@ -913,7 +922,7 @@ class AutomationToolPlatform:
             manager=self.manager,
             store=self.store,
             output_service=ToolOutputService(self.store, self.artifact_store),
-            execution_mode=self.project_execution_mode(engagement_id),
+            execution_mode=(await self.project_execution_mode(engagement_id)),
         )
         specs = dict(broker.specs)
         selected: Any = broker
@@ -948,12 +957,12 @@ class AutomationToolPlatform:
         return AutomationToolComponents(
             broker=selected,
             scope=scope,
-            workspace=self.workspace_resolver(engagement_id),
+            workspace=(await resolve_workspace(self.workspace_resolver, engagement_id)),
             specs=specs,
             runtime_digest=runtime_digest,
         )
 
-    def mission_components(
+    async def mission_components(
         self, run: AgentRun, provider: ModelProvider
     ) -> MissionComponents:
         selected = run.metadata.get("tool_names")
@@ -972,12 +981,14 @@ class AutomationToolPlatform:
         )
         if browser_only:
             assert self.browser_automation is not None
-            engagement = self.store.get(Engagement, run.engagement_id)
+            engagement = await self.store.get(Engagement, run.engagement_id)
             if not engagement.scope_policy_id:
                 raise MissionConfigurationError(
                     "browser missions require an engagement scope policy"
                 )
-            browser_scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+            browser_scope = await self.store.get(
+                ScopePolicy, engagement.scope_policy_id
+            )
             if browser_scope.engagement_id != engagement.id:
                 raise MissionConfigurationError(
                     "engagement scope policy ownership is inconsistent"
@@ -986,7 +997,9 @@ class AutomationToolPlatform:
             components = AutomationToolComponents(
                 broker=BrowserAutomationBroker(self.store, self.browser_automation),
                 scope=browser_scope,
-                workspace=self.workspace_resolver(run.engagement_id),
+                workspace=(
+                    await resolve_workspace(self.workspace_resolver, run.engagement_id)
+                ),
                 specs=browser_specs,
                 runtime_digest="browser-native-v1",
             )
@@ -1020,10 +1033,12 @@ class AutomationToolPlatform:
                 browser_broker = BrowserAutomationBroker(
                     self.store, self.browser_automation
                 )
-                browser_scope = self.chat_components(
-                    engagement_id=run.engagement_id
+                browser_scope = (
+                    await self.chat_components(engagement_id=run.engagement_id)
                 ).scope
-                browser_workspace = self.workspace_resolver(run.engagement_id)
+                browser_workspace = await resolve_workspace(
+                    self.workspace_resolver, run.engagement_id
+                )
                 browser_components = AutomationToolComponents(
                     broker=browser_broker,
                     scope=browser_scope,
@@ -1056,7 +1071,7 @@ class AutomationToolPlatform:
                         specs={**extra_components.specs, **browser_specs},
                         runtime_digest=f"{extra_components.runtime_digest}+browser-native-v1",
                     )
-            components = self.chat_components(
+            components = await self.chat_components(
                 engagement_id=run.engagement_id,
                 extra_components=extra_components,
             )
@@ -1067,8 +1082,8 @@ class AutomationToolPlatform:
             "automation_runtime_digest": runtime_digest,
             **(
                 {
-                    "automation_policy_revision": self.manager.project_policy(
-                        run.engagement_id
+                    "automation_policy_revision": (
+                        await self.manager.project_policy(run.engagement_id)
                     ).revision,
                 }
                 if not browser_only
@@ -1105,11 +1120,13 @@ class AutomationToolPlatform:
             workspace=components.workspace,
             specs=specialist_specs,
             model=run.supervisor_model,
-            max_output_tokens=default_output_tokens(
-                self.store,
-                run.supervisor_provider_id,
-                run.supervisor_model or provider.config.default_model,
-                token_budget=run.budget.max_tokens,
+            max_output_tokens=(
+                await default_output_tokens(
+                    self.store,
+                    run.supervisor_provider_id,
+                    run.supervisor_model or provider.config.default_model,
+                    token_budget=run.budget.max_tokens,
+                )
             ),
             store=self.store,
         )

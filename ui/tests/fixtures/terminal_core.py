@@ -185,7 +185,7 @@ def main() -> None:
     @app.post("/api/v1/fixture/terminal-seed")
     async def seed(body: SeedRequest, request: Request) -> dict[str, str]:
         require_fixture_auth(request)
-        store.get(Engagement, body.engagement_id)
+        (await store.get(Engagement, body.engagement_id))
         preflight = ContainerTerminalPreflightRequest(engagement_id=body.engagement_id)
         preview = await service.preflight(preflight)
         if not preview.preview_token or not preview.preview_fingerprint:

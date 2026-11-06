@@ -140,7 +140,7 @@ def percentile(values: list[float], percent: int) -> float | None:
     return round(sorted(values)[max(0, math.ceil(len(values) * percent / 100) - 1)], 3)
 
 
-def seed(data: Path, scale: int):
+async def seed(data: Path, scale: int):
     from nebula.v3.artifacts import ArtifactStore
     from nebula.v3.domain import (
         AgentRun,
@@ -177,155 +177,183 @@ def seed(data: Path, scale: int):
     )
     counts: Counter[str] = Counter()
 
-    def save(items):
+    async def save(items):
         for start in range(0, len(items), 250):
             batch = items[start : start + 250]
-            store.create_many(batch)
+            (await store.create_many(batch))
             counts.update(item.entity_kind for item in batch)
 
-    save(
-        [
-            ProviderProfile(
-                id="inert-provider",
-                name="Synthetic disabled provider",
-                provider_type="vllm",
-                is_local=True,
-                enabled=False,
-                model_allowlist=["synthetic"],
-            )
-        ]
+    (
+        await save(
+            [
+                ProviderProfile(
+                    id="inert-provider",
+                    name="Synthetic disabled provider",
+                    provider_type="vllm",
+                    is_local=True,
+                    enabled=False,
+                    model_allowlist=["synthetic"],
+                )
+            ]
+        )
     )
     for project_index in range(3):
         project = f"project-{project_index}"
-        root = workspace.tool_platform.workspace_for(project)
-        save(
-            [
-                Engagement(
-                    id=project,
-                    name=f"Synthetic project {project_index}",
-                    workspace_path=str(root),
-                )
-            ]
-        )
-        save(
-            [
-                Observation(
-                    id=f"note-{project_index}-{i}",
-                    engagement_id=project,
-                    observation_type="note",
-                    title=f"Synthetic note {i:06}",
-                    body="Synthetic note λ. " * 100,
-                )
-                for i in range(1000 * scale)
-            ]
-        )
-        save(
-            [
-                WorkItem(
-                    id=f"work-{project_index}-{i}",
-                    engagement_id=project,
-                    title=f"Synthetic work {i:06}",
-                    description="Synthetic progress. " * 40,
-                )
-                for i in range(200 * scale)
-            ]
-        )
-        save(
-            [
-                Asset(
-                    id=f"asset-{project_index}-{i}",
-                    engagement_id=project,
-                    name=f"Synthetic asset {i}",
-                    address=f"asset-{i}.invalid",
-                )
-                for i in range(200 * scale)
-            ]
-        )
-        save(
-            [
-                Finding(
-                    id=f"finding-{project_index}-{i}",
-                    engagement_id=project,
-                    title=f"Synthetic finding {i}",
-                )
-                for i in range(100 * scale)
-            ]
-        )
-        save(
-            [
-                Report(
-                    id=f"report-{project_index}-{i}",
-                    engagement_id=project,
-                    title=f"Synthetic report {i}",
-                    executive_summary="Synthetic summary. " * 50,
-                    observation_ids=[f"note-{project_index}-{j}" for j in range(20)],
-                )
-                for i in range(10 * scale)
-            ]
-        )
-        save(
-            [
-                ChatSession(
-                    id=f"chat-{project_index}-{i}",
-                    engagement_id=project,
-                    title=f"Synthetic chat {i}",
-                    provider_profile_id="inert-provider",
-                    model="synthetic",
-                )
-                for i in range(10 * scale)
-            ]
-        )
-        for chat in range(10 * scale):
-            save(
+        root = await workspace.tool_platform.workspace_for(project)
+        (
+            await save(
                 [
-                    ChatMessage(
-                        id=f"message-{project_index}-{chat}-{i}",
-                        engagement_id=project,
-                        session_id=f"chat-{project_index}-{chat}",
-                        sequence=i + 1,
-                        role="user" if i % 2 == 0 else "assistant",
-                        content="Synthetic transcript λ. " * 80,
+                    Engagement(
+                        id=project,
+                        name=f"Synthetic project {project_index}",
+                        workspace_path=str(root),
                     )
-                    for i in range(200)
                 ]
             )
-        save(
-            [
-                BrowserIdentity(
-                    id=f"identity-{project_index}",
-                    engagement_id=project,
-                    name="Synthetic identity",
-                )
-            ]
         )
-        save(
-            [
-                BrowserSession(
-                    id=f"browser-{project_index}-{i}",
-                    engagement_id=project,
-                    name=f"Synthetic browser {i}",
-                    identity_id=f"identity-{project_index}",
-                    status="closed",
-                )
-                for i in range(10 * scale)
-            ]
+        (
+            await save(
+                [
+                    Observation(
+                        id=f"note-{project_index}-{i}",
+                        engagement_id=project,
+                        observation_type="note",
+                        title=f"Synthetic note {i:06}",
+                        body="Synthetic note λ. " * 100,
+                    )
+                    for i in range(1000 * scale)
+                ]
+            )
         )
-        save(
-            [
-                AgentRun(
-                    id=f"run-{project_index}",
-                    engagement_id=project,
-                    objective="Synthetic event history",
-                    status="complete",
+        (
+            await save(
+                [
+                    WorkItem(
+                        id=f"work-{project_index}-{i}",
+                        engagement_id=project,
+                        title=f"Synthetic work {i:06}",
+                        description="Synthetic progress. " * 40,
+                    )
+                    for i in range(200 * scale)
+                ]
+            )
+        )
+        (
+            await save(
+                [
+                    Asset(
+                        id=f"asset-{project_index}-{i}",
+                        engagement_id=project,
+                        name=f"Synthetic asset {i}",
+                        address=f"asset-{i}.invalid",
+                    )
+                    for i in range(200 * scale)
+                ]
+            )
+        )
+        (
+            await save(
+                [
+                    Finding(
+                        id=f"finding-{project_index}-{i}",
+                        engagement_id=project,
+                        title=f"Synthetic finding {i}",
+                    )
+                    for i in range(100 * scale)
+                ]
+            )
+        )
+        (
+            await save(
+                [
+                    Report(
+                        id=f"report-{project_index}-{i}",
+                        engagement_id=project,
+                        title=f"Synthetic report {i}",
+                        executive_summary="Synthetic summary. " * 50,
+                        observation_ids=[
+                            f"note-{project_index}-{j}" for j in range(20)
+                        ],
+                    )
+                    for i in range(10 * scale)
+                ]
+            )
+        )
+        (
+            await save(
+                [
+                    ChatSession(
+                        id=f"chat-{project_index}-{i}",
+                        engagement_id=project,
+                        title=f"Synthetic chat {i}",
+                        provider_profile_id="inert-provider",
+                        model="synthetic",
+                    )
+                    for i in range(10 * scale)
+                ]
+            )
+        )
+        for chat in range(10 * scale):
+            (
+                await save(
+                    [
+                        ChatMessage(
+                            id=f"message-{project_index}-{chat}-{i}",
+                            engagement_id=project,
+                            session_id=f"chat-{project_index}-{chat}",
+                            sequence=i + 1,
+                            role="user" if i % 2 == 0 else "assistant",
+                            content="Synthetic transcript λ. " * 80,
+                        )
+                        for i in range(200)
+                    ]
                 )
-            ]
+            )
+        (
+            await save(
+                [
+                    BrowserIdentity(
+                        id=f"identity-{project_index}",
+                        engagement_id=project,
+                        name="Synthetic identity",
+                    )
+                ]
+            )
+        )
+        (
+            await save(
+                [
+                    BrowserSession(
+                        id=f"browser-{project_index}-{i}",
+                        engagement_id=project,
+                        name=f"Synthetic browser {i}",
+                        identity_id=f"identity-{project_index}",
+                        status="closed",
+                    )
+                    for i in range(10 * scale)
+                ]
+            )
+        )
+        (
+            await save(
+                [
+                    AgentRun(
+                        id=f"run-{project_index}",
+                        engagement_id=project,
+                        objective="Synthetic event history",
+                        status="complete",
+                    )
+                ]
+            )
         )
         for i in range(100 * scale):
-            store.append_event(
-                f"run-{project_index}",
-                "synthetic.progress",
-                {"step": i},
-                idempotency_key=f"seed-{i}",
+            (
+                await store.append_event(
+                    f"run-{project_index}",
+                    "synthetic.progress",
+                    {"step": i},
+                    idempotency_key=f"seed-{i}",
+                )
             )
         blobs: list[Artifact] = []
         for i in range(4 * scale):
@@ -338,8 +366,8 @@ def seed(data: Path, scale: int):
             blobs.append(
                 artifact.model_copy(update={"id": f"blob-{project_index}-{i}"})
             )
-        save(blobs)
-        root = workspace.tool_platform.workspace_for(project)
+        (await save(blobs))
+        root = await workspace.tool_platform.workspace_for(project)
         for i in range(200 * scale):
             (root / f"synthetic-{i:05}.txt").write_text(f"synthetic file {i} λ\n" * 20)
         (root / "synthetic.ipynb").write_text(
@@ -350,7 +378,7 @@ def seed(data: Path, scale: int):
     return store, artifacts, workspace, dict(counts)
 
 
-def serve(data: Path, port: int, scale: int):
+async def serve(data: Path, port: int, scale: int):
     import uvicorn
     from keyring.backends.null import Keyring
     from sqlalchemy import event
@@ -360,7 +388,7 @@ def serve(data: Path, port: int, scale: int):
 
     if not data.is_dir() or any(data.iterdir()):
         raise ValueError("Core requires a newly created empty temporary directory")
-    store, artifacts, workspace, counts = seed(data, scale)
+    store, artifacts, workspace, counts = await seed(data, scale)
     token = os.environ.pop("NEBULA_STRESS_TOKEN")
     app = create_app(
         store,
@@ -381,7 +409,10 @@ def serve(data: Path, port: int, scale: int):
 
     def after_sql(conn, cursor, statement, parameters, context, executemany):
         # SQL text has placeholders; values and authentication never enter reports.
-        key = (threading.get_ident() == loop_thread, statement)
+        key = (
+            threading.get_ident() == loop_thread and not conn.dialect.is_async,
+            statement,
+        )
         with lock:
             elapsed = (time.perf_counter() - context.stress_started) * 1000
             values = sql[key]
@@ -389,8 +420,8 @@ def serve(data: Path, port: int, scale: int):
             values[1] += elapsed
             values[2] = max(values[2], elapsed)
 
-    event.listen(store.database.engine, "before_cursor_execute", before_sql)
-    event.listen(store.database.engine, "after_cursor_execute", after_sql)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", before_sql)
+    event.listen(store.database.engine.sync_engine, "after_cursor_execute", after_sql)
     original = app.router.lifespan_context
 
     @asynccontextmanager
@@ -451,7 +482,13 @@ def serve(data: Path, port: int, scale: int):
         lag.clear()
         return result
 
-    uvicorn.run(app, host="0.0.0.0", port=port, access_log=False, log_level="warning")
+    (
+        await uvicorn.Server(
+            uvicorn.Config(
+                app, host="0.0.0.0", port=port, access_log=False, log_level="warning"
+            )
+        ).serve()
+    )
 
 
 async def execute(client: httpx.AsyncClient, scenario: Scenario, identity: str):
@@ -892,7 +929,7 @@ async def run(args):
         raise RuntimeError("stress operations failed; inspect the JSON receipt")
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--source-tree", type=Path, default=Path(__file__).resolve().parents[1]
@@ -923,14 +960,14 @@ def main():
         parser.error("waves must be positive, concurrency 1..512, soak 0..3600 seconds")
     sys.path.insert(0, str(args.source_tree.resolve() / "src"))
     if args.serve:
-        serve(Path(args.serve[0]), int(args.serve[1]), args.scale)
+        (await serve(Path(args.serve[0]), int(args.serve[1]), args.scale))
         return
     address = ipaddress.ip_address(args.lan_address)
     if address.version != 4 or address.is_loopback or address.is_unspecified:
         parser.error("--lan-address must be this host's IPv4 test-LAN address")
     args.lan_address = str(address)
-    asyncio.run(run(args))
+    (await run(args))
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

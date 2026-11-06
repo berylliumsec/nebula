@@ -1,3 +1,7 @@
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import asyncio
 
 import httpx
@@ -20,7 +24,7 @@ def test_browserd_adapter_requires_literal_loopback_and_opaque_authentication():
         LocalBrowserdAdapter("http://127.0.0.1:4711", "secret token")
 
 
-def test_browserd_adapter_maps_authenticated_readiness_without_url_secrets():
+async def test_browserd_adapter_maps_authenticated_readiness_without_url_secrets():
     observed: dict[str, str | None] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -45,19 +49,17 @@ def test_browserd_adapter_maps_authenticated_readiness_without_url_secrets():
     token = "browserd-secret-token"
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
-        capability = asyncio.run(
-            LocalBrowserdAdapter(
-                "http://127.0.0.1:4711", token, client=client
-            ).readiness()
-        )
+        capability = await LocalBrowserdAdapter(
+            "http://127.0.0.1:4711", token, client=client
+        ).readiness()
     finally:
-        asyncio.run(client.aclose())
+        (await client.aclose())
     assert capability.state == BrowserEngineState.READY
     assert observed["authorization"] == f"Bearer {token}"
     assert token not in str(observed["url"])
 
 
-def test_browserd_adapter_fails_closed_on_contract_drift():
+async def test_browserd_adapter_fails_closed_on_contract_drift():
     async def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -75,18 +77,16 @@ def test_browserd_adapter_fails_closed_on_contract_drift():
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
-        capability = asyncio.run(
-            LocalBrowserdAdapter(
-                "http://127.0.0.1:4711", "token", client=client
-            ).readiness()
-        )
+        capability = await LocalBrowserdAdapter(
+            "http://127.0.0.1:4711", "token", client=client
+        ).readiness()
     finally:
-        asyncio.run(client.aclose())
+        (await client.aclose())
     assert capability.state == BrowserEngineState.UNAVAILABLE
     assert "incompatible" in (capability.unavailability_reason or "")
 
 
-def test_browserd_lost_side_effect_receipt_is_ambiguous_and_never_auto_replayed():
+async def test_browserd_lost_side_effect_receipt_is_ambiguous_and_never_auto_replayed():
     async def handler(_: httpx.Request) -> httpx.Response:
         raise httpx.ReadError("receipt connection closed")
 
@@ -102,13 +102,11 @@ def test_browserd_lost_side_effect_receipt_is_ambiguous_and_never_auto_replayed(
         side_effect="possible",
     )
     try:
-        receipt = asyncio.run(
-            LocalBrowserdAdapter(
-                "http://127.0.0.1:4711", "token", client=client
-            ).execute(action)
-        )
+        receipt = await LocalBrowserdAdapter(
+            "http://127.0.0.1:4711", "token", client=client
+        ).execute(action)
     finally:
-        asyncio.run(client.aclose())
+        (await client.aclose())
     assert receipt.state == "ambiguous"
     assert receipt.action_token == action.action_token
     assert "will not replay" in (receipt.recovery_action or "")
@@ -122,7 +120,7 @@ def test_registry_discovers_configured_browserd_without_exposing_token(monkeypat
     assert isinstance(registry._adapters[0], LocalBrowserdAdapter)
 
 
-def test_companion_navigation_outlives_the_health_check_deadline():
+async def test_companion_navigation_outlives_the_health_check_deadline():
     async def exercise():
         async def slow_page(reader, writer):
             await reader.readuntil(b"\r\n\r\n")
@@ -148,10 +146,10 @@ def test_companion_navigation_outlives_the_health_check_deadline():
             server.close()
             await server.wait_closed()
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
-def test_action_client_deadline_covers_playwright_operation_timeout():
+async def test_action_client_deadline_covers_playwright_operation_timeout():
     from nebula.v3.browser_engine import (
         BROWSER_ACTION_TIMEOUT_SECONDS,
         BrowserEngineReceipt,
@@ -193,8 +191,11 @@ def test_action_client_deadline_covers_playwright_operation_timeout():
             await client.aclose()
         return receipt
 
-    receipt = asyncio.run(exercise())
+    receipt = await exercise()
     assert receipt.state == "complete"
     assert BROWSER_ACTION_TIMEOUT_SECONDS >= 30.0  # Playwright's default budget
     assert deadlines["/v1/actions"]["read"] >= BROWSER_ACTION_TIMEOUT_SECONDS
     assert deadlines["/v1/readiness"]["read"] == 5.0
+
+
+pytestmark = pytest.mark.anyio

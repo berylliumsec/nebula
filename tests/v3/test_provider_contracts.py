@@ -1,4 +1,7 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import json
 
 import httpx
@@ -53,7 +56,7 @@ def _required_request() -> ModelRequest:
     )
 
 
-def test_profile_runtime_preserves_locality_allowlist_and_legacy_flavor():
+async def test_profile_runtime_preserves_locality_allowlist_and_legacy_flavor():
     runtime = provider_from_profile(
         ProviderProfile(
             id="legacy-local",
@@ -70,8 +73,8 @@ def test_profile_runtime_preserves_locality_allowlist_and_legacy_flavor():
     assert runtime.config.local is True
     assert runtime.config.model_allowlist == ["allowed-model"]
     with pytest.raises(ProviderError, match="not allowed"):
-        asyncio.run(
-            runtime.complete(
+        (
+            await runtime.complete(
                 ModelRequest(
                     model="different-model",
                     messages=[ModelMessage(role="user", content="hello")],
@@ -80,7 +83,7 @@ def test_profile_runtime_preserves_locality_allowlist_and_legacy_flavor():
         )
 
 
-def test_disabled_provider_is_rejected_before_network_access():
+async def test_disabled_provider_is_rejected_before_network_access():
     provider = OpenAICompatibleProvider(
         ProviderConfig(
             id="disabled",
@@ -92,14 +95,14 @@ def test_disabled_provider_is_rejected_before_network_access():
     )
 
     with pytest.raises(ProviderError, match="disabled"):
-        asyncio.run(
-            provider.complete(
+        (
+            await provider.complete(
                 ModelRequest(messages=[ModelMessage(role="user", content="hello")])
             )
         )
 
 
-def test_simple_compatible_chat_omits_tool_only_parameters():
+async def test_simple_compatible_chat_omits_tool_only_parameters():
     observed = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -122,8 +125,8 @@ def test_simple_compatible_chat_omits_tool_only_parameters():
         transport=httpx.MockTransport(handler),
     )
 
-    asyncio.run(
-        provider.complete(
+    (
+        await provider.complete(
             ModelRequest(messages=[ModelMessage(role="user", content="hello")])
         )
     )
@@ -241,7 +244,7 @@ def test_responses_required_tool_choice_and_paired_history_wire_contract():
     assert payload["input"][-1]["type"] == "function_call_output"
 
 
-def test_anthropic_and_gemini_required_tool_wire_contracts(monkeypatch):
+async def test_anthropic_and_gemini_required_tool_wire_contracts(monkeypatch):
     monkeypatch.setenv("TEST_PROVIDER_KEY", "secret")
     observed = []
 
@@ -266,8 +269,8 @@ def test_anthropic_and_gemini_required_tool_wire_contracts(monkeypatch):
         "capabilities": {"tools": True, "strict_tools": True},
     }
     transport = httpx.MockTransport(handler)
-    asyncio.run(
-        AnthropicProvider(
+    (
+        await AnthropicProvider(
             ProviderConfig(
                 id="anthropic",
                 kind=ProviderKind.ANTHROPIC,
@@ -277,8 +280,8 @@ def test_anthropic_and_gemini_required_tool_wire_contracts(monkeypatch):
             transport=transport,
         ).complete(_required_request())
     )
-    asyncio.run(
-        GeminiProvider(
+    (
+        await GeminiProvider(
             ProviderConfig(
                 id="gemini",
                 kind=ProviderKind.GEMINI,
@@ -298,7 +301,7 @@ def test_anthropic_and_gemini_required_tool_wire_contracts(monkeypatch):
     assert observed[1]["contents"][-2]["parts"][0]["functionCall"]["id"] == "call-1"
 
 
-def test_batched_tool_calls_reach_each_adapter_wire_contract(monkeypatch):
+async def test_batched_tool_calls_reach_each_adapter_wire_contract(monkeypatch):
     """A routing step that accepts a batch must not disable parallel calls."""
 
     monkeypatch.setenv("TEST_PROVIDER_KEY", "secret")
@@ -323,8 +326,8 @@ def test_batched_tool_calls_reach_each_adapter_wire_contract(monkeypatch):
     )
     assert compatible._payload(batched, "model-a")["parallel_tool_calls"] is True
 
-    asyncio.run(
-        AnthropicProvider(
+    (
+        await AnthropicProvider(
             ProviderConfig(
                 id="anthropic",
                 kind=ProviderKind.ANTHROPIC,
@@ -344,7 +347,7 @@ def test_batched_tool_calls_reach_each_adapter_wire_contract(monkeypatch):
     }
 
 
-def test_bedrock_required_tool_wire_contract(monkeypatch):
+async def test_bedrock_required_tool_wire_contract(monkeypatch):
     observed = {}
 
     class RuntimeClient:
@@ -367,7 +370,7 @@ def test_bedrock_required_tool_wire_contract(monkeypatch):
         )
     )
 
-    asyncio.run(provider.complete(_required_request()))
+    (await provider.complete(_required_request()))
 
     assert observed["toolConfig"]["toolChoice"] == {"any": {}}
     assert observed["messages"][-2]["content"][0]["toolUse"]["toolUseId"] == "call-1"
@@ -410,7 +413,7 @@ def test_public_provider_endpoint_cannot_be_labeled_local():
         )
 
 
-def test_bedrock_health_verifies_runtime_credentials_and_discovers_models(
+async def test_bedrock_health_verifies_runtime_credentials_and_discovers_models(
     monkeypatch,
 ):
     observed = {}
@@ -440,8 +443,11 @@ def test_bedrock_health_verifies_runtime_credentials_and_discovers_models(
         )
     )
 
-    health = asyncio.run(provider.health())
+    health = await provider.health()
 
     assert health.healthy is True
     assert health.models == ["anthropic.claude-test", "amazon.nova-test"]
     assert observed == {"service": "bedrock", "region": "us-east-1"}
+
+
+pytestmark = pytest.mark.anyio

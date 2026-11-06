@@ -7,6 +7,11 @@ Gemini ``thoughtSignature``, Anthropic thinking blocks and Responses reasoning
 items. A browser screenshot travels with the result of the step that took it.
 """
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import base64
 import copy
@@ -138,7 +143,7 @@ def _config(
     )
 
 
-def _chat(
+async def _chat(
     tmp_path: Path,
     provider: ModelProvider,
     model: str,
@@ -149,8 +154,8 @@ def _chat(
     """A follow-up tool turn: the conversation already has one exchange."""
 
     store = NebulaStore(tmp_path / "replay.db")
-    project = store.create(Engagement(id="project", name="Replay"))
-    profile = store.create(
+    project = await store.create(Engagement(id="project", name="Replay"))
+    profile = await store.create(
         ProviderProfile(
             id="provider",
             name="Provider",
@@ -164,7 +169,7 @@ def _chat(
             },
         )
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             id="session",
             engagement_id=project.id,
@@ -179,14 +184,16 @@ def _chat(
         )
     )
     stored = [
-        store.create(
-            ChatMessage(
-                id=f"message-{sequence}",
-                engagement_id=project.id,
-                session_id=session.id,
-                sequence=sequence,
-                role=role,
-                content=content,
+        (
+            await store.create(
+                ChatMessage(
+                    id=f"message-{sequence}",
+                    engagement_id=project.id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=role,
+                    content=content,
+                )
             )
         )
         for sequence, role, content in (
@@ -195,7 +202,7 @@ def _chat(
             (3, ChatRole.USER, QUESTION),
         )
     ]
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             id="turn",
             engagement_id=project.id,
@@ -326,7 +333,7 @@ OPENROUTER_DETAILS = [
 ]
 
 
-def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp_path):
+async def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp_path):
     model = "anthropic/claude-sonnet-5"
     wire = Wire(
         _completion(
@@ -357,7 +364,7 @@ def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp_path)
         _config(ProviderKind.OPENAI_COMPATIBLE, ProviderFlavor.OPENROUTER, model),
         transport=wire.transport,
     )
-    _, service, prepared, broker = _chat(tmp_path, provider, model)
+    _, service, prepared, broker = await _chat(tmp_path, provider, model)
 
     assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
@@ -382,7 +389,7 @@ def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp_path)
         assert "reasoning_details" not in _prior_answer(payload["messages"])
 
 
-def test_openrouter_deepseek_v4_gets_its_empty_reasoning_details_back(tmp_path):
+async def test_openrouter_deepseek_v4_gets_its_empty_reasoning_details_back(tmp_path):
     model = "deepseek/deepseek-v4-pro"
     wire = Wire(
         _completion(
@@ -411,7 +418,7 @@ def test_openrouter_deepseek_v4_gets_its_empty_reasoning_details_back(tmp_path):
         _config(ProviderKind.OPENAI_COMPATIBLE, ProviderFlavor.OPENROUTER, model),
         transport=wire.transport,
     )
-    _, service, prepared, _ = _chat(tmp_path, provider, model)
+    _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
     assert _run(service, prepared) == ANSWER
 
@@ -424,7 +431,7 @@ def test_openrouter_deepseek_v4_gets_its_empty_reasoning_details_back(tmp_path):
         assert _prior_answer(payload["messages"])["reasoning_details"] == []
 
 
-def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tmp_path):
+async def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tmp_path):
     model = "deepseek-v4-pro"
     wire = Wire(
         _completion(
@@ -454,7 +461,7 @@ def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tmp_path
         _config(ProviderKind.OPENAI_COMPATIBLE, ProviderFlavor.DEEPSEEK, model),
         transport=wire.transport,
     )
-    _, service, prepared, _ = _chat(tmp_path, provider, model)
+    _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
     assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
@@ -476,7 +483,7 @@ def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tmp_path
         )
 
 
-def test_legacy_deepseek_reasoner_gets_no_back_filled_reasoning(tmp_path):
+async def test_legacy_deepseek_reasoner_gets_no_back_filled_reasoning(tmp_path):
     model = "deepseek-reasoner"
     wire = Wire(
         _completion(
@@ -502,7 +509,7 @@ def test_legacy_deepseek_reasoner_gets_no_back_filled_reasoning(tmp_path):
         _config(ProviderKind.OPENAI_COMPATIBLE, ProviderFlavor.DEEPSEEK, model),
         transport=wire.transport,
     )
-    _, service, prepared, _ = _chat(tmp_path, provider, model)
+    _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
     assert _run(service, prepared) == ANSWER
 
@@ -528,7 +535,7 @@ def _gemini(parts: list[dict[str, Any]], response_id: str) -> dict[str, Any]:
     }
 
 
-def test_gemini_replays_thought_signatures_with_the_whole_batch(tmp_path):
+async def test_gemini_replays_thought_signatures_with_the_whole_batch(tmp_path):
     model = "gemini-3-pro-preview"
     wire = Wire(
         _gemini(
@@ -558,7 +565,7 @@ def test_gemini_replays_thought_signatures_with_the_whole_batch(tmp_path):
         _config(ProviderKind.GEMINI, ProviderFlavor.GEMINI, model),
         transport=wire.transport,
     )
-    _, service, prepared, broker = _chat(tmp_path, provider, model)
+    _, service, prepared, broker = await _chat(tmp_path, provider, model)
 
     assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
@@ -632,7 +639,7 @@ def test_gemini_3_steps_without_a_signature_carry_the_documented_sentinel():
     )
 
 
-def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_path):
+async def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_path):
     model = "claude-sonnet-5"
     thinking = [
         {"type": "thinking", "thinking": "I need both values.", "signature": "SIG-T"},
@@ -684,7 +691,7 @@ def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_path):
         _config(ProviderKind.ANTHROPIC, ProviderFlavor.ANTHROPIC, model),
         transport=wire.transport,
     )
-    _, service, prepared, _ = _chat(tmp_path, provider, model)
+    _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
     assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
@@ -708,7 +715,7 @@ def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_path):
         ] == [("tool_result", "toolu_a"), ("tool_result", "toolu_b")]
 
 
-def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
+async def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
     model = "amazon.nova-pro-v1:0"
     seen: list[dict[str, Any]] = []
 
@@ -764,7 +771,7 @@ def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
     provider = BedrockProvider(
         _config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK, model)
     )
-    _, service, prepared, _ = _chat(tmp_path, provider, model)
+    _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
     assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
@@ -789,7 +796,7 @@ def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
         ] == ["tu-a", "tu-b"]
 
 
-def test_responses_replays_encrypted_reasoning_items_before_their_calls(tmp_path):
+async def test_responses_replays_encrypted_reasoning_items_before_their_calls(tmp_path):
     model = "gpt-5"
     reasoning_item = {
         "type": "reasoning",
@@ -847,10 +854,10 @@ def test_responses_replays_encrypted_reasoning_items_before_their_calls(tmp_path
         _config(ProviderKind.OPENAI_RESPONSES, ProviderFlavor.OPENAI, model),
         transport=wire.transport,
     )
-    _, service, prepared, _ = _chat(tmp_path, provider, model)
+    _, service, prepared, _ = await _chat(tmp_path, provider, model)
 
     # Commentary is preamble: saved as the turn's reasoning, not its answer.
-    message = asyncio.run(service.complete(prepared)).message
+    message = (await service.complete(prepared)).message
     assert message.content == ANSWER
     assert "Reading both values." in message.reasoning
 
@@ -874,7 +881,7 @@ def test_responses_replays_encrypted_reasoning_items_before_their_calls(tmp_path
         ]
 
 
-def test_chat_records_the_batch_group_and_reasoning_once(tmp_path):
+async def test_chat_records_the_batch_group_and_reasoning_once(tmp_path):
     state = {
         "provider_id": "provider",
         "model": "model-a",
@@ -908,11 +915,11 @@ def test_chat_records_the_batch_group_and_reasoning_once(tmp_path):
         ModelResponse(provider_id="provider", model="model-a", text=ANSWER),
     ]
     provider = Scripted(responses)
-    store, service, prepared, _ = _chat(tmp_path, provider, "model-a")
+    store, service, prepared, _ = await _chat(tmp_path, provider, "model-a")
 
     assert _run(service, prepared) == ANSWER
 
-    history = store.get(ChatTurn, "turn").tool_history
+    history = (await store.get(ChatTurn, "turn")).tool_history
     assert [entry["budget_class"] for entry in history] == ["refused", "execution"]
     group = history[0]["response_group"]
     assert group and history[1]["response_group"] == group
@@ -926,7 +933,7 @@ def test_chat_records_the_batch_group_and_reasoning_once(tmp_path):
     assert replayed[1].provider_metadata == {"thought_signature": "SIG-2"}
 
 
-def test_an_unreadable_call_stays_in_the_batch_that_issued_it(tmp_path):
+async def test_an_unreadable_call_stays_in_the_batch_that_issued_it(tmp_path):
     state = {"provider_id": "provider", "model": "model-a", "reasoning_content": "Go."}
     responses = [
         ModelResponse(
@@ -954,12 +961,12 @@ def test_an_unreadable_call_stays_in_the_batch_that_issued_it(tmp_path):
         ModelResponse(provider_id="provider", model="model-a", text=ANSWER),
     ]
     provider = Scripted(responses)
-    store, service, prepared, broker = _chat(tmp_path, provider, "model-a")
+    store, service, prepared, broker = await _chat(tmp_path, provider, "model-a")
 
     assert _run(service, prepared) == ANSWER
 
     assert [call.arguments["value"] for call in broker.calls] == ["b"]
-    history = store.get(ChatTurn, "turn").tool_history
+    history = (await store.get(ChatTurn, "turn")).tool_history
     assert [entry["budget_class"] for entry in history] == ["refused", "execution"]
     assert history[0]["response_group"] == history[1]["response_group"]
     assert history[0]["reasoning_state"] == state
@@ -968,11 +975,11 @@ def test_an_unreadable_call_stays_in_the_batch_that_issued_it(tmp_path):
     assert len({result.response_group for result in replayed}) == 1
 
 
-def test_a_step_core_delivers_is_a_batch_of_its_own(tmp_path):
-    store, service, prepared, _ = _chat(tmp_path, Scripted([]), "model-a")
-    turn = store.get(ChatTurn, "turn")
+async def test_a_step_core_delivers_is_a_batch_of_its_own(tmp_path):
+    store, service, prepared, _ = await _chat(tmp_path, Scripted([]), "model-a")
+    turn = await store.get(ChatTurn, "turn")
 
-    turn, _ = service._subagent_delivery_step(
+    turn, _ = await service._subagent_delivery_step(
         turn,
         prepared.tool_components,
         "safe_read",
@@ -980,11 +987,11 @@ def test_a_step_core_delivers_is_a_batch_of_its_own(tmp_path):
         "Delivered one message.",
     )
 
-    entry = service._turn_history(turn)[-1]
+    entry = (await service._turn_history(turn))[-1]
     assert entry["response_group"] == "core-0"
     assert "reasoning_state" not in entry
     # Replay reads the turn's ledger, which only the service can reach.
-    (result,) = service._provider_tool_history(turn)
+    (result,) = await service._provider_tool_history(turn)
     assert result.response_group == "core-0"
     assert result.reasoning_state is None
 
@@ -1138,7 +1145,7 @@ def test_glm_reasoning_is_replayed_only_when_preserved_thinking_is_on():
     assert assistant["reasoning_content"] == "Plan."
 
 
-def test_streamed_reasoning_details_and_call_signatures_are_kept_whole():
+async def test_streamed_reasoning_details_and_call_signatures_are_kept_whole():
     """Fragments merge the way OpenRouter's SDK merges them."""
 
     chunks = [
@@ -1210,7 +1217,7 @@ def test_streamed_reasoning_details_and_call_signatures_are_kept_whole():
                 return event.response
         raise AssertionError("no completed response")
 
-    response = asyncio.run(completed())
+    response = await completed()
 
     assert response.reasoning == "I need a."
     assert response.reasoning_state == {
@@ -1301,7 +1308,9 @@ def test_screenshot_follows_its_result_on_chat_completions():
     assert [part["type"] for part in messages[-1]["content"]] == ["text", "image_url"]
 
 
-def test_screenshot_travels_inside_its_tool_result_on_native_adapters(monkeypatch):
+async def test_screenshot_travels_inside_its_tool_result_on_native_adapters(
+    monkeypatch,
+):
     request = _screenshot_request()
 
     responses = OpenAIResponsesProvider(
@@ -1325,8 +1334,8 @@ def test_screenshot_travels_inside_its_tool_result_on_native_adapters(monkeypatc
             "usage": {"input_tokens": 1, "output_tokens": 1},
         }
     )
-    asyncio.run(
-        AnthropicProvider(
+    (
+        await AnthropicProvider(
             _config(ProviderKind.ANTHROPIC, ProviderFlavor.ANTHROPIC),
             transport=anthropic_wire.transport,
         ).complete(request)
@@ -1340,8 +1349,8 @@ def test_screenshot_travels_inside_its_tool_result_on_native_adapters(monkeypatc
     assert results[1]["content"] == "b"
 
     gemini_wire = Wire(_gemini([{"text": "ok"}], "resp-1"))
-    asyncio.run(
-        GeminiProvider(
+    (
+        await GeminiProvider(
             _config(ProviderKind.GEMINI, ProviderFlavor.GEMINI),
             transport=gemini_wire.transport,
         ).complete(request)
@@ -1368,10 +1377,10 @@ def test_screenshot_travels_inside_its_tool_result_on_native_adapters(monkeypatc
             }
 
     monkeypatch.setattr(providers.boto3, "client", lambda *args, **kwargs: Client())
-    asyncio.run(
-        BedrockProvider(_config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK)).complete(
-            request
-        )
+    (
+        await BedrockProvider(
+            _config(ProviderKind.BEDROCK, ProviderFlavor.BEDROCK)
+        ).complete(request)
     )
     bedrock_results = seen[0]["messages"][-1]["content"]
     assert [
@@ -1383,7 +1392,7 @@ def test_screenshot_travels_inside_its_tool_result_on_native_adapters(monkeypatc
     ]
 
 
-def test_chat_attaches_only_the_newest_screenshot_to_its_own_result(tmp_path):
+async def test_chat_attaches_only_the_newest_screenshot_to_its_own_result(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     provider = Scripted(
         [
@@ -1398,14 +1407,14 @@ def test_chat_attaches_only_the_newest_screenshot_to_its_own_result(tmp_path):
             ModelResponse(provider_id="provider", model="model-a", text=ANSWER),
         ]
     )
-    store, service, prepared, _ = _chat(
+    store, service, prepared, _ = await _chat(
         tmp_path, provider, "model-a", vision=True, artifact_store=artifacts
     )
-    turn = store.get(ChatTurn, "turn")
+    turn = await store.get(ChatTurn, "turn")
     history = []
     for step, data in enumerate((b"older screenshot", b"newest screenshot")):
         tool_call_id = f"tool-call-{step}"
-        artifact = store.create(
+        artifact = await store.create(
             artifacts.put_bytes(
                 data,
                 engagement_id="project",
@@ -1428,11 +1437,13 @@ def test_chat_attaches_only_the_newest_screenshot_to_its_own_result(tmp_path):
                 "response_group": f"g{step}",
             }
         )
-    store.update(
-        ChatTurn,
-        turn.id,
-        {"tool_history": history, "next_step": 2, "status": ChatTurnStatus.ROUTING},
-        expected_revision=turn.revision,
+    (
+        await store.update(
+            ChatTurn,
+            turn.id,
+            {"tool_history": history, "next_step": 2, "status": ChatTurnStatus.ROUTING},
+            expected_revision=turn.revision,
+        )
     )
 
     assert _run(service, prepared) == ANSWER
@@ -1446,13 +1457,13 @@ def test_chat_attaches_only_the_newest_screenshot_to_its_own_result(tmp_path):
     assert base64.b64decode(newest.attachments[1]["data"]) == b"newest screenshot"
 
 
-def test_a_text_only_route_gets_no_screenshot(tmp_path):
+async def test_a_text_only_route_gets_no_screenshot(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    store, service, prepared, _ = _chat(
+    store, service, prepared, _ = await _chat(
         tmp_path, Scripted([]), "model-a", vision=False, artifact_store=artifacts
     )
-    turn = store.get(ChatTurn, "turn")
-    artifact = store.create(
+    turn = await store.get(ChatTurn, "turn")
+    artifact = await store.create(
         artifacts.put_bytes(
             b"screenshot",
             engagement_id="project",
@@ -1477,5 +1488,8 @@ def test_a_text_only_route_gets_no_screenshot(tmp_path):
         }
     )
 
-    (result,) = service._replayed_tool_history(prepared, turn)
+    (result,) = await service._replayed_tool_history(prepared, turn)
     assert result.attachments == []
+
+
+pytestmark = pytest.mark.anyio

@@ -61,9 +61,9 @@ class ApplicationModelService:
     def __init__(self, store, artifact_store=None):
         self.store = store
 
-    def project(self, project):
+    async def project(self, project):
         try:
-            return self.store.get(Engagement, project)
+            return await self.store.get(Engagement, project)
         except NotFoundError as exc:
             raise HTTPException(404, "Project unavailable") from exc
 
@@ -73,9 +73,9 @@ class ApplicationModelService:
         ).scalar()
         return deepcopy(payload) if payload else empty(project)
 
-    def snapshot(self, project):
-        self.project(project)
-        with self.store.database.engine.connect() as connection:
+    async def snapshot(self, project):
+        (await self.project(project))
+        async with self.store.database.connection() as connection:
             return self._read(connection, project)
 
     def registry(self, graph):
@@ -181,8 +181,8 @@ class ApplicationModelService:
             ),
         )
 
-    def schema(self, project, category=None, query=""):
-        return self.active_registry(self.snapshot(project)).discover(
+    async def schema(self, project, category=None, query=""):
+        return self.active_registry((await self.snapshot(project))).discover(
             category=category, query=query
         )
 
@@ -198,8 +198,8 @@ class ApplicationModelService:
         )
         return current
 
-    def workspace(self, project):
-        graph = self.snapshot(project)
+    async def workspace(self, project):
+        graph = await self.snapshot(project)
         return {
             **graph,
             "objects": list(graph["objects"].values()),
@@ -207,7 +207,7 @@ class ApplicationModelService:
             "schema": self.display_schema(graph),
         }
 
-    def view(
+    async def view(
         self,
         project,
         query="",
@@ -219,7 +219,7 @@ class ApplicationModelService:
         relationship_offset=0,
     ):
         """Bound the operator read path independently of total project size."""
-        graph = self.snapshot(project)
+        graph = await self.snapshot(project)
         registry = self.registry(graph)
         objects = graph["objects"]
         counts = {name: 0 for name in registry.categories}
@@ -301,8 +301,10 @@ class ApplicationModelService:
             "relationship_offset": relationship_offset,
         }
 
-    def search(self, project, query="", category=None, type=None, offset=0, limit=100):
-        graph = self.snapshot(project)
+    async def search(
+        self, project, query="", category=None, type=None, offset=0, limit=100
+    ):
+        graph = await self.snapshot(project)
         registry = self.registry(graph)
         selected = [
             o
@@ -322,8 +324,8 @@ class ApplicationModelService:
             "next_offset": offset + limit if offset + limit < len(selected) else None,
         }
 
-    def neighborhood(self, project, object_id, depth=1, limit=100):
-        graph = self.snapshot(project)
+    async def neighborhood(self, project, object_id, depth=1, limit=100):
+        graph = await self.snapshot(project)
         if object_id not in graph["objects"]:
             raise HTTPException(404, "Object unavailable; return to the project model")
         return self._neighborhood(graph, object_id, depth, limit)
@@ -359,8 +361,8 @@ class ApplicationModelService:
             "truncated": bool(frontier) or len(relationships) > limit,
         }
 
-    def relationship_options(self, project, source_id, target_id):
-        graph = self.snapshot(project)
+    async def relationship_options(self, project, source_id, target_id):
+        graph = await self.snapshot(project)
         if source_id not in graph["objects"] or target_id not in graph["objects"]:
             raise ValueError("Choose two objects in this project")
         registry = self.active_registry(graph)
@@ -425,27 +427,29 @@ class ApplicationModelService:
             "source_available": True,
         }
 
-    def evidence(self, project, kind, identifier):
-        self.project(project)
-        with self.store.database.engine.connect() as connection:
+    async def evidence(self, project, kind, identifier):
+        (await self.project(project))
+        async with self.store.database.connection() as connection:
             return self._evidence(connection, project, kind, identifier)
 
-    def evidence_list(self, project, offset=0, limit=100):
-        self.project(project)
-        with self.store.database.engine.connect() as connection:
+    async def evidence_list(self, project, offset=0, limit=100):
+        (await self.project(project))
+        async with self.store.database.connection() as connection:
             cutoff = self._read(connection, project).get("evidence_since")
-            rows = connection.execute(
-                select(EntityRow.kind, EntityRow.id)
-                .where(
-                    EntityRow.engagement_id == project,
-                    EntityRow.kind.in_(SOURCE_KINDS),
-                    EntityRow.created_at >= datetime.fromisoformat(cutoff)
-                    if cutoff
-                    else True,
+            rows = (
+                await connection.execute(
+                    select(EntityRow.kind, EntityRow.id)
+                    .where(
+                        EntityRow.engagement_id == project,
+                        EntityRow.kind.in_(SOURCE_KINDS),
+                        EntityRow.created_at >= datetime.fromisoformat(cutoff)
+                        if cutoff
+                        else True,
+                    )
+                    .order_by(EntityRow.created_at.desc(), EntityRow.id)
+                    .offset(offset)
+                    .limit(limit + 1)
                 )
-                .order_by(EntityRow.created_at.desc(), EntityRow.id)
-                .offset(offset)
-                .limit(limit + 1)
             ).all()
             return {
                 "evidence": [
@@ -455,15 +459,17 @@ class ApplicationModelService:
                 "next_offset": offset + limit if len(rows) > limit else None,
             }
 
-    def history(self, project, after=0, limit=100):
-        self.project(project)
-        with self.store.database.engine.connect() as connection:
+    async def history(self, project, after=0, limit=100):
+        (await self.project(project))
+        async with self.store.database.connection() as connection:
             rows = (
-                connection.execute(
-                    select(edits.c.payload)
-                    .where(edits.c.project_id == project, edits.c.revision > after)
-                    .order_by(edits.c.revision)
-                    .limit(limit + 1)
+                (
+                    await connection.execute(
+                        select(edits.c.payload)
+                        .where(edits.c.project_id == project, edits.c.revision > after)
+                        .order_by(edits.c.revision)
+                        .limit(limit + 1)
+                    )
                 )
                 .scalars()
                 .all()
@@ -490,26 +496,36 @@ class ApplicationModelService:
         ]
         return {**claim.model_dump(mode="json"), **stamp, "sources": snapshots}
 
-    def transact(self, project, request: GraphTransaction, *, producer="operator"):
-        self.project(project)
+    async def transact(
+        self, project, request: GraphTransaction, *, producer="operator"
+    ):
+        (await self.project(project))
         raw = request.model_dump(mode="json")
         fingerprint = digest({"producer": producer, "request": raw})
-        with self.store.database.engine.connect() as connection:
+        async with self.store.database.connection() as connection:
             # Existing store lock: SQLite BEGIN IMMEDIATE, PostgreSQL advisory
             # transaction lock. Cross-process serialization, not an in-memory lock.
-            self.store._begin_run_write(connection, "application-graph:" + project)
+            (
+                await self.store._begin_run_write(
+                    connection, "application-graph:" + project
+                )
+            )
             try:
-                if not connection.execute(
-                    select(EntityRow.id).where(
-                        EntityRow.id == project,
-                        EntityRow.kind == Engagement.entity_kind,
+                if not (
+                    await connection.execute(
+                        select(EntityRow.id).where(
+                            EntityRow.id == project,
+                            EntityRow.kind == Engagement.entity_kind,
+                        )
                     )
                 ).scalar():
                     raise HTTPException(404, "Project unavailable")
-                receipt = connection.execute(
-                    select(edits.c.digest, edits.c.payload).where(
-                        edits.c.project_id == project,
-                        edits.c.idempotency_key == request.idempotency_key,
+                receipt = (
+                    await connection.execute(
+                        select(edits.c.digest, edits.c.payload).where(
+                            edits.c.project_id == project,
+                            edits.c.idempotency_key == request.idempotency_key,
+                        )
                     )
                 ).first()
                 if receipt:
@@ -838,15 +854,17 @@ class ApplicationModelService:
                     )
                 graph["revision"] = stamp["revision"]
                 if request.expected_revision == 0:
-                    connection.execute(
-                        insert(graphs).values(
-                            project_id=project,
-                            revision=graph["revision"],
-                            payload=graph,
+                    (
+                        await connection.execute(
+                            insert(graphs).values(
+                                project_id=project,
+                                revision=graph["revision"],
+                                payload=graph,
+                            )
                         )
                     )
                 else:
-                    changed = connection.execute(
+                    changed = await connection.execute(
                         update(graphs)
                         .where(
                             graphs.c.project_id == project,
@@ -862,17 +880,19 @@ class ApplicationModelService:
                     "revision": graph["revision"],
                     "changed_ids": [c["id"] for c in changes if "id" in c],
                 }
-                connection.execute(
-                    insert(edits).values(
-                        project_id=project,
-                        revision=graph["revision"],
-                        idempotency_key=request.idempotency_key,
-                        digest=fingerprint,
-                        payload={**stamp, "changes": changes, "result": result},
+                (
+                    await connection.execute(
+                        insert(edits).values(
+                            project_id=project,
+                            revision=graph["revision"],
+                            idempotency_key=request.idempotency_key,
+                            digest=fingerprint,
+                            payload={**stamp, "changes": changes, "result": result},
+                        )
                     )
                 )
-                connection.commit()
+                (await connection.commit())
                 return result
             except Exception:
-                connection.rollback()
+                (await connection.rollback())
                 raise

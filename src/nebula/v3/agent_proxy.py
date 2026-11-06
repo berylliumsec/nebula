@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
 import asyncio
 import hashlib
 import os
@@ -25,7 +27,7 @@ class AgentMitmProxy:
         session_id: str,
         identity_id: str,
         root: Path,
-        authorize: Callable[[str], None],
+        authorize: MaybeAsync[[str], None],
         connect: Callable[
             [str, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
         ]

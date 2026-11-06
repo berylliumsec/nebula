@@ -1,12 +1,15 @@
 """OpenRouter account credit checks are separate from inference key limits."""
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
-import asyncio
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.credentials import CredentialStore
@@ -26,7 +29,7 @@ def _profile(**changes: object) -> ProviderProfile:
     )
 
 
-def test_missing_management_key_does_not_use_inference_key(monkeypatch):
+async def test_missing_management_key_does_not_use_inference_key(monkeypatch):
     monkeypatch.setenv("NEBULA_INFERENCE_TEST_KEY", "inference-only")
     requests = []
 
@@ -36,10 +39,8 @@ def test_missing_management_key_does_not_use_inference_key(monkeypatch):
             200, json={"data": {"total_credits": 100, "total_usage": 75}}
         )
 
-    snapshot = asyncio.run(
-        read_openrouter_credits(
-            _profile(), CredentialStore(), transport=httpx.MockTransport(handler)
-        )
+    snapshot = await read_openrouter_credits(
+        _profile(), CredentialStore(), transport=httpx.MockTransport(handler)
     )
     assert snapshot.status == "unavailable"
     assert snapshot.reason_code == "management_credential_missing"
@@ -49,7 +50,7 @@ def test_missing_management_key_does_not_use_inference_key(monkeypatch):
         _profile(openrouter_management_secret_ref="env:NEBULA_INFERENCE_TEST_KEY")
 
 
-def test_account_credit_read_uses_distinct_key_and_fixed_origin(monkeypatch):
+async def test_account_credit_read_uses_distinct_key_and_fixed_origin(monkeypatch):
     monkeypatch.setenv("NEBULA_INFERENCE_TEST_KEY", "inference-only")
     monkeypatch.setenv("NEBULA_MANAGEMENT_TEST_KEY", "management-only")
     requests = []
@@ -60,12 +61,10 @@ def test_account_credit_read_uses_distinct_key_and_fixed_origin(monkeypatch):
             200, json={"data": {"total_credits": 100.50, "total_usage": 80.50}}
         )
 
-    snapshot = asyncio.run(
-        read_openrouter_credits(
-            _profile(openrouter_management_secret_ref="env:NEBULA_MANAGEMENT_TEST_KEY"),
-            CredentialStore(),
-            transport=httpx.MockTransport(handler),
-        )
+    snapshot = await read_openrouter_credits(
+        _profile(openrouter_management_secret_ref="env:NEBULA_MANAGEMENT_TEST_KEY"),
+        CredentialStore(),
+        transport=httpx.MockTransport(handler),
     )
 
     assert snapshot.status == "observed"
@@ -99,16 +98,14 @@ def test_account_credit_read_uses_distinct_key_and_fixed_origin(monkeypatch):
         ),
     ],
 )
-def test_account_credit_failure_is_explicit_and_has_no_amounts(
+async def test_account_credit_failure_is_explicit_and_has_no_amounts(
     monkeypatch, response, reason
 ):
     monkeypatch.setenv("NEBULA_MANAGEMENT_TEST_KEY", "management-only")
-    snapshot = asyncio.run(
-        read_openrouter_credits(
-            _profile(openrouter_management_secret_ref="env:NEBULA_MANAGEMENT_TEST_KEY"),
-            CredentialStore(),
-            transport=httpx.MockTransport(lambda request: response),
-        )
+    snapshot = await read_openrouter_credits(
+        _profile(openrouter_management_secret_ref="env:NEBULA_MANAGEMENT_TEST_KEY"),
+        CredentialStore(),
+        transport=httpx.MockTransport(lambda request: response),
     )
     assert snapshot.status == "unavailable"
     assert snapshot.reason_code == reason
@@ -116,16 +113,20 @@ def test_account_credit_failure_is_explicit_and_has_no_amounts(
     assert snapshot.observed_at is None
 
 
-def test_credit_refresh_route_requires_auth_and_openrouter_profile(
+async def test_credit_refresh_route_requires_auth_and_openrouter_profile(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("NEBULA_MANAGEMENT_TEST_KEY", "management-only")
     store = NebulaStore(tmp_path / "core.sqlite")
-    store.create(
-        _profile(openrouter_management_secret_ref="env:NEBULA_MANAGEMENT_TEST_KEY")
+    (
+        await store.create(
+            _profile(openrouter_management_secret_ref="env:NEBULA_MANAGEMENT_TEST_KEY")
+        )
     )
-    store.create(
-        ProviderProfile(id="other-provider", name="Other", provider_type="openai")
+    (
+        await store.create(
+            ProviderProfile(id="other-provider", name="Other", provider_type="openai")
+        )
     )
     app = create_app(
         store=store,
@@ -137,25 +138,29 @@ def test_credit_refresh_route_requires_auth_and_openrouter_profile(
             )
         ),
     )
-    with TestClient(app) as client:
+    async with TestClient(app) as client:
         path = "/api/v1/providers/openrouter-account/openrouter/credits/refresh"
-        assert client.post(path).status_code == 401
-        response = client.post(path, headers={"Authorization": "Bearer test-token"})
+        assert (await client.post(path)).status_code == 401
+        response = await client.post(
+            path, headers={"Authorization": "Bearer test-token"}
+        )
         assert response.status_code == 200, response.text
         assert response.json()["remaining_usd"] == 19.95
-        unsupported = client.post(
+        unsupported = await client.post(
             "/api/v1/providers/other-provider/openrouter/credits/refresh",
             headers={"Authorization": "Bearer test-token"},
         )
         assert unsupported.status_code == 422
 
 
-def test_management_reference_round_trips_through_provider_create_and_patch(tmp_path):
+async def test_management_reference_round_trips_through_provider_create_and_patch(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.sqlite")
     app = create_app(store=store, auth_token="test-token")
     headers = {"Authorization": "Bearer test-token"}
-    with TestClient(app) as client:
-        created = client.post(
+    async with TestClient(app) as client:
+        created = await client.post(
             "/api/v1/providers",
             headers=headers,
             json={
@@ -170,7 +175,7 @@ def test_management_reference_round_trips_through_provider_create_and_patch(tmp_
         assert profile["openrouter_management_secret_ref"] == (
             "env:NEBULA_MANAGEMENT_TEST_KEY"
         )
-        changed = client.patch(
+        changed = await client.patch(
             f"/api/v1/providers/{profile['id']}",
             headers=headers,
             json={
@@ -184,7 +189,10 @@ def test_management_reference_round_trips_through_provider_create_and_patch(tmp_
         assert changed.json()["openrouter_management_secret_ref"] == (
             "env:NEBULA_NEXT_MANAGEMENT_KEY"
         )
-        saved = store.get(ProviderProfile, profile["id"])
+        saved = await store.get(ProviderProfile, profile["id"])
         assert saved.openrouter_management_secret_ref == (
             "env:NEBULA_NEXT_MANAGEMENT_KEY"
         )
+
+
+pytestmark = pytest.mark.anyio

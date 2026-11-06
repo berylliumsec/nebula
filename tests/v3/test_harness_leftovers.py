@@ -18,6 +18,10 @@ each stdin message when a turn takes it, and coalesces queued messages into one.
 """
 
 from __future__ import annotations
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 import json
@@ -111,7 +115,7 @@ class ScriptedCodexRpc:
         return None
 
 
-def test_codex_daybreak_catalog_and_turn_request():
+async def test_codex_daybreak_catalog_and_turn_request():
     request = ChatCompletionRequest.model_validate(
         {
             "backend": "harness",
@@ -168,10 +172,10 @@ def test_codex_daybreak_catalog_and_turn_request():
         assert rpc.calls[-1][1]["cyberAccessProgram"] == "daybreakRed"
         await stream.aclose()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_path):
+async def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_path):
     class ThreadRpc(ScriptedCodexRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             self.calls.append((method, params))
@@ -237,7 +241,7 @@ def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_path):
             {"threadId": THREAD, "daybreakEnabled": True},
         ) in rpc.calls
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 def _notification(method: str, **params: Any) -> dict[str, Any]:
@@ -351,7 +355,7 @@ def _fake_app_server(tmp_path: Path, body: str) -> HarnessProfile:
 # 1. Server requests that arrive between turns -----------------------------------
 
 
-def test_codex_requests_left_between_turns_are_answered_not_dropped():
+async def test_codex_requests_left_between_turns_are_answered_not_dropped():
     async def scenario() -> None:
         rpc = ScriptedCodexRpc([_agent_completed("Done."), _turn_completed()])
         presented: list[Any] = []
@@ -412,10 +416,10 @@ def test_codex_requests_left_between_turns_are_answered_not_dropped():
             "item/commandExecution/requestApproval",
         ]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_request_sent_after_a_turn_completed_gets_a_reply(tmp_path):
+async def test_codex_request_sent_after_a_turn_completed_gets_a_reply(tmp_path):
     profile = _fake_app_server(
         tmp_path,
         """
@@ -457,7 +461,7 @@ def test_codex_request_sent_after_a_turn_completed_gets_a_reply(tmp_path):
         assert reply["error"]["code"] == -32000
         assert "result" not in reply
 
-    asyncio.run(asyncio.wait_for(scenario(), 20))
+    (await asyncio.wait_for(scenario(), 20))
 
 
 # 2. Requests Codex withdraws while the operator is deciding ----------------------
@@ -498,7 +502,7 @@ class PendingDecisions:
     ],
     ids=["approval", "user-input", "mcp-elicitation"],
 )
-def test_codex_withdrawn_request_ends_the_wait_instead_of_hanging(
+async def test_codex_withdrawn_request_ends_the_wait_instead_of_hanging(
     request_frame: dict[str, Any], event_type: str
 ):
     async def scenario() -> None:
@@ -545,10 +549,10 @@ def test_codex_withdrawn_request_ends_the_wait_instead_of_hanging(
         assert events[-1].type == "interrupted"
         assert events.index(withdrawn[0]) < len(events) - 1
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_answer_still_goes_out_when_another_request_is_resolved():
+async def test_codex_answer_still_goes_out_when_another_request_is_resolved():
     async def scenario() -> None:
         rpc = ScriptedCodexRpc([_command_approval(61)])
         pending = PendingDecisions()
@@ -575,7 +579,7 @@ def test_codex_answer_still_goes_out_when_another_request_is_resolved():
         assert events[-1].type == "completed"
         assert events[-1].message == "Scan finished."
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 class CodexScriptAdapter(HarnessAdapter):
@@ -596,12 +600,12 @@ class CodexScriptAdapter(HarnessAdapter):
         )
 
 
-def _codex_runtime(
+async def _codex_runtime(
     tmp_path: Path, rpc: ScriptedCodexRpc
 ) -> tuple[NebulaStore, HarnessRuntimeService, str, str]:
     store = NebulaStore(tmp_path / "nebula.db")
-    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
-    profile = store.create(
+    engagement = await store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = await store.create(
         HarnessProfile(
             id="codex-a",
             name="Codex fixture",
@@ -618,7 +622,7 @@ def _codex_runtime(
         workspace_resolver=lambda _: tmp_path,
         adapter_factory=lambda _: adapter,
     )
-    _, owner, turn = service.prepare_chat(
+    _, owner, turn = await service.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
@@ -627,98 +631,113 @@ def _codex_runtime(
         harness_session_id=None,
         mcp_server_ids=[],
     )
-    session = store.get(HarnessSession, turn.harness_session_id)
+    session = await store.get(HarnessSession, turn.harness_session_id)
     # A host-mode session whose shell capability makes commands ask the operator.
-    store.update(
-        HarnessSession,
-        session.id,
-        {
-            "metadata": {
-                **session.metadata,
-                "execution_mode": "host",
-                "native_capabilities": HarnessNativeCapabilities(shell=True).model_dump(
-                    mode="json"
-                ),
-            }
-        },
-        expected_revision=session.revision,
+    (
+        await store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **session.metadata,
+                    "execution_mode": "host",
+                    "native_capabilities": HarnessNativeCapabilities(
+                        shell=True
+                    ).model_dump(mode="json"),
+                }
+            },
+            expected_revision=session.revision,
+        )
     )
     return store, service, owner.id, turn.id
 
 
-def test_codex_withdrawn_approval_expires_the_pending_nebula_card(tmp_path):
+async def test_codex_withdrawn_approval_expires_the_pending_nebula_card(tmp_path):
     async def scenario() -> None:
         rpc = ScriptedCodexRpc([_command_approval(71)])
-        store, service, _, turn_id = _codex_runtime(tmp_path, rpc)
+        store, service, _, turn_id = await _codex_runtime(tmp_path, rpc)
 
-        def pending() -> list[Approval]:
+        async def pending() -> list[Approval]:
             return [
                 approval
-                for approval in store.list_entities(
-                    Approval, engagement_id="eng-a", limit=100
+                for approval in (
+                    await store.list_entities(
+                        Approval, engagement_id="eng-a", limit=100
+                    )
                 )
                 if approval.status == ApprovalStatus.PENDING
             ]
 
-        task = service.start_chat_turn(turn_id)
+        task = await service.start_chat_turn(turn_id)
         await _until(lambda: bool(pending()))
-        card = pending()[0]
+        card = (await pending())[0]
         rpc.events.put_nowait(_turn_completed("interrupted"))
         rpc.events.put_nowait(_notification("serverRequest/resolved", requestId=71))
 
         await asyncio.wait_for(task, DEADLINE_SECONDS)
 
-        expired = store.get(Approval, card.id)
+        expired = await store.get(Approval, card.id)
         assert expired.status == ApprovalStatus.EXPIRED
         assert expired.decided_by == "harness"
         assert "Codex withdrew" in (expired.decision_note or "")
-        call = store.get(ToolCall, card.tool_call_id or "")
+        call = await store.get(ToolCall, card.tool_call_id or "")
         assert call.status == ToolCallStatus.CANCELLED
-        assert store.get(HarnessTurn, turn_id).status == HarnessTurnStatus.INTERRUPTED
+        assert (
+            await store.get(HarnessTurn, turn_id)
+        ).status == HarnessTurnStatus.INTERRUPTED
         assert rpc.responses == []
-        await service.close_session(store.get(HarnessTurn, turn_id).harness_session_id)
+        await service.close_session(
+            (await store.get(HarnessTurn, turn_id)).harness_session_id
+        )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_codex_withdrawn_question_expires_the_pending_nebula_interaction(tmp_path):
+async def test_codex_withdrawn_question_expires_the_pending_nebula_interaction(
+    tmp_path,
+):
     async def scenario() -> None:
         rpc = ScriptedCodexRpc([_user_input(72)])
-        store, service, owner_id, turn_id = _codex_runtime(tmp_path, rpc)
+        store, service, owner_id, turn_id = await _codex_runtime(tmp_path, rpc)
 
-        def pending() -> list[HarnessInteraction]:
+        async def pending() -> list[HarnessInteraction]:
             return [
                 item
-                for item in store.list_entities(
-                    HarnessInteraction, engagement_id="eng-a", limit=100
+                for item in (
+                    await store.list_entities(
+                        HarnessInteraction, engagement_id="eng-a", limit=100
+                    )
                 )
                 if item.status == HarnessInteractionStatus.PENDING
             ]
 
-        task = service.start_chat_turn(turn_id)
+        task = await service.start_chat_turn(turn_id)
         await _until(lambda: bool(pending()))
-        question = pending()[0]
+        question = (await pending())[0]
         rpc.events.put_nowait(_turn_completed("interrupted"))
         rpc.events.put_nowait(_notification("serverRequest/resolved", requestId=72))
 
         await asyncio.wait_for(task, DEADLINE_SECONDS)
 
         assert (
-            store.get(HarnessInteraction, question.id).status
-            == HarnessInteractionStatus.EXPIRED
-        )
-        assert store.get(HarnessTurn, turn_id).status == HarnessTurnStatus.INTERRUPTED
-        assert store.get(ChatTurn, owner_id).status.value == "interrupted"
+            await store.get(HarnessInteraction, question.id)
+        ).status == HarnessInteractionStatus.EXPIRED
+        assert (
+            await store.get(HarnessTurn, turn_id)
+        ).status == HarnessTurnStatus.INTERRUPTED
+        assert (await store.get(ChatTurn, owner_id)).status.value == "interrupted"
         assert rpc.responses == []
-        await service.close_session(store.get(HarnessTurn, turn_id).harness_session_id)
+        await service.close_session(
+            (await store.get(HarnessTurn, turn_id)).harness_session_id
+        )
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # 3. A second interrupt of a turn that already ended ------------------------------
 
 
-def test_codex_second_interrupt_of_an_ended_turn_is_not_an_error(tmp_path):
+async def test_codex_second_interrupt_of_an_ended_turn_is_not_an_error(tmp_path):
     profile = _fake_app_server(
         tmp_path,
         """
@@ -763,10 +782,10 @@ def test_codex_second_interrupt_of_an_ended_turn_is_not_an_error(tmp_path):
         finally:
             await rpc.close()
 
-    asyncio.run(asyncio.wait_for(scenario(), 20))
+    (await asyncio.wait_for(scenario(), 20))
 
 
-def test_codex_interrupt_of_a_turn_codex_already_ended_is_not_an_error():
+async def test_codex_interrupt_of_a_turn_codex_already_ended_is_not_an_error():
     async def scenario() -> None:
         rpc = ScriptedCodexRpc()
         rpc.interrupt_error = {"code": -32600, "message": "no active turn to interrupt"}
@@ -786,7 +805,7 @@ def test_codex_interrupt_of_a_turn_codex_already_ended_is_not_an_error():
         with pytest.raises(HarnessProviderError):
             await connection.interrupt()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # 5. Pricing after model/rerouted ------------------------------------------------
@@ -803,7 +822,7 @@ def _token_usage(total_in: int, total_out: int, last_in: int, last_out: int) -> 
     )
 
 
-def test_codex_usage_after_a_reroute_is_priced_with_the_serving_model():
+async def test_codex_usage_after_a_reroute_is_priced_with_the_serving_model():
     async def scenario() -> None:
         rpc = ScriptedCodexRpc(
             [
@@ -846,7 +865,7 @@ def test_codex_usage_after_a_reroute_is_priced_with_the_serving_model():
         assert first.cost_usd == pytest.approx(0.004)
         assert list(first.model_usage) == ["gpt-5.4"]
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 # 6. Claude guidance the CLI answers in a turn of its own --------------------------
@@ -1129,7 +1148,7 @@ async def _steered_turn(
     return events
 
 
-def test_claude_guidance_answered_in_its_own_cli_turn_stays_in_the_steered_turn(
+async def test_claude_guidance_answered_in_its_own_cli_turn_stays_in_the_steered_turn(
     tmp_path: Path,
 ):
     async def scenario() -> None:
@@ -1167,10 +1186,10 @@ def test_claude_guidance_answered_in_its_own_cli_turn_stays_in_the_steered_turn(
         )
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_guidance_absorbed_at_a_tool_boundary_ends_with_that_turn(
+async def test_claude_guidance_absorbed_at_a_tool_boundary_ends_with_that_turn(
     tmp_path: Path,
 ):
     async def scenario() -> None:
@@ -1207,13 +1226,13 @@ def test_claude_guidance_absorbed_at_a_tool_boundary_ends_with_that_turn(
         assert following[-1].message == "Answer to the next question."
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
 @pytest.mark.parametrize(
     "early_echo", [True, False], ids=["echo-at-turn-start", "echo-with-answer"]
 )
-def test_claude_stop_after_guidance_also_stops_the_guidance_turn(
+async def test_claude_stop_after_guidance_also_stops_the_guidance_turn(
     tmp_path: Path, early_echo: bool
 ):
     async def scenario() -> None:
@@ -1228,9 +1247,9 @@ def test_claude_stop_after_guidance_also_stops_the_guidance_turn(
         # The real CLI echoes a prompt only with the turn's first assistant
         # message, so a stop before it relies on the adapter's --replay flag.
         connection = await (
-            _claude(cli, tmp_path)
+            (await _claude(cli, tmp_path))
             if early_echo
-            else _claude(cli, tmp_path, acknowledges_user_messages=True)
+            else (await _claude(cli, tmp_path, acknowledges_user_messages=True))
         )
         events: list[HarnessEvent] = []
 
@@ -1261,10 +1280,10 @@ def test_claude_stop_after_guidance_also_stops_the_guidance_turn(
         )
         await connection.close()
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_claude_adapter_asks_the_cli_to_acknowledge_each_user_message(
+async def test_claude_adapter_asks_the_cli_to_acknowledge_each_user_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     captured: dict[str, Any] = {}
@@ -1310,7 +1329,10 @@ def test_claude_adapter_asks_the_cli_to_acknowledge_each_user_message(
             )
         )
 
-    asyncio.run(scenario())
+    (await scenario())
     assert captured["extra_args"] == {"replay-user-messages": None}
     # The connection then expects the echoes even before one arrives.
     assert opened[0]._cli_acknowledges is True
+
+
+pytestmark = pytest.mark.anyio

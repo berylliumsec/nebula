@@ -3,8 +3,8 @@
 Core supports PostgreSQL through `NEBULA_V3_DATABASE_URL`. PostgreSQL permits
 independent agent transactions to write concurrently. Core retains transaction
 locks for each ordered event stream and conflict checks for the same saved
-record. A database change does not remove synchronous work from Core's event
-loop.
+record. Runtime SQL uses Psycopg 3 asynchronously; SQLite uses aiosqlite.
+Each task owns its session, and database work completes before external calls.
 
 `nebula-core migrate-to-postgresql` is an offline, one-way copy of the main
 `nebula.db`. It preserves saved IDs, revisions, timestamps, JSON documents,
@@ -20,6 +20,40 @@ Artifacts, workspaces, credentials, mission checkpoints, Butler memory, and vect
 indexes remain in the existing data directory or their configured locations.
 Keep those files and use the same `--data-dir` when restarting Core. This command
 does not migrate separate SQLite databases used by these services.
+
+## Configure the runtime connection budget
+
+PostgreSQL startup requires three explicit deployment allocations:
+
+- `NEBULA_V3_DB_ADMIN_RESERVE`: additional administrative headroom, at least one
+  connection, beyond PostgreSQL's own reserved slots.
+- `NEBULA_V3_DB_OTHER_CONNECTIONS`: peak allocation for other clients, maintenance,
+  probes and auxiliary pools, including consumers of the same role/database limits.
+- `NEBULA_V3_DB_PEAK_PROCESSES`: maximum simultaneous Core processes, including
+  rolling-deployment overlap. Every Core process owns one shared runtime pool.
+
+Each maintenance/CLI process uses a separate one-connection pool. Reserve one
+slot per simultaneous command in `NEBULA_V3_DB_OTHER_CONNECTIONS`, alongside
+other consumers. Commands reject a zero auxiliary allocation. Discovery also
+uses only one connection and closes it before the command's runtime pool opens.
+
+Core reads `max_connections`, PostgreSQL's reserved slots, and login-role/database
+connection limits. It subtracts the allocations above and divides the remaining
+capacity across the declared process count. Startup refuses an infeasible budget.
+For example, 100 server slots, three PostgreSQL-reserved slots, five additional
+admin slots, twelve other-consumer slots, and two Core processes allow **40 slots
+per Core**. This example is not a production default.
+
+The pool never overflows. `NEBULA_V3_DB_POOL_SIZE` may select a smaller positive
+pool, but cannot exceed the calculated ceiling. `NEBULA_V3_DB_POOL_TIMEOUT` is a
+positive finite number of seconds, defaulting to 30. Zero or unlimited pool sizes
+are invalid. Reconfigure the budget before increasing replicas or changing other
+consumers; observed idle connections are not a capacity allocation.
+
+Authenticated `GET /api/v1/diagnostics/performance` reports the declared budget,
+pool occupancy and high-water mark, waiting callers, timeouts, acquisition time,
+query/transaction time and event-loop lag. Bulk listings share bounded admission
+so foreground requests retain capacity where the budget allows it.
 
 ## Prepare the server and source
 

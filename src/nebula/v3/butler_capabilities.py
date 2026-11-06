@@ -35,7 +35,9 @@ from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
 
 if TYPE_CHECKING:
+    from .control_assistant_work import ControlAssistantWork
     from .container_terminal import ContainerTerminalService
+    from .storage import NebulaStore, StoreTransaction
     from .workspace import WorkspaceService
 
 
@@ -267,9 +269,15 @@ class _ButlerAction(Protocol):
 class ButlerCapabilities:
     """Validated gateway to the selected project's existing Core actions."""
 
-    def __init__(
+    @classmethod
+    async def create(cls, *args, **kwargs) -> "ButlerCapabilities":
+        instance = cls.__new__(cls)
+        await instance._initialize(*args, **kwargs)
+        return instance
+
+    async def _initialize(
         self,
-        store: Any,
+        store: NebulaStore,
         artifact_store: Any,
         project_id: str,
         *,
@@ -277,7 +285,7 @@ class ButlerCapabilities:
         notebooks: Any = None,
         workspace: WorkspaceService | None = None,
         container_terminals: ContainerTerminalService | None = None,
-        work: Any = None,
+        work: ControlAssistantWork | None = None,
         memory: Any = None,
         operator_message: str = "",
         operator_turn_id: str | None = None,
@@ -289,7 +297,7 @@ class ButlerCapabilities:
         # checks. The gateway only controls discovery and schema validation.
         self._store = store
         self._project_id = project_id
-        self._project_name = store.get(Engagement, project_id).name
+        self._project_name = (await store.get(Engagement, project_id)).name
         self._memory = memory
         self._operator_message = operator_message
         self._operator_turn_id = operator_turn_id
@@ -487,7 +495,7 @@ class ButlerCapabilities:
                 and name != "nebula.work.catalog"
                 and self._read_only(plugin)
             }
-            case = store.get(ButlerRecoveryCase, background_case_id)
+            case = await store.get(ButlerRecoveryCase, background_case_id)
             if case.signal == "butler.global_periodic_check":
                 if instructions_root is None or work is None:
                     raise ValueError("Nebula-wide Butler tools are unavailable")
@@ -506,12 +514,12 @@ class ButlerCapabilities:
                     }
                 )
 
-    def _background_case(self) -> ButlerRecoveryCase:
+    async def _background_case(self) -> ButlerRecoveryCase:
         if self._background_case_id is None:
             raise RuntimeError("not a background Butler action")
-        case = self._store.get(ButlerRecoveryCase, self._background_case_id)
-        project = self._store.get(Engagement, self._project_id)
-        policy = self._store.find_entity(
+        case = await self._store.get(ButlerRecoveryCase, self._background_case_id)
+        project = await self._store.get(Engagement, self._project_id)
+        policy = await self._store.find_entity(
             ButlerAuthorityPolicy, "engagement_id", self._project_id
         )
         if (
@@ -526,7 +534,7 @@ class ButlerCapabilities:
             raise ValueError("Butler Act authority or recovery case changed")
         return case
 
-    def _check_background_change_reason(
+    async def _check_background_change_reason(
         self, case: ButlerRecoveryCase, name: str, arguments: dict[str, Any]
     ) -> None:
         if name == "nebula.work.decide_approval":
@@ -540,7 +548,7 @@ class ButlerCapabilities:
             from .butler_oversight import ButlerEventPayload
             from .butler_recovery import ButlerRecoveryService
 
-            event = ButlerRecoveryService(self._store).source_event(case)
+            event = await ButlerRecoveryService(self._store).source_event(case)
             payload = ButlerEventPayload.model_validate(event.payload)
             approval_id = str(arguments.get("action_id") or "")
             if not any(
@@ -550,7 +558,7 @@ class ButlerCapabilities:
                 raise ValueError(
                     "background Butler may decide only the triggering approval"
                 )
-            approval = self._store.get(Approval, approval_id)
+            approval = await self._store.get(Approval, approval_id)
             if (
                 approval.engagement_id != self._project_id
                 or approval.status != ApprovalStatus.PENDING
@@ -566,7 +574,7 @@ class ButlerCapabilities:
         from .butler_oversight import ButlerEventPayload
         from .butler_recovery import ButlerRecoveryService
 
-        event = ButlerRecoveryService(self._store).source_event(case)
+        event = await ButlerRecoveryService(self._store).source_event(case)
         metrics = ButlerEventPayload.model_validate(event.payload).metrics
         category = metrics.get("category")
         rule = metrics.get("rule")
@@ -582,18 +590,48 @@ class ButlerCapabilities:
                 "A full subagent slot is not a runtime configuration failure"
             )
 
-    def _begin_background_step(self, operation: str, arguments: dict[str, Any]) -> str:
+    async def _locked_background_case(
+        self, transaction: StoreTransaction
+    ) -> ButlerRecoveryCase | None:
+        from .database import EntityRow
+
+        assert self._background_case_id is not None
+        row = await transaction.session.get(
+            EntityRow,
+            self._background_case_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        return (
+            ButlerRecoveryCase.model_validate(row.payload) if row is not None else None
+        )
+
+    async def _begin_background_step(
+        self, operation: str, arguments: dict[str, Any]
+    ) -> str:
         from .butler_oversight import _entity_in_transaction
         from .butler_authority import policy_id
 
-        case = self._background_case()
         step_id = str(uuid4())
         digest = hashlib.sha256(
             json.dumps(arguments, sort_keys=True, default=str).encode()
         ).hexdigest()
-        with self._store.transaction(immediate=True) as transaction:
-            current = _entity_in_transaction(transaction, ButlerRecoveryCase, case.id)
-            policy = _entity_in_transaction(
+        async with self._store.transaction(immediate=True) as transaction:
+            # Serialize audit appends before taking the authorization snapshot.
+            # SQLite's immediate transaction and PostgreSQL's row locks protect
+            # both begin and finish without holding a connection during effects.
+            current = await self._locked_background_case(transaction)
+            from .database import EntityRow
+
+            for entity_id in (self._project_id, policy_id(self._project_id)):
+                await transaction.session.get(
+                    EntityRow,
+                    entity_id,
+                    with_for_update=True,
+                    populate_existing=True,
+                )
+            case = await self._background_case()
+            policy = await _entity_in_transaction(
                 transaction,
                 ButlerAuthorityPolicy,
                 policy_id(self._project_id),
@@ -607,26 +645,28 @@ class ButlerCapabilities:
                 or policy.revision != current.authority_revision
             ):
                 raise ValueError("Butler Act authority or recovery case changed")
-            transaction.update(
-                ButlerRecoveryCase,
-                current.id,
-                {
-                    "steps": [
-                        *current.steps,
-                        {
-                            "id": step_id,
-                            "operation": operation,
-                            "arguments_sha256": digest,
-                            "status": "running",
-                            "started_at": utc_now().isoformat(),
-                        },
-                    ]
-                },
-                expected_revision=current.revision,
+            (
+                await transaction.update(
+                    ButlerRecoveryCase,
+                    current.id,
+                    {
+                        "steps": [
+                            *current.steps,
+                            {
+                                "id": step_id,
+                                "operation": operation,
+                                "arguments_sha256": digest,
+                                "status": "running",
+                                "started_at": utc_now().isoformat(),
+                            },
+                        ]
+                    },
+                    expected_revision=current.revision,
+                )
             )
         return step_id
 
-    def _finish_background_step(
+    async def _finish_background_step(
         self,
         step_id: str,
         *,
@@ -635,13 +675,10 @@ class ButlerCapabilities:
         result: dict[str, Any] | None = None,
         error: BaseException | None = None,
     ) -> None:
-        from .butler_oversight import _entity_in_transaction
 
         assert self._background_case_id is not None
-        with self._store.transaction(immediate=True) as transaction:
-            case = _entity_in_transaction(
-                transaction, ButlerRecoveryCase, self._background_case_id
-            )
+        async with self._store.transaction(immediate=True) as transaction:
+            case = await self._locked_background_case(transaction)
             if case is None:
                 return
             steps = list(case.steps)
@@ -744,24 +781,32 @@ class ButlerCapabilities:
                         *case.dialogue_read_turn_ids,
                         read_turn_id,
                     ]
-            transaction.update(
-                ButlerRecoveryCase,
-                case.id,
-                updates,
-                expected_revision=case.revision,
+            (
+                await transaction.update(
+                    ButlerRecoveryCase,
+                    case.id,
+                    updates,
+                    expected_revision=case.revision,
+                )
             )
 
     def _memory_actions(self) -> list[AnalysisTool]:
         """Expose scoped memory through the existing four-tool gateway."""
 
         async def list_items(arguments: dict[str, Any]) -> dict[str, Any]:
-            return self._memory.list(
-                self._project_id, limit=arguments.get("limit", 40)
+            return (
+                await self._memory.list(
+                    self._project_id, limit=arguments.get("limit", 40)
+                )
             ).model_dump(mode="json")
 
         async def search_items(arguments: dict[str, Any]) -> dict[str, Any]:
-            return self._memory.search(
-                self._project_id, arguments["query"], limit=arguments.get("limit", 12)
+            return (
+                await self._memory.search(
+                    self._project_id,
+                    arguments["query"],
+                    limit=arguments.get("limit", 12),
+                )
             ).model_dump(mode="json")
 
         async def remember_item(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -769,10 +814,10 @@ class ButlerCapabilities:
                 (self._operator_turn_id, self._operator_message)
             ]
             if self._operator_turn_id:
-                turn = self._store.get(ChatTurn, self._operator_turn_id)
+                turn = await self._store.get(ChatTurn, self._operator_turn_id)
                 if turn.engagement_id != self._project_id:
                     raise ValueError("Memory source belongs to another project")
-                messages = self._store.list_session_entities(
+                messages = await self._store.list_session_entities(
                     ChatMessage, turn.session_id, newest_first=True, limit=16
                 )
                 sources.extend(
@@ -782,7 +827,7 @@ class ButlerCapabilities:
                     and message.role == ChatRole.USER
                     and not message_is_replaced(message)
                 )
-            item = self._memory.remember_operator_item(
+            item = await self._memory.remember_operator_item(
                 self._project_id,
                 scope=arguments["scope"],
                 content=arguments["content"],
@@ -793,7 +838,7 @@ class ButlerCapabilities:
             return {"item": item.model_dump(mode="json")}
 
         async def edit_item(arguments: dict[str, Any]) -> dict[str, Any]:
-            item = self._memory.update(
+            item = await self._memory.update(
                 self._project_id,
                 arguments["id"],
                 arguments["content"],
@@ -802,10 +847,12 @@ class ButlerCapabilities:
             return {"item": item.model_dump(mode="json")}
 
         async def forget_item(arguments: dict[str, Any]) -> dict[str, Any]:
-            self._memory.delete(
-                self._project_id,
-                arguments["id"],
-                expected_revision=arguments["expected_revision"],
+            (
+                await self._memory.delete(
+                    self._project_id,
+                    arguments["id"],
+                    expected_revision=arguments["expected_revision"],
+                )
             )
             return {"deleted": True, "id": arguments["id"]}
 
@@ -1085,17 +1132,17 @@ class ButlerCapabilities:
             ) from exc
         step_id: str | None = None
         if self._background_case_id is not None:
-            case = self._background_case()
+            case = await self._background_case()
             if change and name not in _BACKGROUND_CHANGES:
                 raise ValueError("this operation is unavailable to background Butler")
             if change:
-                self._check_background_change_reason(case, name, payload)
+                (await self._check_background_change_reason(case, name, payload))
             if change and name in {
                 "nebula.work.set_chat_settings",
                 "nebula.work.message_chat",
                 "nebula.work.retry_chat_turn",
             }:
-                target = self._store.get(
+                target = await self._store.get(
                     ChatSession, str(payload.get("session_id") or "")
                 )
                 if target.engagement_id != self._project_id or target.parent_session_id:
@@ -1104,7 +1151,7 @@ class ButlerCapabilities:
                 "nebula.work.goal_action",
                 "nebula.work.update_goal",
             }:
-                goal = self._store.find_entity(
+                goal = await self._store.find_entity(
                     ChatGoal, "session_id", str(payload.get("session_id") or "")
                 )
                 if goal is None:
@@ -1126,14 +1173,14 @@ class ButlerCapabilities:
                         "subagent_model",
                     )
                 ):
-                    current = self._work.chat_settings(
+                    current = await self._work.chat_settings(
                         self._project_id, payload.get("session_id")
                     )
                     selected = {**current["settings"], **settings}
                     if selected.get("backend") == "harness" and selected.get(
                         "allow_subagents"
                     ):
-                        self._work.chat.subagents.validate_harness_setting(
+                        await self._work.chat.subagents.validate_harness_setting(
                             self._project_id,
                             selected.get("subagent_provider_id") or "",
                             selected.get("subagent_model") or "",
@@ -1141,8 +1188,8 @@ class ButlerCapabilities:
                             selected.get("subagent_reasoning_effort"),
                             selected.get("subagent_harness_profile_id"),
                         )
-            step_id = self._begin_background_step(name, payload)
-            self._background_case()
+            step_id = await self._begin_background_step(name, payload)
+            (await self._background_case())
         try:
             if (
                 self._background_case_id is not None
@@ -1159,13 +1206,17 @@ class ButlerCapabilities:
                 result = await plugin._handler(payload)
         except BaseException as exc:
             if step_id is not None:
-                self._finish_background_step(
-                    step_id, operation=name, arguments=payload, error=exc
+                (
+                    await self._finish_background_step(
+                        step_id, operation=name, arguments=payload, error=exc
+                    )
                 )
             raise
         if step_id is not None:
-            self._finish_background_step(
-                step_id, operation=name, arguments=payload, result=result
+            (
+                await self._finish_background_step(
+                    step_id, operation=name, arguments=payload, result=result
+                )
             )
         return {
             **result,

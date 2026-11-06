@@ -31,7 +31,7 @@ def summary(values):
     }
 
 
-def serve(args):
+async def serve(args):
     from contextlib import asynccontextmanager
     import uvicorn
     from sqlalchemy import event
@@ -54,12 +54,12 @@ def serve(args):
 
     root = Path(args.directory)
     store = NebulaStore(root / "core.db")
-    project = store.create(
+    project = await store.create(
         Engagement(
             id="eng-a", name="Synthetic tool event load", workspace_path=str(root)
         )
     )
-    profile = store.create(
+    profile = await store.create(
         HarnessProfile(
             id="harness-a",
             name="Inert synthetic harness",
@@ -72,7 +72,7 @@ def serve(args):
     from nebula.v3.artifacts import ArtifactStore
 
     for index in range(args.chats):
-        hs = store.create(
+        hs = await store.create(
             HarnessSession(
                 id=f"harness-{index}",
                 engagement_id=project.id,
@@ -80,33 +80,37 @@ def serve(args):
                 model="test-model",
             )
         )
-        store.create(
-            ChatSession(
-                id=f"chat-{index}",
-                engagement_id=project.id,
-                title="Synthetic history",
-                backend="harness",
-                harness_profile_id=profile.id,
-                harness_session_id=hs.id,
-                model="test-model",
+        (
+            await store.create(
+                ChatSession(
+                    id=f"chat-{index}",
+                    engagement_id=project.id,
+                    title="Synthetic history",
+                    backend="harness",
+                    harness_profile_id=profile.id,
+                    harness_session_id=hs.id,
+                    model="test-model",
+                )
             )
         )
-        store.create_many(
-            [
-                ToolCall(
-                    id=f"old-{index}-{i}",
-                    engagement_id=project.id,
-                    run_id="old",
-                    origin="chat",
-                    chat_session_id=f"chat-{index}",
-                    tool_name="vendor:codex:synthetic.noop",
-                    status="complete",
-                    risk_class="local_read",
-                    result="x" * 4096,
-                    metadata={"harness_turn_id": "old-turn"},
-                )
-                for i in range(args.history)
-            ]
+        (
+            await store.create_many(
+                [
+                    ToolCall(
+                        id=f"old-{index}-{i}",
+                        engagement_id=project.id,
+                        run_id="old",
+                        origin="chat",
+                        chat_session_id=f"chat-{index}",
+                        tool_name="vendor:codex:synthetic.noop",
+                        status="complete",
+                        risk_class="local_read",
+                        result="x" * 4096,
+                        metadata={"harness_turn_id": "old-turn"},
+                    )
+                    for i in range(args.history)
+                ]
+            )
         )
 
     class Connection(HarnessConnection):
@@ -159,7 +163,7 @@ def serve(args):
             raise AssertionError("This fixture must not probe an external harness")
 
         async def open(self, request):
-            owners = store.find_entities(
+            owners = await store.find_entities(
                 ChatSession, {"harness_session_id": request.session.id}
             )
             measured = any(
@@ -184,10 +188,10 @@ def serve(args):
     latencies = []
     original_record = runtime._record_tool_event
 
-    def record(*params):
+    async def record(*params):
         start = time.perf_counter()
         try:
-            return original_record(*params)
+            return await original_record(*params)
         finally:
             if params[0].chat_session_id in {
                 f"chat-{index}" for index in range(args.chats)
@@ -215,7 +219,7 @@ def serve(args):
                 }
             )
 
-    event.listen(store.database.engine, "before_cursor_execute", capture)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", capture)
     lag = []
     lifespan = app.router.lifespan_context
 
@@ -246,8 +250,12 @@ def serve(args):
                 )
 
     app.router.lifespan_context = monitored
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
-    store.database.dispose()
+    (
+        await uvicorn.Server(
+            uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+        ).serve()
+    )
+    (await store.database.dispose())
 
 
 async def drive(args, token, process):
@@ -356,7 +364,7 @@ async def drive(args, token, process):
         }
 
 
-def main():
+async def main():
     p = argparse.ArgumentParser()
     p.add_argument("--serve", action="store_true")
     p.add_argument("--directory")
@@ -369,7 +377,7 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
     if args.serve:
-        return serve(args)
+        return await serve(args)
     address = ipaddress.ip_address(args.host)
     if address.is_loopback or address.is_unspecified or not address.is_private:
         p.error("Use a private non-loopback test LAN address")
@@ -417,7 +425,7 @@ def main():
                 stderr=log,
             )
             try:
-                result = asyncio.run(drive(args, token, process))
+                result = await drive(args, token, process)
             finally:
                 if process.poll() is None:
                     process.send_signal(signal.SIGINT)
@@ -436,4 +444,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

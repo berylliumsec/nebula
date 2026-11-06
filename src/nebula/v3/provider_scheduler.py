@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import ColumnElement, case, exists, func, or_, select, update
 
@@ -15,6 +16,8 @@ from .domain import ChatTurn, ChatTurnStatus, utc_now
 from .storage import ConflictError, NebulaStore
 from .host_load import HostLoadGate
 from .host_admission import save_host_wait
+from .async_utils import finish_cleanup
+from .diagnostics import create_diagnostic_task
 
 # A turn waiting in one of these states resumes through admission again, so
 # its admission stays parked until it does.
@@ -110,18 +113,38 @@ class ProviderAdmission:
         self.scheduler = scheduler
         self.lane = lane
         self.released = False
+        # Fence cleanup to this admission, including commit whose result was
+        # lost to cancellation. An older token cannot close a later lease.
+        self.lease_owner = uuid4().hex
+        self._release_task: asyncio.Task[None] | None = None
 
     async def release(self, turn_id: str) -> None:
         # The turn frees its slot as soon as provider work ends, before it
         # settles; the task that admitted it releases again on exit. A second
         # release must not complete a later admission of the same turn.
-        if self.released:
-            return
-        self.released = True
-        self.scheduler._complete(turn_id)
-        if self.lane == "background":
-            self.scheduler._background.release()
-        self.scheduler._provider.release()
+        if self._release_task is None:
+            self.released = True
+            self._release_task = create_diagnostic_task(
+                self._release(turn_id),
+                feature="chat",
+                event_code="chat.provider_admission.release_failed",
+                failure_message="A provider admission's durable lease could not be closed.",
+                name="nebula-provider-admission-release",
+            )
+
+        async def join():
+            await self._release_task
+
+        await finish_cleanup(join())
+
+    async def _release(self, turn_id: str) -> None:
+        try:
+            await self.scheduler._complete(turn_id, self.lease_owner)
+        finally:
+            # A database failure must not permanently consume process capacity.
+            if self.lane == "background":
+                self.scheduler._background.release()
+            self.scheduler._provider.release()
 
 
 class ProviderScheduler:
@@ -141,16 +164,28 @@ class ProviderScheduler:
         self._provider = asyncio.Semaphore(self.config.provider_limit)
         self._background = asyncio.Semaphore(self.config.background_limit)
         self._active: dict[str, str] = {}
+        self._active_owners: dict[str, str] = {}
+        # Positions are display state. Share one short-lived ordered snapshot
+        # across waiters instead of querying/ranking the queue for every poll.
+        # Admission, claims and leases always read durable state independently.
+        self._positions: dict[str, int] = {}
+        self._positions_until = 0.0
+        self._positions_generation = 0
+        self._positions_lock = asyncio.Lock()
         self.host_load = host_load
         self._host_reasons: dict[str, str] = {}
 
     def queue_detail(self, turn_id: str) -> str:
         return self._host_reasons.get(turn_id, "Waiting for Core capacity")
 
-    def enqueue(self, turn: ChatTurn) -> None:
+    def _invalidate_positions(self) -> None:
+        self._positions_until = 0.0
+        self._positions_generation += 1
+
+    async def enqueue(self, turn: ChatTurn) -> None:
         now = turn.queued_at or utc_now()
-        with self.store.database.session() as session:
-            row = session.get(ProviderTurnQueueRow, turn.id)
+        async with self.store.database.session() as session:
+            row = await session.get(ProviderTurnQueueRow, turn.id)
             if row is None:
                 session.add(
                     ProviderTurnQueueRow(
@@ -167,9 +202,10 @@ class ProviderScheduler:
                 row.completed_at = None
                 row.lease_owner = None
                 row.lease_expires_at = None
+        self._invalidate_positions()
 
     async def admit(self, turn_id: str) -> ProviderAdmission:
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = await self.store.get(ChatTurn, turn_id)
         lane = turn.capacity_lane
         performance = self.store.database.performance
         if lane == "background":
@@ -182,6 +218,7 @@ class ProviderScheduler:
             if lane == "background":
                 self._background.release()
             raise
+        admission = ProviderAdmission(self, lane)
         try:
             if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
 
@@ -190,13 +227,11 @@ class ProviderScheduler:
                         self._host_reasons.pop(turn_id, None)
                     else:
                         self._host_reasons[turn_id] = reason
-                    await asyncio.to_thread(
-                        save_host_wait, self.store, ChatTurn, turn_id, reason
-                    )
+                    await save_host_wait(self.store, ChatTurn, turn_id, reason)
 
                 with performance.span("provider.host_load_wait"):
                     await self.host_load.wait(deferred)
-            latest = self.store.get(ChatTurn, turn_id)
+            latest = await self.store.get(ChatTurn, turn_id)
             if latest.status == ChatTurnStatus.CANCELLED:
                 raise asyncio.CancelledError
             admitted_at = utc_now()
@@ -209,11 +244,11 @@ class ProviderScheduler:
             # finalizing a retried answer): that state selects how it resumes.
             if latest.status == ChatTurnStatus.QUEUED:
                 changes["status"] = ChatTurnStatus.ROUTING
-            with self.store.transaction() as transaction:
-                row = transaction.session.get(ProviderTurnQueueRow, turn_id)
+            async with self.store.transaction() as transaction:
+                row = await transaction.session.get(ProviderTurnQueueRow, turn_id)
                 if row is None or row.state != "queued":
                     raise ConflictError("provider turn is no longer queued")
-                updated = transaction.update(
+                updated = await transaction.update(
                     ChatTurn,
                     turn_id,
                     changes,
@@ -221,80 +256,92 @@ class ProviderScheduler:
                 )
                 row.state = "running"
                 row.admitted_at = admitted_at
-                row.lease_owner = self.worker_id
+                row.lease_owner = admission.lease_owner
                 row.lease_expires_at = admitted_at + timedelta(hours=24)
-                transaction.session.flush()
+                (await transaction.session.flush())
             self._active[turn_id] = lane
+            self._active_owners[turn_id] = admission.lease_owner
+            self._invalidate_positions()
             del updated
             self._host_reasons.pop(turn_id, None)
-            return ProviderAdmission(self, lane)
+            return admission
         except BaseException:
             self._host_reasons.pop(turn_id, None)
-            self._provider.release()
-            if lane == "background":
-                self._background.release()
+            # This also handles a commit followed by cancelled connection
+            # cleanup, when no token has reached the parent yet.
+            await admission.release(turn_id)
             raise
 
-    def _complete(self, turn_id: str) -> None:
-        self._active.pop(turn_id, None)
+    async def _complete(self, turn_id: str, lease_owner: str) -> None:
+        if self._active_owners.get(turn_id) == lease_owner:
+            self._active.pop(turn_id, None)
+            self._active_owners.pop(turn_id, None)
         # Read in SQL, so a turn that is gone or unreadable still frees the
         # admission (and, in ProviderAdmission.release, its slots).
-        with self.store.database.session() as session:
-            session.execute(
-                update(ProviderTurnQueueRow)
-                .where(
-                    ProviderTurnQueueRow.turn_id == turn_id,
-                    ProviderTurnQueueRow.state == "running",
+        async with self.store.database.session() as session:
+            (
+                await session.execute(
+                    update(ProviderTurnQueueRow)
+                    .where(
+                        ProviderTurnQueueRow.turn_id == turn_id,
+                        ProviderTurnQueueRow.state == "running",
+                        ProviderTurnQueueRow.lease_owner == lease_owner,
+                    )
+                    .values(
+                        state=_released_state(),
+                        completed_at=utc_now(),
+                        lease_owner=None,
+                        lease_expires_at=None,
+                    )
+                    .execution_options(synchronize_session=False)
                 )
-                .values(
-                    state=_released_state(),
-                    completed_at=utc_now(),
-                    lease_owner=None,
-                    lease_expires_at=None,
-                )
-                .execution_options(synchronize_session=False)
             )
+        self._invalidate_positions()
 
-    def cancel(self, turn_id: str) -> None:
-        with self.store.database.session() as session:
-            row = session.get(ProviderTurnQueueRow, turn_id)
+    async def cancel(self, turn_id: str) -> None:
+        async with self.store.database.session() as session:
+            row = await session.get(ProviderTurnQueueRow, turn_id)
             if row is not None and row.state == "queued":
                 row.state = "cancelled"
                 row.completed_at = utc_now()
+        self._invalidate_positions()
 
     def admitted(self, turn_id: str) -> bool:
         """Whether this process holds a provider slot for ``turn_id``."""
 
         return turn_id in self._active
 
-    def withdraw(self, turn_id: str) -> None:
+    async def withdraw(self, turn_id: str) -> None:
         """Release a queued admission its runtime gave up on, as its turn stands.
 
         Parked when the turn can still resume, otherwise over; a turn still
         queued keeps its row, so a restart restores it.
         """
 
-        with self.store.database.session() as session:
-            session.execute(
-                update(ProviderTurnQueueRow)
-                .where(
-                    ProviderTurnQueueRow.turn_id == turn_id,
-                    ProviderTurnQueueRow.state == "queued",
-                    or_(
-                        ~_turn_exists(),
-                        _turn_status() != ChatTurnStatus.QUEUED.value,
-                    ),
+        async with self.store.database.session() as session:
+            (
+                await session.execute(
+                    update(ProviderTurnQueueRow)
+                    .where(
+                        ProviderTurnQueueRow.turn_id == turn_id,
+                        ProviderTurnQueueRow.state == "queued",
+                        or_(
+                            ~_turn_exists(),
+                            _turn_status() != ChatTurnStatus.QUEUED.value,
+                        ),
+                    )
+                    .values(
+                        state=_released_state(),
+                        completed_at=utc_now(),
+                        lease_owner=None,
+                        lease_expires_at=None,
+                    )
+                    .execution_options(synchronize_session=False)
                 )
-                .values(
-                    state=_released_state(),
-                    completed_at=utc_now(),
-                    lease_owner=None,
-                    lease_expires_at=None,
-                )
-                .execution_options(synchronize_session=False)
             )
+        self._invalidate_positions()
 
-    def settle(self, turn_id: str | None = None) -> list[str]:
+    async def settle(self, turn_id: str | None = None) -> list[str]:
         """Close queued or parked admissions whose turn ended or no longer exists.
 
         Admission release settles a running admission; a turn that ends while
@@ -312,53 +359,64 @@ class ProviderScheduler:
         ]
         if turn_id is not None:
             ended.append(ProviderTurnQueueRow.turn_id == turn_id)
-        with self.store.database.session() as session:
+        async with self.store.database.session() as session:
             settled = list(
-                session.scalars(select(ProviderTurnQueueRow.turn_id).where(*ended))
+                (
+                    await session.scalars(
+                        select(ProviderTurnQueueRow.turn_id).where(*ended)
+                    )
+                )
             )
             if settled:
                 # The same conditions again, in the statement that writes: a
                 # turn resumed since the read keeps its new admission.
-                session.execute(
+                (
+                    await session.execute(
+                        update(ProviderTurnQueueRow)
+                        .where(ProviderTurnQueueRow.turn_id.in_(settled), *ended)
+                        .values(
+                            state=_released_state(),
+                            completed_at=func.coalesce(
+                                ProviderTurnQueueRow.completed_at, utc_now()
+                            ),
+                            lease_owner=None,
+                            lease_expires_at=None,
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                )
+        self._invalidate_positions()
+        return settled
+
+    async def recover(self) -> list[str]:
+        """Return queued turns and reset leases abandoned by a stopped Core."""
+
+        async with self.store.database.session() as session:
+            # ChatService startup owns the corresponding running-turn
+            # interruption. The admission only drops its stale lease, and
+            # stays parked if that left the turn resumable.
+            (
+                await session.execute(
                     update(ProviderTurnQueueRow)
-                    .where(ProviderTurnQueueRow.turn_id.in_(settled), *ended)
+                    .where(ProviderTurnQueueRow.state == "running")
                     .values(
                         state=_released_state(),
-                        completed_at=func.coalesce(
-                            ProviderTurnQueueRow.completed_at, utc_now()
-                        ),
+                        completed_at=utc_now(),
                         lease_owner=None,
                         lease_expires_at=None,
                     )
                     .execution_options(synchronize_session=False)
                 )
-        return settled
-
-    def recover(self) -> list[str]:
-        """Return queued turns and reset leases abandoned by a stopped Core."""
-
-        with self.store.database.session() as session:
-            # ChatService startup owns the corresponding running-turn
-            # interruption. The admission only drops its stale lease, and
-            # stays parked if that left the turn resumable.
-            session.execute(
-                update(ProviderTurnQueueRow)
-                .where(ProviderTurnQueueRow.state == "running")
-                .values(
-                    state=_released_state(),
-                    completed_at=utc_now(),
-                    lease_owner=None,
-                    lease_expires_at=None,
-                )
-                .execution_options(synchronize_session=False)
             )
             rows = list(
-                session.scalars(
-                    select(ProviderTurnQueueRow)
-                    .where(ProviderTurnQueueRow.state == "queued")
-                    .order_by(
-                        ProviderTurnQueueRow.accepted_at,
-                        ProviderTurnQueueRow.turn_id,
+                (
+                    await session.scalars(
+                        select(ProviderTurnQueueRow)
+                        .where(ProviderTurnQueueRow.state == "queued")
+                        .order_by(
+                            ProviderTurnQueueRow.accepted_at,
+                            ProviderTurnQueueRow.turn_id,
+                        )
                     )
                 )
             )
@@ -371,56 +429,69 @@ class ProviderScheduler:
                     row.lease_owner = None
                     row.lease_expires_at = None
                 queued.append(row.turn_id)
-            return queued
+        self._invalidate_positions()
+        return queued
 
-    def position(self, turn_id: str) -> int | None:
-        with self.store.database.session() as session:
-            row = session.get(ProviderTurnQueueRow, turn_id)
-            if row is None or row.state != "queued":
-                return None
-            return int(
-                session.scalar(
-                    select(func.count())
-                    .select_from(ProviderTurnQueueRow)
-                    .where(
-                        ProviderTurnQueueRow.state == "queued",
-                        (
-                            (ProviderTurnQueueRow.accepted_at < row.accepted_at)
-                            | (
-                                (ProviderTurnQueueRow.accepted_at == row.accepted_at)
-                                & (ProviderTurnQueueRow.turn_id <= row.turn_id)
-                            )
-                        ),
-                    )
+    async def _load_positions(self) -> dict[str, int]:
+        async with self.store.database.session() as session:
+            ids = await session.scalars(
+                select(ProviderTurnQueueRow.turn_id)
+                .where(ProviderTurnQueueRow.state == "queued")
+                .order_by(
+                    ProviderTurnQueueRow.accepted_at, ProviderTurnQueueRow.turn_id
                 )
-                or 0
             )
+            return {key: rank for rank, key in enumerate(ids, 1)}
 
-    def metrics(self) -> dict[str, Any]:
-        with self.store.database.session() as session:
+    async def position(self, turn_id: str) -> int | None:
+        # An enclosing transaction may see its own uncommitted queue writes;
+        # those observations must never be published to other tasks.
+        if self.store.database.task_session() is not None:
+            return (await self._load_positions()).get(turn_id)
+        loop = asyncio.get_running_loop()
+        if loop.time() >= self._positions_until:
+            async with self._positions_lock:
+                if loop.time() >= self._positions_until:
+                    generation = self._positions_generation
+                    self._positions = await self._load_positions()
+                    # Local mutations invalidate immediately; other processes'
+                    # changes become visible within half the one-second poll.
+                    self._positions_until = (
+                        loop.time() + 0.5
+                        if generation == self._positions_generation
+                        else 0.0
+                    )
+        return self._positions.get(turn_id)
+
+    async def metrics(self) -> dict[str, Any]:
+        async with self.store.database.session() as session:
             queued_direct = int(
-                session.scalar(
-                    select(func.count())
-                    .select_from(ProviderTurnQueueRow)
-                    .where(
-                        ProviderTurnQueueRow.state == "queued",
-                        ProviderTurnQueueRow.lane == "direct",
+                (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ProviderTurnQueueRow)
+                        .where(
+                            ProviderTurnQueueRow.state == "queued",
+                            ProviderTurnQueueRow.lane == "direct",
+                        )
                     )
                 )
                 or 0
             )
             queued_background = int(
-                session.scalar(
-                    select(func.count())
-                    .select_from(ProviderTurnQueueRow)
-                    .where(
-                        ProviderTurnQueueRow.state == "queued",
-                        ProviderTurnQueueRow.lane == "background",
+                (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ProviderTurnQueueRow)
+                        .where(
+                            ProviderTurnQueueRow.state == "queued",
+                            ProviderTurnQueueRow.lane == "background",
+                        )
                     )
                 )
                 or 0
             )
-            oldest = session.scalar(
+            oldest = await session.scalar(
                 select(func.min(ProviderTurnQueueRow.accepted_at)).where(
                     ProviderTurnQueueRow.state == "queued"
                 )

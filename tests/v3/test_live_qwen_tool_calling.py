@@ -4,7 +4,11 @@ The HTTP fixture checks Core's adapter, capability probe, broker, and chat loop;
 only the opt-in live test checks actual model inference and vLLM's parser.
 """
 
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 import os
 from types import SimpleNamespace
@@ -151,13 +155,13 @@ def qwen_http_fixture():
     )
 
 
-def test_qwen_fixture_required_probe_safe_call_and_final_response(
+async def test_qwen_fixture_required_probe_safe_call_and_final_response(
     tmp_path, qwen_http_fixture
 ):
     fixture = qwen_http_fixture
     store = NebulaStore(tmp_path / "qwen-fixture.db")
-    project = store.create(Engagement(name="Qwen fixture"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Qwen fixture"))
+    profile = await store.create(
         ProviderProfile(
             name="Fixture vLLM",
             provider_type="vllm",
@@ -201,13 +205,15 @@ def test_qwen_fixture_required_probe_safe_call_and_final_response(
             ledger=StoreToolLedger(store, enforce_run_budget=False),
             workspace_resolver=lambda _: tmp_path,
         ),
-        scope=store.create(
-            ScopePolicy(engagement_id=project.id, on_demand_tools=False)
+        scope=(
+            await store.create(
+                ScopePolicy(engagement_id=project.id, on_demand_tools=False)
+            )
         ),
         workspace=tmp_path,
         specs={spec.name: spec},
     )
-    session = store.create(
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Qwen fixture acceptance",
@@ -230,7 +236,9 @@ def test_qwen_fixture_required_probe_safe_call_and_final_response(
             store, profile, fixture.model, provider_factory
         )
         assert verification.verification.status == ProviderVerificationStatus.VERIFIED
-        assert store.get(ProviderProfile, profile.id).tools_verified_for(fixture.model)
+        assert (await store.get(ProviderProfile, profile.id)).tools_verified_for(
+            fixture.model
+        )
         prepared = await service.prepare_async(
             ChatCompletionRequest(
                 provider_id=profile.id,
@@ -253,7 +261,7 @@ def test_qwen_fixture_required_probe_safe_call_and_final_response(
         )
         return await service.complete(prepared)
 
-    completion = asyncio.run(scenario())
+    completion = await scenario()
 
     assert len(fixture.requests) == 4
     message = fixture.responses[1]["choices"][0]["message"]
@@ -263,11 +271,11 @@ def test_qwen_fixture_required_probe_safe_call_and_final_response(
     assert call["function"]["name"] == "nebula_safe_echo"
     assert json.loads(call["function"]["arguments"]) == {"nonce": fixture.nonce}
     assert executed == [{"nonce": fixture.nonce}]
-    [stored_call] = store.list_entities(ToolCall)
+    [stored_call] = await store.list_entities(ToolCall)
     assert stored_call.tool_name == "nebula_safe_echo"
     assert stored_call.status == ToolCallStatus.COMPLETE
     assert stored_call.result == {"echo": fixture.nonce, "status": "complete"}
-    [turn] = store.list_entities(ChatTurn)
+    [turn] = await store.list_entities(ChatTurn)
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.execution_tool_calls == 1
 
@@ -369,3 +377,6 @@ def test_live_qwen_required_probe_safe_call_and_final_response():
         final_message = final.json()["choices"][0]["message"]
         assert final_message.get("content", "").strip()
         assert not final_message.get("tool_calls")
+
+
+pytestmark = pytest.mark.anyio

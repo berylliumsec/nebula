@@ -1,9 +1,14 @@
 """Focused Work persistence, scope, and API contracts."""
 
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import asyncio
 import json
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 import pytest
 
 import nebula.v3.chat as chat_module
@@ -33,26 +38,25 @@ from nebula.v3.work import (
 from tests.v3.test_chat import FakeProvider
 
 
-def test_work_default_on_and_check_ins_are_durable_and_idempotent(tmp_path):
+async def test_work_default_on_and_check_ins_are_durable_and_idempotent(tmp_path):
     path = tmp_path / "core.db"
     store = NebulaStore(path)
-    project = store.create(Engagement(name="Release planning"))
+    project = await store.create(Engagement(name="Release planning"))
     service = WorkService(store)
-    assert service.enabled(project.id)
-    created = service.create(
+    assert await service.enabled(project.id)
+    created = await service.create(
         project.id,
         WorkCreate(title="Prepare release notes", request_id="create-1"),
         actor_id="operator",
     )
     assert (
-        service.create(
+        await service.create(
             project.id,
             WorkCreate(title="Prepare release notes", request_id="create-1"),
             actor_id="operator",
-        ).id
-        == created.id
-    )
-    check_in = service.check_in(
+        )
+    ).id == created.id
+    check_in = await service.check_in(
         project.id,
         created.id,
         WorkCheckIn(
@@ -65,77 +69,82 @@ def test_work_default_on_and_check_ins_are_durable_and_idempotent(tmp_path):
         actor_id="operator",
     )
     assert (
-        service.check_in(
+        await service.check_in(
             project.id,
             created.id,
             WorkCheckIn(summary="Outlined the changes", request_id="update-1"),
             actor_kind="operator",
             actor_id="operator",
-        ).id
-        == check_in.id
-    )
+        )
+    ).id == check_in.id
     reopened = WorkService(NebulaStore(path))
-    assert reopened.enabled(project.id)
-    assert reopened.get(project.id, created.id).status == "in_progress"
-    assert [update.id for update in reopened.updates(project.id, created.id)] == [
-        check_in.id
-    ]
-    reopened.set_enabled(project.id, False)
-    assert reopened.get(project.id, created.id).status == "in_progress"
-    assert not WorkService(NebulaStore(path)).enabled(project.id)
+    assert await reopened.enabled(project.id)
+    assert (await reopened.get(project.id, created.id)).status == "in_progress"
+    assert [
+        update.id for update in (await reopened.updates(project.id, created.id))
+    ] == [check_in.id]
+    (await reopened.set_enabled(project.id, False))
+    assert (await reopened.get(project.id, created.id)).status == "in_progress"
+    assert not (await WorkService(NebulaStore(path)).enabled(project.id))
 
 
-def test_work_item_revision_checks_preserve_edits_and_idempotent_check_ins(tmp_path):
+async def test_work_item_revision_checks_preserve_edits_and_idempotent_check_ins(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Revision checks"))
+    project = await store.create(Engagement(name="Revision checks"))
     service = WorkService(store)
-    item = service.create(
+    item = await service.create(
         project.id, WorkCreate(title="Review plan"), actor_id="operator"
     )
-    changed = service.patch(
+    changed = await service.patch(
         project.id,
         item.id,
         WorkPatch(priority="high", expected_revision=item.revision),
     )
     with pytest.raises(ConflictError, match="work item changed"):
-        service.patch(
-            project.id,
-            item.id,
-            WorkPatch(title="Stale title", expected_revision=item.revision),
+        (
+            await service.patch(
+                project.id,
+                item.id,
+                WorkPatch(title="Stale title", expected_revision=item.revision),
+            )
         )
     with pytest.raises(ConflictError, match="work item changed"):
-        service.check_in(
-            project.id,
-            item.id,
-            WorkCheckIn(summary="Stale status", expected_revision=item.revision),
-            actor_kind="operator",
-            actor_id="operator",
+        (
+            await service.check_in(
+                project.id,
+                item.id,
+                WorkCheckIn(summary="Stale status", expected_revision=item.revision),
+                actor_kind="operator",
+                actor_id="operator",
+            )
         )
-    assert service.get(project.id, item.id).title == "Review plan"
-    assert service.updates(project.id, item.id) == []
+    assert (await service.get(project.id, item.id)).title == "Review plan"
+    assert (await service.updates(project.id, item.id)) == []
     request = WorkCheckIn(
         summary="Ready to review",
         status="review",
         request_id="check-1",
         expected_revision=changed.revision,
     )
-    first = service.check_in(
+    first = await service.check_in(
         project.id, item.id, request, actor_kind="operator", actor_id="operator"
     )
-    repeated = service.check_in(
+    repeated = await service.check_in(
         project.id, item.id, request, actor_kind="operator", actor_id="operator"
     )
     assert repeated.id == first.id
-    assert service.get(project.id, item.id).status == "review"
-    assert len(service.updates(project.id, item.id)) == 1
+    assert (await service.get(project.id, item.id)).status == "review"
+    assert len((await service.updates(project.id, item.id))) == 1
 
 
-def test_work_project_batch_links_existing_projects_and_prevents_cycles(tmp_path):
+async def test_work_project_batch_links_existing_projects_and_prevents_cycles(tmp_path):
     path = tmp_path / "core.db"
     store = NebulaStore(path)
-    parent = store.create(Engagement(name="Portfolio", work_enabled=False))
+    parent = await store.create(Engagement(name="Portfolio", work_enabled=False))
     children = [
-        store.create(Engagement(name=f"Plan {index}", work_enabled=False))
+        (await store.create(Engagement(name=f"Plan {index}", work_enabled=False)))
         for index in range(2)
     ]
     client = TestClient(create_app(store, auth_token="test-token"))
@@ -145,62 +154,61 @@ def test_work_project_batch_links_existing_projects_and_prevents_cycles(tmp_path
         "parent_engagement_id": parent.id,
         "work_enabled": True,
     }
-    assert client.patch("/api/v1/work/projects", json=body).status_code == 401
-    response = client.patch("/api/v1/work/projects", headers=auth, json=body)
+    assert (await client.patch("/api/v1/work/projects", json=body)).status_code == 401
+    response = await client.patch("/api/v1/work/projects", headers=auth, json=body)
     assert response.status_code == 200, response.text
     assert response.json() == {"updated": 2}
-    assert client.patch("/api/v1/work/projects", headers=auth, json=body).json() == {
-        "updated": 0
-    }
+    assert (
+        await client.patch("/api/v1/work/projects", headers=auth, json=body)
+    ).json() == {"updated": 0}
     reloaded = NebulaStore(path)
     assert all(
-        reloaded.get(Engagement, child.id).parent_engagement_id == parent.id
+        (await reloaded.get(Engagement, child.id)).parent_engagement_id == parent.id
         for child in children
     )
-    assert all(reloaded.get(Engagement, child.id).work_enabled for child in children)
-    assert not reloaded.get(Engagement, parent.id).work_enabled
-    cycle = client.patch(
+    assert all(
+        (await reloaded.get(Engagement, child.id)).work_enabled for child in children
+    )
+    assert not (await reloaded.get(Engagement, parent.id)).work_enabled
+    cycle = await client.patch(
         "/api/v1/work/projects",
         headers=auth,
         json={"project_ids": [parent.id], "parent_engagement_id": children[0].id},
     )
     assert cycle.status_code == 409
-    assert reloaded.get(Engagement, parent.id).parent_engagement_id is None
+    assert (await reloaded.get(Engagement, parent.id)).parent_engagement_id is None
     assert (
-        client.patch(
+        await client.patch(
             "/api/v1/work/projects",
             headers=auth,
             json={
                 "project_ids": [children[0].id],
                 "parent_engagement_id": children[0].id,
             },
-        ).status_code
-        == 409
-    )
+        )
+    ).status_code == 409
     assert (
-        client.patch(
+        await client.patch(
             "/api/v1/work/projects",
             headers=auth,
             json={"project_ids": ["missing"], "parent_engagement_id": parent.id},
-        ).status_code
-        == 404
-    )
+        )
+    ).status_code == 404
     assert (
-        client.patch(
+        await client.patch(
             "/api/v1/work/projects",
             headers=auth,
             json={
                 "project_ids": [children[0].id, children[0].id],
                 "parent_engagement_id": parent.id,
             },
-        ).status_code
-        == 422
-    )
+        )
+    ).status_code == 422
 
 
-def test_work_import_can_create_child_under_existing_project(tmp_path):
+async def test_work_import_can_create_child_under_existing_project(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    parent = store.create(Engagement(name="Portfolio"))
+    parent = await store.create(Engagement(name="Portfolio"))
     client = TestClient(create_app(store, auth_token="test-token"))
     auth = {"Authorization": "Bearer test-token"}
     body = {
@@ -213,15 +221,14 @@ def test_work_import_can_create_child_under_existing_project(tmp_path):
             }
         ],
     }
-    response = client.post("/api/v1/work/import", headers=auth, json=body)
+    response = await client.post("/api/v1/work/import", headers=auth, json=body)
     assert response.status_code == 200, response.text
     child_id = response.json()["projects"][0]["engagement_id"]
-    assert store.get(Engagement, child_id).parent_engagement_id == parent.id
+    assert (await store.get(Engagement, child_id)).parent_engagement_id == parent.id
     assert (
-        client.post("/api/v1/work/import", headers=auth, json=body).json()
-        == response.json()
-    )
-    invalid = client.post(
+        await client.post("/api/v1/work/import", headers=auth, json=body)
+    ).json() == response.json()
+    invalid = await client.post(
         "/api/v1/work/import",
         headers=auth,
         json={
@@ -237,7 +244,7 @@ def test_work_import_can_create_child_under_existing_project(tmp_path):
     )
     assert invalid.status_code == 404
     assert (
-        client.post(
+        await client.post(
             "/api/v1/work/import",
             headers=auth,
             json={
@@ -251,34 +258,37 @@ def test_work_import_can_create_child_under_existing_project(tmp_path):
                     }
                 ],
             },
-        ).status_code
-        == 422
-    )
-
-
-def test_work_rejects_cross_project_items_and_assignees(tmp_path):
-    store = NebulaStore(tmp_path / "core.db")
-    first = store.create(Engagement(name="First"))
-    second = store.create(Engagement(name="Second"))
-    service = WorkService(store)
-    item = service.create(first.id, WorkCreate(title="First task"), actor_id="operator")
-    with pytest.raises(NotFoundError):
-        service.get(second.id, item.id)
-    with pytest.raises(NotFoundError):
-        service.check_in(
-            second.id,
-            item.id,
-            WorkCheckIn(summary="Wrong project"),
-            actor_kind="operator",
-            actor_id="operator",
         )
-    assert not store.list_entities(WorkUpdate, engagement_id=second.id)
+    ).status_code == 422
 
 
-def test_provider_work_tools_use_chat_scope_and_opt_out(tmp_path):
+async def test_work_rejects_cross_project_items_and_assignees(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Release planning"))
-    chat = store.create(
+    first = await store.create(Engagement(name="First"))
+    second = await store.create(Engagement(name="Second"))
+    service = WorkService(store)
+    item = await service.create(
+        first.id, WorkCreate(title="First task"), actor_id="operator"
+    )
+    with pytest.raises(NotFoundError):
+        (await service.get(second.id, item.id))
+    with pytest.raises(NotFoundError):
+        (
+            await service.check_in(
+                second.id,
+                item.id,
+                WorkCheckIn(summary="Wrong project"),
+                actor_kind="operator",
+                actor_id="operator",
+            )
+        )
+    assert not (await store.list_entities(WorkUpdate, engagement_id=second.id))
+
+
+async def test_provider_work_tools_use_chat_scope_and_opt_out(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = await store.create(Engagement(name="Release planning"))
+    chat = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Plan release",
@@ -302,18 +312,18 @@ def test_provider_work_tools_use_chat_scope_and_opt_out(tmp_path):
             components.scope,
         )
 
-    assert asyncio.run(call("work_list", {})).output == {
+    assert (await call("work_list", {})).output == {
         "items": [],
         "offset": 0,
         "next_offset": None,
     }
-    created = asyncio.run(
-        call("work_create", {"title": "Prepare notes", "request_id": "create-1"})
+    created = (
+        await call("work_create", {"title": "Prepare notes", "request_id": "create-1"})
     ).output["item"]
     assert created["assignee_session_id"] == chat.id
     assert created["source_id"] == chat.id
-    updated = asyncio.run(
-        call(
+    updated = (
+        await call(
             "work_check_in",
             {
                 "item_id": created["id"],
@@ -323,20 +333,20 @@ def test_provider_work_tools_use_chat_scope_and_opt_out(tmp_path):
         )
     ).output["update"]
     assert updated["source_session_id"] == chat.id
-    assert len(service.updates(project.id, created["id"])) == 1
-    service.set_enabled(project.id, False)
+    assert len((await service.updates(project.id, created["id"]))) == 1
+    (await service.set_enabled(project.id, False))
     with pytest.raises(ValueError, match="off"):
-        asyncio.run(call("work_list", {}))
+        (await call("work_list", {}))
 
 
-def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
+async def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    parent = store.create(Engagement(name="Parent project"))
-    child = store.create(
+    parent = await store.create(Engagement(name="Parent project"))
+    child = await store.create(
         Engagement(name="linked_child", parent_engagement_id=parent.id)
     )
-    unrelated = store.create(Engagement(name="Unrelated"))
-    chat = store.create(
+    unrelated = await store.create(Engagement(name="Unrelated"))
+    chat = await store.create(
         ChatSession(
             engagement_id=parent.id,
             title="Research",
@@ -345,10 +355,12 @@ def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
         )
     )
     service = WorkService(store)
-    item = service.create(
+    item = await service.create(
         child.id, WorkCreate(title="Research status"), actor_id="import"
     )
-    other = service.create(unrelated.id, WorkCreate(title="Other"), actor_id="import")
+    other = await service.create(
+        unrelated.id, WorkCreate(title="Other"), actor_id="import"
+    )
     components = work_components(service, parent.id, tmp_path)
 
     async def call(name: str, arguments: dict):
@@ -366,16 +378,15 @@ def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
 
     assert [
         row["id"]
-        for row in asyncio.run(call("work_list", {"project_name": child.name})).output[
+        for row in (await call("work_list", {"project_name": child.name})).output[
             "items"
         ]
     ] == [item.id]
-    assert (
-        asyncio.run(call("work_get", {"item_id": item.id})).output["item"]["id"]
-        == item.id
-    )
-    update = asyncio.run(
-        call(
+    assert (await call("work_get", {"item_id": item.id})).output["item"][
+        "id"
+    ] == item.id
+    update = (
+        await call(
             "work_check_in",
             {
                 "item_id": item.id,
@@ -387,19 +398,19 @@ def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
     assert update["source_session_id"] == chat.id
     assert update["source_engagement_id"] == parent.id
     with pytest.raises(NotFoundError):
-        asyncio.run(call("work_list", {"project_name": unrelated.name}))
+        (await call("work_list", {"project_name": unrelated.name}))
     with pytest.raises(NotFoundError):
-        asyncio.run(call("work_get", {"item_id": other.id}))
+        (await call("work_get", {"item_id": other.id}))
     with pytest.raises(NotFoundError):
-        asyncio.run(call("work_check_in", {"item_id": other.id, "summary": "No"}))
+        (await call("work_check_in", {"item_id": other.id, "summary": "No"}))
 
 
-def test_provider_work_pages_and_reads_full_long_item(tmp_path):
+async def test_provider_work_pages_and_reads_full_long_item(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Large Work project"))
+    project = await store.create(Engagement(name="Large Work project"))
     service = WorkService(store)
     long_description = "🙂" * 20_000
-    original = store.create(
+    original = await store.create(
         WorkItem(
             engagement_id=project.id,
             title="Long description",
@@ -407,11 +418,13 @@ def test_provider_work_pages_and_reads_full_long_item(tmp_path):
         )
     )
     for index in range(75):
-        store.create(
-            WorkItem(
-                engagement_id=project.id,
-                title=f"Task {index:03d}",
-                description="Details " * 125,
+        (
+            await store.create(
+                WorkItem(
+                    engagement_id=project.id,
+                    title=f"Task {index:03d}",
+                    description="Details " * 125,
+                )
             )
         )
     components = work_components(service, project.id, tmp_path)
@@ -434,7 +447,7 @@ def test_provider_work_pages_and_reads_full_long_item(tmp_path):
     seen: list[str] = []
     while True:
         arguments = {} if offset is None else {"offset": offset}
-        page = asyncio.run(call("work_list", arguments)).output
+        page = (await call("work_list", arguments)).output
         delivered = serialize_model_result(page)
         assert len(delivered.encode("utf-8")) <= MAX_EXCERPT_BYTES
         assert "nebula.bounded-result/v1" not in delivered
@@ -446,7 +459,7 @@ def test_provider_work_pages_and_reads_full_long_item(tmp_path):
         if offset is None:
             break
     assert len(seen) == len(set(seen)) == 76
-    assert set(seen) == {item.id for item in service.list(project.id)}
+    assert set(seen) == {item.id for item in (await service.list(project.id))}
     assert original.id in seen
 
     description_offset = None
@@ -455,7 +468,7 @@ def test_provider_work_pages_and_reads_full_long_item(tmp_path):
         arguments = {"item_id": original.id}
         if description_offset is not None:
             arguments["description_offset"] = description_offset
-        result = asyncio.run(call("work_get", arguments)).output
+        result = (await call("work_get", arguments)).output
         delivered = serialize_model_result(result)
         assert len(delivered.encode("utf-8")) <= MAX_EXCERPT_BYTES
         assert "nebula.bounded-result/v1" not in delivered
@@ -466,16 +479,16 @@ def test_provider_work_pages_and_reads_full_long_item(tmp_path):
     assert "".join(chunks) == long_description
 
 
-def test_provider_work_list_reaches_items_after_previous_500_cap(tmp_path):
+async def test_provider_work_list_reaches_items_after_previous_500_cap(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Imported tasks"))
+    project = await store.create(Engagement(name="Imported tasks"))
     for index in range(505):
-        store.create(WorkItem(engagement_id=project.id, title=f"Task {index}"))
+        (await store.create(WorkItem(engagement_id=project.id, title=f"Task {index}")))
     service = WorkService(store)
     offset = 0
     seen: list[str] = []
     while True:
-        page = service.agent_list_page(project.id, offset=offset, limit=100)
+        page = await service.agent_list_page(project.id, offset=offset, limit=100)
         assert len(serialize_model_result(page).encode("utf-8")) <= MAX_EXCERPT_BYTES
         seen.extend(item["id"] for item in page["items"])
         if page["next_offset"] is None:
@@ -484,10 +497,10 @@ def test_provider_work_list_reaches_items_after_previous_500_cap(tmp_path):
     assert len(seen) == len(set(seen)) == 505
 
 
-def test_provider_chat_can_follow_work_list_pages(tmp_path, monkeypatch):
+async def test_provider_chat_can_follow_work_list_pages(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Agent pagination"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Agent pagination"))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
@@ -500,11 +513,13 @@ def test_provider_chat_can_follow_work_list_pages(tmp_path, monkeypatch):
         )
     )
     for index in range(45):
-        store.create(
-            WorkItem(
-                engagement_id=project.id,
-                title=f"Task {index}",
-                description="Context " * 125,
+        (
+            await store.create(
+                WorkItem(
+                    engagement_id=project.id,
+                    title=f"Task {index}",
+                    description="Context " * 125,
+                )
             )
         )
 
@@ -555,7 +570,7 @@ def test_provider_chat_can_follow_work_list_pages(tmp_path, monkeypatch):
     provider = PagingProvider()
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     chat = ChatService(store, workspace_resolver=lambda _: tmp_path)
-    prepared = chat.prepare(
+    prepared = await chat.prepare(
         ChatCompletionRequest(
             engagement_id=project.id,
             provider_id=profile.id,
@@ -564,18 +579,18 @@ def test_provider_chat_can_follow_work_list_pages(tmp_path, monkeypatch):
             include_knowledge=False,
         )
     )
-    response = asyncio.run(chat.complete(prepared))
+    response = await chat.complete(prepared)
     assert response.message.content == "Read 45 tasks."
     assert provider.pages > 1
     assert len(provider.seen) == len(set(provider.seen)) == 45
 
 
-def test_new_project_advertises_work_on_provider_turn_without_timed_prompt(
+async def test_new_project_advertises_work_on_provider_turn_without_timed_prompt(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Project"))
-    profile = store.create(
+    project = await store.create(Engagement(name="Project"))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
@@ -592,7 +607,7 @@ def test_new_project_advertises_work_on_provider_turn_without_timed_prompt(
     provider.config.capabilities.strict_tools = True
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     chat = ChatService(store, workspace_resolver=lambda _: tmp_path)
-    prepared = chat.prepare(
+    prepared = await chat.prepare(
         ChatCompletionRequest(
             engagement_id=project.id,
             provider_id=profile.id,
@@ -610,12 +625,12 @@ def test_new_project_advertises_work_on_provider_turn_without_timed_prompt(
     assert "work_agents" in prepared.tool_components.specs
 
 
-def test_provider_roster_is_default_even_when_work_and_peer_messages_are_off(
+async def test_provider_roster_is_default_even_when_work_and_peer_messages_are_off(
     tmp_path, monkeypatch
 ):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Project", work_enabled=False))
-    profile = store.create(
+    project = await store.create(Engagement(name="Project", work_enabled=False))
+    profile = await store.create(
         ProviderProfile(
             name="Local provider",
             provider_type="vllm",
@@ -632,7 +647,7 @@ def test_provider_roster_is_default_even_when_work_and_peer_messages_are_off(
     provider.config.capabilities.strict_tools = True
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     chat = ChatService(store, workspace_resolver=lambda _: tmp_path)
-    prepared = chat.prepare(
+    prepared = await chat.prepare(
         ChatCompletionRequest(
             engagement_id=project.id,
             provider_id=profile.id,
@@ -650,13 +665,13 @@ def test_provider_roster_is_default_even_when_work_and_peer_messages_are_off(
     assert "work_agents" in prepared.model_request.instructions
 
 
-def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
+async def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Active project", work_enabled=False))
-    foreign = store.create(Engagement(name="Foreign project"))
+    project = await store.create(Engagement(name="Active project", work_enabled=False))
+    foreign = await store.create(Engagement(name="Foreign project"))
 
-    def session(engagement_id, title, **metadata):
-        return store.create(
+    async def session(engagement_id, title, **metadata):
+        return await store.create(
             ChatSession(
                 engagement_id=engagement_id,
                 title=title,
@@ -666,9 +681,9 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
             )
         )
 
-    worker = session(project.id, "Parser review", allow_agent_messaging=False)
-    waiting = session(project.id, "Release review")
-    child = store.create(
+    worker = await session(project.id, "Parser review", allow_agent_messaging=False)
+    waiting = await session(project.id, "Release review")
+    child = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Decoder subagent",
@@ -678,11 +693,11 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
             metadata={"subagent_id": "decoder-child"},
         )
     )
-    hidden = session(project.id, "Side chat", side_chat=True)
-    other = session(foreign.id, "Foreign work")
+    hidden = await session(project.id, "Side chat", side_chat=True)
+    other = await session(foreign.id, "Foreign work")
 
-    def turn(chat, status):
-        return store.create(
+    async def turn(chat, status):
+        return await store.create(
             ChatTurn(
                 engagement_id=chat.engagement_id,
                 session_id=chat.id,
@@ -692,22 +707,24 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
             )
         )
 
-    worker_turn = turn(worker, ChatTurnStatus.ROUTING)
-    waiting_turn = turn(waiting, ChatTurnStatus.WAITING_APPROVAL)
-    child_turn = turn(child, ChatTurnStatus.ROUTING)
-    turn(hidden, ChatTurnStatus.ROUTING)
-    turn(other, ChatTurnStatus.ROUTING)
-    store.create(
-        ChatTurn(
-            engagement_id=project.id,
-            session_id=other.id,
-            provider_profile_id="provider-1",
-            model="model-a",
-            status=ChatTurnStatus.ROUTING,
+    worker_turn = await turn(worker, ChatTurnStatus.ROUTING)
+    waiting_turn = await turn(waiting, ChatTurnStatus.WAITING_APPROVAL)
+    child_turn = await turn(child, ChatTurnStatus.ROUTING)
+    (await turn(hidden, ChatTurnStatus.ROUTING))
+    (await turn(other, ChatTurnStatus.ROUTING))
+    (
+        await store.create(
+            ChatTurn(
+                engagement_id=project.id,
+                session_id=other.id,
+                provider_profile_id="provider-1",
+                model="model-a",
+                status=ChatTurnStatus.ROUTING,
+            )
         )
     )
     service = WorkService(store)
-    item = service.create(
+    item = await service.create(
         project.id,
         WorkCreate(
             title="Inspect decoder",
@@ -716,10 +733,12 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
         ),
         actor_id="operator",
     )
-    service.create(
-        project.id,
-        WorkCreate(title="Old task", status="done", assignee_session_id=waiting.id),
-        actor_id="operator",
+    (
+        await service.create(
+            project.id,
+            WorkCreate(title="Old task", status="done", assignee_session_id=waiting.id),
+            actor_id="operator",
+        )
     )
 
     components = work_roster_components(service, project.id, tmp_path)
@@ -738,7 +757,7 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
         )
         return result.output["agents"]
 
-    entries = {row["session_id"]: row for row in asyncio.run(roster())}
+    entries = {row["session_id"]: row for row in (await roster())}
     assert set(entries) == {worker.id, waiting.id, child.id}
     assert entries[worker.id]["state"] == "working"
     assert entries[worker.id]["work_item"] == {
@@ -752,8 +771,8 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
     assert entries[child.id]["state"] == "working"
     assert entries[child.id]["work_item"] is None
     with pytest.raises(ToolNotPermitted, match="limited to this project"):
-        asyncio.run(
-            components.broker.execute(
+        (
+            await components.broker.execute(
                 ToolInvocation(
                     engagement_id=foreign.id,
                     run_id=worker_turn.id,
@@ -766,7 +785,7 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
             )
         )
     client = TestClient(create_app(store, auth_token="test-token"))
-    dashboard = client.get(
+    dashboard = await client.get(
         "/api/v1/work/agents", headers={"Authorization": "Bearer test-token"}
     )
     assert dashboard.status_code == 200
@@ -776,22 +795,26 @@ def test_agent_roster_matches_dashboard_scope_and_refreshes_links(tmp_path):
         if row["engagement_id"] == project.id
     } == {session_id: row["state"] for session_id, row in entries.items()}
 
-    service.patch(project.id, item.id, WorkPatch(assignee_session_id=waiting.id))
-    store.update(ChatTurn, worker_turn.id, {"status": ChatTurnStatus.COMPLETE})
-    refreshed = {row["session_id"]: row for row in asyncio.run(roster())}
+    (
+        await service.patch(
+            project.id, item.id, WorkPatch(assignee_session_id=waiting.id)
+        )
+    )
+    (await store.update(ChatTurn, worker_turn.id, {"status": ChatTurnStatus.COMPLETE}))
+    refreshed = {row["session_id"]: row for row in (await roster())}
     assert set(refreshed) == {waiting.id, child.id}
     assert refreshed[waiting.id]["work_item"]["id"] == item.id
-    store.update(ChatTurn, waiting_turn.id, {"status": ChatTurnStatus.COMPLETE})
-    store.update(ChatTurn, child_turn.id, {"status": ChatTurnStatus.COMPLETE})
-    assert asyncio.run(roster()) == []
+    (await store.update(ChatTurn, waiting_turn.id, {"status": ChatTurnStatus.COMPLETE}))
+    (await store.update(ChatTurn, child_turn.id, {"status": ChatTurnStatus.COMPLETE}))
+    assert (await roster()) == []
 
 
-def test_work_agents_api_lists_active_sessions_across_projects(tmp_path):
+async def test_work_agents_api_lists_active_sessions_across_projects(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     for index in range(30):
-        store.create(Engagement(name=f"Empty project {index}"))
-    project = store.create(Engagement(name="Active project"))
-    session = store.create(
+        (await store.create(Engagement(name=f"Empty project {index}")))
+    project = await store.create(Engagement(name="Active project"))
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Review release plan",
@@ -799,7 +822,7 @@ def test_work_agents_api_lists_active_sessions_across_projects(tmp_path):
             model="model-a",
         )
     )
-    turn = store.create(
+    turn = await store.create(
         ChatTurn(
             engagement_id=project.id,
             session_id=session.id,
@@ -809,8 +832,8 @@ def test_work_agents_api_lists_active_sessions_across_projects(tmp_path):
         )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
-    assert client.get("/api/v1/work/agents").status_code == 401
-    response = client.get(
+    assert (await client.get("/api/v1/work/agents")).status_code == 401
+    response = await client.get(
         "/api/v1/work/agents", headers={"Authorization": "Bearer test-token"}
     )
     assert response.status_code == 200, response.text
@@ -825,10 +848,10 @@ def test_work_agents_api_lists_active_sessions_across_projects(tmp_path):
     ]
 
 
-def test_work_change_feed_signals_saved_updates_across_services(tmp_path):
+async def test_work_change_feed_signals_saved_updates_across_services(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Project"))
-    session = store.create(
+    project = await store.create(Engagement(name="Project"))
+    session = await store.create(
         ChatSession(
             engagement_id=project.id,
             title="Plan release",
@@ -842,15 +865,13 @@ def test_work_change_feed_signals_saved_updates_across_services(tmp_path):
     async def scenario():
         queue = reader.changes.subscribe()
         try:
-            item = await asyncio.to_thread(
-                writer.create,
+            item = await writer.create(
                 project.id,
                 WorkCreate(title="Review the plan"),
                 actor_id="operator",
             )
             assert await asyncio.wait_for(queue.get(), 1) == "work"
-            await asyncio.to_thread(
-                writer.check_in,
+            await writer.check_in(
                 project.id,
                 item.id,
                 WorkCheckIn(summary="Review ready"),
@@ -858,10 +879,9 @@ def test_work_change_feed_signals_saved_updates_across_services(tmp_path):
                 actor_id="session-1",
             )
             assert await asyncio.wait_for(queue.get(), 1) == "work"
-            await asyncio.to_thread(writer.set_enabled, project.id, False)
+            await writer.set_enabled(project.id, False)
             assert await asyncio.wait_for(queue.get(), 1) == "projects"
-            turn = await asyncio.to_thread(
-                store.create,
+            turn = await store.create(
                 ChatTurn(
                     engagement_id=project.id,
                     session_id=session.id,
@@ -870,8 +890,7 @@ def test_work_change_feed_signals_saved_updates_across_services(tmp_path):
                 ),
             )
             assert await asyncio.wait_for(queue.get(), 1) == "work"
-            await asyncio.to_thread(
-                store.update,
+            await store.update(
                 ChatTurn,
                 turn.id,
                 {"status": ChatTurnStatus.COMPLETE},
@@ -881,70 +900,64 @@ def test_work_change_feed_signals_saved_updates_across_services(tmp_path):
         finally:
             reader.changes.unsubscribe(queue)
 
-    asyncio.run(scenario())
+    (await scenario())
 
 
-def test_work_api_auth_scope_and_refresh(tmp_path):
+async def test_work_api_auth_scope_and_refresh(tmp_path):
     path = tmp_path / "core.db"
     store = NebulaStore(path)
-    project = store.create(Engagement(name="Documentation portal"))
-    other = store.create(Engagement(name="Another project"))
+    project = await store.create(Engagement(name="Documentation portal"))
+    other = await store.create(Engagement(name="Another project"))
     client = TestClient(create_app(store, auth_token="test-token"))
     root = f"/api/v1/engagements/{project.id}/work"
     auth = {"Authorization": "Bearer test-token"}
-    assert client.get(root).status_code == 401
+    assert (await client.get(root)).status_code == 401
     assert (
-        client.patch(f"{root}/setting", headers=auth, json={"enabled": True}).json()[
-            "work_enabled"
-        ]
-        is True
-    )
-    response = client.post(
+        await client.patch(f"{root}/setting", headers=auth, json={"enabled": True})
+    ).json()["work_enabled"] is True
+    response = await client.post(
         root, headers=auth, json={"title": "Build the search page", "status": "ready"}
     )
     assert response.status_code == 200, response.text
     item_id = response.json()["id"]
     assert (
-        client.get(
-            f"/api/v1/engagements/{other.id}/work/{item_id}", headers=auth
-        ).status_code
-        == 404
-    )
-    update = client.post(
+        await client.get(f"/api/v1/engagements/{other.id}/work/{item_id}", headers=auth)
+    ).status_code == 404
+    update = await client.post(
         f"{root}/{item_id}/updates",
         headers=auth,
         json={"summary": "Search layout is ready", "status": "review"},
     )
     assert update.status_code == 200, update.text
-    assert client.get(f"{root}/{item_id}", headers=auth).json()["status"] == "review"
+    assert (await client.get(f"{root}/{item_id}", headers=auth)).json()[
+        "status"
+    ] == "review"
     reloaded = TestClient(create_app(NebulaStore(path), auth_token="test-token"))
-    assert reloaded.get(root, headers=auth).json()[0]["id"] == item_id
-    assert (
-        reloaded.get(f"{root}/{item_id}/updates", headers=auth).json()[0]["summary"]
-        == "Search layout is ready"
-    )
-    current = store.get(Engagement, project.id)
-    disabled = client.patch(
+    assert (await reloaded.get(root, headers=auth)).json()[0]["id"] == item_id
+    assert (await reloaded.get(f"{root}/{item_id}/updates", headers=auth)).json()[0][
+        "summary"
+    ] == "Search layout is ready"
+    current = await store.get(Engagement, project.id)
+    disabled = await client.patch(
         f"{root}/setting",
         headers=auth,
         json={"enabled": False, "expected_revision": current.revision},
     )
     assert disabled.status_code == 200, disabled.text
     assert disabled.json()["work_enabled"] is False
-    stale = client.patch(
+    stale = await client.patch(
         f"{root}/setting",
         headers=auth,
         json={"enabled": True, "expected_revision": current.revision},
     )
     assert stale.status_code == 409, stale.text
-    assert store.get(Engagement, project.id).work_enabled is False
-    assert (
-        reloaded.get("/api/v1/work/updates", headers=auth).json()[0]["item_id"]
-        == item_id
-    )
+    assert (await store.get(Engagement, project.id)).work_enabled is False
+    assert (await reloaded.get("/api/v1/work/updates", headers=auth)).json()[0][
+        "item_id"
+    ] == item_id
 
 
-def test_work_import_api_creates_projects_items_and_updates_without_duplicate_or_overwrite(
+async def test_work_import_api_creates_projects_items_and_updates_without_duplicate_or_overwrite(
     tmp_path,
 ):
     path = tmp_path / "core.db"
@@ -976,68 +989,74 @@ def test_work_import_api_creates_projects_items_and_updates_without_duplicate_or
             }
         ],
     }
-    assert client.post("/api/v1/work/import", json=body).status_code == 401
-    first = client.post("/api/v1/work/import", headers=auth, json=body)
+    assert (await client.post("/api/v1/work/import", json=body)).status_code == 401
+    first = await client.post("/api/v1/work/import", headers=auth, json=body)
     assert first.status_code == 200, first.text
     project = first.json()["projects"][0]
     project_id = project["engagement_id"]
     item_id = project["items"][0]["item_id"]
-    assert store.get(Engagement, project_id).work_enabled is True
-    assert store.get(Engagement, project_id).workspace_path == str(workspace.resolve())
-    assert store.get(WorkItem, item_id).source_kind == "import"
-    assert (
-        client.get(f"/api/v1/engagements/{project_id}/work", headers=auth).json()[0][
-            "id"
-        ]
-        == item_id
+    assert (await store.get(Engagement, project_id)).work_enabled is True
+    assert (await store.get(Engagement, project_id)).workspace_path == str(
+        workspace.resolve()
     )
+    assert (await store.get(WorkItem, item_id)).source_kind == "import"
+    assert (
+        await client.get(f"/api/v1/engagements/{project_id}/work", headers=auth)
+    ).json()[0]["id"] == item_id
     assert (
         len(
-            client.get(
-                f"/api/v1/engagements/{project_id}/work/{item_id}/updates", headers=auth
+            (
+                await client.get(
+                    f"/api/v1/engagements/{project_id}/work/{item_id}/updates",
+                    headers=auth,
+                )
             ).json()
         )
         == 1
     )
 
-    changed = client.post(
+    changed = await client.post(
         f"/api/v1/engagements/{project_id}/work/{item_id}/updates",
         headers=auth,
         json={"summary": "Review complete", "status": "review"},
     )
     assert changed.status_code == 200, changed.text
-    repeated = client.post("/api/v1/work/import", headers=auth, json=body)
+    repeated = await client.post("/api/v1/work/import", headers=auth, json=body)
     assert repeated.status_code == 200, repeated.text
     assert repeated.json() == first.json()
     reloaded = TestClient(create_app(NebulaStore(path), auth_token="test-token"))
     assert (
-        reloaded.get(
+        await reloaded.get(
             f"/api/v1/engagements/{project_id}/work/{item_id}", headers=auth
-        ).json()["status"]
-        == "review"
-    )
+        )
+    ).json()["status"] == "review"
     assert (
         len(
-            reloaded.get(
-                f"/api/v1/engagements/{project_id}/work/{item_id}/updates", headers=auth
+            (
+                await reloaded.get(
+                    f"/api/v1/engagements/{project_id}/work/{item_id}/updates",
+                    headers=auth,
+                )
             ).json()
         )
         == 2
     )
     update_pages = [
-        reloaded.get(
-            f"/api/v1/work/updates?offset={offset}&limit=1", headers=auth
+        (
+            await reloaded.get(
+                f"/api/v1/work/updates?offset={offset}&limit=1", headers=auth
+            )
         ).json()
         for offset in (0, 1)
     ]
     assert update_pages[0][0]["id"] != update_pages[1][0]["id"]
 
 
-def test_work_import_api_can_attach_to_existing_project_and_reject_duplicate_ids(
+async def test_work_import_api_can_attach_to_existing_project_and_reject_duplicate_ids(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "core.db")
-    existing = store.create(Engagement(name="Existing plan"))
+    existing = await store.create(Engagement(name="Existing plan"))
     client = TestClient(create_app(store, auth_token="test-token"))
     auth = {"Authorization": "Bearer test-token"}
     project = {
@@ -1057,7 +1076,7 @@ def test_work_import_api_can_attach_to_existing_project_and_reject_duplicate_ids
             },
         ],
     }
-    invalid = client.post(
+    invalid = await client.post(
         "/api/v1/work/import",
         headers=auth,
         json={
@@ -1066,8 +1085,8 @@ def test_work_import_api_can_attach_to_existing_project_and_reject_duplicate_ids
         },
     )
     assert invalid.status_code == 422
-    assert store.list_entities(WorkItem, engagement_id=existing.id) == []
-    missing_workspace = client.post(
+    assert (await store.list_entities(WorkItem, engagement_id=existing.id)) == []
+    missing_workspace = await client.post(
         "/api/v1/work/import",
         headers=auth,
         json={
@@ -1082,7 +1101,7 @@ def test_work_import_api_can_attach_to_existing_project_and_reject_duplicate_ids
         },
     )
     assert missing_workspace.status_code == 422
-    saved = client.post(
+    saved = await client.post(
         "/api/v1/work/import",
         headers=auth,
         json={
@@ -1092,10 +1111,13 @@ def test_work_import_api_can_attach_to_existing_project_and_reject_duplicate_ids
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["projects"][0]["engagement_id"] == existing.id
-    assert len(store.list_entities(WorkItem, engagement_id=existing.id)) == 2
-    assert len(store.list_entities(WorkUpdate, engagement_id=existing.id)) == 1
-    assert store.get(Engagement, existing.id).name == "Existing plan"
-    first_page = client.get("/api/v1/work/items?offset=0&limit=1", headers=auth)
-    second_page = client.get("/api/v1/work/items?offset=1&limit=1", headers=auth)
+    assert len((await store.list_entities(WorkItem, engagement_id=existing.id))) == 2
+    assert len((await store.list_entities(WorkUpdate, engagement_id=existing.id))) == 1
+    assert (await store.get(Engagement, existing.id)).name == "Existing plan"
+    first_page = await client.get("/api/v1/work/items?offset=0&limit=1", headers=auth)
+    second_page = await client.get("/api/v1/work/items?offset=1&limit=1", headers=auth)
     assert first_page.status_code == second_page.status_code == 200
     assert first_page.json()[0]["id"] != second_page.json()[0]["id"]
+
+
+pytestmark = pytest.mark.anyio

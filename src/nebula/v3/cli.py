@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+from functools import partial, wraps
+
 from .diagnostics import record_caught_exception
 
 import asyncio
@@ -28,6 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
 from .api import create_app
+from .async_utils import call_async
 from .artifacts import ArtifactStore
 from .automation_runtime import AutomationRuntimeManager, resolve_callback_origin
 from .automation_tools import (
@@ -38,6 +42,7 @@ from .automation_tools import (
 from .context import default_output_tokens
 from .credentials import CredentialStore
 from .database import Database, DatabaseInUseError, vacuum_sqlite
+from .database_pool import PoolSettings
 from .diagnostics import (
     configure_diagnostics,
     get_diagnostics,
@@ -113,8 +118,44 @@ app.add_typer(chat_app, name="chat")
 app.add_typer(maintenance_app, name="maintenance")
 
 
+_cli_stores: ContextVar[list[NebulaStore] | None] = ContextVar(
+    "nebula_cli_stores", default=None
+)
+
+
+def _async_command(function=None, *, server_loop: bool = False):
+    """Typer calls synchronously; one loop owns each command's async resources."""
+
+    if function is None:
+        return partial(_async_command, server_loop=server_loop)
+
+    @wraps(function)
+    def command(*args, **kwargs):
+        async def run():
+            stores: list[NebulaStore] = []
+            token = _cli_stores.set(stores)
+            try:
+                return await function(*args, **kwargs)
+            finally:
+                from .async_utils import close_store_resources
+
+                try:
+                    await close_store_resources(stores)
+                finally:
+                    _cli_stores.reset(token)
+
+        if server_loop:
+            # Server.run selected Uvicorn's default loop before constructing
+            # resources. Preserve that ordering while awaiting serve ourselves.
+            uvicorn.Config("nebula.v3.api:create_app").setup_event_loop()
+        return asyncio.run(run())
+
+    return command
+
+
 @app.command("mcp-gateway", hidden=True)
-def mcp_gateway(
+@_async_command
+async def mcp_gateway(
     socket_path: Annotated[Path, typer.Option("--socket")],
 ) -> None:
     """Run the authenticated session gateway shim for a packaged Core."""
@@ -122,7 +163,7 @@ def mcp_gateway(
     token = os.environ.pop("NEBULA_MCP_GATEWAY_TOKEN", None)
     if not token:
         raise typer.BadParameter("gateway token environment is required")
-    exit_code = asyncio.run(serve_mcp_gateway(socket_path, token))
+    exit_code = await serve_mcp_gateway(socket_path, token)
     if exit_code:
         raise typer.Exit(exit_code)
 
@@ -155,14 +196,29 @@ def _diagnostic_manager(root: Path, *, level_override: str | None = None):
 
 
 def _services(
-    value: Path | None = None, *, diagnostics_level: str | None = None
+    value: Path | None = None,
+    *,
+    diagnostics_level: str | None = None,
+    runtime_pool: bool = False,
 ) -> tuple[Path, NebulaStore, ArtifactStore]:
     root = _data_dir(value)
     _diagnostic_manager(root, level_override=diagnostics_level)
     database_url = os.getenv("NEBULA_V3_DATABASE_URL")
-    database = Database(database_url or root / "nebula.db")
+    stores = _cli_stores.get()
+    settings = None
+    if (
+        not runtime_pool
+        and stores is not None
+        and database_url
+        and database_url.startswith(("postgres://", "postgresql://", "postgresql+"))
+    ):
+        settings = PoolSettings.from_environment().auxiliary()
+    database = Database(database_url or root / "nebula.db", pool_settings=settings)
     artifact_root = Path(os.getenv("NEBULA_V3_ARTIFACT_DIR", root / "artifacts"))
-    return root, NebulaStore(database), ArtifactStore(artifact_root)
+    store = NebulaStore(database)
+    if stores is not None:
+        stores.append(store)
+    return root, store, ArtifactStore(artifact_root)
 
 
 def _automation_services(value: Path | None = None) -> AutomationRuntimeManager:
@@ -185,30 +241,33 @@ def _print(value: Any) -> None:
 
 
 @runtime_app.command("status")
-def runtime_status(
+@_async_command
+async def runtime_status(
     data_dir: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     """Report runner, digest, readiness, and the generated binary inventory."""
 
     manager = _automation_services(data_dir)
-    _print(asyncio.run(manager.runtime_info()).model_dump(mode="json"))
+    _print((await manager.runtime_info()).model_dump(mode="json"))
 
 
 @runtime_app.command("prepare")
-def runtime_prepare(
+@_async_command
+async def runtime_prepare(
     data_dir: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     """Pull the exact pinned image if needed, then verify its inventory."""
 
     manager = _automation_services(data_dir)
-    result = asyncio.run(manager.prepare())
+    result = await manager.prepare()
     _print(result.model_dump(mode="json"))
     if not result.ready:
         raise typer.Exit(code=1)
 
 
 @mcp_app.command("import")
-def mcp_import(
+@_async_command
+async def mcp_import(
     source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
     apply: Annotated[
         bool, typer.Option(help="Save the servers; without it, only preview.")
@@ -272,7 +331,7 @@ def mcp_import(
     if not isinstance(document, dict):
         raise typer.BadParameter("the MCP configuration must be a JSON object")
     _, store, _ = _services(data_dir)
-    report = import_mcp_config(
+    report = await import_mcp_config(
         McpImportRequest(
             config=document,
             dry_run=not apply,
@@ -291,7 +350,8 @@ def mcp_import(
 
 
 @mcp_app.command("export")
-def mcp_export(
+@_async_command
+async def mcp_export(
     destination: Annotated[
         Path | None, typer.Argument(help="Write here instead of standard output.")
     ] = None,
@@ -301,7 +361,7 @@ def mcp_export(
     """Export MCP servers as mcpServers JSON; stored credentials become ${NAME}."""
 
     _, store, _ = _services(data_dir)
-    report = export_mcp_config(all_mcp_profiles(store))
+    report = export_mcp_config((await all_mcp_profiles(store)))
     for warning in report.warnings:
         typer.echo(warning, err=True)
     text = json.dumps(report.config, indent=2, sort_keys=True) + "\n"
@@ -370,7 +430,8 @@ def _browser_diagnostic_ingress_allowed(
 
 
 @app.command()
-def serve(
+@_async_command(server_loop=True)
+async def serve(
     host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=0, max=65535)] = 8000,
     token: Annotated[
@@ -467,19 +528,23 @@ def serve(
         auth_token = bootstrap["ipc_token"]
     else:
         auth_token = token or secrets.token_urlsafe(32)
-    root, store, artifacts = _services(data_dir, diagnostics_level=diagnostics_level)
+    root, store, artifacts = _services(
+        data_dir, diagnostics_level=diagnostics_level, runtime_pool=True
+    )
+    await store.database.initialize()
     reranker = CrossEncoderReranker(
         Path(os.getenv("NEBULA_V3_KNOWLEDGE_MODELS_DIR", root / "knowledge-models")),
         # "off" keeps retrieval as it was, and nothing is downloaded.
         enabled=os.getenv("NEBULA_V3_KNOWLEDGE_RERANKER", "on").strip().casefold()
         not in {"0", "false", "no", "off"},
     )
-    knowledge_index = ChromaKnowledgeIndex(
+    knowledge_index = await asyncio.to_thread(
+        ChromaKnowledgeIndex,
         Path(os.getenv("NEBULA_V3_KNOWLEDGE_INDEX_DIR", root / "knowledge-index")),
         reranker=reranker,
     )
     # A model already on disk is verified and loaded now, not on the first turn.
-    reranker.start_if_present()
+    await asyncio.to_thread(reranker.start_if_present)
     record_diagnostic(
         "info",
         "api",
@@ -491,7 +556,8 @@ def serve(
     tool_platform = default_runtime_platform(
         store=store, artifact_store=artifacts, data_root=root
     )
-    api = create_app(
+    api = await call_async(
+        create_app,
         store,
         artifact_store=artifacts,
         auth_token=auth_token,
@@ -618,7 +684,7 @@ def serve(
             daemon=True,
         ).start()
     try:
-        server.run(sockets=[listener])
+        await server.serve(sockets=[listener])
     except BaseException as exc:
         record_caught_exception(
             "diagnostics",
@@ -786,7 +852,8 @@ def _free_port() -> int:
 
 
 @app.command("import-2x")
-def import_2x(
+@_async_command
+async def import_2x(
     source: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
     data_dir: Annotated[Path | None, typer.Option()] = None,
     allow_external_knowledge: Annotated[
@@ -799,7 +866,7 @@ def import_2x(
     """Import a Nebula 2.x engagement without modifying it."""
 
     _, store, artifacts = _services(data_dir)
-    report = import_2x_engagement(
+    report = await import_2x_engagement(
         source,
         store,
         artifacts,
@@ -811,7 +878,8 @@ def import_2x(
 
 
 @app.command("export")
-def export_command(
+@_async_command
+async def export_command(
     engagement_id: Annotated[str, typer.Argument()],
     destination: Annotated[Path, typer.Argument()],
     data_dir: Annotated[Path | None, typer.Option()] = None,
@@ -821,7 +889,7 @@ def export_command(
 
     _, store, artifacts = _services(data_dir)
     try:
-        manifest = export_engagement(
+        manifest = await export_engagement(
             engagement_id=engagement_id,
             destination=destination,
             store=store,
@@ -836,7 +904,8 @@ def export_command(
 
 
 @app.command("run")
-def run_mission(
+@_async_command
+async def run_mission(
     engagement_id: Annotated[str, typer.Argument()],
     objective: Annotated[str, typer.Argument()],
     data_dir: Annotated[Path | None, typer.Option()] = None,
@@ -865,13 +934,13 @@ def run_mission(
         raise typer.BadParameter("executable missions require --provider")
     executable = provider_id is not None and requests_tools
     root, store, artifacts = _services(data_dir)
-    store.get(Engagement, engagement_id)
+    (await store.get(Engagement, engagement_id))
     selected_provider = None
     selected_model = model
     if provider_id is None and model is not None:
         raise typer.BadParameter("--model requires --provider")
     if provider_id is not None:
-        profile = store.get(ProviderProfile, provider_id)
+        profile = await store.get(ProviderProfile, provider_id)
         registry = ProviderRegistry()
         registry.register(provider_from_profile(profile))
         selected_provider = registry.get(provider_id)
@@ -890,8 +959,10 @@ def run_mission(
             ModelSpecialist(
                 selected_provider,
                 model=selected_model,
-                max_output_tokens=default_output_tokens(
-                    store, provider_id, selected_model, token_budget=max_tokens
+                max_output_tokens=(
+                    await default_output_tokens(
+                        store, provider_id, selected_model, token_budget=max_tokens
+                    )
                 ),
             )
             if selected_provider is not None
@@ -969,13 +1040,13 @@ def run_mission(
             )
             while queued.id in service.active_run_ids:
                 await asyncio.sleep(0.05)
-            return store.get(AgentRun, queued.id)
+            return await store.get(AgentRun, queued.id)
         finally:
             await service.shutdown()
             await manager.shutdown()
 
     if executable:
-        run = asyncio.run(execute_tools())
+        run = await execute_tools()
         _print(
             {
                 "run_id": run.id,
@@ -988,7 +1059,7 @@ def run_mission(
         )
         return
 
-    state = asyncio.run(execute_analysis())
+    state = await execute_analysis()
     _print(
         {
             "run_id": state.get("run_id"),
@@ -999,7 +1070,8 @@ def run_mission(
 
 
 @app.command()
-def worker(
+@_async_command
+async def worker(
     once: Annotated[bool, typer.Option(help="Check capability and exit.")] = True,
 ) -> None:
     """Validate the dedicated rootless worker boundary."""
@@ -1012,7 +1084,7 @@ def worker(
     async def check() -> tuple[bool, str]:
         return await ContainerSandboxRunner().available()
 
-    available, detail = asyncio.run(check())
+    available, detail = await check()
     _print(
         {
             "worker": "ready" if available else "analysis-only",
@@ -1031,7 +1103,7 @@ def migrate(
 
     root = _data_dir(data_dir)
     _diagnostic_manager(root)
-    database_url = Database._normalize_url(
+    database_url = Database._normalize_sync_url(
         os.getenv("NEBULA_V3_DATABASE_URL") or root / "nebula.db"
     )
     config = Config()
@@ -1228,7 +1300,8 @@ def migrate_to_postgresql(
 
 
 @maintenance_app.command("prune-events")
-def maintenance_prune_events(
+@_async_command
+async def maintenance_prune_events(
     data_dir: Annotated[Path | None, typer.Option()] = None,
     batch_size: Annotated[
         int, typer.Option(min=1, max=10_000, help="Rows per committed batch.")
@@ -1242,7 +1315,7 @@ def maintenance_prune_events(
 
     _, store, _ = _services(data_dir)
     started = time.monotonic()
-    report = prune_orphaned_event_history(
+    report = await prune_orphaned_event_history(
         store.database, batch_size=batch_size, pause=pause_between_batches
     )
     _print({**report.as_dict(), "seconds": round(time.monotonic() - started, 1)})
@@ -1350,7 +1423,8 @@ def diagnostics_export(
 
 
 @app.command()
-def doctor(
+@_async_command
+async def doctor(
     data_dir: Annotated[Path | None, typer.Option()] = None,
     json_output: Annotated[
         bool,
@@ -1369,7 +1443,7 @@ def doctor(
     async def sandbox_health() -> tuple[bool, str]:
         return await ContainerSandboxRunner().available()
 
-    sandbox_available, sandbox_detail = asyncio.run(sandbox_health())
+    sandbox_available, sandbox_detail = await sandbox_health()
     artifact_probe = None
     artifact_ok = False
     try:
@@ -1385,7 +1459,7 @@ def doctor(
     referenced_digests: set[str] = set()
     offset = 0
     while True:
-        page = store.list_entities(Artifact, offset=offset, limit=1_000)
+        page = await store.list_entities(Artifact, offset=offset, limit=1_000)
         for artifact in page:
             checked_artifacts += 1
             referenced_digests.add(artifact.sha256)
@@ -1416,8 +1490,8 @@ def doctor(
             for path in sorted(terminal_spool_root.iterdir())
             if path.is_file()
         )
-    with store.database.session() as session:
-        terminal_rows = session.scalars(select(TerminalCommandRow)).all()
+    async with store.database.session() as session:
+        terminal_rows = (await session.scalars(select(TerminalCommandRow))).all()
     for row in terminal_rows:
         terminal_audit_checked += 1
         expected_command_hash = hashlib.sha256(row.command.encode("utf-8")).hexdigest()
@@ -1437,7 +1511,7 @@ def doctor(
             if artifact_id is None:
                 continue
             try:
-                artifact = store.get(Artifact, artifact_id)
+                artifact = await store.get(Artifact, artifact_id)
                 output_artifacts[field_name] = artifact
                 if not artifacts.verify(artifact):
                     terminal_audit_errors.append(f"{row.id}:{field_name}_integrity")
@@ -1505,7 +1579,7 @@ def doctor(
             events: list[Any] = []
             after_sequence = 0
             while True:
-                operation_page = store.replay_operation_events(
+                operation_page = await store.replay_operation_events(
                     row.session_id, after_sequence=after_sequence, limit=10_000
                 )
                 events.extend(operation_page)
@@ -1559,9 +1633,9 @@ def doctor(
         runtime_resolver=workspace_platform.resolve_human_terminal_runtime,
         cached_runtime_provider=workspace_platform.last_automation_runtime_metadata,
     )
-    runtime_report: dict[str, Any] = asyncio.run(
-        runtime_manager.runtime_info()
-    ).model_dump(mode="json")
+    runtime_report: dict[str, Any] = (await runtime_manager.runtime_info()).model_dump(
+        mode="json"
+    )
     healthy = (
         artifact_ok
         and not corrupt_artifacts
@@ -1573,7 +1647,7 @@ def doctor(
         "status": "ok" if healthy else "error",
         **build_metadata(),
         "data_dir": str(root),
-        "database": store.database.health(),
+        "database": (await store.database.health()),
         "diagnostics": diagnostics_health,
         "artifacts": {
             "writable": artifact_ok,

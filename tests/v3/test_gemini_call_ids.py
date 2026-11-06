@@ -1,6 +1,11 @@
 """Gemini call ids Core makes up never repeat across responses."""
 
-import asyncio
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
+
 import json
 
 import httpx
@@ -70,28 +75,26 @@ def _call_body(value: str, **extra) -> dict:
     }
 
 
-def test_gemini_calls_without_a_response_id_get_distinct_ids_per_response():
+async def test_gemini_calls_without_a_response_id_get_distinct_ids_per_response():
     seen: list[dict] = []
     provider = _gemini([_call_body("a"), _call_body("b")], seen)
     request = ModelRequest(
         messages=[ModelMessage(role="user", content="read a then b")], tools=[TOOL]
     )
 
-    first = asyncio.run(provider.complete(request))
-    second = asyncio.run(
-        provider.complete(
-            request.model_copy(
-                update={
-                    "tool_results": [
-                        ModelToolResult(
-                            call_id=first.tool_calls[0].id,
-                            name="safe_read",
-                            arguments={"value": "a"},
-                            output='{"value": "a"}',
-                        )
-                    ]
-                }
-            )
+    first = await provider.complete(request)
+    second = await provider.complete(
+        request.model_copy(
+            update={
+                "tool_results": [
+                    ModelToolResult(
+                        call_id=first.tool_calls[0].id,
+                        name="safe_read",
+                        arguments={"value": "a"},
+                        output='{"value": "a"}',
+                    )
+                ]
+            }
         )
     )
 
@@ -103,16 +106,17 @@ def test_gemini_calls_without_a_response_id_get_distinct_ids_per_response():
     assert first.tool_calls[0].id not in replayed
 
 
-def test_gemini_calls_keep_the_response_id_scope_when_one_is_sent():
+async def test_gemini_calls_keep_the_response_id_scope_when_one_is_sent():
     seen: list[dict] = []
     provider = _gemini([_call_body("a", responseId="gemini_1")], seen)
 
-    response = asyncio.run(
-        provider.complete(
-            ModelRequest(
-                messages=[ModelMessage(role="user", content="read a")], tools=[TOOL]
-            )
+    response = await provider.complete(
+        ModelRequest(
+            messages=[ModelMessage(role="user", content="read a")], tools=[TOOL]
         )
     )
 
     assert response.tool_calls[0].id == "nebula-gemini-call:gemini_1:0"
+
+
+pytestmark = pytest.mark.anyio

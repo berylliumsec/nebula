@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .diagnostics import record_caught_exception
 
+import asyncio
 import base64
 import binascii
 from io import BytesIO
@@ -548,7 +549,7 @@ def _image_dimensions(data: bytes) -> tuple[str, int, int]:
     )
 
 
-def upload_evidence(
+async def upload_evidence(
     *,
     store: NebulaStore,
     artifact_store: ArtifactStore,
@@ -556,9 +557,9 @@ def upload_evidence(
 ) -> Evidence:
     """Persist the immutable blob, Artifact, and Evidence as one logical upload."""
 
-    store.get(Engagement, request.engagement_id)
-    finding = _validate_links(store, request)
-    data = request.decoded_content()
+    (await store.get(Engagement, request.engagement_id))
+    finding = await _validate_links(store, request)
+    data = await asyncio.to_thread(request.decoded_content)
     evidence_id = str(uuid4())
     artifact_metadata: dict[str, Any] = {
         "evidence_id": evidence_id,
@@ -571,7 +572,8 @@ def upload_evidence(
         artifact_metadata["source_context"] = request.source_context
     if request.edit_recipe is not None:
         artifact_metadata["edit_recipe"] = request.edit_recipe
-    stored = artifact_store.put_bytes_with_status(
+    stored = await asyncio.to_thread(
+        artifact_store.put_bytes_with_status,
         data,
         engagement_id=request.engagement_id,
         filename=request.filename,
@@ -611,24 +613,28 @@ def upload_evidence(
     )
     try:
         if finding is None:
-            store.create_many([stored.artifact, evidence])
+            (await store.create_many([stored.artifact, evidence]))
         else:
-            with store.transaction() as transaction:
-                transaction.add_all([stored.artifact, evidence])
-                transaction.update(
-                    Finding,
-                    finding.id,
-                    {
-                        "evidence_ids": list(
-                            dict.fromkeys([*finding.evidence_ids, evidence.id])
-                        )
-                    },
-                    expected_revision=finding.revision,
+            async with store.transaction() as transaction:
+                (await transaction.add_all([stored.artifact, evidence]))
+                (
+                    await transaction.update(
+                        Finding,
+                        finding.id,
+                        {
+                            "evidence_ids": list(
+                                dict.fromkeys([*finding.evidence_ids, evidence.id])
+                            )
+                        },
+                        expected_revision=finding.revision,
+                    )
                 )
                 # The finding link is read back from the authoritative edge, so
                 # the upload must write it in the same unit of work.
-                ResourceRelationService(store).sync_legacy_edges(
-                    transaction.session, evidence
+                (
+                    await ResourceRelationService(store).sync_legacy_edges(
+                        transaction.session, evidence
+                    )
                 )
     except Exception as caught_error:
         record_caught_exception(
@@ -638,29 +644,29 @@ def upload_evidence(
             caught_error,
             stage="evidence",
         )
-        artifact_store.discard_new_blob(stored)
+        await asyncio.to_thread(artifact_store.discard_new_blob, stored)
         raise
     return evidence
 
 
-def _validate_links(
+async def _validate_links(
     store: NebulaStore, request: EvidenceUploadRequest
 ) -> Finding | None:
     finding: Finding | None = None
     if request.finding_id:
-        finding = store.get(Finding, request.finding_id)
+        finding = await store.get(Finding, request.finding_id)
         if finding.engagement_id != request.engagement_id:
             raise EvidenceReferenceError(
                 "finding does not belong to the evidence engagement"
             )
     if request.parent_artifact_id:
-        parent = store.get(Artifact, request.parent_artifact_id)
+        parent = await store.get(Artifact, request.parent_artifact_id)
         if parent.engagement_id != request.engagement_id:
             raise EvidenceReferenceError(
                 "parent artifact does not belong to the evidence engagement"
             )
     for asset_id in request.asset_ids:
-        asset = store.get(Asset, asset_id)
+        asset = await store.get(Asset, asset_id)
         if asset.engagement_id != request.engagement_id:
             raise EvidenceReferenceError(
                 f"asset {asset_id!r} does not belong to the evidence engagement"

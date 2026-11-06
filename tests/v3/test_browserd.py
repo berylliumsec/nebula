@@ -1,8 +1,11 @@
-import asyncio
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 import hashlib
 import json
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 import pytest
 
 from nebula.v3.browser_engine import BrowserEngineAction, BrowserEngineReceipt
@@ -78,7 +81,7 @@ def test_browserd_uploads_are_confined_to_an_explicit_host_browser(tmp_path):
         bounded._upload_path(str(outside))
 
 
-def test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguous(
+async def test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguous(
     tmp_path,
 ):
     async def exercise():
@@ -98,7 +101,7 @@ def test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguou
         with pytest.raises(ValueError, match="different arguments"):
             await ledger.claim(action(url="https://app.example.test/changed"))
 
-    asyncio.run(exercise())
+    (await exercise())
 
 
 class FakeBrowserdManager:
@@ -139,29 +142,29 @@ class FakeBrowserdManager:
         return BrowserdLifecycleReceipt(assessment_id=assessment_id, state=state)
 
 
-def test_browserd_api_is_authenticated_and_exposes_normalized_receipts(tmp_path):
+async def test_browserd_api_is_authenticated_and_exposes_normalized_receipts(tmp_path):
     configured = settings(tmp_path)
     manager = FakeBrowserdManager()
-    with TestClient(
+    async with TestClient(
         create_browserd_app(configured, manager=manager)  # type: ignore[arg-type]
     ) as client:
-        assert client.get("/v1/readiness").status_code == 401
+        assert (await client.get("/v1/readiness")).status_code == 401
         headers = {"Authorization": f"Bearer {configured.token}"}
-        readiness = client.get("/v1/readiness", headers=headers)
+        readiness = await client.get("/v1/readiness", headers=headers)
         assert readiness.status_code == 200
         assert readiness.json()["state"] == "ready"
-        identity = client.post(
+        identity = await client.post(
             "/v1/identities/ensure",
             headers=headers,
             json={"identity_id": "identity-1"},
         )
         assert identity.json()["tab_ids"] == ["tab-1"]
-        receipt = client.post(
+        receipt = await client.post(
             "/v1/actions", headers=headers, json=action().model_dump(mode="json")
         )
         assert receipt.status_code == 200
         assert receipt.json()["action_token"] == "action-1"
-        stopped = client.post(
+        stopped = await client.post(
             "/v1/assessments/assessment-1/stop", headers=headers, json={}
         )
         assert stopped.json() == {
@@ -193,7 +196,7 @@ class FakePlaywrightStarter:
         return self.playwright
 
 
-def test_browserd_readiness_requires_manifest_bound_full_chromium(tmp_path):
+async def test_browserd_readiness_requires_manifest_bound_full_chromium(tmp_path):
     configured = settings(tmp_path)
     executable = configured.runtime_root / "chromium-test" / "chrome-linux" / "chrome"
     executable.parent.mkdir(parents=True)
@@ -225,13 +228,13 @@ def test_browserd_readiness_requires_manifest_bound_full_chromium(tmp_path):
         await manager.close()
         return capability
 
-    capability = asyncio.run(exercise())
+    capability = await exercise()
     assert capability.state == BrowserEngineState.READY
     assert capability.digest == f"sha256:{executable_sha256}"
     assert "cdp-screencast" in capability.protocols
 
 
-def test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500(
+async def test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500(
     tmp_path, monkeypatch
 ):
     from nebula.v3 import browserd
@@ -245,7 +248,7 @@ def test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500(
 
     monkeypatch.setattr(browserd, "companion_operate", timed_out)
     client = TestClient(create_browserd_app(configured, manager=manager))
-    response = client.post(
+    response = await client.post(
         "/v1/companion/identity",
         headers={"Authorization": "Bearer opaque-browserd-token"},
         json={"operation": "navigate", "url": "https://example.test/", "tab_id": "tab"},
@@ -254,12 +257,11 @@ def test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500(
     assert "retry" in response.json()["detail"]
     assert "private" not in response.text
     assert (
-        client.post("/v1/companion/identity", json={"operation": "tabs"}).status_code
-        == 401
-    )
+        await client.post("/v1/companion/identity", json={"operation": "tabs"})
+    ).status_code == 401
 
 
-def test_companion_tabs_success_preserves_identity_and_page_contents(
+async def test_companion_tabs_success_preserves_identity_and_page_contents(
     tmp_path, monkeypatch
 ):
     configured = settings(tmp_path)
@@ -289,7 +291,7 @@ def test_companion_tabs_success_preserves_identity_and_page_contents(
         {"operation": "tabs", "protected_values": ["protected-secret"]},
         {"operation": "tabs"},
     ]:
-        response = client.post(
+        response = await client.post(
             "/v1/companion/identity",
             headers={"Authorization": "Bearer opaque-browserd-token"},
             json=payload,
@@ -404,7 +406,7 @@ class LaunchingFakePlaywright(FakePlaywright):
         self.chromium = LaunchingFakeChromium(executable_path)
 
 
-def test_closed_tabs_are_forgotten_and_popups_are_listed(tmp_path):
+async def test_closed_tabs_are_forgotten_and_popups_are_listed(tmp_path):
     from nebula.v3.browser_companion import CompanionRequest
     from nebula.v3.browser_companion_runtime import operate
 
@@ -467,4 +469,7 @@ def test_closed_tabs_are_forgotten_and_popups_are_listed(tmp_path):
         assert len({tab["id"] for tab in opened["tabs"]}) == 2
         await manager.close()
 
-    asyncio.run(exercise())
+    (await exercise())
+
+
+pytestmark = pytest.mark.anyio

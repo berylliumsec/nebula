@@ -40,7 +40,7 @@ def summary(values):
     }
 
 
-def serve(args):
+async def serve(args):
     import uvicorn
     from fastapi import Header, HTTPException
     from sqlalchemy import event
@@ -73,14 +73,14 @@ def serve(args):
     )
     (static / "probe.txt").write_text("synthetic static asset\n")
     store = storage.NebulaStore(root / "core.db")
-    project = store.create(
+    project = await store.create(
         Engagement(
             id="probe-project",
             name="Synthetic MCP probe",
             workspace_path=str(workspace),
         )
     )
-    provider = store.create(
+    provider = await store.create(
         ProviderProfile(
             id="probe-provider",
             name="Inert provider",
@@ -89,7 +89,7 @@ def serve(args):
             model_allowlist=["inert"],
         )
     )
-    harness = store.create(
+    harness = await store.create(
         HarnessProfile(
             id="probe-harness",
             name="Inert harness",
@@ -143,7 +143,7 @@ def serve(args):
                     }
                 )
             )
-    store.create_many(profiles)
+    (await store.create_many(profiles))
     counts, guard = Counter(), threading.Lock()
     loop_thread = threading.get_ident()
     original_hydrate = storage._row_to_entity
@@ -161,7 +161,7 @@ def serve(args):
     timings = []
     for _ in range(3):
         started = time.perf_counter()
-        catalog = catalog_mcp_profiles(store, engagement_id=project.id)
+        catalog = await catalog_mcp_profiles(store, engagement_id=project.id)
         timings.append((time.perf_counter() - started) * 1000)
     isolation = {
         "latency": summary(timings),
@@ -182,7 +182,7 @@ def serve(args):
     lag = []
     measuring = False
 
-    @event.listens_for(store.database.engine, "before_cursor_execute")
+    @event.listens_for(store.database.engine.sync_engine, "before_cursor_execute")
     def delayed_read(conn, cursor, statement, parameters, context, executemany):
         if (
             measuring
@@ -190,7 +190,9 @@ def serve(args):
             and statement.startswith("SELECT")
             and "mcp_servers" in parameters
         ):
-            time.sleep(args.slow_read_ms / 1000)
+            conn.connection.dbapi_connection.run_async(
+                lambda _driver: asyncio.sleep(args.slow_read_ms / 1000)
+            )
 
     def authenticate(authorization):
         if not secrets.compare_digest(
@@ -209,7 +211,7 @@ def serve(args):
                 # catalog, guards and receipts; the vendor remains inert.
                 setting = {"provider_profile_id": provider.id, "model": "inert"}
                 for index in range(args.clients):
-                    session = store.create(
+                    session = await store.create(
                         HarnessSession(
                             id=f"harness-{index}",
                             engagement_id=project.id,
@@ -222,7 +224,7 @@ def serve(args):
                             },
                         )
                     )
-                    chat = store.create(
+                    chat = await store.create(
                         ChatSession(
                             id=f"chat-{index}",
                             engagement_id=project.id,
@@ -233,7 +235,7 @@ def serve(args):
                             model="inert",
                         )
                     )
-                    parent = store.create(
+                    parent = await store.create(
                         ChatTurn(
                             id=f"parent-{index}",
                             engagement_id=project.id,
@@ -243,7 +245,7 @@ def serve(args):
                             request_snapshot={"provider_subagent": setting},
                         )
                     )
-                    turn = store.create(
+                    turn = await store.create(
                         HarnessTurn(
                             id=f"turn-{index}",
                             engagement_id=project.id,
@@ -325,8 +327,12 @@ def serve(args):
         return response["structuredContent"]
 
     app.router.routes.append(static_mount)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
-    store.database.dispose()
+    (
+        await uvicorn.Server(
+            uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+        ).serve()
+    )
+    (await store.database.dispose())
 
 
 async def drive(args, process, token):
@@ -427,7 +433,7 @@ async def drive(args, process, token):
         }
 
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--host", required=True)
@@ -449,7 +455,7 @@ def main():
     ):
         parser.error("Keep the synthetic workload bounded")
     if args.serve:
-        return serve(args)
+        return await serve(args)
     args.output = args.output.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with socket.socket() as selected:
@@ -489,7 +495,7 @@ def main():
             ]
             process = subprocess.Popen(command, env=environment, stdout=log, stderr=log)
             try:
-                result = asyncio.run(drive(args, process, token))
+                result = await drive(args, process, token)
             finally:
                 if process.poll() is None:
                     process.send_signal(signal.SIGINT)
@@ -530,4 +536,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

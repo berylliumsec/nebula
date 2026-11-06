@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .async_utils import resolve_workspace
+
 import hashlib
 import os
 import shutil
@@ -202,16 +204,16 @@ class NativeCheckpointService:
         self.store = store
         self.workspace_resolver = workspace_resolver
 
-    def list_for_session(self, session_id: str) -> list[NativeCheckpoint]:
-        items = self.store.list_session_entities(NativeCheckpoint, session_id)
+    async def list_for_session(self, session_id: str) -> list[NativeCheckpoint]:
+        items = await self.store.list_session_entities(NativeCheckpoint, session_id)
         return sorted(items, key=lambda item: item.created_at, reverse=True)
 
-    def capture(
+    async def capture(
         self, session_id: str, *, label: str, paths: list[str]
     ) -> NativeCheckpoint:
         from .domain import ChatSession
 
-        session = self.store.get(ChatSession, session_id)
+        session = await self.store.get(ChatSession, session_id)
         unique = list(dict.fromkeys(path.strip() for path in paths if path.strip()))
         if not unique:
             raise NativeCheckpointError(
@@ -219,7 +221,9 @@ class NativeCheckpointService:
             )
         if len(unique) > MAX_CHECKPOINT_FILES:
             raise NativeCheckpointError("checkpoint is limited to 64 files")
-        workspace = Path(self.workspace_resolver(session.engagement_id)).resolve()
+        workspace = Path(
+            (await resolve_workspace(self.workspace_resolver, session.engagement_id))
+        ).resolve()
         # Validate every path and size before writing anything, then copy
         # into a staging directory that only becomes the checkpoint once all
         # files are in place. A rejected entry therefore never leaves a
@@ -249,7 +253,7 @@ class NativeCheckpointService:
             _discard(staging)
             raise
         try:
-            return self.store.create(
+            return await self.store.create(
                 NativeCheckpoint(
                     id=checkpoint_id,
                     engagement_id=session.engagement_id,
@@ -263,9 +267,11 @@ class NativeCheckpointService:
             _discard(checkpoint_root / checkpoint_id)
             raise
 
-    def preview(self, checkpoint_id: str) -> list[CheckpointFileStatus]:
-        checkpoint = self.store.get(NativeCheckpoint, checkpoint_id)
-        workspace = Path(self.workspace_resolver(checkpoint.engagement_id)).resolve()
+    async def preview(self, checkpoint_id: str) -> list[CheckpointFileStatus]:
+        checkpoint = await self.store.get(NativeCheckpoint, checkpoint_id)
+        workspace = Path(
+            (await resolve_workspace(self.workspace_resolver, checkpoint.engagement_id))
+        ).resolve()
         statuses: list[CheckpointFileStatus] = []
         for item in checkpoint.files:
             relative = str(item["path"])
@@ -296,18 +302,20 @@ class NativeCheckpointService:
             )
         return statuses
 
-    def restore(self, checkpoint_id: str) -> list[CheckpointFileStatus]:
-        preview = self.preview(checkpoint_id)
+    async def restore(self, checkpoint_id: str) -> list[CheckpointFileStatus]:
+        preview = await self.preview(checkpoint_id)
         conflicts = [item.path for item in preview if item.status == "conflict"]
         if conflicts:
             raise ConflictError(
                 "checkpoint restore rejected because later edits conflict: "
                 + ", ".join(conflicts)
             )
-        checkpoint = self.store.get(NativeCheckpoint, checkpoint_id)
-        workspace = Path(self.workspace_resolver(checkpoint.engagement_id)).resolve()
+        checkpoint = await self.store.get(NativeCheckpoint, checkpoint_id)
+        workspace = Path(
+            (await resolve_workspace(self.workspace_resolver, checkpoint.engagement_id))
+        ).resolve()
         for item in checkpoint.files:
             relative = str(item["path"])
             captured = workspace / CHECKPOINT_ROOT / checkpoint.id / Path(relative)
             _restore_file(workspace, relative, captured.read_bytes())
-        return self.preview(checkpoint_id)
+        return await self.preview(checkpoint_id)

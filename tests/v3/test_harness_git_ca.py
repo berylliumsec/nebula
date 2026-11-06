@@ -1,6 +1,11 @@
 """The managed harness must retain Git's trusted CA without copying ambient secrets."""
 
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import asyncio
 from types import SimpleNamespace
@@ -10,7 +15,7 @@ from nebula.v3.domain import HarnessKind, HarnessProfile
 from nebula.v3.harnesses import CodexAppServerAdapter, _CodexRpc
 
 
-def test_codex_spawn_keeps_git_ca_for_worker_commands(tmp_path, monkeypatch):
+async def test_codex_spawn_keeps_git_ca_for_worker_commands(tmp_path, monkeypatch):
     ca_file = tmp_path / "mercury-ca.pem"
     ca_file.write_text("synthetic CA", encoding="utf-8")
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -37,12 +42,13 @@ def test_codex_spawn_keeps_git_ca_for_worker_commands(tmp_path, monkeypatch):
         executable=str(executable),
     )
 
-    asyncio.run(
-        CodexAppServerAdapter()._connect(profile, CredentialStore(), (), tmp_path)
-    )
+    (await CodexAppServerAdapter()._connect(profile, CredentialStore(), (), tmp_path))
 
     assert len(captured_envs) == 1
     child_env = captured_envs[0]
     assert child_env["GIT_SSL_CAINFO"] == str(ca_file)
     assert child_env["SSL_CERT_FILE"] == str(ca_file)
     assert "NEBULA_TEST_SECRET_SENTINEL" not in child_env
+
+
+pytestmark = pytest.mark.anyio

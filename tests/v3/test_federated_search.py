@@ -1,8 +1,13 @@
 from __future__ import annotations
+import pytest
+from tests.v3.async_test_support import (
+    anyio_backend as anyio_backend,
+    close_database_handles as close_database_handles,
+)
 
 import base64
 
-from fastapi.testclient import TestClient
+from tests.v3.async_test_support import AsyncTestClient as TestClient
 from sqlalchemy import select, update
 
 from nebula.v3.api import create_app
@@ -25,20 +30,24 @@ def _auth() -> dict[str, str]:
     return {"Authorization": "Bearer test-token"}
 
 
-def test_search_is_active_project_first_and_paginates(tmp_path):
+async def test_search_is_active_project_first_and_paginates(tmp_path):
     store = NebulaStore(tmp_path / "search.db")
     first = Engagement(name="Alpha")
     second = Engagement(name="Beta")
-    store.create_many([first, second])
-    store.create(
-        Asset(engagement_id=first.id, name="Shared gateway", hostname="alpha.test")
+    (await store.create_many([first, second]))
+    (
+        await store.create(
+            Asset(engagement_id=first.id, name="Shared gateway", hostname="alpha.test")
+        )
     )
-    store.create(
-        Asset(engagement_id=second.id, name="Shared gateway", hostname="beta.test")
+    (
+        await store.create(
+            Asset(engagement_id=second.id, name="Shared gateway", hostname="beta.test")
+        )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    active = client.get(
+    active = await client.get(
         "/api/v1/search",
         params={"query": "gateway", "active_project": first.id, "limit": 1},
         headers=_auth(),
@@ -46,37 +55,41 @@ def test_search_is_active_project_first_and_paginates(tmp_path):
     assert active.status_code == 200
     assert len(active.json()["items"]) == 1
     assert active.json()["items"][0]["ref"]["project_id"] == first.id
-    all_projects = client.get(
-        "/api/v1/search",
-        params={
-            "query": "gateway",
-            "active_project": first.id,
-            "scope": "all",
-            "limit": 1,
-        },
-        headers=_auth(),
+    all_projects = (
+        await client.get(
+            "/api/v1/search",
+            params={
+                "query": "gateway",
+                "active_project": first.id,
+                "scope": "all",
+                "limit": 1,
+            },
+            headers=_auth(),
+        )
     ).json()
     assert all_projects["items"][0]["project"] == "Alpha"
     assert all_projects["next_cursor"]
-    second_page = client.get(
-        "/api/v1/search",
-        params={
-            "query": "gateway",
-            "active_project": first.id,
-            "scope": "all",
-            "limit": 1,
-            "cursor": all_projects["next_cursor"],
-        },
-        headers=_auth(),
+    second_page = (
+        await client.get(
+            "/api/v1/search",
+            params={
+                "query": "gateway",
+                "active_project": first.id,
+                "scope": "all",
+                "limit": 1,
+                "cursor": all_projects["next_cursor"],
+            },
+            headers=_auth(),
+        )
     ).json()
     assert second_page["items"][0]["project"] == "Beta"
     assert any(action["id"] == "open" for action in all_projects["items"][0]["actions"])
 
 
-def test_search_projection_excludes_secrets_outputs_and_url_queries(tmp_path):
+async def test_search_projection_excludes_secrets_outputs_and_url_queries(tmp_path):
     store = NebulaStore(tmp_path / "privacy.db")
     project = Engagement(name="Privacy")
-    store.create(project)
+    (await store.create(project))
     command = CommandExecution(
         engagement_id=project.id,
         session_id="session",
@@ -117,9 +130,11 @@ def test_search_projection_excludes_secrets_outputs_and_url_queries(tmp_path):
         scope_policy_revision=1,
         created_by="operator",
     )
-    store.create_many([command, browser, note, assessment])
-    with store.database.session() as session:
-        documents = {row.id: row for row in session.scalars(select(SearchDocumentRow))}
+    (await store.create_many([command, browser, note, assessment]))
+    async with store.database.session() as session:
+        documents = {
+            row.id: row for row in (await session.scalars(select(SearchDocumentRow)))
+        }
     command_text = f"{documents[command.id].label} {documents[command.id].description} {documents[command.id].content}"
     browser_text = f"{documents[browser.id].label} {documents[browser.id].description} {documents[browser.id].content}"
     assert "SECRET_OUTPUT" not in command_text
@@ -140,25 +155,27 @@ def test_search_projection_excludes_secrets_outputs_and_url_queries(tmp_path):
     assert "operator saved durable note" in documents[note.id].description
 
 
-def test_search_repairs_a_stale_projection(tmp_path):
+async def test_search_repairs_a_stale_projection(tmp_path):
     store = NebulaStore(tmp_path / "stale.db")
     project = Engagement(name="Before")
-    store.create(project)
-    with store.database.session() as session:
-        session.execute(
-            update(EntityRow)
-            .where(EntityRow.id == project.id)
-            .values(
-                revision=2,
-                payload={
-                    **project.model_dump(mode="json"),
-                    "name": "After",
-                    "revision": 2,
-                },
+    (await store.create(project))
+    async with store.database.session() as session:
+        (
+            await session.execute(
+                update(EntityRow)
+                .where(EntityRow.id == project.id)
+                .values(
+                    revision=2,
+                    payload={
+                        **project.model_dump(mode="json"),
+                        "name": "After",
+                        "revision": 2,
+                    },
+                )
             )
         )
     client = TestClient(create_app(store, auth_token="test-token"))
-    response = client.get(
+    response = await client.get(
         "/api/v1/search",
         params={"query": "After", "active_project": project.id},
         headers=_auth(),
@@ -168,27 +185,31 @@ def test_search_repairs_a_stale_projection(tmp_path):
     assert response.json()["items"][0]["label"] == "After"
 
 
-def test_temporary_conversations_do_not_keep_the_projection_stale(tmp_path):
+async def test_temporary_conversations_do_not_keep_the_projection_stale(tmp_path):
     store = NebulaStore(tmp_path / "popup.db")
-    project = store.create(Engagement(name="Popup project"))
-    provider = store.create(
+    project = await store.create(Engagement(name="Popup project"))
+    provider = await store.create(
         ProviderProfile(name="Local", provider_type="vllm", is_local=True)
     )
-    store.create(
-        ChatSession(
-            engagement_id=project.id,
-            title="Durable conversation",
-            provider_profile_id=provider.id,
-            model="model-a",
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Durable conversation",
+                provider_profile_id=provider.id,
+                model="model-a",
+            )
         )
     )
-    store.create(
-        ChatSession(
-            engagement_id=project.id,
-            title="Ask Nebula popup",
-            provider_profile_id=provider.id,
-            model="model-a",
-            metadata={"temporary_assistant": True},
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Ask Nebula popup",
+                provider_profile_id=provider.id,
+                model="model-a",
+                metadata={"temporary_assistant": True},
+            )
         )
     )
     client = TestClient(create_app(store, auth_token="test-token"))
@@ -196,7 +217,7 @@ def test_temporary_conversations_do_not_keep_the_projection_stale(tmp_path):
     # The popup session is deliberately never projected, so its presence must
     # not read as a stale index on every search.
     for _ in range(2):
-        response = client.get(
+        response = await client.get(
             "/api/v1/search",
             params={"query": "conversation", "active_project": project.id},
             headers=_auth(),
@@ -211,18 +232,20 @@ def _cursor(value: str) -> str:
     return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
 
 
-def test_search_does_not_blame_the_cursor_for_a_stale_projection_kind(tmp_path):
+async def test_search_does_not_blame_the_cursor_for_a_stale_projection_kind(tmp_path):
     store = NebulaStore(tmp_path / "stale-kind.db")
-    project = store.create(Engagement(name="Stale kind"))
-    with store.database.session() as session:
-        session.execute(
-            update(SearchDocumentRow)
-            .where(SearchDocumentRow.id == project.id)
-            .values(resource_kind="retired_kind")
+    project = await store.create(Engagement(name="Stale kind"))
+    async with store.database.session() as session:
+        (
+            await session.execute(
+                update(SearchDocumentRow)
+                .where(SearchDocumentRow.id == project.id)
+                .values(resource_kind="retired_kind")
+            )
         )
     client = TestClient(create_app(store, auth_token="test-token"))
 
-    response = client.get(
+    response = await client.get(
         "/api/v1/search",
         params={"query": "Stale", "active_project": project.id},
         headers=_auth(),
@@ -233,16 +256,19 @@ def test_search_does_not_blame_the_cursor_for_a_stale_projection_kind(tmp_path):
     assert "retired_kind" in response.json()["detail"]
 
 
-def test_search_rejects_a_cursor_that_is_not_a_page_offset(tmp_path):
+async def test_search_rejects_a_cursor_that_is_not_a_page_offset(tmp_path):
     store = NebulaStore(tmp_path / "cursor.db")
-    project = store.create(Engagement(name="Cursor"))
+    project = await store.create(Engagement(name="Cursor"))
     client = TestClient(create_app(store, auth_token="test-token"))
 
     for cursor in (_cursor("-1"), _cursor("abc"), "%%%"):
-        response = client.get(
+        response = await client.get(
             "/api/v1/search",
             params={"query": "Cursor", "active_project": project.id, "cursor": cursor},
             headers=_auth(),
         )
         assert response.status_code == 422, (cursor, response.text)
         assert response.json()["detail"] == "invalid search cursor"
+
+
+pytestmark = pytest.mark.anyio

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .async_utils import MaybeAsync
+
+from .async_utils import call_async
+
 from .diagnostics import (
     create_diagnostic_task,
     gather_diagnostic,
@@ -446,7 +450,7 @@ class ContainerTerminalService:
         execution_service: ExecutionService | None = None,
         command_history: TerminalCommandHistory | None = None,
         credential_store: CredentialStore | None = None,
-        operator_id: Callable[[], str] | None = None,
+        operator_id: (MaybeAsync[[], str] | None) = None,
         audit_nonce_factory: Callable[[], str] | None = None,
         max_active: int = 32,
         reconnect_grace_seconds: float = TERMINAL_RECONNECT_GRACE_SECONDS,
@@ -492,14 +496,14 @@ class ContainerTerminalService:
 
     async def startup(self) -> None:
         if self.command_history is not None:
-            recovered = await asyncio.to_thread(self.command_history.recover_spools)
+            recovered = await self.command_history.recover_spools()
             if recovered:
                 LOGGER.warning(
                     "recovered %d interrupted terminal audit spool(s)", recovered
                 )
         if self.tool_platform is not None:
             await self.tool_platform.cleanup_operator_terminals()
-        await asyncio.to_thread(self._recover_interrupted_events)
+        await self._recover_interrupted_events()
 
     def bind_execution_service(self, service: ExecutionService) -> None:
         if service.store is not self.store:
@@ -529,12 +533,12 @@ class ContainerTerminalService:
             )
         )
 
-    def _selected_vpn(self, engagement_id: str) -> tuple[VpnProfile, str] | None:
+    async def _selected_vpn(self, engagement_id: str) -> tuple[VpnProfile, str] | None:
         policy_id = str(
             uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")
         )
         try:
-            policy = self.store.get(AutomationProjectPolicy, policy_id)
+            policy = await self.store.get(AutomationProjectPolicy, policy_id)
         except NotFoundError:
             # diagnostic-expected: projects without a saved policy use direct networking.
             return None
@@ -546,7 +550,7 @@ class ContainerTerminalService:
                 "enable project networking before starting a VPN terminal",
             )
         try:
-            profile = self.store.get(VpnProfile, policy.vpn_profile_id)
+            profile = await self.store.get(VpnProfile, policy.vpn_profile_id)
         except NotFoundError as exc:
             raise ContainerTerminalError(
                 "vpn_unavailable",
@@ -587,7 +591,7 @@ class ContainerTerminalService:
     async def list_sessions(self, engagement_id: str) -> ContainerTerminalSessionList:
         """Read one Project's live sessions without issuing WebSocket tickets."""
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         await self._finish_expired_reconnects(engagement_id)
         async with self._lock:
             sessions = [
@@ -617,7 +621,7 @@ class ContainerTerminalService:
     ) -> ContainerTerminalSessionList:
         """Stop only the exact session previously read in this Project."""
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         async with self._lock:
             session = self._sessions.get(session_id) or self._finishing_sessions.get(
                 session_id
@@ -782,8 +786,8 @@ class ContainerTerminalService:
             stage="shutdown",
         )
 
-    def capabilities(self, engagement_id: str) -> ContainerTerminalCapabilities:
-        self.store.get(Engagement, engagement_id)
+    async def capabilities(self, engagement_id: str) -> ContainerTerminalCapabilities:
+        (await self.store.get(Engagement, engagement_id))
         ready = False
         detail: str | None = None
         error_code: str | None = None
@@ -794,9 +798,9 @@ class ContainerTerminalService:
             detail = "human terminal container execution is not configured"
         else:
             try:
-                self.tool_platform.resolve_human_terminal_profile(engagement_id)
+                (await self.tool_platform.resolve_human_terminal_profile(engagement_id))
                 ready = True
-                selected_vpn = self._selected_vpn(engagement_id)
+                selected_vpn = await self._selected_vpn(engagement_id)
                 if selected_vpn is not None:
                     profile, _config = selected_vpn
                     network = ContainerTerminalNetworkSnapshot(
@@ -886,7 +890,7 @@ class ContainerTerminalService:
             raise ContainerTerminalError(
                 "preview_stale", "terminal preview does not match the request"
             )
-        if signed.get("operator_id") != self.operator_id():
+        if signed.get("operator_id") != (await call_async(self.operator_id)):
             raise ContainerTerminalError(
                 "preview_stale", "active operator changed after terminal review"
             )
@@ -936,7 +940,7 @@ class ContainerTerminalService:
             session_id = str(uuid4())
             ticket = secrets.token_urlsafe(32)
             audit_nonce = self.audit_nonce_factory()
-            operator_id = self.operator_id()
+            operator_id = await call_async(self.operator_id)
             expires = utc_now() + timedelta(seconds=TICKET_TTL_SECONDS)
             parser = (
                 self.command_history.new_parser(
@@ -980,19 +984,21 @@ class ContainerTerminalService:
                 failure_message="Terminal ticket expiry supervision failed.",
                 name=f"container-terminal-ticket-{session_id}",
             )
-        self._event(
-            reservation,
-            "container_terminal.pending",
-            {
-                "status": "pending",
-                "preview_fingerprint": request.preview_fingerprint,
-                "runtime": prepared.runtime.model_dump(mode="json"),
-                "network": prepared.network.model_dump(mode="json"),
-                "security": prepared.security.model_dump(mode="json"),
-                "limits": _terminal_limits().model_dump(mode="json"),
-                "workspace": "/workspace",
-            },
-            key="pending",
+        (
+            await self._event(
+                reservation,
+                "container_terminal.pending",
+                {
+                    "status": "pending",
+                    "preview_fingerprint": request.preview_fingerprint,
+                    "runtime": prepared.runtime.model_dump(mode="json"),
+                    "network": prepared.network.model_dump(mode="json"),
+                    "security": prepared.security.model_dump(mode="json"),
+                    "limits": _terminal_limits().model_dump(mode="json"),
+                    "workspace": "/workspace",
+                },
+                key="pending",
+            )
         )
         return self._start_response(reservation)
 
@@ -1011,7 +1017,7 @@ class ContainerTerminalService:
         after the old transport closes.
         """
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         await self._finish_expired_reconnects(engagement_id)
         async with self._lock:
             sessions = sorted(
@@ -1043,7 +1049,7 @@ class ContainerTerminalService:
     ) -> ContainerTerminalRecoveryListResponse:
         """Issue fresh one-use tickets for every active Project terminal."""
 
-        self.store.get(Engagement, engagement_id)
+        (await self.store.get(Engagement, engagement_id))
         await self._finish_expired_reconnects(engagement_id)
         async with self._lock:
             sessions = sorted(
@@ -1167,11 +1173,13 @@ class ContainerTerminalService:
             session.state = "claimed"
             self._rotate_ticket_locked(session)
             self._cancel_session_task_locked(session, "expiry_task")
-        self._event(
-            session,
-            "container_terminal.claimed",
-            {"status": "connecting"},
-            key="claimed",
+        (
+            await self._event(
+                session,
+                "container_terminal.claimed",
+                {"status": "connecting"},
+                key="claimed",
+            )
         )
         return session.request.engagement_id
 
@@ -1237,11 +1245,13 @@ class ContainerTerminalService:
                 session.state = "launching"
                 launch_required = True
         if launch_required:
-            self._event(
-                session,
-                "container_terminal.claimed",
-                {"status": "connecting"},
-                key="claimed",
+            (
+                await self._event(
+                    session,
+                    "container_terminal.claimed",
+                    {"status": "connecting"},
+                    key="claimed",
+                )
             )
             try:
                 await self._launch_session(session_id, expected_state="launching")
@@ -1544,11 +1554,13 @@ class ContainerTerminalService:
         }
         if detail:
             payload["detail"] = detail[:1_000]
-        self._event(
-            session,
-            "container_terminal.terminal",
-            payload,
-            key="terminal",
+        (
+            await self._event(
+                session,
+                "container_terminal.terminal",
+                payload,
+                key="terminal",
+            )
         )
 
     async def _launch_session(
@@ -1702,15 +1714,17 @@ class ContainerTerminalService:
             raise ContainerTerminalError(
                 "interrupted", "terminal launch was interrupted"
             )
-        self._event(
-            session,
-            "container_terminal.running",
-            {
-                "status": "running",
-                "container_name": process.container_name,
-                "workspace": "/workspace",
-            },
-            key="running",
+        (
+            await self._event(
+                session,
+                "container_terminal.running",
+                {
+                    "status": "running",
+                    "container_name": process.container_name,
+                    "workspace": "/workspace",
+                },
+                key="running",
+            )
         )
         return process
 
@@ -1752,8 +1766,7 @@ class ContainerTerminalService:
                             await self._persist_capture(session, capture)
                     for command_record in parsed.records:
                         try:
-                            await asyncio.to_thread(
-                                self.command_history.record,
+                            await self.command_history.record(
                                 engagement_id=session.request.engagement_id,
                                 session_id=session.id,
                                 command=command_record.command,
@@ -1816,8 +1829,7 @@ class ContainerTerminalService:
         if self.command_history is None:
             return
         try:
-            await asyncio.to_thread(
-                self.command_history.record_capture,
+            await self.command_history.record_capture(
                 engagement_id=session.request.engagement_id,
                 session_id=session.id,
                 operator_id=session.operator_id,
@@ -1837,19 +1849,21 @@ class ContainerTerminalService:
                 type(exc).__name__,
             )
             try:
-                self._event(
-                    session,
-                    "container_terminal.audit_gap",
-                    {
-                        "status": "capture_failed",
-                        "shell_sequence": capture.shell_sequence,
-                        "command_sha256": hashlib.sha256(
-                            capture.command.encode("utf-8")
-                        ).hexdigest(),
-                        "output_sha256": capture.output_sha256,
-                        "error": type(exc).__name__,
-                    },
-                    key=f"audit-gap-{capture.shell_sequence}",
+                (
+                    await self._event(
+                        session,
+                        "container_terminal.audit_gap",
+                        {
+                            "status": "capture_failed",
+                            "shell_sequence": capture.shell_sequence,
+                            "command_sha256": hashlib.sha256(
+                                capture.command.encode("utf-8")
+                            ).hexdigest(),
+                            "output_sha256": capture.output_sha256,
+                            "error": type(exc).__name__,
+                        },
+                        key=f"audit-gap-{capture.shell_sequence}",
+                    )
                 )
             except Exception as caught_error:
                 record_caught_exception(
@@ -2072,7 +2086,7 @@ class ContainerTerminalService:
         prepared = await self._prepare(request)
         binding = {
             "request_fingerprint": _digest_json(request.model_dump(mode="json")),
-            "operator_id": self.operator_id(),
+            "operator_id": (await call_async(self.operator_id)),
             "runtime": prepared.runtime.model_dump(mode="json"),
             "network": prepared.network.model_dump(mode="json"),
             "security": prepared.security.model_dump(mode="json"),
@@ -2108,7 +2122,7 @@ class ContainerTerminalService:
     async def _prepare(
         self, request: ContainerTerminalPreflightRequest
     ) -> _PreparedTerminal:
-        self.store.get(Engagement, request.engagement_id)
+        (await self.store.get(Engagement, request.engagement_id))
         if self.tool_platform is None:
             raise ContainerTerminalError(
                 "runner_unavailable",
@@ -2116,7 +2130,11 @@ class ContainerTerminalService:
                 status_code=503,
             )
         try:
-            self.tool_platform.resolve_human_terminal_profile(request.engagement_id)
+            (
+                await self.tool_platform.resolve_human_terminal_profile(
+                    request.engagement_id
+                )
+            )
         except RuntimePlatformError as exc:
             record_caught_exception(
                 "terminal",
@@ -2154,7 +2172,7 @@ class ContainerTerminalService:
                 default_tools=resolution.image.security_tools,
             )
         runtime = _runtime_snapshot(resolution)
-        selected_vpn = self._selected_vpn(request.engagement_id)
+        selected_vpn = await self._selected_vpn(request.engagement_id)
         vpn_config: str | None = None
         if selected_vpn is None:
             network = ContainerTerminalNetworkSnapshot(
@@ -2235,38 +2253,42 @@ class ContainerTerminalService:
             vpn_config=vpn_config,
         )
 
-    def _recover_interrupted_events(self) -> None:
+    async def _recover_interrupted_events(self) -> None:
         # Runs at startup, so it reads only the sessions that never recorded a
         # terminal event, not the project's whole event history. An unreadable
         # project is skipped, not fatal.
-        unsettled = self.store.unsettled_operation_events(
+        unsettled = await self.store.unsettled_operation_events(
             "container_terminal", "container_terminal.terminal"
         )
         if not unsettled:
             return
         readable = {
             engagement.id
-            for engagement in self.store.iter_readable_entities(Engagement)
+            async for engagement in self.store.iter_readable_entities(Engagement)
         }
         for event in unsettled:
             if event.engagement_id not in readable:
                 continue
-            self.store.append_operation_event(
-                event.operation_id,
-                "container_terminal",
-                event.engagement_id,
-                "container_terminal.terminal",
-                {
-                    "status": "interrupted",
-                    "exit_code": None,
-                    "error_code": "interrupted",
-                    "detail": "Core restarted before the terminal session ended",
-                },
-                actor_id=event.actor_id,
-                idempotency_key=(f"container-terminal:{event.operation_id}:terminal"),
+            (
+                await self.store.append_operation_event(
+                    event.operation_id,
+                    "container_terminal",
+                    event.engagement_id,
+                    "container_terminal.terminal",
+                    {
+                        "status": "interrupted",
+                        "exit_code": None,
+                        "error_code": "interrupted",
+                        "detail": "Core restarted before the terminal session ended",
+                    },
+                    actor_id=event.actor_id,
+                    idempotency_key=(
+                        f"container-terminal:{event.operation_id}:terminal"
+                    ),
+                )
             )
 
-    def _event(
+    async def _event(
         self,
         session: _TerminalReservation,
         event_type: str,
@@ -2274,14 +2296,16 @@ class ContainerTerminalService:
         *,
         key: str,
     ) -> None:
-        self.store.append_operation_event(
-            session.id,
-            "container_terminal",
-            session.request.engagement_id,
-            event_type,
-            payload,
-            actor_id=session.operator_id,
-            idempotency_key=f"container-terminal:{session.id}:{key}",
+        (
+            await self.store.append_operation_event(
+                session.id,
+                "container_terminal",
+                session.request.engagement_id,
+                event_type,
+                payload,
+                actor_id=session.operator_id,
+                idempotency_key=f"container-terminal:{session.id}:{key}",
+            )
         )
 
     def _sign_preview(
@@ -2360,7 +2384,7 @@ async def _feed_terminal_parser(
 
     # diagnostic-expected: this filesystem worker is shielded, awaited, and
     # cancellation is classified below before the durable write completes.
-    worker = asyncio.create_task(asyncio.to_thread(parser.feed, data))
+    worker = asyncio.create_task(parser.feed_async(data))
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError as caught_error:
