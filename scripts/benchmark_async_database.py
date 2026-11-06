@@ -382,6 +382,7 @@ async def drive(args, origin, process):
         )
     }
     errors = []
+    rejections = {kind: [] for kind in ("chat", "listing", "auth", "tool")}
     observations = []
     successful_turn_ids = []
     async with httpx.AsyncClient(
@@ -511,8 +512,19 @@ async def drive(args, origin, process):
         sampling_task = asyncio.create_task(sample())
 
         async def guarded(kind, operation):
+            started = time.perf_counter()
             try:
                 await operation
+            except httpx.HTTPStatusError as exc:
+                try:
+                    code = str(exc.response.json().get("code", ""))
+                except ValueError:
+                    code = ""
+                status = exc.response.status_code
+                if status == 429 or (status == 503 and code.endswith("database_busy")):
+                    rejections[kind].append((status, time.perf_counter() - started))
+                else:
+                    errors.append({"kind": kind, "error": str(exc)[:500]})
             except Exception as exc:
                 errors.append({"kind": kind, "error": str(exc)[:500]})
 
@@ -561,6 +573,17 @@ async def drive(args, origin, process):
         else None,
         "metrics": {name: distribution(values) for name, values in metrics.items()},
         "error_count": len(errors),
+        "rejections": {
+            kind: {
+                "count": len(values),
+                "statuses": {
+                    str(status): sum(item[0] == status for item in values)
+                    for status in {item[0] for item in values}
+                },
+                "latency": distribution([item[1] for item in values]),
+            }
+            for kind, values in rejections.items()
+        },
         "errors": errors[:30],
         "final_observation": observation,
         "observations": observations,
