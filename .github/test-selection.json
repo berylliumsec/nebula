@@ -1,5 +1,5 @@
 {
-  "change_digest": "b7431d660cfbfd4d15ab672f032b2130b8d3316cc218ef1ba4ba9613e4de4bc1",
+  "change_digest": "fda9da19727f1abb5cea412a3e6af38216781b36fd92f04577da487480c6df45",
   "reviewed_by": "Codex; David approved the Figma layout; independent fresh-context root-cause validation before repair",
   "reason": "The paired terminal client gains a bounded reading layout, separated two-line conversation states, and an activity indicator that animates only during local reads or confirmed active turns. Forty-one focused Python cases cover presentation, real PTY geometry and spinner frames, retryable picker failure, stream/queue/wait/reconnect lifecycle, three authenticated TLS LAN Core journeys, and product-knowledge digest/sync. One frontend catalog test verifies discoverability of animation and reduced motion.",
   "exclusions": "The changed interface is the Python prompt_toolkit terminal, not a browser page; desktop/mobile Playwright and touch checks do not exercise this surface. Native runtime tests are unrelated. The selected Python LAN fixture uses synthetic paired projects and an inert provider; no operator data or live agent is touched. The full Python and frontend suites are excluded by the focused-test policy.",

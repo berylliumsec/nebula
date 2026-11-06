@@ -217,6 +217,10 @@ asyncio.run(main())
         read,
     ):
         read("plan:", rendered=True)
+        # PTY writes can split one redraw across reads, especially on macOS.
+        # Wait for the navigation state before taking the complete screen snapshot.
+        read("● Running", rendered=True)
+        read("○ Idle", rendered=True)
         rows = read.screen.display
         assert any("● Running" in row for row in rows)
         assert any("○ Idle" in row for row in rows)
