@@ -94,6 +94,10 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
             "How can I select and copy text from the nebula-chat screen?",
             "Drag across the chat screen",
         ),
+        (
+            "nebula-chat standing tool-result consent",
+            "standing tool-result consent",
+        ),
     ):
         matches = search_product_knowledge(question)
         assert any(expected in str(item["text"]) for item in matches), question
