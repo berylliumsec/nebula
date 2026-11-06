@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+from prompt_toolkit.utils import get_cwidth
 
 from nebula.terminal.shell import Shell
 from nebula.terminal.state import View
-from nebula.terminal.transport import AsyncApi, Settings
+from nebula.terminal.transport import AsyncApi, ClientError, Settings
 from nebula.terminal.tui import TuiUI
 from nebula.terminal.ui import CancelledInput, TerminalUI
 
@@ -136,17 +137,34 @@ def test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown() -> None:
         }
     )
     rows = ui._sidebar_text().splitlines()
-    assert any("› Selected chat" in row and row.endswith("IDLE") for row in rows)
-    assert any("Needs action" in row and row.endswith("WAIT") for row in rows)
-    assert any("External work" in row and row.endswith("RUN") for row in rows)
-    assert {len(row) for row in rows if row.endswith(("RUN", "WAIT", "IDLE"))} == {32}
+    assert (
+        rows[
+            rows.index(next(row for row in rows if "› Selected chat" in row)) + 1
+        ].strip()
+        == "○ Idle"
+    )
+    assert (
+        rows[rows.index(next(row for row in rows if "Needs action" in row)) + 1].strip()
+        == "◐ Waiting for action"
+    )
+    assert (
+        rows[
+            rows.index(next(row for row in rows if "External work" in row)) + 1
+        ].strip()
+        == "● Running"
+    )
+    assert all(get_cwidth(row) <= 32 for row in rows)
     assert rows.index(next(row for row in rows if "Needs action" in row)) < rows.index(
         next(row for row in rows if "Idle 0" in row)
     )
     ui.set_conversation_activity(None)
-    assert any(
-        "› Selected chat" in row and row.endswith("?")
-        for row in ui._sidebar_text().splitlines()
+    assert "UNKNOWN" in ui._header_text()
+    rows = ui._sidebar_text().splitlines()
+    assert (
+        rows[
+            rows.index(next(row for row in rows if "› Selected chat" in row)) + 1
+        ].strip()
+        == "? State unknown"
     )
     ui.open_view(
         {"id": "other-project", "name": "Other"}, {"id": "other", "title": "Other chat"}
@@ -154,9 +172,10 @@ def test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown() -> None:
     ui.set_navigation(
         "https://core.example:8765", [], [{"id": "other", "title": "Other chat"}]
     )
-    assert any(
-        "› Other chat" in row and row.endswith("?")
-        for row in ui._sidebar_text().splitlines()
+    rows = ui._sidebar_text().splitlines()
+    assert (
+        rows[rows.index(next(row for row in rows if "› Other chat" in row)) + 1].strip()
+        == "? State unknown"
     )
 
 
@@ -221,13 +240,14 @@ def test_navigation_rail_includes_the_selected_butler(tmp_path) -> None:
         assert "› Apple Bug Bounty" in ui._sidebar_text()
         assert [row["id"] for row in ui._chats] == ["butler", "main"]
         assert "› Butler" in ui._sidebar_text()
-        assert any(
-            "› Butler" in row and row.endswith("RUN")
-            for row in ui._sidebar_text().splitlines()
+        rows = ui._sidebar_text().splitlines()
+        assert (
+            rows[rows.index(next(row for row in rows if "› Butler" in row)) + 1].strip()
+            == "● Running"
         )
-        assert any(
-            "Main" in row and row.endswith("IDLE")
-            for row in ui._sidebar_text().splitlines()
+        assert (
+            rows[rows.index(next(row for row in rows if "Main" in row)) + 1].strip()
+            == "○ Idle"
         )
         await api.close()
 
@@ -277,9 +297,13 @@ def test_navigation_rail_keeps_an_older_selected_chat(tmp_path) -> None:
         ui.open_view(project, selected)
         await shell.refresh_navigation()
         assert [row["id"] for row in ui._chats] == ["older", "recent"]
-        assert any(
-            "› Older active chat" in row and row.endswith("RUN")
-            for row in ui._sidebar_text().splitlines()
+        rows = ui._sidebar_text().splitlines()
+        assert (
+            rows[
+                rows.index(next(row for row in rows if "› Older active chat" in row))
+                + 1
+            ].strip()
+            == "● Running"
         )
         await api.close()
 
@@ -392,9 +416,41 @@ def test_tui_searches_and_selects_a_menu_without_opaque_ids() -> None:
     asyncio.run(run())
 
 
+def test_tui_picker_page_failure_is_visible_and_retryable() -> None:
+    async def run() -> None:
+        ui = TuiUI()
+        calls = 0
+
+        async def more() -> list[dict[str, str]]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ClientError("Core read failed")
+            return [{"id": "beta", "name": "Beta"}]
+
+        choice = asyncio.create_task(
+            ui.choose("Conversation", [{"id": "alpha", "name": "Alpha"}], more=more)
+        )
+        await asyncio.sleep(0)
+        ui._menu_move(1)
+        ui._menu_select()
+        await asyncio.sleep(0)
+        assert "Could not load more" in ui._menu_text()
+        assert calls == 1
+        ui._menu_select()
+        await asyncio.sleep(0)
+        assert "Beta" in ui._menu_text()
+        assert "Could not load more" not in ui._menu_text()
+        ui._menu_select()
+        assert (await choice)["id"] == "beta"
+
+    asyncio.run(run())
+
+
 def test_tui_selection_loading_stays_visible_until_next_view_is_ready() -> None:
     async def run() -> None:
         ui = TuiUI()
+        ui.open_core("https://core.example:8765")
         ui.activity("Ready")
         shortcut = asyncio.create_task(ui.ask("You", main=True))
         await asyncio.sleep(0)
@@ -410,17 +466,18 @@ def test_tui_selection_loading_stays_visible_until_next_view_is_ready() -> None:
         ui._menu_select()
         assert (await choice)["id"] == "chat"
         assert not ui._modal_visible
-        assert "LOADING  Opening conversation…" in ui._activity_text()
+        assert "OPENING  Opening conversation…" in ui._activity_text()
 
         ui.open_view(
             {"id": "project", "name": "Project"},
             {"id": "chat", "title": "Slow chat"},
         )
-        assert "LOADING  Opening conversation…" in ui._activity_text()
+        ui.set_conversation_activity({"chat": "idle"})
+        assert "OPENING  Opening conversation…" in ui._activity_text()
         ready = asyncio.create_task(ui.ask("You", main=True))
         await asyncio.sleep(0)
         assert "LOADING" not in ui._activity_text()
-        assert "Ready" in ui._activity_text()
+        assert "Ready for a message" in ui._activity_text()
         ui._complete_main(EOFError())
         try:
             await ready
@@ -447,6 +504,8 @@ def test_tui_loading_clears_when_a_picker_needs_input_or_fails() -> None:
 
         ui.begin_loading("Opening conversation…")
         ui.say("Cannot reach Core securely. Check the connection.")
+        assert "Opening conversation" not in ui._activity_text()
+        assert "ERROR" in ui._activity_text()
         ui._render()
         ready = asyncio.create_task(ui.ask("You", main=True))
         await asyncio.sleep(0)
@@ -459,6 +518,50 @@ def test_tui_loading_clears_when_a_picker_needs_input_or_fails() -> None:
             pass
 
     asyncio.run(run())
+
+
+def test_tui_status_distinguishes_active_transport_core_wait_and_queue() -> None:
+    ui = TuiUI()
+    project = {"id": "project", "name": "Apple Bug Bounty"}
+    chat = {
+        "id": "chat",
+        "title": "A very long conversation title " * 10,
+        "model": "model-a",
+    }
+    ui.open_core("https://core.example:8765")
+    ui.open_view(project, chat)
+    ui.set_conversation_activity({"chat": "idle"})
+    assert "IDLE" in ui._header_text()
+    assert "model-a" in "".join(text for _, text in ui._conversation_heading_text())
+    assert get_cwidth(ui._header_text()) <= ui.app.output.get_size().columns
+
+    ui.submission("message")
+    assert "SENDING" in ui._activity_text()
+    ui.set_turn_phase("queued")
+    assert ui._display_state()[0] == "QUEUED"
+    assert not ui._display_state()[2]
+    ui.set_turn_phase("working")
+    assert ui._display_state()[0] == "WORKING"
+    assert ui._display_state()[2]
+    ui.set_conversation_activity({"chat": "waiting"})
+    assert ui._display_state()[0] == "WAITING"
+    assert not ui._display_state()[2]
+    ui.set_turn_phase("waiting")
+    assert not ui._streaming
+    ui.set_conversation_activity({"chat": "idle"})
+    assert ui._display_state()[0] == "IDLE"
+    ui.stream_stopped()
+    assert ui._display_state()[0] == "IDLE"
+
+
+def test_tui_reduced_motion_keeps_operation_status_visible(monkeypatch) -> None:
+    monkeypatch.setenv("NEBULA_CHAT_REDUCED_MOTION", "1")
+    ui = TuiUI()
+    ui.open_core("https://core.example:8765")
+    ui.begin_loading("Opening conversation…")
+    assert ui._spinner() == "●"
+    assert "OPENING  Opening conversation…" in ui._activity_text()
+    assert ui._reduced_motion
 
 
 def test_plain_fallback_prints_progress_transitions_once(capsys) -> None:

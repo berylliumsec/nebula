@@ -159,6 +159,73 @@ def test_full_screen_progress_paste_and_narrow_resize():
         assert process.returncode == 0
 
 
+def test_full_screen_spinner_changes_during_a_core_read_and_stops_afterward():
+    code = """
+import asyncio
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_core('https://core.example:8765')
+    ui.begin_loading('Opening conversation…')
+    await asyncio.sleep(1.5)
+    ui.clear_loading()
+    await asyncio.sleep(0.5)
+    await ui.close()
+    print('ANIMATION_DONE',flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command", columns=120, rows=30) as (
+        process,
+        _master,
+        output,
+        read,
+    ):
+        read("OPENING", rendered=True)
+        assert "Opening conversation" in "\n".join(read.screen.display)
+        rendered = read(b"ANIMATION_DONE").decode(errors="replace")
+        assert len({glyph for glyph in "◐◓◑◒" if glyph in rendered}) >= 2
+        assert "READY" in rendered
+        process.wait(timeout=3)
+        assert process.returncode == 0
+
+
+def test_full_screen_wide_layout_separates_rail_and_bounds_long_text():
+    code = """
+import asyncio
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_core('https://core.example:8765')
+    project={'id':'project','name':'Apple Bug Bounty'}
+    chat={'id':'chat','title':'Simulate open memory lane with a very long generated title ' * 5}
+    idle={'id':'idle','title':'Idle neighbor'}
+    ui.open_view(project,chat)
+    ui.set_navigation('https://core.example:8765',[project],[chat,idle])
+    ui.set_conversation_activity({'chat':'working','idle':'idle'})
+    ui.say('plan: '+'long content ' * 35)
+    ui._render()
+    await ui.ask('You',main=True)
+    await ui.close()
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command", columns=180, rows=36) as (
+        _process,
+        _master,
+        _output,
+        read,
+    ):
+        read("plan:", rendered=True)
+        rows = read.screen.display
+        assert any("● Running" in row for row in rows)
+        assert any("○ Idle" in row for row in rows)
+        assert any("plan:" in row for row in rows)
+        assert max(len(row.rstrip()) for row in rows if "plan:" in row) <= 142
+        assert "Simulate open memory lane" in "\n".join(rows)
+        assert any("Message or /command" in row for row in rows[-6:-1])
+
+
 def test_full_screen_renders_markdown_and_toggles_original_source():
     code = """
 import asyncio

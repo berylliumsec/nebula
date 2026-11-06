@@ -72,11 +72,11 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
         ),
         ("Choose skills and goals from the terminal Assistant shell", "shell"),
         ("Full-screen terminal chat F4 commands activity", "F4"),
-        ("How do I see selectable slash commands in nebula-chat?", "Typing `/`"),
+        ("How do I see selectable slash commands in nebula-chat?", "type `/`"),
         ("How can I tell which nebula-chat conversations are running or idle?", "RUN"),
         (
             "Does nebula-chat show feedback while opening a selected conversation?",
-            "LOADING",
+            "animate",
         ),
     ):
         matches = search_product_knowledge(question)
@@ -828,6 +828,14 @@ def test_product_search_finds_per_host_cpu_budget_configuration(monkeypatch):
         "host-cpu-budget" in str(item["text"]) or "CPU budget" in str(item["text"])
         for item in matches
     )
+
+
+def test_product_search_finds_terminal_animation_and_reduced_motion(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "nebula-chat animated loading spinner reduced motion running idle conversation"
+    )
+    assert any("NEBULA_CHAT_REDUCED_MOTION" in str(item["text"]) for item in matches)
 
 
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):

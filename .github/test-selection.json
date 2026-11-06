@@ -1,22 +1,36 @@
 {
-  "change_digest": "953e9bd1ea020a59b9dc4a6e620260dc01a608e18f3560439e6d3f072a175b52",
-  "reviewed_by": "Codex; independent fresh-context root-cause validation before repair",
-  "reason": "A harness-session list page now resolves chat/run titles and first turns only for the returned session IDs through a backfilled, indexed projection. Focused Python tests cover title precedence, project scoping, pagination under unrelated history, projection updates, SQLite migration roundtrip, PostgreSQL backfill, and an authenticated non-loopback LAN Core refresh. The catalogued advanced-session-binding browser journey covers the visible resume selector in desktop Chromium, mobile Chromium, mobile WebKit, and a real-Core fixture.",
-  "exclusions": "No UI source, provider call, harness execution, or native runtime changed. Frontend unit and native tests are not relevant to the server-side list query; the selected Playwright journey verifies the unchanged UI consumption of display names. Full Python and browser suites are excluded by the focused-test policy. Synthetic LAN fixtures do not use operator data or live providers. The PostgreSQL migration test is selected for CI's isolated database-migrations job; it skips locally without a PostgreSQL service. The legacy harness chat/mission integration test blocks during its synthetic completion before reaching the list route on this Mac; the selected route-level and LAN Core tests exercise the changed listing directly.",
+  "change_digest": "b7431d660cfbfd4d15ab672f032b2130b8d3316cc218ef1ba4ba9613e4de4bc1",
+  "reviewed_by": "Codex; David approved the Figma layout; independent fresh-context root-cause validation before repair",
+  "reason": "The paired terminal client gains a bounded reading layout, separated two-line conversation states, and an activity indicator that animates only during local reads or confirmed active turns. Forty-one focused Python cases cover presentation, real PTY geometry and spinner frames, retryable picker failure, stream/queue/wait/reconnect lifecycle, three authenticated TLS LAN Core journeys, and product-knowledge digest/sync. One frontend catalog test verifies discoverability of animation and reduced motion.",
+  "exclusions": "The changed interface is the Python prompt_toolkit terminal, not a browser page; desktop/mobile Playwright and touch checks do not exercise this surface. Native runtime tests are unrelated. The selected Python LAN fixture uses synthetic paired projects and an inert provider; no operator data or live agent is touched. The full Python and frontend suites are excluded by the focused-test policy.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 0,
+    "python": 41,
+    "frontend": 1,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_session_title_lookup.py",
-    "tests/v3/test_harness_session_title_migration.py",
-    "tests/v3/test_migrations.py::test_postgresql_harness_session_title_lookup_backfills_legacy_links"
+    "tests/test_terminal_tui.py",
+    "tests/test_terminal_pty.py",
+    "tests/test_terminal_shell.py::test_stream_reports_acceptance_and_tool_progress_before_answer",
+    "tests/test_terminal_shell.py::test_busy_text_queues_once_with_readback_and_does_not_submit",
+    "tests/test_terminal_shell.py::test_reconnect_state_failure_never_repeats_post",
+    "tests/test_terminal_shell.py::test_capacity_queued_acceptance_is_followed_without_a_new_submission",
+    "tests/test_terminal_shell.py::test_approval_pause_does_not_reconnect_as_a_network_failure",
+    "tests/test_terminal_shell.py::test_auth_expiry_during_reconnect_does_not_crash_detach",
+    "tests/test_terminal_shell.py::test_cancelling_a_menu_leaves_the_attached_turn_running",
+    "tests/test_terminal_shell.py::test_main_prompt_interrupt_stops_detached_selected_turn",
+    "tests/v3/test_terminal_core.py::test_paired_full_screen_tui_shows_progress_and_saved_answer",
+    "tests/v3/test_terminal_core.py::test_paired_tui_shows_loading_while_selected_project_and_chat_open",
+    "tests/v3/test_terminal_core.py::test_paired_tui_marks_other_conversations_running_waiting_and_idle",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_terminal_animation_and_reduced_motion",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/settingsCatalog.terminal.test.ts"
+  ],
   "native": [],
-  "playwright": [
-    "area:advanced-session-binding"
-  ]
+  "playwright": []
 }

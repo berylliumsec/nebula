@@ -296,12 +296,14 @@ class TerminalProcess:
 
     def expect_chat_state(self, title, state, timeout=25):
         assert self.screen is not None and self.screen_stream is not None
+        status = {"RUN": "Running", "WAIT": "Waiting for action", "IDLE": "Idle"}[state]
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            display = "\n".join(self.screen.display)
+            lines = self.screen.display
+            display = "\n".join(lines)
             if any(
-                title in row and row.strip().endswith(state)
-                for row in display.splitlines()
+                title in row and lines[index + 1].strip().endswith(status)
+                for index, row in enumerate(lines[:-1])
             ):
                 return display
             ready, _, _ = select.select([self.output_fd], [], [], 0.05)
@@ -869,7 +871,7 @@ def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core)
         terminal.expect_screen("Terminal Project / Harness chat", "/help for commands")
         delayed["path"] = "/api/v1/engagements"
         terminal.send("/projects")
-        terminal.expect_screen("LOADING  Running /projects…", "Harness chat")
+        terminal.expect_screen("LOADING", "Harness chat")
         assert delayed["entered"].wait(10), "Project catalog did not reach Core"
         delayed["release"].set()
         terminal.expect_screen("Search:", "Second Project")
@@ -880,7 +882,7 @@ def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core)
         os.write(terminal.input_fd, b"Second Project")
         terminal.expect_screen("Search: Second Project")
         os.write(terminal.input_fd, b"\r")
-        terminal.expect_screen("LOADING  Opening project…", timeout=7)
+        terminal.expect_screen("LOADING  Loading conversations from Core…", timeout=7)
         assert delayed["entered"].wait(10), "Chat catalog did not reach Core"
         delayed["release"].set()
         terminal.expect_screen("Search:", "Slow chat")
@@ -891,9 +893,9 @@ def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core)
         os.write(terminal.input_fd, b"Slow chat")
         terminal.expect_screen("Search: Slow chat")
         os.write(terminal.input_fd, b"\r")
-        terminal.expect_screen("LOADING  Opening conversation…", timeout=7)
+        terminal.expect_screen("OPENING  Opening conversation…", timeout=7)
         assert delayed["entered"].wait(10), "Chat detail did not reach Core"
-        terminal.expect_screen("LOADING  Opening conversation…", "Harness chat")
+        terminal.expect_screen("OPENING  Opening conversation…", "Harness chat")
         delayed["release"].set()
         terminal.expect_screen("Second Project / Slow chat", absent=("LOADING",))
     finally:

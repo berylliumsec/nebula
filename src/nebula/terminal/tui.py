@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import lru_cache
 from io import StringIO
@@ -45,6 +47,9 @@ from .ui import CancelledInput, InterruptedPrompt, SlashCommandCompleter, Termin
 
 SIDEBAR_WIDTH = 32
 SIDEBAR_MIN_COLUMNS = 110
+SIDEBAR_MIN_ROWS = 24
+READING_WIDTH = 104
+SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
 
 
 def activity_label(state: str | None) -> str:
@@ -117,6 +122,7 @@ class Picker:
     more: Callable[[], Awaitable[list[dict[str, Any]]]] | None
     index: int = 0
     loading: bool = False
+    error: str = ""
 
 
 class TuiUI(TerminalUI):
@@ -132,6 +138,8 @@ class TuiUI(TerminalUI):
         self._project = ""
         self._project_label = ""
         self._chat = ""
+        self._chat_title = "Choose a conversation"
+        self._model = ""
         self._projects: list[dict[str, Any]] = []
         self._chats: list[dict[str, Any]] = []
         self._chat_activity: dict[str, str] | None = None
@@ -139,7 +147,20 @@ class TuiUI(TerminalUI):
         self._activity: list[str] = []
         self._notice = ""
         self._loading = ""
+        self._loading_since: float | None = None
         self._streaming = False
+        self._turn_phase = ""
+        self._turn_since: float | None = None
+        self._spinner_index = 0
+        self._animation_task: asyncio.Task[None] | None = None
+        self._reduced_motion = os.environ.get(
+            "NEBULA_CHAT_REDUCED_MOTION", ""
+        ).lower() not in {
+            "",
+            "0",
+            "false",
+            "no",
+        }
         self._source_view = False
         self._render_width = 0
         self._mode = "main"
@@ -166,7 +187,7 @@ class TuiUI(TerminalUI):
         self.composer = TextArea(
             multiline=True,
             wrap_lines=True,
-            height=Dimension(min=2, preferred=2, max=4),
+            height=2,
             prompt="> ",
             completer=SlashCommandCompleter(lambda: self.command_names),
             style="class:composer",
@@ -180,7 +201,7 @@ class TuiUI(TerminalUI):
             style="class:transcript",
         )
         self._sidebar = Window(
-            FormattedTextControl(self._sidebar_text),
+            FormattedTextControl(self._sidebar_fragments),
             width=SIDEBAR_WIDTH,
             wrap_lines=False,
             style="class:sidebar",
@@ -190,6 +211,12 @@ class TuiUI(TerminalUI):
             height=1,
             wrap_lines=False,
             style="class:activity",
+        )
+        self._conversation_heading = Window(
+            FormattedTextControl(self._conversation_heading_text),
+            height=2,
+            wrap_lines=False,
+            style="class:heading",
         )
         keys = KeyBindings()
 
@@ -261,8 +288,17 @@ class TuiUI(TerminalUI):
         wide = Condition(
             lambda: (
                 self.app.output.get_size().columns >= SIDEBAR_MIN_COLUMNS
-                and self.app.output.get_size().rows >= 18
+                and self.app.output.get_size().rows >= SIDEBAR_MIN_ROWS
             )
+        )
+        reading = HSplit(
+            [
+                self._conversation_heading,
+                self.transcript,
+                self._activity_window,
+                Frame(self.composer, title="Message or /command"),
+            ],
+            width=Dimension(max=READING_WIDTH, preferred=READING_WIDTH),
         )
         root = FloatContainer(
             content=HSplit(
@@ -275,15 +311,15 @@ class TuiUI(TerminalUI):
                     VSplit(
                         [
                             ConditionalContainer(self._sidebar, filter=wide),
-                            HSplit(
-                                [
-                                    self.transcript,
-                                    self._activity_window,
-                                ]
+                            ConditionalContainer(
+                                Window(width=2, char=" ", style="class:rail-divider"),
+                                filter=wide,
                             ),
+                            Window(width=2, char=" ", style="class:gutter"),
+                            reading,
+                            Window(char=" ", style="class:gutter"),
                         ]
                     ),
-                    Frame(self.composer, title="Message or /command"),
                     Window(
                         FormattedTextControl(self._footer_text),
                         height=1,
@@ -323,15 +359,24 @@ class TuiUI(TerminalUI):
                 {}
                 if "NO_COLOR" in os.environ
                 else {
-                    "header": "bg:#263445 #ffffff bold",
-                    "sidebar": "bg:#18222e #d1dce8",
-                    "transcript": "bg:#111821 #e3e8ee",
-                    "activity": "bg:#202c37 #b6d3db",
-                    "composer": "bg:#18222e #ffffff",
-                    "footer": "bg:#263445 #c5d2df",
+                    "header": "bg:#192631 #e7eef3 bold",
+                    "sidebar": "bg:#141f2a #b5c4ce",
+                    "rail-divider": "bg:#344654 #344654",
+                    "gutter": "bg:#101720 #101720",
+                    "rail-selected": "bg:#233747 #e7eef3 bold",
+                    "rail-running": "#83d9c6",
+                    "rail-waiting": "#f0c47b",
+                    "rail-idle": "#8497a4",
+                    "rail-unknown": "#8497a4",
+                    "heading": "bg:#101720 #e7eef3 bold",
+                    "heading-meta": "#8497a4",
+                    "transcript": "bg:#101720 #e7eef3",
+                    "activity": "bg:#1d373b #e7eef3",
+                    "composer": "bg:#1c2a36 #e7eef3",
+                    "footer": "bg:#192631 #b5c4ce",
                     "selected": "reverse bold",
-                    "completion-menu": "bg:#263445 #ffffff",
-                    "completion-menu.completion.current": "bg:#42617e #ffffff bold",
+                    "completion-menu": "bg:#192631 #e7eef3",
+                    "completion-menu.completion.current": "bg:#233747 #e7eef3 bold",
                 }
             ),
         )
@@ -350,14 +395,21 @@ class TuiUI(TerminalUI):
         self._app_task = asyncio.create_task(self.app.run_async())
         self._app_task.add_done_callback(self._screen_closed)
         await asyncio.sleep(0)
+        self._sync_animation()
 
     async def close(self) -> None:
+        if self._animation_task is not None:
+            self._animation_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._animation_task
         if self.app.is_running:
             self.app.exit()
         if self._app_task is not None:
             await self._app_task
 
     def _screen_closed(self, task: asyncio.Task[None]) -> None:
+        if self._animation_task is not None:
+            self._animation_task.cancel()
         if task.cancelled():
             error: BaseException = EOFError()
         else:
@@ -370,7 +422,102 @@ class TuiUI(TerminalUI):
 
     def _invalidate(self) -> None:
         if hasattr(self, "app") and self.app.is_running:
+            self._sync_animation()
             self.app.invalidate()
+
+    def _sync_animation(self) -> None:
+        if not self.app.is_running:
+            return
+        active = self._display_state()[2] or bool(self._picker and self._picker.loading)
+        if self._reduced_motion:
+            active = False
+        if active and self._animation_task is None:
+            self._animation_task = asyncio.create_task(self._animate())
+        elif not active and self._animation_task is not None:
+            self._animation_task.cancel()
+            self._animation_task = None
+            self._spinner_index = 0
+
+    async def _animate(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(0.24)
+                if not self.app.is_running or not (
+                    self._display_state()[2] or (self._picker and self._picker.loading)
+                ):
+                    return
+                self._spinner_index = (self._spinner_index + 1) % len(SPINNER_FRAMES)
+                self.app.invalidate()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if self._animation_task is asyncio.current_task():
+                self._animation_task = None
+
+    def _spinner(self) -> str:
+        return "●" if self._reduced_motion else SPINNER_FRAMES[self._spinner_index]
+
+    def _display_state(self) -> tuple[str, str, bool, float | None]:
+        """Keep Core turn state separate from local reads and stream transport."""
+        core_state = (self._chat_activity or {}).get(self._chat) if self._chat else None
+        if self._loading:
+            verb = "OPENING" if self._loading.startswith("Opening ") else "LOADING"
+            return verb, self._loading, True, self._loading_since
+        if self._notice:
+            label = (
+                "OFFLINE"
+                if self._notice.startswith("Connection lost")
+                else "ACTION"
+                if self._notice.startswith("Action required")
+                else "ERROR"
+            )
+            return label, self._notice, False, None
+        if self._turn_phase == "queued":
+            return (
+                "QUEUED",
+                self._activity[-1] if self._activity else "Waiting in Core",
+                False,
+                None,
+            )
+        if self._turn_phase == "waiting":
+            return (
+                "WAITING",
+                self._activity[-1] if self._activity else "Check /status",
+                False,
+                None,
+            )
+        if self._turn_phase == "reconnecting":
+            return (
+                "RECONNECTING",
+                "Reading the active Core turn",
+                True,
+                self._turn_since,
+            )
+        if core_state == "waiting":
+            return "WAITING", "Check /status for the next action", False, None
+        if self._turn_phase == "sending":
+            return (
+                "SENDING",
+                "Waiting for Core to accept the turn",
+                True,
+                self._turn_since,
+            )
+        if self._turn_phase == "working":
+            return (
+                "WORKING",
+                self._activity[-1] if self._activity else "Turn active",
+                True,
+                self._turn_since,
+            )
+        if core_state == "idle":
+            return "IDLE", "Ready for a message", False, None
+        if core_state == "working":
+            return "WORKING", "Turn active in Core · F6 Follow", True, None
+        if not self._core:
+            return "CONNECTING", "Connecting to Core", True, None
+        if self._chat and core_state is None:
+            return "UNKNOWN", "Turn state unavailable · /status", False, None
+        return "READY", "Ready for a message", False, None
 
     def _schedule_render(self) -> None:
         if self._render_scheduled:
@@ -385,8 +532,13 @@ class TuiUI(TerminalUI):
 
     def _reading_width(self) -> int:
         columns = self.app.output.get_size().columns
-        sidebar = SIDEBAR_WIDTH if columns >= SIDEBAR_MIN_COLUMNS else 0
-        return max(12, min(100, columns - sidebar - 4))
+        size = self.app.output.get_size()
+        sidebar = (
+            SIDEBAR_WIDTH + 2
+            if columns >= SIDEBAR_MIN_COLUMNS and size.rows >= SIDEBAR_MIN_ROWS
+            else 0
+        )
+        return max(12, min(96, columns - sidebar - 6))
 
     def _check_render_width(self, _app: Application[None]) -> None:
         if self._render_width != self._reading_width():
@@ -424,15 +576,29 @@ class TuiUI(TerminalUI):
 
     def _header_text(self) -> str:
         width = self.app.output.get_size().columns
-        progress = self._status.rsplit(" · ", 1)[-1]
-        status = "[" + _edge(progress, min(26, max(8, width // 3))) + "]"
-        left = " Nebula  " + _middle(
-            self._context, max(0, width - get_cwidth(status) - 11)
+        label, _, animated, _ = self._display_state()
+        status = f"{self._spinner() if animated else '●'} {label}"
+        core = "● CORE" if self._core else "◐ CORE"
+        right = f"{core}  {status}" if width >= 80 else status
+        context = self._project_label or "Choose a project"
+        if self._chat:
+            context += " / " + self._chat_title
+        left = " ✦ NEBULA  " + _middle(
+            context, min(56, max(8, width - get_cwidth(right) - 14))
         )
-        left = _edge(left, max(0, width - get_cwidth(status) - 1))
-        return (
-            left + " " * max(1, width - get_cwidth(left) - get_cwidth(status)) + status
-        )
+        left = _edge(left, max(0, width - get_cwidth(right) - 1))
+        return left + " " * max(1, width - get_cwidth(left) - get_cwidth(right)) + right
+
+    def _conversation_heading_text(self) -> list[tuple[str, str]]:
+        width = min(72, self._reading_width() + 4)
+        title = self._chat_title if self._project else "Choose a project"
+        details = self._project_label or self._core or "Connecting to Core"
+        if self._model and self._chat:
+            details += "  ·  " + self._model
+        return [
+            ("bold", " " + _edge(title, width - 2) + "\n"),
+            ("class:heading-meta", " " + _edge(details, width - 2)),
+        ]
 
     def _rail_rows(
         self, rows: list[dict[str, Any]], selected: str, slots: int, key: str
@@ -449,35 +615,32 @@ class TuiUI(TerminalUI):
         visible = ordered[: slots - 1] if len(ordered) > slots else ordered[:slots]
         lines = []
         for row in visible:
-            label = (
-                activity_label((self._chat_activity or {}).get(str(row.get("id"))))
-                if key == "title"
-                else ""
-            )
             title = _middle(
                 _plain_title(row.get(key) or row.get("name") or row.get("id"))
                 if key == "title"
                 else terminal_text(row.get(key) or row.get("name") or row.get("id")),
-                SIDEBAR_WIDTH - (8 if key == "title" else 4),
+                SIDEBAR_WIDTH - 4,
             )
-            if label:
-                title += " " * max(0, SIDEBAR_WIDTH - 8 - get_cwidth(title))
-            lines.append(
-                (" › " if row.get("id") == selected else "   ")
-                + title
-                + (" " + label.rjust(4) if label else "")
-            )
+            lines.append((" › " if row.get("id") == selected else "   ") + title)
+            if key == "title":
+                state = (self._chat_activity or {}).get(str(row.get("id")))
+                state_text = {
+                    "working": "● Running",
+                    "waiting": "◐ Waiting for action",
+                    "idle": "○ Idle",
+                }.get(state, "? State unknown")
+                lines.append("   " + state_text)
         if len(ordered) > slots:
             lines.append(f"   +{len(ordered) - len(visible)} more")
         return lines
 
     def _sidebar_text(self) -> str:
         rows = self.app.output.get_size().rows
-        project_slots = min(6, max(2, (rows - 12) // 3))
-        chat_slots = max(1, min(9, rows - 12 - project_slots))
+        project_slots = min(4, max(3, (rows - 10) // 8))
+        chat_slots = max(1, min(6, (rows - 9 - project_slots) // 2))
         lines = [
             " CORE",
-            "  " + _middle(self._core or "Connecting", SIDEBAR_WIDTH - 3),
+            "  " + _middle(self._core or "Connecting", SIDEBAR_WIDTH - 4),
             "",
             " PROJECTS · F2",
         ]
@@ -494,31 +657,42 @@ class TuiUI(TerminalUI):
             lines.append("   Browse conversations")
         return "\n".join(lines)
 
+    def _sidebar_fragments(self) -> list[tuple[str, str]]:
+        fragments: list[tuple[str, str]] = []
+        selected_status = False
+        for line in self._sidebar_text().splitlines():
+            style = ""
+            if line.startswith(" › "):
+                style = "class:rail-selected"
+                selected_status = True
+            elif line.startswith("   ● Running"):
+                style = (
+                    "class:rail-selected" if selected_status else "class:rail-running"
+                )
+                selected_status = False
+            elif line.startswith("   ◐ Waiting"):
+                style = (
+                    "class:rail-selected" if selected_status else "class:rail-waiting"
+                )
+                selected_status = False
+            elif line.startswith("   ○ Idle") or line.startswith("   ? State"):
+                style = "class:rail-selected" if selected_status else "class:rail-idle"
+                selected_status = False
+            else:
+                selected_status = False
+            fragments.append((style, line + "\n"))
+        return fragments
+
     def _activity_text(self) -> str:
-        width = self.app.output.get_size().columns
-        if self._loading:
-            detail = "LOADING  " + self._loading
-        elif self._notice:
-            detail = "ACTION  " + self._notice
-        elif self._streaming:
-            detail = "WORKING  " + (
-                self._activity[-1] if self._activity else "Waiting for Core"
-            )
-        elif (
-            self._chat
-            and self._chat_activity
-            and self._chat_activity.get(self._chat) == "working"
-        ):
-            detail = "WORKING  Turn active in Core · F6 Follow"
-        elif (
-            self._chat
-            and self._chat_activity
-            and self._chat_activity.get(self._chat) == "waiting"
-        ):
-            detail = "WAITING  Check /status for the next action"
-        else:
-            detail = self._activity[-1] if self._activity else "Ready"
-        return _edge(" " + detail, width - 1)
+        width = self._reading_width() + 4
+        label, detail, animated, since = self._display_state()
+        glyph = self._spinner() if animated else "●"
+        prefix = f" {glyph} {label}  "
+        elapsed = ""
+        if since is not None and not self._reduced_motion and width >= 42:
+            minutes, seconds = divmod(int(max(0, time.monotonic() - since)), 60)
+            elapsed = f"  {minutes:02}:{seconds:02} "
+        return _edge(prefix + detail, width - get_cwidth(elapsed)) + elapsed
 
     def _footer_text(self) -> str:
         width = self.app.output.get_size().columns if hasattr(self, "app") else 80
@@ -527,13 +701,13 @@ class TuiUI(TerminalUI):
             return _edge(" ↑↓ Select  Tab Insert  Enter Run", width - 1)
         source = "Render" if self._source_view else "Source"
         if width < 60:
-            hint = f" F1 Help  F2 Projects  F10 {source}"
+            hint = f" F1 Help  F3 Chats  F10 {source}"
         elif width < 110:
             hint = f" F1 Help  F2 Projects  F3 Chats  F8 Approvals  F10 {source}"
         else:
             hint = (
-                " F1 Help  F2 Projects  F3 Chats  F4 Commands  F5 Activity"
-                f"  F8 Approvals  F10 {source}  Tab Read  ^C Stop  ^D Quit"
+                " F1 Help    F2 Projects    F3 Chats    F8 Approvals"
+                f"    F10 {source}    Tab Read    ^C Stop    ^D Quit"
             )
         return _edge(hint, width - 1)
 
@@ -545,6 +719,8 @@ class TuiUI(TerminalUI):
         self._activity.clear()
         self._notice = ""
         self._streaming = False
+        self._turn_phase = ""
+        self._turn_since = None
         self._render()
 
     def open_core(self, core: str) -> None:
@@ -552,6 +728,8 @@ class TuiUI(TerminalUI):
         self._project = ""
         self._project_label = ""
         self._chat = ""
+        self._chat_title = "Choose a conversation"
+        self._model = ""
         self._projects = []
         self._chats = []
         self._chat_activity = None
@@ -560,6 +738,8 @@ class TuiUI(TerminalUI):
         self._activity.clear()
         self._notice = ""
         self._streaming = False
+        self._turn_phase = ""
+        self._turn_since = None
         self._render()
 
     def set_identity(
@@ -570,16 +750,27 @@ class TuiUI(TerminalUI):
         self._project = project["id"]
         self._project_label = terminal_text(project.get("name") or "Project")
         self._chat = session["id"] if session else ""
-        self._context = (
-            self._project_label
-            + " / "
-            + _plain_title((session or {}).get("title") or "New conversation")
+        self._chat_title = _plain_title(
+            (session or {}).get("title") or "New conversation"
         )
+        self._model = terminal_text((session or {}).get("model") or "")
+        self._context = self._project_label + " / " + self._chat_title
+        self._invalidate()
+
+    def set_model(self, model: str | None) -> None:
+        self._model = terminal_text(model or "")
         self._invalidate()
 
     def set_conversation_activity(self, states: dict[str, str] | None) -> None:
         """Show Core's project-scoped turn states; None means status is unknown."""
         self._chat_activity = states
+        if (
+            self._turn_phase == "waiting"
+            and self._chat
+            and states is not None
+            and states.get(self._chat) in {"working", "idle"}
+        ):
+            self._turn_phase = ""
         self._invalidate()
 
     def set_navigation(
@@ -593,11 +784,8 @@ class TuiUI(TerminalUI):
         self._chats = chats
         selected = next((row for row in chats if row.get("id") == self._chat), None)
         if selected is not None:
-            self._context = (
-                self._project_label
-                + " / "
-                + _plain_title(selected.get("title") or "Conversation")
-            )
+            self._chat_title = _plain_title(selected.get("title") or "Conversation")
+            self._context = self._project_label + " / " + self._chat_title
         self._invalidate()
 
     def activity(self, value: str) -> None:
@@ -609,22 +797,47 @@ class TuiUI(TerminalUI):
 
     def begin_loading(self, value: str) -> None:
         self._loading = terminal_text(value).strip()[:180]
+        self._loading_since = time.monotonic()
         self._invalidate()
 
     def clear_loading(self) -> None:
         if self._loading:
             self._loading = ""
+            self._loading_since = None
             self._invalidate()
 
     def clear_notice(self) -> None:
         self._notice = ""
         self._invalidate()
 
+    def show_problem(self, value: str) -> None:
+        self.clear_loading()
+        self._notice = terminal_text(value).splitlines()[0][:180]
+        self._invalidate()
+
+    def set_turn_phase(self, phase: str) -> None:
+        if phase not in {"sending", "working", "queued", "waiting", "reconnecting", ""}:
+            raise ValueError(f"Unknown turn phase: {phase}")
+        if phase in {"sending", "working", "reconnecting"} and self._turn_since is None:
+            self._turn_since = time.monotonic()
+        elif phase in {"queued", "waiting", ""}:
+            self._turn_since = None
+        if phase == "waiting":
+            self._streaming = False
+        self._turn_phase = phase
+        self._invalidate()
+
+    def stream_stopped(self) -> None:
+        """Stop the local spinner; Core may still own an active background turn."""
+        self._streaming = False
+        self.set_turn_phase("")
+
     def say(self, value: Any = "") -> None:
         clean = terminal_text(value)
         notice = clean.lstrip()
         if notice.startswith(("Action required", "Connection lost", "Cannot ")):
             self._notice = notice.splitlines()[0]
+            self.clear_loading()
         elif notice.startswith(
             (
                 "Decision recorded",
@@ -644,6 +857,7 @@ class TuiUI(TerminalUI):
         if not clean:
             return
         self._streaming = True
+        self.set_turn_phase("working")
         if self._entries and self._entries[-1][0] == "Assistant":
             kind, previous = self._entries[-1]
             self._entries[-1] = kind, (previous + clean)[-100_000:]
@@ -660,7 +874,9 @@ class TuiUI(TerminalUI):
             self._schedule_render()
 
     def submission(self, text: str, *, queued: bool = False) -> None:
+        self.clear_loading()
         self._streaming = not queued
+        self.set_turn_phase("queued" if queued else "sending")
         self._entries.append(
             ("You · queued" if queued else "You · sending", terminal_text(text))
         )
@@ -669,7 +885,7 @@ class TuiUI(TerminalUI):
         self._schedule_render()
 
     def finish_turn(self) -> None:
-        self._streaming = False
+        self.stream_stopped()
         self.activity("Ready")
         self._invalidate()
 
@@ -887,15 +1103,25 @@ class TuiUI(TerminalUI):
             return ""
         rows = self._matching_items()
         if not rows:
-            return " No matches. Edit search or press Ctrl-G."
+            message = " No matches. Edit search or press Ctrl-G."
+            if self._picker.loading:
+                message += f"\n {self._spinner()} Loading more from Core…"
+            if self._picker.error:
+                message += "\n " + _edge(self._picker.error, 100)
+            return message
         page_size = max(4, min(20, self.app.output.get_size().rows - 11))
         start = self._picker.index // page_size * page_size
         visible = rows[start : start + page_size]
-        return "\n".join(
+        message = "\n".join(
             (" › " if start + offset == self._picker.index else "   ")
             + terminal_text(row.get("label") or row.get("name") or row["id"])[:150]
             for offset, row in enumerate(visible)
-        ) + ("\n   Loading…" if self._picker.loading else "")
+        )
+        if self._picker.loading:
+            message += f"\n   {self._spinner()} Loading more from Core…"
+        if self._picker.error:
+            message += "\n   " + _edge(self._picker.error, 100)
+        return message
 
     def _menu_move(self, change: int) -> None:
         if self._picker is None:
@@ -909,6 +1135,7 @@ class TuiUI(TerminalUI):
         if picker.more is None:
             return
         picker.loading = True
+        picker.error = ""
         self._invalidate()
         try:
             rows = await picker.more()
@@ -918,7 +1145,7 @@ class TuiUI(TerminalUI):
                     picker.more = None
                 picker.index = max(0, len(picker.items) - len(rows))
         except (ClientError, OSError, httpx.HTTPError) as exc:
-            self.say(str(exc))
+            picker.error = "Could not load more. Press Enter to retry: " + str(exc)
         finally:
             picker.loading = False
             self._invalidate()
