@@ -737,10 +737,60 @@ def test_ssh_environment_menu_uses_discovery_hosts(tmp_path):
 
     async def run():
         shell = make_shell(
-            tmp_path, handler, ui=UI(choices=["environments", ["ssh-a"]])
+            tmp_path, handler, ui=UI(choices=["environments", ["ssh-a"], "__done"])
         )
         await settings(shell)
         assert shell.current().environments == ["ssh-a"]
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_settings_menu_refreshes_core_between_changes_and_exits_on_done(tmp_path):
+    from nebula.terminal.settings import settings
+
+    config = copy.deepcopy(CONFIG)
+    revision = 2
+    writes = []
+
+    def handler(request):
+        nonlocal revision
+        if request.url.path.endswith("assistant-config"):
+            if request.method == "GET":
+                return response({"revision": revision, "settings": config})
+            patch = json.loads(request.content)
+            assert patch["expected_revision"] == revision
+            writes.append(patch["settings"])
+            config.update(patch["settings"])
+            revision += 1
+            return response({"revision": revision, "settings": config})
+        if request.url.path.endswith(("providers", "harnesses")):
+            return response([])
+        pytest.fail(str(request.url))
+
+    class TrackingUI(UI):
+        def __init__(self):
+            super().__init__(choices=["tools_enabled", "include_knowledge", "__done"])
+            self.menus = []
+
+        async def choose(self, title, items, **kwargs):
+            self.menus.append({item["id"]: item["name"] for item in items})
+            return await super().choose(title, items, **kwargs)
+
+    async def run():
+        ui = TrackingUI()
+        shell = make_shell(tmp_path, handler, ui=ui)
+        await settings(shell)
+        assert writes == [
+            {"tools_enabled": True},
+            {"include_knowledge": True},
+        ]
+        assert len(ui.menus) == 3
+        assert ui.menus[0]["tools_enabled"].endswith("off")
+        assert ui.menus[1]["tools_enabled"].endswith("on")
+        assert ui.menus[1]["include_knowledge"].endswith("off")
+        assert ui.menus[2]["include_knowledge"].endswith("on")
+        assert ui.menus[2]["__done"] == "Done · return to chat"
         await shell.api.close()
 
     asyncio.run(run())

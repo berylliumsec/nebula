@@ -127,6 +127,13 @@ async def select_skill(shell: Shell, selected: str | None = None) -> None:
 
 
 async def settings(shell: Shell) -> None:
+    """Keep the settings workflow open until the operator leaves it."""
+    while not await _settings_choice(shell):
+        if hasattr(shell.ui, "begin_loading"):
+            shell.ui.begin_loading("Refreshing Assistant settings…")
+
+
+async def _settings_choice(shell: Shell) -> bool:
     config = await shell.configuration()
     await shell.runtimes()
     profile = shell.profiles.get(config["profile_id"], {})
@@ -165,13 +172,16 @@ async def settings(shell: Shell) -> None:
                 ("harness_cyber_access_program", "Account access tier"),
             )
         )
+    choices.append({"id": "__done", "name": "Done · return to chat"})
     selected = (await shell.ui.choose("Assistant settings (next turn)", choices))["id"]
+    if selected == "__done":
+        return True
     if selected == "model":
         await model(shell)
-        return
+        return False
     if selected in toggles:
         await save(shell, {selected: not config.get(selected, False)})
-        return
+        return False
     if selected in {"mcp_server_ids", "hook_ids", "environments"}:
         if selected == "mcp_server_ids":
             rows = await shell.api.page(
@@ -222,13 +232,13 @@ async def settings(shell: Shell) -> None:
                 config.get(selected) or [],
             )
             await save(shell, {selected: ids})
-        return
+        return False
     if selected == "max_active_subagents":
         raw = (
             await shell.ui.ask("Maximum active subagents (blank means no limit)")
         ).strip()
         await save(shell, {selected: int(raw) if raw else None})
-        return
+        return False
     if selected == "subagent_runtime":
         options = await shell.runtimes()
         choice = await shell.ui.choose("Subagent runtime", options)
@@ -244,7 +254,7 @@ async def settings(shell: Shell) -> None:
                 "subagent_model": choice["model"],
             },
         )
-        return
+        return False
     field = (
         ("harness_reasoning_effort" if is_harness else "reasoning_effort")
         if selected == "reasoning"
@@ -293,3 +303,4 @@ async def settings(shell: Shell) -> None:
             else choice
         },
     )
+    return False

@@ -20,6 +20,7 @@ from uuid import uuid4
 import httpx
 import pyte
 import pytest
+import pytest_asyncio
 import uvicorn
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -361,7 +362,7 @@ class TerminalProcess:
                 pipe.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def lan_core(tmp_path, monkeypatch):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.connect(("192.0.2.1", 9))
@@ -717,6 +718,7 @@ def test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect(lan_
     )
     terminal.send("/settings", expect="Assistant settings")
     terminal.send("Plan before acting", expect="Saved in Core for the next turn")
+    terminal.send("Done · return to chat", expect="You:")
     observed = admin.get(f"chat-sessions/{session['id']}/assistant-config").json()
     assert observed["settings"]["planning_enabled"] is True
     # A concurrent device changes the setting; the next client read must use it.
@@ -830,6 +832,78 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
                     "rendered streamed Markdown",
                     "source toggle",
                     "saved readback",
+                ],
+                "result": "passed",
+            }
+        )
+    )
+
+
+def test_paired_tui_settings_stays_open_for_multiple_changes(lan_core):
+    data = lan_core
+    terminal = data["start"](
+        "shell", "--project", "Terminal Project", tty=True, columns=100, rows=32
+    )
+    terminal.expect_screen("New conversation")
+    terminal.send("New conversation")
+    terminal.expect_screen("Message or /command", "/help for commands")
+    terminal.send("Create a synthetic settings test chat")
+    terminal.expect_screen("Response complete.")
+    sessions = (
+        data["admin"]
+        .get("chat-sessions", params={"engagement_id": "terminal-project"})
+        .json()
+    )
+    session = next(
+        row
+        for row in sessions
+        if row["backend"] == "provider" and not row["metadata"].get("control_assistant")
+    )
+    path = f"chat-sessions/{session['id']}/assistant-config"
+    initial = data["admin"].get(path).json()
+    planning = initial["settings"]["planning_enabled"]
+    knowledge = initial["settings"]["include_knowledge"]
+
+    terminal.send("/settings")
+    terminal.expect_screen(
+        "Assistant settings (next turn)",
+        f"Plan before acting: {'on' if planning else 'off'}",
+    )
+    terminal.send("Plan before acting")
+    terminal.expect_screen(
+        "Assistant settings (next turn)",
+        f"Plan before acting: {'off' if planning else 'on'}",
+    )
+    after_first = data["admin"].get(path).json()
+    assert after_first["settings"]["planning_enabled"] is not planning
+    assert after_first["revision"] == initial["revision"] + 1
+
+    terminal.send("Project knowledge")
+    terminal.expect_screen(
+        "Assistant settings (next turn)",
+        f"Project knowledge: {'off' if knowledge else 'on'}",
+    )
+    after_second = data["admin"].get(path).json()
+    assert after_second["settings"]["include_knowledge"] is not knowledge
+    assert after_second["revision"] == after_first["revision"] + 1
+    assert after_second["settings"]["planning_enabled"] is not planning
+
+    terminal.send("Done · return to chat")
+    terminal.expect_screen(
+        "Message or /command", absent=("Assistant settings (next turn)",)
+    )
+    terminal.close()
+    print(
+        json.dumps(
+            {
+                "origin": data["origin"],
+                "build": "candidate Python TUI and real authenticated TLS LAN Core",
+                "fixture": "inert provider and synthetic project",
+                "checks": [
+                    "fresh values after first settings edit",
+                    "second edit without reopening settings",
+                    "one Core revision per save",
+                    "Done returns to chat",
                 ],
                 "result": "passed",
             }

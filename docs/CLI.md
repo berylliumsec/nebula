@@ -90,6 +90,9 @@ changed through `/goal skills`. Assistant settings apply on the next turn;
 changes from another device are reread before sending. A revision conflict asks
 for fresh review instead of overwriting another device's choice.
 
+The `/settings` menu stays open after each change and rereads Core before the
+next choice. Select **Done · return to chat** or press Ctrl-G to leave it.
+
 Local attachment/export paths refer to the client. Workspace and skill paths
 refer to Core. Documents are uploaded to the project's Core knowledge library;
 preview the exact bounded excerpt before attaching it. Image bytes are validated

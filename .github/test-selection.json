@@ -1,186 +1,34 @@
 {
-  "change_digest": "8897bfb26d269626b6ab13a74c5cdc2ab3c32e3d0534f8373759366302e47d4e",
-  "reviewed_by": "Codex; independent diagnosis of database blocking, harness-list cost, and goal runtime authority before implementation",
-  "reason": "Native async runtime, scoped transactions and claims, bounded PostgreSQL budgets, task/session ownership, cancellation and restart recovery on SQLite/PostgreSQL, same-chat runtime-switch boundaries/consent, indexed harness seeks and bounded query work. Includes existing API/CLI/WebSocket/storage/recovery/queue cases, mixed recovery with foreground chat/tool/auth/listing load, async factories, atomic default-policy creation, concurrent audit authorization, relation project/revision guards and nonblocking file/output/PDF/export/workspace work. Hosted source tests build and verify current product guidance through their fixture; selected workspace search requires ripgrep, now explicitly installed. The selected frozen job builds the real Linux artifact and runs exactly two database journeys. Browser scope is 24 runtime-switch cases on the required desktop/mobile profiles. No full suite. Fifteen measured runs cover the ten planned cases plus five justified final-runtime rechecks after caller repairs.",
-  "exclusions": "No full suites or native desktop build. Python3.12 selected; Python3.11/3.13 required-name jobs do not execute tests. Local model/browser downloads denied; hosted jobs supply those boundaries. Physical devices not used. No production deployment. Earlier failed performance experiments retained.",
+  "change_digest": "a13458b5d06aa6d3da577b830ebe2cec07e517ac090fd0783ae39c119debc250",
+  "reviewed_by": "Codex; independent settings-flow diagnosis and paired TUI/Core verification",
+  "reason": "Keep /settings open after each saved choice, refresh authoritative Core values and revisions, and exit explicitly with Done or cancellation. Selected contracts cover two sequential TUI edits against disposable authenticated TLS LAN Core, existing direct CLI navigation and concurrent-device readback, local menu refresh, environment selection, and packaged CLI guidance. The async test fixture is declared explicitly and its missing dev plugin is locked.",
+  "exclusions": "No frontend, native, or Playwright changes. No full suite or production Core mutation. Local wheel installation follows merge.",
   "expected_tests": {
-    "python": 217,
-    "frontend": 3,
+    "python": 6,
+    "frontend": 0,
     "native": 0,
-    "playwright": 24,
-    "manual": 2,
-    "benchmarks": 10
+    "playwright": 0,
+    "manual": 1,
+    "benchmarks": 0
   },
   "python": [
-    "tests/v3/test_async_database.py",
-    "tests/v3/test_async_storage.py",
-    "tests/v3/test_async_core.py",
-    "tests/v3/test_async_runtime_switching.py",
-    "tests/v3/test_async_postgresql.py",
-    "tests/v3/test_async_harness_queries.py",
-    "tests/v3/test_async_recovery.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_chat.py::test_restart_interrupts_turns_and_blocks_unknown_tool_replay",
-    "tests/v3/test_chat.py::test_restart_projects_late_recorded_tool_result_once",
-    "tests/v3/test_chat.py::test_restart_adopts_late_receipt_into_the_ledger_the_provider_replays",
-    "tests/v3/test_chat.py::test_tool_ledger_binds_provider_replay_intent_to_idempotent_call",
-    "tests/v3/test_chat.py::test_restart_allows_explicit_resume_when_no_tool_effect_is_unknown",
-    "tests/v3/test_chat.py::test_core_shutdown_leaves_an_inflight_provider_turn_recoverable",
-    "tests/v3/test_chat.py::test_core_restart_recovery_bounds_concurrent_provider_turns",
-    "tests/v3/test_chat.py::test_core_restart_recovery_retries_a_resume_that_could_not_be_admitted",
-    "tests/v3/test_chat.py::test_provider_turn_and_goal_have_one_durable_worker_owner",
-    "tests/v3/test_chat.py::test_goal_charges_compaction_usage_before_provider_response",
-    "tests/v3/test_chat_tool_loop.py::test_batched_safe_reads_overlap_and_commit_in_provider_order",
-    "tests/v3/test_chat_tool_loop.py::test_goal_exhaustion_after_routing_stops_before_tool_effect",
-    "tests/v3/test_tool_failures.py::test_broker_rejects_hash_before_execution_and_finishes_call",
-    "tests/v3/test_packaging.py::test_core_archive_requires_native_async_database_runtime",
-    "tests/v3/test_async_rollback.py",
-    "tests/v3/test_async_auxiliary_database.py",
-    "tests/v3/test_browserd.py::test_action_ledger_deduplicates_receipts_and_marks_interrupted_work_ambiguous",
-    "tests/v3/test_async_shutdown.py",
-    "tests/v3/test_async_queue_positions.py",
-    "tests/v3/test_api.py::test_health_and_data_routes_require_auth",
-    "tests/v3/test_api.py::test_run_event_rest_and_authenticated_websocket_replay",
-    "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
-    "tests/v3/test_cli.py::test_doctor_reports_analysis_only_without_host_fallback",
-    "tests/v3/test_cli.py::test_serve_reports_a_busy_port_without_a_traceback",
-    "tests/v3/test_cli.py::test_cli_run_uses_an_explicit_vllm_profile_without_tools",
-    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_postgresql_migration_and_offline_cutover",
-    "tests/v3/test_product_knowledge.py::test_product_guidance_finds_bounded_pool_and_pending_runtime_switch",
-    "tests/v3/test_async_admission_cleanup.py",
-    "tests/v3/test_postgresql_core.py::test_postgresql_run_event_sequence_and_retry_are_atomic",
-    "tests/v3/test_postgresql_core.py::test_postgresql_transaction_and_direct_operation_writers_share_lock",
-    "tests/v3/test_operators.py::test_concurrent_first_profiles_still_have_one_active_operator",
-    "tests/v3/test_chat_queue.py::test_two_devices_cannot_overwrite_same_revision",
-    "tests/v3/test_session_state.py::test_projection_revision_survives_reopen_and_concurrent_reads",
-    "tests/v3/test_control_plane_reads.py",
-    "tests/v3/test_load_read_responsiveness.py",
-    "tests/v3/test_entity_listing_workers.py",
-    "tests/v3/test_capability_stress.py::test_slow_saved_state_read_leaves_unrelated_settings_responsive",
-    "tests/v3/test_capability_stress.py::test_artifact_read_keeps_acknowledgement_integrity_and_authorization",
-    "tests/v3/test_harness_session_title_lookup.py",
-    "tests/v3/test_execution_ai.py::test_post_tool_config_generates_suggestion_and_automatic_note",
-    "tests/v3/test_reporting.py::test_pdf_export_hashes_artifacts_off_the_event_loop",
-    "tests/v3/test_reporting.py::test_pdf_download_route_verifies_off_the_event_loop",
-    "tests/v3/test_exporter.py::test_export_contains_entities_events_deduplicated_blobs_and_hash_manifest",
-    "tests/v3/test_exporter.py::test_export_is_atomic_on_integrity_failure_and_refuses_overwrite",
-    "tests/v3/test_evidence.py::test_upload_persists_immutable_artifact_and_listable_evidence",
-    "tests/v3/test_evidence.py::test_database_failure_compensates_only_a_new_blob",
-    "tests/v3/test_evidence.py::test_linked_finding_update_failure_rolls_back_entities_and_new_blob",
-    "tests/v3/test_workspace.py::test_workspace_lists_previews_downloads_and_rejects_symlinks",
-    "tests/v3/test_workspace.py::test_workspace_search_opens_one_directory_at_a_time",
-    "tests/v3/test_workspace.py::test_workspace_search_skips_generated_directories",
-    "tests/v3/test_workspace.py::test_workspace_text_search_ripgrep_preserves_python_results",
-    "tests/v3/test_workspace.py::test_workspace_text_search_pins_files_and_falls_back_on_rg_failure",
-    "tests/v3/test_workspace.py::test_workspace_text_search_limit_keeps_original_file_count",
-    "tests/v3/test_workspace.py::test_workspace_text_search_uses_python_for_small_files",
-    "tests/v3/test_workspace.py::test_workspace_api_runs_filesystem_operations_off_the_event_loop",
-    "tests/v3/test_async_output_workers.py",
-    "tests/v3/test_tool_result_recovery.py::test_oversized_capability_result_has_authorized_artifact_and_replays",
-    "tests/v3/test_async_caller_boundaries.py",
-    "tests/v3/test_harness_chat_goals.py::test_goal_conversation_is_atomic_and_supported_for_each_harness",
-    "tests/v3/test_harness_chat_goals.py::test_existing_harness_chat_can_add_goal_and_child_gets_fresh_session",
-    "tests/v3/test_butler_capabilities.py::test_global_create_goal_exposes_and_saves_harness_max_effort",
-    "tests/v3/test_butler_capabilities.py::test_scheduled_recovery_goal_is_typed_linked_and_uses_daybreak_blue",
-    "tests/v3/test_butler_capabilities.py::test_scheduled_recovery_selects_available_quota_over_butler_profile",
-    "tests/v3/test_relations.py::test_relations_reject_cross_project_dangling_and_invalid_predicate",
-    "tests/v3/test_relations.py::test_relations_are_typed_reciprocal_unique_and_revision_guarded"
+    "tests/test_terminal_shell.py::test_settings_menu_refreshes_core_between_changes_and_exits_on_done",
+    "tests/test_terminal_shell.py::test_ssh_environment_menu_uses_discovery_hosts",
+    "tests/v3/test_terminal_core.py::test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect",
+    "tests/v3/test_terminal_core.py::test_paired_tui_settings_stays_open_for_multiple_changes",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
-  "frontend": [
-    "ui/src/api/asyncRuntimeSwitch.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:harness-provider-switch",
-    "area:provider-runtime-switch"
-  ],
+  "playwright": [],
   "manual": [
-    "scripts/verify_async_frozen_core.py::sqlite",
-    "scripts/verify_async_frozen_core.py::postgresql"
+    "build and inspect installed nebula-chat wheel on this Mac"
   ],
-  "benchmarks": [
-    {
-      "revision": "baseline",
-      "pool": 15,
-      "rate": 1,
-      "requests_per_kind": 30,
-      "host_monitor": "system",
-      "label": "baseline-low-equal"
-    },
-    {
-      "revision": "candidate",
-      "pool": 15,
-      "rate": 1,
-      "requests_per_kind": 30,
-      "host_monitor": "system",
-      "label": "candidate-low-equal"
-    },
-    {
-      "revision": "baseline",
-      "pool": 15,
-      "rate": 8,
-      "requests_per_kind": 120,
-      "host_monitor": "system",
-      "label": "baseline-mixed-equal"
-    },
-    {
-      "revision": "candidate",
-      "pool": 15,
-      "rate": 8,
-      "requests_per_kind": 120,
-      "host_monitor": "system",
-      "label": "candidate-mixed-equal"
-    },
-    {
-      "revision": "baseline",
-      "pool": 40,
-      "rate": 8,
-      "requests_per_kind": 120,
-      "host_monitor": "system",
-      "label": "baseline-mixed-max"
-    },
-    {
-      "revision": "candidate",
-      "pool": 40,
-      "rate": 8,
-      "requests_per_kind": 120,
-      "host_monitor": "system",
-      "label": "candidate-mixed-max"
-    },
-    {
-      "revision": "candidate",
-      "pool": 40,
-      "rate": 16,
-      "requests_per_kind": 180,
-      "host_monitor": "system",
-      "label": "candidate-overload-max"
-    },
-    {
-      "revision": "baseline",
-      "pool": 40,
-      "rate": 16,
-      "requests_per_kind": 180,
-      "host_monitor": "system",
-      "label": "baseline-overload-max"
-    },
-    {
-      "revision": "baseline",
-      "pool": 40,
-      "rate": 2,
-      "requests_per_kind": 600,
-      "host_monitor": "system",
-      "label": "baseline-soak-max"
-    },
-    {
-      "revision": "candidate",
-      "pool": 40,
-      "rate": 2,
-      "requests_per_kind": 600,
-      "host_monitor": "system",
-      "label": "candidate-soak-max"
-    }
-  ]
+  "benchmarks": [],
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false
 }
