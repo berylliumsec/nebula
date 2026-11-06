@@ -261,3 +261,14 @@ class _AsyncWebSocket:
         results = await asyncio.gather(self.task, return_exceptions=True)
         if done and isinstance(results[0], Exception):
             raise results[0]
+
+
+async def inspect_database(database, method, *args, **kwargs):
+    """Materialize schema metadata inside the supported async connection bridge."""
+    from sqlalchemy import inspect
+
+    await database.initialize()
+    async with database.engine.connect() as connection:
+        return await connection.run_sync(
+            lambda sync: getattr(inspect(sync), method)(*args, **kwargs)
+        )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from tests.v3.async_test_support import (
+    inspect_database,
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
@@ -13,7 +14,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from tests.v3.async_test_support import AsyncTestClient as TestClient
-from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from nebula.v3.api import create_app
@@ -878,7 +878,9 @@ async def test_schema_contains_durable_audit_and_output_reference_columns(tmp_pa
     database = Database(tmp_path / "columns.db")
     columns = {
         column["name"]
-        for column in inspect(database.engine).get_columns("terminal_command_records")
+        for column in (
+            await inspect_database(database, "get_columns", "terminal_command_records")
+        )
     }
     assert {
         "id",

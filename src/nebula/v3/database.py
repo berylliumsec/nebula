@@ -757,7 +757,7 @@ class Database:
                             SELECT current_setting('max_connections')::int AS maximum,
                               current_setting('superuser_reserved_connections')::int +
                               COALESCE(current_setting('reserved_connections', true), '0')::int AS reserved,
-                              (SELECT rolconnlimit FROM pg_roles WHERE rolname = current_user) AS role_limit,
+                              (SELECT rolconnlimit FROM pg_roles WHERE rolname = session_user) AS role_limit,
                               (SELECT datconnlimit FROM pg_database WHERE datname = current_database()) AS database_limit
                         """)
                             )

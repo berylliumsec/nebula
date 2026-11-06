@@ -1,9 +1,9 @@
+import asyncio
 import pytest
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
-from concurrent.futures import ThreadPoolExecutor
 
 from tests.v3.async_test_support import AsyncTestClient as TestClient
 
@@ -144,14 +144,16 @@ async def test_operator_profile_requests_cannot_write_activation_or_invalid_iden
 async def test_concurrent_first_profiles_still_have_one_active_operator(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     service = OperatorProfileService(store)
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        profiles = list(
-            executor.map(
-                lambda name: service.create_profile(display_name=name),
-                ["First", "Second"],
+    profiles = list(
+        (
+            await asyncio.gather(
+                *(
+                    (lambda name: service.create_profile(display_name=name))(_item)
+                    for _item in ["First", "Second"]
+                )
             )
         )
+    )
 
     persisted = await service.list_profiles()
     assert {profile.id for profile in profiles} == {profile.id for profile in persisted}

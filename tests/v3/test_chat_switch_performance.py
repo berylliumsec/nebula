@@ -6,9 +6,7 @@ from tests.v3.async_test_support import (
 )
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Event
 import time
 from types import SimpleNamespace
 import zlib
@@ -184,36 +182,30 @@ async def test_chat_lookup_projection_tracks_writes_orders_history_and_uses_inde
 
 async def test_blocking_history_read_does_not_block_chat_state(tmp_path, monkeypatch):
     store = await _store(tmp_path)
-    entered = Event()
-    release = Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
     original = ChatService.session_messages
 
     async def blocked(self, session_id, *, include_replaced=False):
         if session_id == "session-a":
             entered.set()
-            assert release.wait(2), "history test gate was not released"
+            await asyncio.wait_for(release.wait(), 2)
         return await original(self, session_id, include_replaced=include_replaced)
 
     monkeypatch.setattr(ChatService, "session_messages", blocked)
     async with TestClient(create_app(store, auth_token="test-token")) as client:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            slow = executor.submit(
-                client.get,
-                "/api/v1/chat/sessions/session-a/messages",
-                headers=AUTH,
+        slow = asyncio.create_task(
+            client.get("/api/v1/chat/sessions/session-a/messages", headers=AUTH)
+        )
+        await asyncio.wait_for(entered.wait(), 1)
+        try:
+            state = await asyncio.wait_for(
+                client.get("/api/v1/chat/sessions/session-a/state", headers=AUTH), 0.75
             )
-            assert entered.wait(1)
-            fast = executor.submit(
-                client.get,
-                "/api/v1/chat/sessions/session-a/state",
-                headers=AUTH,
-            )
-            try:
-                state = fast.result(timeout=0.75)
-                assert state.status_code == 200, state.text
-            finally:
-                release.set()
-            assert slow.result(timeout=2).status_code == 200
+            assert state.status_code == 200, state.text
+        finally:
+            release.set()
+        assert (await asyncio.wait_for(slow, 2)).status_code == 200
 
 
 async def test_optional_naming_database_read_does_not_block_event_loop(
@@ -236,7 +228,7 @@ async def test_optional_naming_database_read_does_not_block_event_loop(
     original = service.session_messages
 
     async def slow_messages(session_id):
-        time.sleep(0.4)
+        await asyncio.sleep(0.4)
         return await original(session_id)
 
     monkeypatch.setattr(service, "session_messages", slow_messages)
@@ -288,7 +280,7 @@ async def test_large_chat_json_is_compressed_and_timed_but_small_and_sse_are_not
         async def events():
             yield b"data: " + (b"x" * 4_000) + b"\n\n"
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return StreamingResponse((await events()), media_type="text/event-stream")
 
     app.add_api_route("/api/v1/chat/test-stream", test_stream, methods=["GET"])
 

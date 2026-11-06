@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from builtins import BaseExceptionGroup
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import hashlib
@@ -14,6 +15,7 @@ import secrets
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -155,6 +157,7 @@ def journey(binary, output, kind, endpoint):
         if url:
             environment["NEBULA_V3_DATABASE_URL"] = url
         process = None
+        stops = []
         client = httpx.Client(
             base_url=f"http://127.0.0.1:{port}",
             headers={"Authorization": f"Bearer {token}"},
@@ -201,7 +204,7 @@ def journey(binary, output, kind, endpoint):
 
         def stop():
             if process is not None and process.poll() is None:
-                os.killpg(process.pid, signal.SIGINT)
+                process.send_signal(signal.SIGINT)
                 try:
                     process.wait(timeout=45)
                 except subprocess.TimeoutExpired:
@@ -209,7 +212,28 @@ def journey(binary, output, kind, endpoint):
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=10)
                     raise AssertionError("Owned frozen Core shutdown timed out")
-                assert process.returncode == 0, process.returncode
+                assert process.returncode in (0, 130), process.returncode
+                # Only the bootloader gets the graceful signal; it forwards it
+                # once. Group escalation is reserved for timeout failure.
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        os.killpg(process.pid, 0)
+                    except ProcessLookupError:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise AssertionError(
+                            "An owned frozen Core child survived shutdown"
+                        )
+                    time.sleep(0.01)
+                stops.append(
+                    {
+                        "signal": "SIGINT",
+                        "returncode": process.returncode,
+                        "escalated": False,
+                        "owned_group_gone": True,
+                    }
+                )
 
         def request(method, path, body=None):
             response = client.request(method, path, json=body)
@@ -241,22 +265,11 @@ def journey(binary, output, kind, endpoint):
                     "capabilities": {"streaming": True, "tool_calling": False},
                 },
             )
-            chat = request(
-                "POST",
-                "/api/v1/chat/sessions",
-                {
-                    "engagement_id": project["id"],
-                    "title": "Frozen async fixture",
-                    "provider_profile_id": provider["id"],
-                    "model": "synthetic-model",
-                },
-            )
             completion = request(
                 "POST",
                 "/api/v1/chat/completions",
                 {
                     "engagement_id": project["id"],
-                    "session_id": chat["id"],
                     "provider_id": provider["id"],
                     "model": "synthetic-model",
                     "include_knowledge": False,
@@ -267,6 +280,8 @@ def journey(binary, output, kind, endpoint):
                 },
             )
             assert completion["message"]["content"] == "Synthetic response.", completion
+            chat = request("GET", "/api/v1/chat-sessions/" + completion["session_id"])
+            assert chat["engagement_id"] == project["id"]
             with ThreadPoolExecutor(max_workers=8) as workers:
                 results = list(
                     workers.map(
@@ -310,13 +325,21 @@ def journey(binary, output, kind, endpoint):
                 "status": "passed",
                 "build_commit": health["commit"],
                 "pool": pool,
+                "stops": stops,
                 "restarted_transcript": "one user and one assistant message",
                 "product_source_digest": digest,
                 "product_passages": product.count(),
             }
         finally:
+            primary = sys.exception()
             try:
                 stop()
+            except BaseException as cleanup:
+                if primary is not None:
+                    raise BaseExceptionGroup(
+                        "Frozen journey and cleanup failed", [primary, cleanup]
+                    ) from None
+                raise
             finally:
                 client.close()
 

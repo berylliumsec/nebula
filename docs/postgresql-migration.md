@@ -37,7 +37,7 @@ slot per simultaneous command in `NEBULA_V3_DB_OTHER_CONNECTIONS`, alongside
 other consumers. Commands reject a zero auxiliary allocation. Discovery also
 uses only one connection and closes it before the command's runtime pool opens.
 
-Core reads `max_connections`, PostgreSQL's reserved slots, and role/database
+Core reads `max_connections`, PostgreSQL's reserved slots, and login-role/database
 connection limits. It subtracts the allocations above and divides the remaining
 capacity across the declared process count. Startup refuses an infeasible budget.
 For example, 100 server slots, three PostgreSQL-reserved slots, five additional

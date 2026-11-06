@@ -130,7 +130,7 @@ async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
             with guard:
                 active -= 1
 
-    event.listen(store.database.engine, "before_cursor_execute", slow_read)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", slow_read)
 
     async def exercise():
         limiter = anyio.to_thread.current_default_thread_limiter()
@@ -189,7 +189,9 @@ async def test_slow_listings_use_bounded_workers_and_thread_owned_sessions(
     try:
         (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", slow_read)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", slow_read
+        )
         (await store.database.dispose())
 
 

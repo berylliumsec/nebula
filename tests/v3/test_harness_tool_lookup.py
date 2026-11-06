@@ -148,7 +148,9 @@ async def test_pending_lookup_work_is_bounded_by_active_calls(
                 )
             queries.clear()
             steps.clear()
-            event.listen(store.database.engine, "before_cursor_execute", capture)
+            event.listen(
+                store.database.engine.sync_engine, "before_cursor_execute", capture
+            )
             try:
                 assert [
                     call.id
@@ -158,7 +160,9 @@ async def test_pending_lookup_work_is_bounded_by_active_calls(
                 for connection in progress_connections:
                     connection.set_progress_handler(None, 0)
                 progress_connections.clear()
-                event.remove(store.database.engine, "before_cursor_execute", capture)
+                event.remove(
+                    store.database.engine.sync_engine, "before_cursor_execute", capture
+                )
             assert len(queries) == 1
             sql, _, plan = queries[0]
             assert "JSON_EXTRACT" not in sql

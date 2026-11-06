@@ -1,22 +1,22 @@
 """Core persistence contracts exercised against an isolated PostgreSQL schema."""
 
 from tests.v3.async_test_support import (
+    inspect_database,
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import TimeoutError
 from datetime import timedelta, timezone
 import os
 from pathlib import Path
 import subprocess
 import sys
-from threading import Event
 from uuid import uuid4
 
 import asyncio
 import pytest
-from sqlalchemy import create_engine, event, inspect, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.pool import NullPool
 
@@ -179,7 +179,9 @@ asyncio.run(main())
             marker = await session.get(BootstrapStateRow, SCRATCH_PROJECT_BOOTSTRAP_KEY)
             assert marker.status == "complete"
             assert marker.engagement_id == "scratch-project"
-        assert "session_projections" in inspect(store.database.engine).get_table_names()
+        assert "session_projections" in (
+            await inspect_database(store.database, "get_table_names")
+        )
     finally:
         (await store.event_history.close())
         (await store.database.dispose())
@@ -191,8 +193,7 @@ async def test_postgresql_run_event_sequence_and_retry_are_atomic(postgresql_sto
     async def append(number):
         return await store.append_event("parallel-run", "tick", {"number": number})
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        events = list(pool.map(append, range(18)))
+    events = list((await asyncio.gather(*(append(_item) for _item in range(18)))))
     assert sorted(item.sequence for item in events) == list(range(1, 19))
     first = await store.append_event(
         "parallel-run", "once", {"text": 'π\\"_%'}, idempotency_key="once"
@@ -236,7 +237,7 @@ async def test_postgresql_transaction_and_direct_operation_writers_share_lock(
 ):
     store = postgresql_store
     project = await store.create(Engagement(name="Operation stream"))
-    attempted = Event()
+    attempted = asyncio.Event()
     operation_id = "mixed-stream"
 
     def before(_connection, _cursor, statement, _parameters, _context, _many):
@@ -248,35 +249,31 @@ async def test_postgresql_transaction_and_direct_operation_writers_share_lock(
             operation_id, "fixture", project.id, "direct", idempotency_key="direct"
         )
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        async with store.transaction() as transaction:
-            first = await transaction.append_operation_event(
+    async with store.transaction() as transaction:
+        first = await transaction.append_operation_event(
+            operation_id, "fixture", project.id, "state", idempotency_key="state"
+        )
+        assert (
+            await transaction.append_operation_event(
                 operation_id, "fixture", project.id, "state", idempotency_key="state"
             )
-            assert (
-                await transaction.append_operation_event(
-                    operation_id,
-                    "fixture",
-                    project.id,
-                    "state",
-                    idempotency_key="state",
-                )
-            ) == first
-            second = await transaction.append_operation_event(
-                operation_id, "fixture", project.id, "second"
+            == first
+        )
+        second = await transaction.append_operation_event(
+            operation_id, "fixture", project.id, "second"
+        )
+        assert (first.sequence, second.sequence) == (1, 2)
+        event.listen(store.database.engine.sync_engine, "before_cursor_execute", before)
+        future = asyncio.create_task(direct())
+        try:
+            await asyncio.wait_for(attempted.wait(), 5)
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(future), 0.1)
+        finally:
+            event.remove(
+                store.database.engine.sync_engine, "before_cursor_execute", before
             )
-            assert (first.sequence, second.sequence) == (1, 2)
-            event.listen(store.database.engine, "before_cursor_execute", before)
-            try:
-                future = pool.submit(direct)
-                assert attempted.wait(5), (
-                    "direct writer did not attempt its stream lock"
-                )
-                with pytest.raises(TimeoutError):
-                    future.result(timeout=0.1)
-            finally:
-                event.remove(store.database.engine, "before_cursor_execute", before)
-        assert future.result(timeout=5).sequence == 3
+    assert (await asyncio.wait_for(future, 5)).sequence == 3
     assert [
         item.sequence for item in (await store.replay_operation_events(operation_id))
     ] == [

@@ -8,7 +8,6 @@ from tests.v3.async_test_support import (
 import asyncio
 import threading
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import ContextVar
 from datetime import timedelta
@@ -172,7 +171,9 @@ async def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp
             entered += 1
         assert release.wait(5), "catalog reads blocked Core's request loop"
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_catalog)
+    event.listen(
+        store.database.engine.sync_engine, "before_cursor_execute", hold_catalog
+    )
 
     async def read(index):
         if index % 3 == 0:
@@ -238,7 +239,9 @@ async def test_mixed_settings_read_burst_retains_capacity_after_cancellation(tmp
     try:
         (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_catalog)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_catalog
+        )
 
 
 async def test_worker_retains_context_and_recovers_from_a_failed_read():
@@ -293,33 +296,32 @@ async def test_racing_harness_activity_reads_cannot_publish_an_older_goal(
     (await record("Initial"))
     (await runtime._turn_activity_state(turn))
     (await record("Older replay"))
-    queried = threading.Event()
-    release = threading.Event()
-    loop_thread = threading.get_ident()
+    queried = asyncio.Event()
+    release = asyncio.Event()
     original = store.replay_operation_events
+    older = None
 
     async def racing(*args, **kwargs):
         rows = await original(*args, **kwargs)
-        if threading.get_ident() != loop_thread:
+        if asyncio.current_task() is older:
             queried.set()
-            assert release.wait(3)
+            await asyncio.wait_for(release.wait(), 3)
         return rows
 
     monkeypatch.setattr(store, "replay_operation_events", racing)
-    with ThreadPoolExecutor(max_workers=1) as worker:
-        older = worker.submit(runtime._turn_activity_state, turn)
-        try:
-            assert queried.wait(2)
-            (await record("Newest replay"))
-            newest = await runtime._turn_activity_state(turn)
-            release.set()
-            late = older.result(timeout=2)
-            assert newest.goal.objective == late.goal.objective == "Newest replay"
-            cached = runtime._turn_activity_states[turn.id]
-            assert cached.goal.objective == "Newest replay"
-            assert cached.cursor >= newest.cursor
-        finally:
-            release.set()
+    older = asyncio.create_task(runtime._turn_activity_state(turn))
+    try:
+        await asyncio.wait_for(queried.wait(), 2)
+        await record("Newest replay")
+        newest = await runtime._turn_activity_state(turn)
+        release.set()
+        late = await asyncio.wait_for(older, 2)
+        assert newest.goal.objective == late.goal.objective == "Newest replay"
+        cached = runtime._turn_activity_states[turn.id]
+        assert cached.goal.objective == "Newest replay"
+        assert cached.cursor >= newest.cursor
+    finally:
+        release.set()
 
 
 async def test_search_policy_count_keeps_legacy_defaults_without_hydration(tmp_path):
@@ -561,7 +563,7 @@ async def test_slow_catalog_and_policy_status_leave_core_responsive(tmp_path, re
             entered += 1
         assert release.wait(5), "status read blocked Core's request loop"
 
-    event.listen(store.database.engine, "before_cursor_execute", held)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", held)
 
     async def exercise():
         headers = {"Authorization": "Bearer synthetic-token"}
@@ -598,7 +600,7 @@ async def test_slow_catalog_and_policy_status_leave_core_responsive(tmp_path, re
     try:
         (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", held)
+        event.remove(store.database.engine.sync_engine, "before_cursor_execute", held)
 
 
 async def test_cleanup_yields_and_only_discards_expired_detached_popups(

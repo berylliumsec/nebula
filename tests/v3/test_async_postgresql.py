@@ -107,3 +107,77 @@ async def test_postgresql_budget_discovery_and_slow_query_leave_loop_responsive(
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_postgresql_budget_follows_login_limit_after_startup_role_switch():
+    """SET ROLE cannot widen the authenticated role's connection allocation."""
+    import psycopg
+    from psycopg import sql
+
+    configured = os.getenv("NEBULA_TEST_POSTGRES_ADMIN_URL")
+    if not configured:
+        pytest.skip(
+            "Owned PostgreSQL role-budget fixture requires its explicit admin URL"
+        )
+    admin_url = make_url(Database._normalize_sync_url(configured)).set(
+        drivername="postgresql"
+    )
+    suffix = uuid4().hex[:12]
+    login = "nebula_budget_login_" + suffix
+    effective = "nebula_budget_effective_" + suffix
+    password = "synthetic-owned-role-password"
+    async with await psycopg.AsyncConnection.connect(
+        admin_url.render_as_string(hide_password=False), autocommit=True
+    ) as admin:
+        created = []
+        databases = []
+        try:
+            await admin.execute(
+                sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} CONNECTION LIMIT 3").format(
+                    sql.Identifier(login), sql.Literal(password)
+                )
+            )
+            created.append(login)
+            await admin.execute(
+                sql.SQL("CREATE ROLE {} NOLOGIN").format(sql.Identifier(effective))
+            )
+            created.append(effective)
+            await admin.execute(
+                sql.SQL("GRANT {} TO {}").format(
+                    sql.Identifier(effective), sql.Identifier(login)
+                )
+            )
+            runtime_url = admin_url.set(
+                drivername="postgresql+psycopg",
+                username=login,
+                password=password,
+                query={"options": "-crole=" + effective},
+            ).render_as_string(hide_password=False)
+            database = Database(
+                runtime_url, bootstrap=False, pool_settings=PoolSettings(1, 0, 1)
+            )
+            databases.append(database)
+            await database.initialize()
+            async with database.engine.connect() as connection:
+                identities = (
+                    await connection.execute(text("SELECT session_user, current_user"))
+                ).one()
+                assert identities == (login, effective)
+            assert database.budget.role_limit == 3
+            assert database.budget.ceiling == database.pool_size == 2
+            assert database.pool_snapshot()["max_overflow"] == 0
+            oversized = Database(
+                runtime_url,
+                bootstrap=False,
+                pool_settings=PoolSettings(1, 0, 1, requested_size=3),
+            )
+            databases.append(oversized)
+            with pytest.raises(ValueError, match="safe ceiling 2"):
+                await oversized.initialize()
+        finally:
+            for database in databases:
+                await database.dispose()
+            for role in created:
+                await admin.execute(
+                    sql.SQL("DROP ROLE {}").format(sql.Identifier(role))
+                )

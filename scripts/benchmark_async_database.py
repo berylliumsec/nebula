@@ -324,6 +324,9 @@ async def serve_fixture(args):
                 if native
                 else {"checked_out": database.engine.pool.checkedout()},
                 "load_average": read_optional("/proc/loadavg"),
+                "event_loop": type(asyncio.get_running_loop()).__module__
+                + "."
+                + type(asyncio.get_running_loop()).__qualname__,
             }
 
         @app.post("/fixture/measure")
@@ -623,6 +626,9 @@ def run_parent(args):
                     )
                     result["provenance"] = source_identity(args.source)
                     result["provenance"]["host_monitor"] = args.host_monitor
+                    result["provenance"]["event_loop"] = result["final_observation"][
+                        "event_loop"
+                    ]
                     result["boundary"] = (
                         "TCP Core; independent fixed-arrival load-generator process"
                     )
@@ -708,6 +714,11 @@ def main():
     args = parser.parse_args()
     args.source = args.source.resolve()
     if args.worker:
+        import uvicorn
+
+        # Match the real CLI's default loop for both source revisions. Select
+        # before constructing engines, sessions, or other async resources.
+        uvicorn.Config("nebula.v3.api:create_app").setup_event_loop()
         asyncio.run(serve_fixture(args))
         return 0
     if (

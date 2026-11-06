@@ -199,3 +199,35 @@ def test_auxiliary_pool_consumes_one_declared_other_connection():
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_core_command_selects_server_loop_before_creating_async_resources(
+    monkeypatch,
+):
+    import importlib.util
+    import uvicorn
+
+    stages = []
+    configure = uvicorn.Config.setup_event_loop
+    policy = asyncio.get_event_loop_policy()
+
+    def observed(config):
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        stages.append("configured")
+        configure(config)
+
+    monkeypatch.setattr(uvicorn.Config, "setup_event_loop", observed)
+
+    @_async_command(server_loop=True)
+    async def command():
+        stages.append("running")
+        return type(asyncio.get_running_loop()).__module__
+
+    try:
+        module = await asyncio.to_thread(command)
+        assert stages == ["configured", "running"]
+        if importlib.util.find_spec("uvloop") is not None:
+            assert module == "uvloop"
+    finally:
+        asyncio.set_event_loop_policy(policy)

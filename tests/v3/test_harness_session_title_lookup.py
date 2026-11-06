@@ -162,7 +162,7 @@ async def test_paged_names_preserve_precedence_and_ignore_unrelated_history(tmp_
         if statement.lstrip().startswith("SELECT") and "FROM entities" in statement:
             entity_selects.append(statement)
 
-    event.listen(store.database.engine, "before_cursor_execute", capture)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", capture)
     try:
         client = TestClient(app)
         first = await client.get(
@@ -190,7 +190,9 @@ async def test_paged_names_preserve_precedence_and_ignore_unrelated_history(tmp_
         ]
         assert (await client.get("/api/v1/harness-sessions")).status_code == 401
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", capture)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", capture
+        )
         (await store.database.dispose())
 
 

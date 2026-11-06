@@ -1,14 +1,15 @@
 {
-  "change_digest": "c05e0e5d1d71e0f8f8c075de901e9e4009eaacd4d8884e938eb34406f2de6f4e",
+  "change_digest": "3009bed27ee0c202132921875791487e0337a3b049b916051b2bf212fb480ceb",
   "reviewed_by": "Codex; independent diagnosis of database blocking, harness-list cost, and goal runtime authority before implementation",
-  "reason": "Focused async database and recovery contracts on SQLite/PostgreSQL, real Core auth/chat/listing/Butler-memory entry points, bounded pools, revisions/events/claims, cancellation, runtime-switch activation and compaction consent, indexed harness title seeks, additive rollback, and frozen-driver dependencies. Includes 25 existing storage cases, 14 selected existing recovery/tool cases and one existing action-ledger case. Three UI mapping cases are selected. Additional runtime-switch regressions preserve later metadata and reject invalidated settings or dependency revisions; auxiliary SQLite tests reject synchronous drivers on the event loop. The selected CI job provisions PostgreSQL for its eight existing database cases and fails clearly if configuration is absent; it does not broaden test scope. Nine additional cases exercise callback failures, repeated shutdown cancellation, purger rollback, serial auxiliary budgets, single-flight queue position reads, cache expiry and uncommitted session isolation. Seven existing API/CLI/WebSocket/scheduler cases validate the migrated caller and test-loop boundaries; four product-index cases verify its current digest, discoverability and Chroma synchronization. The selected frozen Linux job builds the real distribution and executes exactly two owned database journeys, with a non-administrative PostgreSQL role. Eight focused admission cases cover failed/cancelled release, repeated cancellation, stale lease fencing, both-database postcommit cancellation, completed-token ownership and recovery-slot cleanup. Six existing restart/ownership cases are rerun after this change.",
-  "exclusions": "No full suites. The 24-case production LAN browser matrix passed in CI. Bundled product knowledge and a frozen executable remain to be verified on hosted CI because local model/runtime downloads are denied. Chat admission performance acceptance remains open; final matched measurements follow the polling and query-shape repairs. Remaining repository diagnostic/test callers are being migrated.",
+  "reason": "Focused async database and recovery contracts on SQLite/PostgreSQL, real Core auth/chat/listing/Butler-memory entry points, bounded pools, revisions/events/claims, cancellation, runtime-switch activation and compaction consent, indexed harness title seeks, additive rollback, and frozen-driver dependencies. Includes 25 existing storage cases, 14 selected existing recovery/tool cases and one existing action-ledger case. Three UI mapping cases are selected. Additional runtime-switch regressions preserve later metadata and reject invalidated settings or dependency revisions; auxiliary SQLite tests reject synchronous drivers on the event loop. The selected CI job provisions PostgreSQL for its eight existing database cases and fails clearly if configuration is absent; it does not broaden test scope. Nine additional cases exercise callback failures, repeated shutdown cancellation, purger rollback, serial auxiliary budgets, single-flight queue position reads, cache expiry and uncommitted session isolation. Seven existing API/CLI/WebSocket/scheduler cases validate the migrated caller and test-loop boundaries; four product-index cases verify its current digest, discoverability and Chroma synchronization. The selected frozen Linux job builds the real distribution and executes exactly two owned database journeys, with a non-administrative PostgreSQL role. Eight focused admission cases cover failed/cancelled release, repeated cancellation, stale lease fencing, both-database postcommit cancellation, completed-token ownership and recovery-slot cleanup. Six existing restart/ownership cases are rerun after this change. Seven additional focused cases cover actual login-role limits under startup SET ROLE, finite overrides, preserved server loop selection, native PostgreSQL stream locks/sequences, operator/queue/projection concurrency. Role setup requires an explicitly owned administrative fixture; runtime/unraisable coroutine warnings fail CI.",
+  "exclusions": "No full suites. Focused source/browser/frozen checks only. Hosted CI supplies locally denied model/browser boundaries. Earlier performance failures remain recorded; final comparisons use restored real CLI loop selection for both revisions and record actual loop identity. No performance pass is claimed before new measurements.",
   "expected_tests": {
-    "python": 131,
+    "python": 138,
     "frontend": 3,
     "native": 0,
     "playwright": 24,
-    "manual": 2
+    "manual": 2,
+    "benchmarks": 10
   },
   "python": [
     "tests/v3/test_async_database.py",
@@ -49,7 +50,12 @@
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_postgresql_migration_and_offline_cutover",
     "tests/v3/test_product_knowledge.py::test_product_guidance_finds_bounded_pool_and_pending_runtime_switch",
-    "tests/v3/test_async_admission_cleanup.py"
+    "tests/v3/test_async_admission_cleanup.py",
+    "tests/v3/test_postgresql_core.py::test_postgresql_run_event_sequence_and_retry_are_atomic",
+    "tests/v3/test_postgresql_core.py::test_postgresql_transaction_and_direct_operation_writers_share_lock",
+    "tests/v3/test_operators.py::test_concurrent_first_profiles_still_have_one_active_operator",
+    "tests/v3/test_chat_queue.py::test_two_devices_cannot_overwrite_same_revision",
+    "tests/v3/test_session_state.py::test_projection_revision_survives_reopen_and_concurrent_reads"
   ],
   "frontend": [
     "ui/src/api/asyncRuntimeSwitch.test.ts"
@@ -62,5 +68,87 @@
   "manual": [
     "scripts/verify_async_frozen_core.py::sqlite",
     "scripts/verify_async_frozen_core.py::postgresql"
+  ],
+  "benchmarks": [
+    {
+      "revision": "baseline",
+      "pool": 15,
+      "rate": 1,
+      "requests_per_kind": 30,
+      "host_monitor": "system",
+      "label": "baseline-low-equal"
+    },
+    {
+      "revision": "candidate",
+      "pool": 15,
+      "rate": 1,
+      "requests_per_kind": 30,
+      "host_monitor": "system",
+      "label": "candidate-low-equal"
+    },
+    {
+      "revision": "baseline",
+      "pool": 15,
+      "rate": 8,
+      "requests_per_kind": 120,
+      "host_monitor": "system",
+      "label": "baseline-mixed-equal"
+    },
+    {
+      "revision": "candidate",
+      "pool": 15,
+      "rate": 8,
+      "requests_per_kind": 120,
+      "host_monitor": "system",
+      "label": "candidate-mixed-equal"
+    },
+    {
+      "revision": "baseline",
+      "pool": 40,
+      "rate": 8,
+      "requests_per_kind": 120,
+      "host_monitor": "system",
+      "label": "baseline-mixed-max"
+    },
+    {
+      "revision": "candidate",
+      "pool": 40,
+      "rate": 8,
+      "requests_per_kind": 120,
+      "host_monitor": "system",
+      "label": "candidate-mixed-max"
+    },
+    {
+      "revision": "candidate",
+      "pool": 40,
+      "rate": 16,
+      "requests_per_kind": 180,
+      "host_monitor": "system",
+      "label": "candidate-overload-max"
+    },
+    {
+      "revision": "baseline",
+      "pool": 40,
+      "rate": 16,
+      "requests_per_kind": 180,
+      "host_monitor": "system",
+      "label": "baseline-overload-max"
+    },
+    {
+      "revision": "baseline",
+      "pool": 40,
+      "rate": 2,
+      "requests_per_kind": 600,
+      "host_monitor": "system",
+      "label": "baseline-soak-max"
+    },
+    {
+      "revision": "candidate",
+      "pool": 40,
+      "rate": 2,
+      "requests_per_kind": 600,
+      "host_monitor": "system",
+      "label": "candidate-soak-max"
+    }
   ]
 }

@@ -5,6 +5,7 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
+import asyncio
 import pytest
 from datetime import timedelta
 
@@ -166,7 +167,6 @@ async def test_expiry_changes_revision_without_rewriting_the_decision(
 
 
 async def test_projection_revision_survives_reopen_and_concurrent_reads(tmp_path):
-    from concurrent.futures import ThreadPoolExecutor
     from nebula.v3.session_state import session_state
     from nebula.v3.storage import NebulaStore
 
@@ -181,10 +181,16 @@ async def test_projection_revision_survives_reopen_and_concurrent_reads(tmp_path
             expected_revision=approval.revision,
         )
     )
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        snapshots = list(
-            pool.map(lambda _: session_state(store, chat, runtime), range(12))
+    snapshots = list(
+        (
+            await asyncio.gather(
+                *(
+                    (lambda _: session_state(store, chat, runtime))(_item)
+                    for _item in range(12)
+                )
+            )
         )
+    )
     assert {item["revision"] for item in snapshots} == {before["revision"] + 1}
     reopened = NebulaStore(str(store.database.engine.url))
     try:

@@ -133,11 +133,13 @@ async def test_slow_search_or_work_read_leaves_other_requests_responsive(
                 with suppress(asyncio.CancelledError):
                     await slow
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_read)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", hold_read)
     try:
         (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_read)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_read
+        )
         (await store.database.engine.dispose())
 
 
@@ -183,11 +185,11 @@ async def test_search_page_does_not_add_a_query_per_result(tmp_path):
                 "each result added another database read"
             )
 
-    event.listen(store.database.engine, "before_cursor_execute", record)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", record)
     try:
         (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", record)
+        event.remove(store.database.engine.sync_engine, "before_cursor_execute", record)
         (await store.database.engine.dispose())
 
 
@@ -256,7 +258,9 @@ async def test_parallel_search_instances_repair_a_missing_projection_once(tmp_pa
                 release.set()
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_insert)
+    event.listen(
+        store.database.engine.sync_engine, "before_cursor_execute", hold_insert
+    )
     try:
         (await exercise())
         async with store.database.session() as session:
@@ -266,7 +270,9 @@ async def test_parallel_search_instances_repair_a_missing_projection_once(tmp_pa
                 )
             ) == 2
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_insert)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_insert
+        )
         (await store.database.engine.dispose())
 
 
@@ -407,11 +413,13 @@ async def test_mixed_read_burst_retains_capacity_when_callers_cancel(tmp_path):
                 await asyncio.gather(*tasks, return_exceptions=True)
                 await asyncio.gather(*(read_in_worker(lambda: None) for _ in range(4)))
 
-    event.listen(store.database.engine, "before_cursor_execute", hold_read)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", hold_read)
     try:
         (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", hold_read)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", hold_read
+        )
         (await store.database.engine.dispose())
 
 

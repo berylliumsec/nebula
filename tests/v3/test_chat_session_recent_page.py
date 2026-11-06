@@ -2,6 +2,7 @@
 
 import pytest
 from tests.v3.async_test_support import (
+    inspect_database,
     anyio_backend as anyio_backend,
     close_database_handles as close_database_handles,
 )
@@ -9,7 +10,6 @@ from tests.v3.async_test_support import (
 from datetime import timedelta
 
 from tests.v3.async_test_support import AsyncTestClient as TestClient
-from sqlalchemy import inspect
 
 from nebula.v3.api import create_app
 from nebula.v3.domain import ChatGoal, ChatSession, Engagement, utc_now
@@ -110,7 +110,7 @@ async def test_recent_conversation_page_is_scoped_ordered_and_indexed(tmp_path):
     assert [row["id"] for row in original.json()] == ["old", "latest"]
     assert "ix_entities_kind_engagement_updated_id" in {
         index["name"]
-        for index in inspect(store.database.engine).get_indexes("entities")
+        for index in (await inspect_database(store.database, "get_indexes", "entities"))
     }
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
-from functools import wraps
+from functools import partial, wraps
 
 from .diagnostics import record_caught_exception
 
@@ -123,8 +123,11 @@ _cli_stores: ContextVar[list[NebulaStore] | None] = ContextVar(
 )
 
 
-def _async_command(function):
+def _async_command(function=None, *, server_loop: bool = False):
     """Typer calls synchronously; one loop owns each command's async resources."""
+
+    if function is None:
+        return partial(_async_command, server_loop=server_loop)
 
     @wraps(function)
     def command(*args, **kwargs):
@@ -141,6 +144,10 @@ def _async_command(function):
                 finally:
                     _cli_stores.reset(token)
 
+        if server_loop:
+            # Server.run selected Uvicorn's default loop before constructing
+            # resources. Preserve that ordering while awaiting serve ourselves.
+            uvicorn.Config("nebula.v3.api:create_app").setup_event_loop()
         return asyncio.run(run())
 
     return command
@@ -423,7 +430,7 @@ def _browser_diagnostic_ingress_allowed(
 
 
 @app.command()
-@_async_command
+@_async_command(server_loop=True)
 async def serve(
     host: Annotated[str, typer.Option(help="Bind address.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=0, max=65535)] = 8000,
@@ -524,6 +531,7 @@ async def serve(
     root, store, artifacts = _services(
         data_dir, diagnostics_level=diagnostics_level, runtime_pool=True
     )
+    await store.database.initialize()
     reranker = CrossEncoderReranker(
         Path(os.getenv("NEBULA_V3_KNOWLEDGE_MODELS_DIR", root / "knowledge-models")),
         # "off" keeps retrieval as it was, and nothing is downloaded.

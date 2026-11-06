@@ -432,9 +432,15 @@ async def test_concurrent_mcp_turns_check_the_same_new_schema_once(
 
     monkeypatch.setattr(Draft202012Validator, "check_schema", classmethod(count_checks))
 
-    async def build():
+    def build():
+        # No engagement/policy lookup occurs here: only frozen schema CPU work.
+        # Separate workers contend on the shared schema compilation cache.
+        import asyncio
+
         start.wait(timeout=2)
-        return await build_mcp_tool_plugins(service, (profile.model_copy(deep=True),))
+        return asyncio.run(
+            build_mcp_tool_plugins(service, (profile.model_copy(deep=True),))
+        )
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(build) for _ in range(4)]

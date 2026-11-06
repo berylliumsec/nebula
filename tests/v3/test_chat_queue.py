@@ -49,8 +49,10 @@ async def setup_queue(tmp_path):
     return store, service, request
 
 
-def enqueue(service, request, revision=0, key="first", **options):
-    return service.write(
+async def enqueue(
+    service: ChatQueueService, request, revision=0, key="first", **options
+):
+    return await service.write(
         "s",
         QueueWrite(
             action="enqueue",
@@ -64,13 +66,15 @@ def enqueue(service, request, revision=0, key="first", **options):
 
 async def test_revision_idempotency_order_and_import(tmp_path):
     store, service, request = await setup_queue(tmp_path)
-    queue = enqueue(service, request, paused=True)
-    assert enqueue(service, request).revision == queue.revision
+    queue = await enqueue(service, request, paused=True)
+    assert (await enqueue(service, request)).revision == queue.revision
     with pytest.raises(ConflictError):
-        enqueue(service, request.model_copy(update={"include_knowledge": True}))
+        (await enqueue(service, request.model_copy(update={"include_knowledge": True})))
     with pytest.raises(ConflictError):
-        enqueue(service, request, key="stale")
-    queue = enqueue(service, request, queue.revision, "second", imported_uncertain=True)
+        (await enqueue(service, request, key="stale"))
+    queue = await enqueue(
+        service, request, queue.revision, "second", imported_uncertain=True
+    )
     assert queue.paused and queue.items[-1]["status"] == "needs_review"
     queue = await service.write(
         "s",
@@ -105,14 +109,14 @@ async def test_enqueue_refuses_project_relink_before_queue_admission(tmp_path):
 
     store.get = read_then_relink
     with pytest.raises(ConflictError, match="Project workspace changed"):
-        enqueue(service, request)
+        (await enqueue(service, request))
     assert (await store.count(ChatQueue)) == 0
     assert (await store.get(Engagement, project.id)).workspace_path == str(new)
 
 
 async def test_claim_is_transactional_and_stale_pause_rolls_back(tmp_path):
     store, service, request = await setup_queue(tmp_path)
-    queue = enqueue(service, request)
+    queue = await enqueue(service, request)
     items = queue.items
     items[0]["status"] = "claiming"
     queue = await store.update(
@@ -145,8 +149,8 @@ async def test_core_dispatches_sequentially_without_any_browser(tmp_path):
     store, service, request = await setup_queue(tmp_path)
 
     async def run():
-        queue = enqueue(service, request)
-        enqueue(service, request, queue.revision, "second")
+        queue = await enqueue(service, request)
+        (await enqueue(service, request, queue.revision, "second"))
         for _ in range(100):
             await service.step((await service.get("s")))
             if all(
@@ -181,7 +185,11 @@ async def test_follow_up_runs_on_the_model_and_effort_picked_after_it_was_queued
     provider.config.model_allowlist.append("model-b")
 
     async def run():
-        enqueue(service, request.model_copy(update={"reasoning_effort": "high"}))
+        (
+            await enqueue(
+                service, request.model_copy(update={"reasoning_effort": "high"})
+            )
+        )
         # The operator switches while the follow-up waits; it is the next turn.
         session = await store.get(ChatSession, "s")
         service.chat.apply_runtime_switch(
@@ -223,7 +231,7 @@ async def test_follow_up_is_reviewed_when_the_conversation_moves_provider(tmp_pa
     )
 
     async def run():
-        enqueue(service, request)
+        (await enqueue(service, request))
         session = await store.get(ChatSession, "s")
         (
             await store.update(
@@ -247,7 +255,7 @@ async def test_restart_and_capability_change_never_blindly_replay(tmp_path):
     store, service, request = await setup_queue(tmp_path)
 
     async def run():
-        queue = enqueue(service, request)
+        queue = await enqueue(service, request)
         items = queue.items
         items[0]["status"] = "claiming"
         queue = await store.update(
@@ -287,19 +295,19 @@ async def test_restart_and_capability_change_never_blindly_replay(tmp_path):
 
 
 async def test_two_devices_cannot_overwrite_same_revision(tmp_path):
-    from concurrent.futures import ThreadPoolExecutor
 
     store, service, request = await setup_queue(tmp_path)
-    queue = enqueue(service, request, paused=True)
+    queue = await enqueue(service, request, paused=True)
 
-    def update(key):
+    async def update(key):
         try:
-            return enqueue(service, request, queue.revision, key)
+            return await enqueue(service, request, queue.revision, key)
         except ConflictError:
             return None
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(update, ["device-a", "device-b"]))
+    results = list(
+        (await asyncio.gather(*(update(_item) for _item in ["device-a", "device-b"])))
+    )
     assert sum(result is not None for result in results) == 1
     assert len((await service.get("s")).items) == 2
 
@@ -311,7 +319,7 @@ async def test_pending_approval_failure_and_revocation_pause_dispatch(tmp_path):
     store, service, request = await setup_queue(tmp_path)
 
     async def run():
-        queue = enqueue(service, request)
+        queue = await enqueue(service, request)
         turn = await store.create(
             ChatTurn(
                 engagement_id="p",
@@ -378,7 +386,7 @@ async def test_restart_after_durable_turn_creation_reconciles_without_replay(
     tmp_path, status, expected
 ):
     store, service, request = await setup_queue(tmp_path)
-    queue = enqueue(service, request)
+    queue = await enqueue(service, request)
     turn = await store.create(
         ChatTurn(
             engagement_id="p",
@@ -432,7 +440,7 @@ async def test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_runnin
         service.chat.provider_factory = lambda _: WaitingProvider(
             profile.id, local=True
         )
-        queue = enqueue(service, request)
+        queue = await enqueue(service, request)
         reason = "Core stopped before this response completed. Review and resume it."
         turn = await store.create(
             ChatTurn(
@@ -704,7 +712,7 @@ async def test_harness_follow_up_can_carry_a_newly_picked_model(tmp_path):
 
 async def test_saved_cancelled_review_is_reconciled_without_replay(tmp_path):
     store, service, request = await setup_queue(tmp_path)
-    queue = enqueue(service, request)
+    queue = await enqueue(service, request)
     turn = await store.create(
         ChatTurn(
             engagement_id="p",
@@ -730,7 +738,7 @@ async def test_saved_cancelled_review_is_reconciled_without_replay(tmp_path):
 
 async def test_saved_uncertain_review_is_reconciled_when_its_turn_completes(tmp_path):
     store, service, request = await setup_queue(tmp_path)
-    queue = enqueue(service, request)
+    queue = await enqueue(service, request)
     turn = await store.create(
         ChatTurn(
             engagement_id="p",
@@ -772,7 +780,7 @@ async def test_follow_up_losing_a_race_to_a_direct_send_waits_instead_of_parking
     store, service, request = await setup_queue(tmp_path)
 
     async def run():
-        queue = enqueue(service, request)
+        queue = await enqueue(service, request)
         real_prepare = service.chat.prepare_async
         direct = {}
 
@@ -825,7 +833,7 @@ async def test_orphaned_claim_is_reviewed_on_the_next_poll_without_a_restart(tmp
     store, service, request = await setup_queue(tmp_path)
 
     async def run():
-        queue = enqueue(service, request)
+        queue = await enqueue(service, request)
 
         async def explode(request):
             raise RuntimeError("provider unavailable")
@@ -860,7 +868,7 @@ async def test_stuck_claim_can_be_removed_or_cleared_but_not_while_dispatching(
     store, service, request = await setup_queue(tmp_path)
 
     async def run():
-        queue = enqueue(service, request)
+        queue = await enqueue(service, request)
         items = queue.items
         items[0]["status"] = "claiming"
         queue = await store.update(
@@ -875,7 +883,7 @@ async def test_stuck_claim_can_be_removed_or_cleared_but_not_while_dispatching(
             ),
         )
         assert queue.items[0]["status"] == "cancelled"
-        queue = enqueue(service, request, queue.revision, "second")
+        queue = await enqueue(service, request, queue.revision, "second")
         items = queue.items
         items[-1]["status"] = "claiming"
         queue = await store.update(
@@ -886,7 +894,7 @@ async def test_stuck_claim_can_be_removed_or_cleared_but_not_while_dispatching(
         )
         assert [item["status"] for item in queue.items] == ["cancelled", "cancelled"]
 
-        queue = enqueue(service, request, queue.revision, "third")
+        queue = await enqueue(service, request, queue.revision, "third")
         gate = asyncio.Event()
         real_prepare = service.chat.prepare_async
 

@@ -359,7 +359,7 @@ async def test_actual_hot_queries_seek_full_keys_without_a_temporary_sort(
                 )
             )
 
-    event.listen(store.database.engine, "before_cursor_execute", capture)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", capture)
     try:
         if operation.startswith("artifact_"):
             if operation == "artifact_filter":
@@ -411,7 +411,9 @@ async def test_actual_hot_queries_seek_full_keys_without_a_temporary_sort(
             assert "SCAN entities" not in plan, plan
             assert "TEMP B-TREE" not in plan, plan
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", capture)
+        event.remove(
+            store.database.engine.sync_engine, "before_cursor_execute", capture
+        )
         (await store.database.dispose())
 
 

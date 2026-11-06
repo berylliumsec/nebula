@@ -323,11 +323,11 @@ async def test_list_relation_cost_does_not_grow_with_result_count(tmp_path, kind
                 "each result added another relationship query"
             )
 
-    event.listen(store.database.engine, "before_cursor_execute", record)
+    event.listen(store.database.engine.sync_engine, "before_cursor_execute", record)
     try:
         (await exercise())
     finally:
-        event.remove(store.database.engine, "before_cursor_execute", record)
+        event.remove(store.database.engine.sync_engine, "before_cursor_execute", record)
         (await store.database.engine.dispose())
 
 
