@@ -11,4 +11,6 @@ it("discovers the paired terminal TUI and live agent progress", () => {
   expect(pairing).toContain("running conversation");
   expect(pairing).toContain("idle conversation");
   expect(pairing).toContain("selection feedback");
+  expect(pairing).toContain("animated spinner");
+  expect(pairing).toContain("reduced motion");
 });

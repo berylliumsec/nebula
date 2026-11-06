@@ -28,22 +28,28 @@ Pair as described below, then run `nebula-chat` or
 The shell checks Core terminal protocol 1. On an interactive TTY it opens a
 full-screen view with a project/chat rail, transcript, live activity, and
 composer. F2 browses projects, F3 browses conversations, F4 opens a searchable
-command menu, F5 shows detailed activity, and F8 opens pending approvals. Typing
-`/` at the start of the composer opens a selectable command list for the current
-conversation. Keep typing to filter it, use Up/Down and Enter to run a selection,
+command menu, F5 shows detailed activity, and F8 opens pending approvals. To see
+selectable slash commands in nebula-chat, type `/` at the start of the composer.
+The command list follows the current conversation. Keep typing to filter it,
+use Up/Down and Enter to run a selection,
 or Tab to insert it without running. When no command list is open, Tab focuses
 the transcript for scrolling. Ctrl-C stops a supported selected turn.
 The view updates as Core accepts, queues, and works on a turn, before the first
 answer text arrives. Progress and requests for action stay visible during input.
-The activity strip shows **LOADING** as soon as a command or menu selection starts
-opening. It stays visible through Core reads, then clears when the next choice or
-view is ready. This local navigation status is separate from a running Core turn.
-The conversation rail labels each chat **RUN**, **WAIT**, or **IDLE** using Core's
-turn state. **WAIT** means Core needs a decision or intervention; `/status` shows
-the next action. A **?** means activity could not be read, so it must not be
-mistaken for idle. The rail refreshes every five seconds, and F3 reads fresh
-states when browsing conversations. At narrow terminal widths, use F3 to see
-those labels in the conversation picker.
+The activity strip and header animate while connecting, opening a project or
+conversation, reading a catalog page, sending a turn, reconnecting, or following
+active Core work. They show the current step and local elapsed time where known;
+they stop when the operation ends. `NEBULA_CHAT_REDUCED_MOTION=1` keeps the same
+labels and feedback with a stationary indicator. The transcript is kept to a
+readable width on wide terminals, and the conversation rail is separated from it.
+At narrow widths the rail hides, leaving the transcript and composer usable.
+
+The rail labels each chat **Running**, **Waiting for action**, **Idle**, or
+**State unknown** using Core's turn state. Waiting calls for `/status` to inspect
+the next action; unknown is never treated as idle. The rail refreshes every five
+seconds, and F3 reads fresh states when browsing conversations. A queued turn and
+a pending action remain visible without an animated progress indicator. At narrow
+terminal widths, F3 shows the compact RUN/WAIT/IDLE labels in the picker.
 
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates

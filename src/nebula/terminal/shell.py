@@ -218,6 +218,7 @@ class Shell:
         self._pending_kinds.clear()
         if isinstance(self.ui, TuiUI):
             self.ui.open_core(self.settings.core or "")
+            self.ui.status = "Ready"
         self.ui.say(f"Connected to {self.settings.core}")
         self.attention_task = asyncio.create_task(self.attention_loop())
 
@@ -251,6 +252,8 @@ class Shell:
                 if matches or complete:
                     return matches
 
+        if isinstance(self.ui, TuiUI):
+            self.ui.begin_loading(f"Loading {title.lower()}s from Core…")
         items = await more()
         if selected:
             candidates = [
@@ -664,6 +667,13 @@ class Shell:
         }
         if not state.get("pending") and hasattr(self.ui, "clear_notice"):
             self.ui.clear_notice()
+        if isinstance(self.ui, TuiUI):
+            if state.get("pending"):
+                self.ui.set_turn_phase("waiting")
+            elif self._known_busy:
+                self.ui.set_turn_phase("working")
+            else:
+                self.ui.stream_stopped()
         if self._known_busy:
             self.update_toolbar(str(state.get("detail") or "Working"))
         else:
@@ -680,6 +690,8 @@ class Shell:
             self.ui.set_commands(self.available_commands())
         if self.view:
             view = self.view
+            if isinstance(self.ui, TuiUI):
+                self.ui.set_model(view.config.get("model"))
             if detail:
                 self._last_progress = terminal_text(detail)[:160]
                 if hasattr(self.ui, "activity"):
@@ -922,6 +934,8 @@ class Shell:
                         return
                     assert view is not None
                     if event == "started":
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.set_turn_phase("working")
                         self.update_toolbar("Core accepted turn")
                     elif event in {"delta", "message_delta"}:
                         delta = terminal_text(payload.get("delta") or "")
@@ -987,6 +1001,8 @@ class Shell:
                             + ". Use /approvals or /input."
                         )
                         self.update_toolbar("Waiting for input")
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.set_turn_phase("waiting")
                         return
                     elif event in {
                         "callback_required",
@@ -1001,6 +1017,8 @@ class Shell:
                             + " Work continues on Core; /status reads its progress."
                         )
                         self.update_toolbar("Waiting for tool callback")
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.set_turn_phase("waiting")
                         return
                     elif event in {
                         "tool_started",
@@ -1023,6 +1041,10 @@ class Shell:
                             detail = "Tool: " + str(detail)
                         elif event == "tool_completed":
                             detail = "Tool finished: " + str(detail)
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.set_turn_phase(
+                                "queued" if event == "queued" else "working"
+                            )
                         self.update_toolbar(str(detail)[:160])
                 if finished:
                     view.submitting = False
@@ -1052,6 +1074,8 @@ class Shell:
                         None,
                     )
                     self.update_toolbar("Reconnecting")
+                    if isinstance(self.ui, TuiUI):
+                        self.ui.set_turn_phase("reconnecting")
                     await asyncio.sleep(retries)
                     try:
                         state = (
@@ -1061,11 +1085,15 @@ class Shell:
                             await self.history()
                             self.ui.say(state.get("detail", "Read saved state."))
                             view.submitting = False
+                            if isinstance(self.ui, TuiUI):
+                                self.ui.stream_stopped()
                             return
                     except httpx.HTTPError:
                         continue
                     except ClientError as exc:
                         view.submitting = False
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.stream_stopped()
                         self.ui.say(
                             "Cannot reconcile Core state: "
                             + str(exc)
@@ -1080,6 +1108,8 @@ class Shell:
                     continue
                 view.uncertain = not accepted
                 view.submitting = False
+                if isinstance(self.ui, TuiUI):
+                    self.ui.stream_stopped()
                 if not accepted:
                     self.restore_draft(view)
                     if isinstance(self.ui, TuiUI):
@@ -1092,6 +1122,9 @@ class Shell:
                 return
             except ClientError as exc:
                 view.submitting = False
+                if isinstance(self.ui, TuiUI):
+                    self.ui.stream_stopped()
+                    self.ui.show_problem(str(exc))
                 if not accepted:
                     self._known_busy = False
                     self.restore_draft(view)
@@ -1156,6 +1189,8 @@ class Shell:
             with suppress(asyncio.CancelledError):
                 await self.stream_task
             self.stream_task = None
+            if isinstance(self.ui, TuiUI):
+                self.ui.stream_stopped()
 
     async def attention_loop(self) -> None:
         etag: str | None = None
@@ -1323,6 +1358,8 @@ class Shell:
                         if state.get("busy"):
                             await self.stop()
                     except (ClientError, httpx.HTTPError) as exc:
+                        if isinstance(self.ui, TuiUI):
+                            self.ui.show_problem(str(exc))
                         self.ui.say(
                             str(exc)
                             if isinstance(exc, ClientError)
@@ -1333,6 +1370,8 @@ class Shell:
                 except EOFError:
                     break
                 except (ClientError, ValueError, OSError, httpx.HTTPError) as exc:
+                    if isinstance(self.ui, TuiUI):
+                        self.ui.show_problem(str(exc))
                     self.ui.say(
                         str(exc)
                         if not isinstance(exc, httpx.HTTPError)
