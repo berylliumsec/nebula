@@ -20,7 +20,9 @@ from typing import Any
 import httpx
 from prompt_toolkit.application import Application
 from prompt_toolkit.completion import CompleteEvent, FuzzyWordCompleter, PathCompleter
+from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition, has_focus
+from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.history import DummyHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
@@ -35,6 +37,7 @@ from prompt_toolkit.layout import (
 from prompt_toolkit.layout.containers import DynamicContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.menus import CompletionsMenu
+from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.styles import Style
 from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import Frame, TextArea
@@ -48,6 +51,11 @@ SIDEBAR_WIDTH = 32
 SIDEBAR_MIN_COLUMNS = 110
 SIDEBAR_MIN_ROWS = 24
 SPINNER_FRAMES = ("◐", "◓", "◑", "◒")
+TRANSCRIPT_PREFIX_WIDTH = 3
+TRANSCRIPT_SCROLLBAR_WIDTH = 1
+TRANSCRIPT_WRAP_MARGIN = 1
+TRANSCRIPT_READING_MAX_WIDTH = 136
+REPEATED_REQUEST_MIN_LENGTH = 100
 
 
 def activity_label(state: str | None) -> str:
@@ -123,6 +131,22 @@ class Picker:
     error: str = ""
 
 
+class _TranscriptLexer(Lexer):
+    """Color role lines without adding decoration to copied transcript text."""
+
+    def __init__(self, ui: TuiUI) -> None:
+        self._ui = ui
+
+    def lex_document(self, document: Document) -> Callable[[int], StyleAndTextTuples]:
+        styles = tuple(self._ui._transcript_line_styles)
+
+        def lex_line(lineno: int) -> StyleAndTextTuples:
+            style = styles[lineno] if lineno < len(styles) else ""
+            return [(f"class:transcript-{style}", document.lines[lineno])]
+
+        return lex_line
+
+
 class TuiUI(TerminalUI):
     """Persistent chat, navigation, activity and composer for an interactive TTY."""
 
@@ -142,6 +166,7 @@ class TuiUI(TerminalUI):
         self._chats: list[dict[str, Any]] = []
         self._chat_activity: dict[str, str] | None = None
         self._entries: list[tuple[str, str]] = []
+        self._transcript_line_styles: list[str] = []
         self._activity: list[str] = []
         self._notice = ""
         self._loading = ""
@@ -196,6 +221,8 @@ class TuiUI(TerminalUI):
             focusable=True,
             wrap_lines=True,
             scrollbar=True,
+            lexer=_TranscriptLexer(self),
+            get_line_prefix=self._transcript_line_prefix,
             style="class:transcript",
         )
         self._sidebar = Window(
@@ -368,6 +395,15 @@ class TuiUI(TerminalUI):
                     "heading": "bg:#101720 #e7eef3 bold",
                     "heading-meta": "#8497a4",
                     "transcript": "bg:#101720 #e7eef3",
+                    "transcript-user-heading": "#9fc1e7 bold",
+                    "transcript-assistant-heading": "#83d9c6 bold",
+                    "transcript-user-body": "#c8d8e6",
+                    "transcript-assistant-body": "#e7eef3",
+                    "transcript-repeat-body": "#8497a4 italic",
+                    "transcript-notice-body": "#91a5b3",
+                    "transcript-user-gutter": "#6485a3",
+                    "transcript-assistant-gutter": "#568e86",
+                    "transcript-notice-gutter": "#677d8b",
                     "activity": "bg:#1d373b #e7eef3",
                     "composer": "bg:#1c2a36 #e7eef3",
                     "footer": "bg:#192631 #b5c4ce",
@@ -535,7 +571,38 @@ class TuiUI(TerminalUI):
             if columns >= SIDEBAR_MIN_COLUMNS and size.rows >= SIDEBAR_MIN_ROWS
             else 0
         )
-        return max(12, columns - sidebar - 6)
+        # The TextArea reserves one column for its scrollbar. Prefixes occupy
+        # three more columns on every visual row, including wrapped rows.
+        return min(
+            TRANSCRIPT_READING_MAX_WIDTH,
+            max(
+                12,
+                columns
+                - sidebar
+                - 4
+                - TRANSCRIPT_PREFIX_WIDTH
+                - TRANSCRIPT_SCROLLBAR_WIDTH
+                - TRANSCRIPT_WRAP_MARGIN,
+            ),
+        )
+
+    def _transcript_line_prefix(
+        self, lineno: int, wrap_count: int
+    ) -> StyleAndTextTuples:
+        style = (
+            self._transcript_line_styles[lineno]
+            if lineno < len(self._transcript_line_styles)
+            else ""
+        )
+        if style.startswith("user-"):
+            marker = "◆  " if style == "user-heading" and not wrap_count else "│  "
+            return [("class:transcript-user-gutter", marker)]
+        if style.startswith("assistant-"):
+            marker = "✦  " if style == "assistant-heading" and not wrap_count else "│  "
+            return [("class:transcript-assistant-gutter", marker)]
+        if style == "notice-body":
+            return [("class:transcript-notice-gutter", "·  ")]
+        return [("", " " * TRANSCRIPT_PREFIX_WIDTH)]
 
     def _check_render_width(self, _app: Application[None]) -> None:
         if self._render_width != self._reading_width():
@@ -545,16 +612,54 @@ class TuiUI(TerminalUI):
         self._render_scheduled = False
         width = self._reading_width()
         self._render_width = width
-        parts = []
+        lines: list[str] = []
+        styles: list[str] = []
+        seen_requests: set[str] = set()
         for kind, source in self._entries:
+            if lines:
+                lines.append("")
+                styles.append("")
             if not kind:
-                parts.append(source.strip("\n"))
+                note = source.strip("\n")
+                note_lines = note.split("\n") if note else [""]
+                lines.extend(note_lines)
+                styles.extend("notice-body" for _ in note_lines)
                 continue
-            body = source if self._source_view else _readable_markdown(source, width)
-            parts.append(
-                kind + "\n" + "\n".join("  " + line for line in body.splitlines())
+            role = "user" if kind.startswith("You") else "assistant"
+            repeated = (
+                role == "user"
+                and kind == "You"
+                and len(source) >= REPEATED_REQUEST_MIN_LENGTH
+                and source in seen_requests
+                and not self._source_view
             )
-        value = "\n\n".join(parts)[-120_000:]
+            if role == "user" and kind == "You":
+                seen_requests.add(source)
+            heading = kind.upper() + (" · REPEATED" if repeated else "")
+            lines.append(heading)
+            styles.append(f"{role}-heading")
+            if repeated:
+                body = "Same request as earlier · F10 Source shows the full text."
+            elif self._source_view:
+                body = source
+            else:
+                body = _readable_markdown(source, width)
+            body_lines = body.split("\n") if body else [""]
+            lines.extend(body_lines)
+            styles.extend(
+                "repeat-body" if repeated else f"{role}-body" for _ in body_lines
+            )
+        value = "\n".join(lines)
+        if len(value) > 120_000:
+            cut = len(value) - 120_000
+            line_end = value.find("\n", cut)
+            if line_end >= 0:
+                styles = styles[value[: line_end + 1].count("\n") :]
+                value = value[line_end + 1 :]
+            else:
+                styles = styles[-1:]
+                value = value[-120_000:]
+        self._transcript_line_styles = styles
         self.transcript.text = value
         self.transcript.buffer.cursor_position = len(value)
         self._invalidate()

@@ -42,6 +42,11 @@ active Core work. They show the current step and local elapsed time where known;
 they stop when the operation ends. `NEBULA_CHAT_REDUCED_MOTION=1` keeps the same
 labels and feedback with a stationary indicator. The transcript, activity strip,
 and composer fill the available terminal pane beside the conversation rail.
+The transcript gives You, Assistant, and status notes separate visual markers
+and keeps long messages at a readable line length. Exact repeated long user
+requests are summarized after their first appearance. F10 Source shows every
+original message and its Markdown text; F10 Render returns to the reading view.
+The transcript remains selectable with Tab for scrolling and copying.
 At narrow widths the rail hides, leaving the transcript and composer usable.
 If macOS Terminal has a split pane open, press Shift-Command-D to close it and
 give the Assistant the full window height.

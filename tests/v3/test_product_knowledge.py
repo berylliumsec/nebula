@@ -846,6 +846,12 @@ def test_product_search_finds_full_width_terminal_and_split_pane_help(monkeypatc
     content = "\n".join(str(item["text"]) for item in matches)
     assert "fill the available terminal pane" in content
     assert "Shift-Command-D" in content
+    matches = search_product_knowledge(
+        "nebula-chat repeated long requests You Assistant F10 Source original messages"
+    )
+    content = " ".join(" ".join(str(item["text"]).split()) for item in matches)
+    assert "Exact repeated long user requests" in content
+    assert "F10 Source" in content
 
 
 def test_packaged_product_guidance_syncs_to_chroma_by_source_digest(tmp_path):

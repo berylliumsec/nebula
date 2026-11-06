@@ -24,8 +24,8 @@ def test_tui_keeps_progress_visible_and_replaces_chat_history() -> None:
         ui.activity("Tool: Search index")
         ui.delta("Partial answer")
         ui._render()
-        assert "You · sending\n  Please review this" in ui.transcript.text
-        assert "Assistant\n  Partial answer" in ui.transcript.text
+        assert "YOU · SENDING\nPlease review this" in ui.transcript.text
+        assert "ASSISTANT\nPartial answer" in ui.transcript.text
         assert "Tool: Search index" in ui._activity_text()
         ui.say("\nAction required: review the call")
         assert "Action required" in ui._activity_text()
@@ -33,7 +33,7 @@ def test_tui_keeps_progress_visible_and_replaces_chat_history() -> None:
         assert "Action required" not in ui._activity_text()
         ui.mark_submission("accepted")
         ui._render()
-        assert "You\n  Please review this" in ui.transcript.text
+        assert "YOU\nPlease review this" in ui.transcript.text
         ui.show_history(
             [
                 {"role": "user", "content": "Saved question", "metadata": {}},
@@ -87,6 +87,48 @@ def test_tui_renders_saved_and_streamed_markdown_with_source_view() -> None:
     assert "/projects/project/workbench?view=chat&session=chat" in ui.transcript.text
     assert "|---|---|" in ui.transcript.text
     assert "**Done**" in ui.transcript.text
+
+
+def test_tui_distinguishes_roles_and_compacts_exact_repeated_long_requests() -> None:
+    ui = TuiUI()
+    request = (
+        "Review the active Nebula goal and its completion criteria. "
+        "Continue concrete work now. If all criteria are met, give an "
+        "evidence-backed completion summary. Do not stop merely to report status."
+    )
+    ui.show_history(
+        [
+            {"role": "user", "content": request, "metadata": {}},
+            {"role": "assistant", "content": "First response.", "metadata": {}},
+            {"role": "user", "content": request, "metadata": {}},
+            {"role": "assistant", "content": "Second response.", "metadata": {}},
+        ]
+    )
+    assert ui.transcript.text.count(request) == 0  # Rich wraps the first copy.
+    assert ui.transcript.text.count("YOU · REPEATED") == 1
+    assert "Same request as earlier" in ui.transcript.text
+    assert "First response." in ui.transcript.text
+    assert "Second response." in ui.transcript.text
+    assistant_line = ui.transcript.text.splitlines().index("ASSISTANT")
+    assert ui._transcript_line_styles[0] == "user-heading"
+    assert ui._transcript_line_styles[assistant_line] == "assistant-heading"
+    assert ui._transcript_line_styles.count("repeat-body") == 1
+    assert ui._transcript_line_prefix(0, 0)[0][1] == "◆  "
+    assert ui._transcript_line_prefix(1, 1)[0][1] == "│  "
+    assert ui._transcript_line_prefix(assistant_line, 0)[0][1] == "✦  "
+    assert "class:transcript-user-heading" in str(
+        ui.transcript.control.lexer.lex_document(ui.transcript.buffer.document)(0)
+    )
+    assert "class:transcript-assistant-heading" in str(
+        ui.transcript.control.lexer.lex_document(ui.transcript.buffer.document)(
+            assistant_line
+        )
+    )
+
+    ui._source_view = True
+    ui._render()
+    assert ui.transcript.text.count(request) == 2
+    assert "YOU · REPEATED" not in ui.transcript.text
 
 
 def test_tui_sidebar_keeps_distinct_suffixes_and_selected_chat_visible() -> None:

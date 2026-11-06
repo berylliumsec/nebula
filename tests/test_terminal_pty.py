@@ -233,6 +233,47 @@ asyncio.run(main())
         )
 
 
+def test_full_screen_chat_roles_and_repeated_requests_have_visual_hierarchy():
+    code = """
+import asyncio
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    ui.open_view({'id':'project','name':'Project'},{'id':'chat','title':'Long chat'})
+    request=('Review the active Nebula goal and its completion criteria. '
+             'Continue concrete work now. If all criteria are met, give an '
+             'evidence-backed completion summary. Do not stop merely to report status.')
+    ui.show_history([
+        {'role':'user','content':request,'metadata':{}},
+        {'role':'assistant','content':'First response with a clear result.','metadata':{}},
+        {'role':'user','content':request,'metadata':{}},
+        {'role':'assistant','content':'Second response with a clear result.','metadata':{}},
+    ])
+    await ui.ask('You',main=True)
+    await ui.close()
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command", columns=202, rows=30) as (
+        _process,
+        master,
+        _output,
+        read,
+    ):
+        read("YOU · REPEATED", rendered=True)
+        rows = read.screen.display
+        display = "\n".join(rows)
+        assert "◆  YOU" in display
+        assert "✦  ASSISTANT" in display
+        assert "│  First response" in display
+        assert "│  Second response" in display
+        assert "Same request as earlier" in display
+        assert not any(row.strip() in {"t", "r"} for row in rows)
+        os.write(master, b"\x1b[21~")  # F10 shows each full original request.
+        read("F10 Render", rendered=True)
+        assert "YOU · REPEATED" not in "\n".join(read.screen.display)
+
+
 def test_full_screen_renders_markdown_and_toggles_original_source():
     code = """
 import asyncio

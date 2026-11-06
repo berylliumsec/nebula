@@ -783,7 +783,7 @@ def test_paired_full_screen_tui_shows_progress_and_saved_answer(lan_core):
     terminal.expect("Message or /command")
     terminal.expect("New conversation")
     terminal.send("New conversation", expect="/help for commands")
-    terminal.send("Answer a synthetic markdown layout question", expect="You · sending")
+    terminal.send("Answer a synthetic markdown layout question", expect="YOU · SENDING")
     terminal.expect("Synthetic provider answer.")
     terminal.expect_screen(
         "Synthetic provider answer.",
