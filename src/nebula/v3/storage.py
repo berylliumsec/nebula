@@ -802,7 +802,7 @@ def _harness_title_queries(dialect: str, scoped: bool, size: int):
             eligible.append(visible_harness_chat_title(candidate, dialect))
         else:
             eligible.append(candidate.kind == model.entity_kind)
-        order = (candidate.created_at, candidate.id)
+        order: tuple[Any, ...] = (candidate.created_at, candidate.id)
         if newest_first:
             order = tuple(column.desc() for column in order)
         selected = (
