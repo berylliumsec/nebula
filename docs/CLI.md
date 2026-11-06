@@ -46,17 +46,22 @@ The transcript gives You, Assistant, and status notes separate visual markers
 and keeps long messages at a readable line length. Exact repeated long user
 requests are summarized after their first appearance. F10 Source shows every
 original message and its Markdown text; F10 Render returns to the reading view.
-The transcript remains selectable with Tab for scrolling and copying.
+Drag across the chat screen to select text with the terminal's native copy
+shortcut. Menus keep mouse controls; Tab focuses the transcript for keyboard
+scrolling. F10 Source exposes the exact message text for copying.
 At narrow widths the rail hides, leaving the transcript and composer usable.
 If macOS Terminal has a split pane open, press Shift-Command-D to close it and
 give the Assistant the full window height.
 
-The rail labels each chat **Running**, **Waiting for action**, **Idle**, or
-**State unknown** using Core's turn state. Waiting calls for `/status` to inspect
-the next action; unknown is never treated as idle. The rail refreshes every five
-seconds, and F3 reads fresh states when browsing conversations. A queued turn and
-a pending action remain visible without an animated progress indicator. At narrow
-terminal widths, F3 shows the compact RUN/WAIT/IDLE labels in the picker.
+The rail labels the selected chat **Running**, **Waiting for action**, **Idle**,
+or **State unknown** using Core's turn state. Waiting calls for `/status` to
+inspect the next action; unknown is never treated as idle. Only the selected
+chat refreshes every five seconds. F3 reads fresh states for the project's
+other chats when you browse them; reopen F3 to refresh that list. A queued
+turn and a pending action remain visible without an animated progress
+indicator. Other chats' action notices stay out of the current transcript;
+F3 marks those waiting for action. At narrow terminal widths, F3 shows
+compact RUN/WAIT/IDLE labels.
 
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates

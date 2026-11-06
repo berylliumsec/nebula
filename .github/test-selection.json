@@ -1,21 +1,23 @@
 {
-  "change_digest": "a13458b5d06aa6d3da577b830ebe2cec07e517ac090fd0783ae39c119debc250",
-  "reviewed_by": "Codex; independent settings-flow diagnosis and paired TUI/Core verification",
-  "reason": "Keep /settings open after each saved choice, refresh authoritative Core values and revisions, and exit explicitly with Done or cancellation. Selected contracts cover two sequential TUI edits against disposable authenticated TLS LAN Core, existing direct CLI navigation and concurrent-device readback, local menu refresh, environment selection, and packaged CLI guidance. The async test fixture is declared explicitly and its missing dev plugin is locked.",
-  "exclusions": "No frontend, native, or Playwright changes. No full suite or production Core mutation. Local wheel installation follows merge.",
+  "change_digest": "01a288e960fd87a62ab2e4120cabf6934a71fee7d28ac71847c9f1209a78cc3a",
+  "reviewed_by": "Codex; independent diagnosis of global polling and transcript mouse capture",
+  "reason": "Scope background TUI refresh to the selected chat's revisioned state, fetch all-chat status only when F3 opens, keep selected action feedback, and release terminal mouse reporting on the chat screen for native text selection. Selected tests cover request scope and ETag/switch guards, selected-only rail labels, current-chat commands, paired TLS LAN client behavior including F3 RUN/WAIT/IDLE and mouse-mode transitions, and current product guidance.",
+  "exclusions": "No Core API or web UI change, so no frontend, native, or Playwright suites. No production Core mutation and no full suite. Install the merged standalone client only on this Mac.",
   "expected_tests": {
-    "python": 6,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "manual": 1,
+    "manual": 2,
     "benchmarks": 0
   },
   "python": [
-    "tests/test_terminal_shell.py::test_settings_menu_refreshes_core_between_changes_and_exits_on_done",
-    "tests/test_terminal_shell.py::test_ssh_environment_menu_uses_discovery_hosts",
-    "tests/v3/test_terminal_core.py::test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect",
-    "tests/v3/test_terminal_core.py::test_paired_tui_settings_stays_open_for_multiple_changes",
+    "tests/test_terminal_shell.py::test_slash_commands_follow_selected_conversation_state",
+    "tests/test_terminal_tui.py::test_tui_sidebar_labels_only_the_selected_chat_state",
+    "tests/test_terminal_tui.py::test_navigation_rail_includes_the_selected_butler",
+    "tests/test_terminal_tui.py::test_navigation_rail_keeps_an_older_selected_chat",
+    "tests/test_terminal_tui.py::test_selected_chat_poll_handles_304_failure_and_project_switch",
+    "tests/v3/test_terminal_core.py::test_paired_tui_polls_selected_chat_and_reads_others_on_demand",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
@@ -23,7 +25,8 @@
   "native": [],
   "playwright": [],
   "manual": [
-    "build and inspect installed nebula-chat wheel on this Mac"
+    "Build merged client wheel and verify installed file hash",
+    "Verify native text selection in macOS Terminal"
   ],
   "benchmarks": [],
   "python_versions": [

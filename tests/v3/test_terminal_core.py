@@ -35,6 +35,8 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     HarnessCapabilities,
     HarnessInteractionKind,
@@ -558,9 +560,17 @@ async def lan_core(tmp_path, monkeypatch):
         "entered": threading.Event(),
         "release": threading.Event(),
     }
+    observed_state_reads: list[str] = []
 
     @app.middleware("http")
     async def delay_selected_read(request, call_next):
+        path = request.url.path
+        if request.method == "GET" and (
+            path in {"/api/v1/chat/session-activity", "/api/v1/chat/attention"}
+            or path.startswith("/api/v1/chat/sessions/")
+            and path.endswith("/state")
+        ):
+            observed_state_reads.append(path)
         if request.method == "GET" and request.url.path == delayed_read["path"]:
             delayed_read["path"] = ""
             delayed_read["entered"].set()
@@ -645,6 +655,7 @@ async def lan_core(tmp_path, monkeypatch):
             "store": store,
             "provider": provider,
             "delayed_read": delayed_read,
+            "observed_state_reads": observed_state_reads,
             "project": project,
             "config": config,
             "env": env,
@@ -661,6 +672,7 @@ async def lan_core(tmp_path, monkeypatch):
         thread.join(timeout=40)
         admin.close()
         assert not thread.is_alive(), "Disposable Core did not shut down"
+        await store.database.dispose()
 
 
 def test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect(lan_core):
@@ -999,21 +1011,23 @@ def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core)
     )
 
 
-def test_paired_tui_marks_other_conversations_running_waiting_and_idle(lan_core):
+def test_paired_tui_polls_selected_chat_and_reads_others_on_demand(lan_core):
     data = lan_core
     for session_id, title, backend, profile_id in (
         ("observed-idle", "Observed idle", "provider", "provider-a"),
         ("external-run", "External run", "provider", "provider-a"),
     ):
-        data["store"].create(
-            ChatSession(
-                id=session_id,
-                engagement_id="terminal-project",
-                title=title,
-                backend=backend,
-                provider_profile_id=profile_id,
-                model="model-a",
-                metadata={"initial_title_state": "operator"},
+        asyncio.run(
+            data["store"].create(
+                ChatSession(
+                    id=session_id,
+                    engagement_id="terminal-project",
+                    title=title,
+                    backend=backend,
+                    provider_profile_id=profile_id,
+                    model="model-a",
+                    metadata={"initial_title_state": "operator"},
+                )
             )
         )
 
@@ -1023,7 +1037,21 @@ def test_paired_tui_marks_other_conversations_running_waiting_and_idle(lan_core)
     watcher.expect("Observed idle")
     watcher.send("Observed idle", expect="/help for commands")
     watcher.expect_chat_state("Observed idle", "IDLE")
-    watcher.expect_chat_state("External run", "IDLE")
+
+    def mouse_reporting_enabled() -> bool:
+        return watcher.output.rfind(b"\x1b[?1000h") > watcher.output.rfind(
+            b"\x1b[?1000l"
+        )
+
+    assert b"\x1b[?1000l" in watcher.output
+    assert not mouse_reporting_enabled(), "Chat screen captured native text selection"
+    before = len(data["observed_state_reads"])
+    time.sleep(5.5)
+    background_reads = data["observed_state_reads"][before:]
+    assert background_reads, "Selected chat did not refresh"
+    assert set(background_reads) == {"/api/v1/chat/sessions/observed-idle/state"}, (
+        background_reads
+    )
 
     other = data["start"](
         "shell", "--project", "Terminal Project", "--chat", "External run"
@@ -1031,21 +1059,43 @@ def test_paired_tui_marks_other_conversations_running_waiting_and_idle(lan_core)
     other.expect("/help for commands")
     other.send("hold response")
     assert data["provider"].holding.wait(15), "Inert provider did not reach its hold"
-    watcher.expect_chat_state("External run", "RUN", timeout=20)
     watcher.send("/chats", expect="Conversation")
     watcher.expect_screen("RUN  External run")
+    assert mouse_reporting_enabled(), "Chat picker lost mouse controls"
     os.write(watcher.input_fd, b"\x07")  # Ctrl-G closes the picker.
+    watcher.expect_screen("Message or /command", absent=("Search:",))
+    assert not mouse_reporting_enabled(), "Chat screen still captured mouse drags"
     other.send("/stop", expect="Turn cancelled.")
-    watcher.expect_chat_state("External run", "IDLE", timeout=20)
+    watcher.send("/chats", expect="Conversation")
+    watcher.expect_screen("IDLE  External run")
+    os.write(watcher.input_fd, b"\x07")
+    watcher.expect_screen("Message or /command", absent=("Search:",))
 
-    other.send("/chats Harness chat", expect="Ready for your next message")
-    other.send("request fixture approval", expect="Action required")
-    watcher.expect_chat_state("Harness chat", "WAIT", timeout=20)
-    other.send("/approvals", expect="Pending approval")
-    other.send("Review the requested action", expect="Decision")
-    other.send("Reject", expect="Decision recorded: rejected")
-    other.expect("Response complete.")
-    watcher.expect_chat_state("Harness chat", "IDLE", timeout=20)
+    waiting_turn = asyncio.run(
+        data["store"].create(
+            ChatTurn(
+                engagement_id="terminal-project",
+                session_id="external-run",
+                provider_profile_id="provider-a",
+                model="model-a",
+                status=ChatTurnStatus.WAITING_APPROVAL,
+            )
+        )
+    )
+    watcher.send("/chats", expect="Conversation")
+    watcher.expect_screen("WAIT  External run")
+    os.write(watcher.input_fd, b"\x07")
+    watcher.expect_screen("Message or /command", absent=("Search:",))
+    asyncio.run(
+        data["store"].update(
+            ChatTurn,
+            waiting_turn.id,
+            {"status": ChatTurnStatus.COMPLETE},
+        )
+    )
+    watcher.send("/chats", expect="Conversation")
+    watcher.expect_screen("IDLE  External run")
+    os.write(watcher.input_fd, b"\x07")
     other.close()
     watcher.close(send_quit=False, send_eof=True)
     print(
@@ -1053,13 +1103,12 @@ def test_paired_tui_marks_other_conversations_running_waiting_and_idle(lan_core)
             {
                 "origin": data["origin"],
                 "build": "candidate Python TUI and authenticated TLS LAN Core",
-                "fixture": "paired clients, synthetic project, inert provider and harness",
+                "fixture": "paired clients, synthetic project, inert provider and stored wait turn",
                 "checks": [
-                    "initial idle",
-                    "other client starts and stops a turn",
-                    "F3 status",
-                    "waiting approval",
-                    "completion returns to idle",
+                    "only selected chat polled in background",
+                    "F3 fetches other chat states on demand",
+                    "RUN, WAIT, IDLE as other client changes turns",
+                    "native selection on chat screen and mouse controls in picker",
                 ],
                 "result": "passed",
             }

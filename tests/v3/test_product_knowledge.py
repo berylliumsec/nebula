@@ -86,6 +86,14 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
             "How do I change several settings in nebula-chat without reopening the menu?",
             "menu stays open after each change",
         ),
+        (
+            "How often does nebula-chat poll the selected chat status?",
+            "Only the selected",
+        ),
+        (
+            "How can I select and copy text from the nebula-chat screen?",
+            "Drag across the chat screen",
+        ),
     ):
         matches = search_product_knowledge(question)
         assert any(expected in str(item["text"]) for item in matches), question

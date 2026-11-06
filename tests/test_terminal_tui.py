@@ -164,7 +164,7 @@ def test_tui_sidebar_keeps_distinct_suffixes_and_selected_chat_visible() -> None
     assert "26B5091g 1" in sidebar and "26B5091g 2" in sidebar
 
 
-def test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown() -> None:
+def test_tui_sidebar_labels_only_the_selected_chat_state() -> None:
     ui = TuiUI()
     project = {"id": "project", "name": "Project"}
     selected = {"id": "selected", "title": "Selected chat"}
@@ -174,7 +174,6 @@ def test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown() -> None:
         [project],
         [
             selected,
-            *({"id": f"idle-{i}", "title": f"Idle {i}"} for i in range(9)),
             {"id": "working", "title": "External work"},
             {"id": "waiting", "title": "Needs action"},
         ],
@@ -184,7 +183,6 @@ def test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown() -> None:
             "selected": "idle",
             "working": "working",
             "waiting": "waiting",
-            **{f"idle-{i}": "idle" for i in range(9)},
         }
     )
     rows = ui._sidebar_text().splitlines()
@@ -194,20 +192,15 @@ def test_tui_sidebar_distinguishes_running_waiting_idle_and_unknown() -> None:
         ].strip()
         == "○ Idle"
     )
-    assert (
-        rows[rows.index(next(row for row in rows if "Needs action" in row)) + 1].strip()
-        == "◐ Waiting for action"
-    )
-    assert (
-        rows[
-            rows.index(next(row for row in rows if "External work" in row)) + 1
-        ].strip()
-        == "● Running"
-    )
+    assert "External work" in ui._sidebar_text()
+    assert "Needs action" in ui._sidebar_text()
+    assert "◐ Waiting for action" not in ui._sidebar_text()
+    assert "● Running" not in ui._sidebar_text()
     assert all(get_cwidth(row) <= 32 for row in rows)
-    assert rows.index(next(row for row in rows if "Needs action" in row)) < rows.index(
-        next(row for row in rows if "Idle 0" in row)
-    )
+    ui.set_conversation_activity({"selected": "waiting"})
+    assert "◐ Waiting for action" in ui._sidebar_text()
+    ui.set_conversation_activity({"selected": "working"})
+    assert "● Running" in ui._sidebar_text()
     ui.set_conversation_activity(None)
     assert "UNKNOWN" in ui._header_text()
     rows = ui._sidebar_text().splitlines()
@@ -257,14 +250,6 @@ def test_navigation_rail_includes_the_selected_butler(tmp_path) -> None:
             return httpx.Response(200, json=[{"id": "other", "name": "Other"}])
         if request.url.path.endswith("/chat-sessions"):
             return httpx.Response(200, json=[main, butler])
-        if request.url.path.endswith("/chat/session-activity"):
-            return httpx.Response(
-                200,
-                json=[
-                    {"session_id": "butler", "state": "working"},
-                    {"session_id": "main", "state": "idle"},
-                ],
-            )
         raise AssertionError(request.url)
 
     async def run() -> None:
@@ -287,6 +272,16 @@ def test_navigation_rail_includes_the_selected_butler(tmp_path) -> None:
         shell.view = View(project, butler)
         ui.open_view(project, butler)
         await shell.refresh_navigation()
+        await shell.status(
+            state={
+                "session_id": "butler",
+                "busy": True,
+                "execution": "running",
+                "pending": [],
+                "detail": "Working.",
+            },
+            quiet=True,
+        )
         assert [row["id"] for row in ui._projects] == ["project", "other"]
         assert "› Apple Bug Bounty" in ui._sidebar_text()
         assert [row["id"] for row in ui._chats] == ["butler", "main"]
@@ -296,10 +291,8 @@ def test_navigation_rail_includes_the_selected_butler(tmp_path) -> None:
             rows[rows.index(next(row for row in rows if "› Butler" in row)) + 1].strip()
             == "● Running"
         )
-        assert (
-            rows[rows.index(next(row for row in rows if "Main" in row)) + 1].strip()
-            == "○ Idle"
-        )
+        assert "Main" in ui._sidebar_text()
+        assert "○ Idle" not in ui._sidebar_text()
         await api.close()
 
     asyncio.run(run())
@@ -316,14 +309,6 @@ def test_navigation_rail_keeps_an_older_selected_chat(tmp_path) -> None:
         if request.url.path.endswith("/chat-sessions"):
             return httpx.Response(
                 200, json=[{"id": "recent", "title": "Recent chat", "metadata": {}}]
-            )
-        if request.url.path.endswith("/chat/session-activity"):
-            return httpx.Response(
-                200,
-                json=[
-                    {"session_id": "older", "state": "working"},
-                    {"session_id": "recent", "state": "idle"},
-                ],
             )
         raise AssertionError(request.url)
 
@@ -347,6 +332,16 @@ def test_navigation_rail_keeps_an_older_selected_chat(tmp_path) -> None:
         shell.view = View(project, selected)
         ui.open_view(project, selected)
         await shell.refresh_navigation()
+        await shell.status(
+            state={
+                "session_id": "older",
+                "busy": True,
+                "execution": "running",
+                "pending": [],
+                "detail": "Working.",
+            },
+            quiet=True,
+        )
         assert [row["id"] for row in ui._chats] == ["older", "recent"]
         rows = ui._sidebar_text().splitlines()
         assert (
@@ -361,7 +356,7 @@ def test_navigation_rail_keeps_an_older_selected_chat(tmp_path) -> None:
     asyncio.run(run())
 
 
-def test_conversation_activity_poll_handles_304_failure_and_project_switch(
+def test_selected_chat_poll_handles_304_failure_and_project_switch(
     tmp_path,
 ) -> None:
     core = "https://core.example:8765"
@@ -370,13 +365,13 @@ def test_conversation_activity_poll_handles_304_failure_and_project_switch(
     entered = asyncio.Event()
     release = asyncio.Event()
     phase = "working"
-    headers: list[str | None] = []
+    requests: list[tuple[str, str | None]] = []
 
     async def handler(request):
         nonlocal phase
-        assert request.url.path.endswith("/chat/session-activity")
-        headers.append(request.headers.get("if-none-match"))
-        project_id = request.url.params["engagement_id"]
+        assert request.url.path.endswith("/state")
+        session_id = request.url.path.split("/")[-2]
+        requests.append((session_id, request.headers.get("if-none-match")))
         if phase == "unchanged":
             return httpx.Response(304)
         if phase == "failed":
@@ -386,13 +381,14 @@ def test_conversation_activity_poll_handles_304_failure_and_project_switch(
             await release.wait()
         return httpx.Response(
             200,
-            headers={"ETag": '"activity-1"'},
-            json=[
-                {
-                    "session_id": project_id + "-chat",
-                    "state": phase if phase in {"working", "idle"} else "working",
-                }
-            ],
+            headers={"ETag": '"state-1"'},
+            json={
+                "session_id": session_id,
+                "busy": phase != "idle",
+                "execution": phase if phase in {"working", "idle"} else "running",
+                "pending": [],
+                "detail": "Working." if phase != "idle" else "Ready.",
+            },
         )
 
     async def run() -> None:
@@ -413,26 +409,30 @@ def test_conversation_activity_poll_handles_304_failure_and_project_switch(
         api = AsyncApi(settings, transport=httpx.MockTransport(handler))
         ui = TuiUI()
         shell = Shell(settings, ui=ui, api=api)
+        await shell.refresh_selected_state()
+        shell.view = View(first, None)
+        await shell.refresh_selected_state()
+        assert requests == []
         shell.view = View(first, {"id": "first-project-chat", "title": "First chat"})
         ui.open_view(first, shell.view.session)
 
-        await shell.refresh_conversation_activity()
+        await shell.refresh_selected_state()
         assert ui._chat_activity == {"first-project-chat": "working"}
         phase = "unchanged"
-        await shell.refresh_conversation_activity()
-        assert headers[-1] == '"activity-1"'
+        await shell.refresh_selected_state()
+        assert requests[-1] == ("first-project-chat", '"state-1"')
         assert ui._chat_activity == {"first-project-chat": "working"}
 
         phase = "failed"
-        await shell.refresh_conversation_activity()
+        await shell.refresh_selected_state()
         assert ui._chat_activity is None
         phase = "idle"
-        await shell.refresh_conversation_activity()
-        assert headers[-1] is None
+        await shell.refresh_selected_state()
+        assert requests[-1] == ("first-project-chat", None)
         assert ui._chat_activity == {"first-project-chat": "idle"}
 
         phase = "delayed"
-        old_read = asyncio.create_task(shell.refresh_conversation_activity())
+        old_read = asyncio.create_task(shell.refresh_selected_state())
         await entered.wait()
         shell.view = View(second, {"id": "second-project-chat", "title": "Second chat"})
         ui.open_view(second, shell.view.session)
@@ -440,9 +440,9 @@ def test_conversation_activity_poll_handles_304_failure_and_project_switch(
         await old_read
         assert ui._chat_activity is None
         phase = "working"
-        await shell.refresh_conversation_activity()
+        await shell.refresh_selected_state()
         assert ui._chat_activity == {"second-project-chat": "working"}
-        assert headers[-1] is None
+        assert requests[-1] == ("second-project-chat", None)
         await api.close()
 
     asyncio.run(run())

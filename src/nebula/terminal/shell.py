@@ -57,17 +57,16 @@ class Shell:
         self.view: View | None = None
         self.views: dict[tuple[str | None, str, str], View] = {}
         self.stream_task: asyncio.Task[None] | None = None
-        self.attention_task: asyncio.Task[None] | None = None
+        self.selected_state_task: asyncio.Task[None] | None = None
         self.profiles: dict[str, dict[str, Any]] = {}
         self.seen_attention: set[str] = set()
         self.running = True
         self._last_progress = ""
         self._known_busy = False
-        self._activity_project_id: str | None = None
-        self._activity_etag: str | None = None
-        self._conversation_states: dict[str, str] | None = None
-        self._activity_unavailable = False
-        self._activity_lock = asyncio.Lock()
+        self._state_identity: tuple[AsyncApi, str] | None = None
+        self._state_etag: str | None = None
+        self._state_unavailable = False
+        self._state_lock = asyncio.Lock()
         self._pending_kinds: set[str] = set()
 
     @property
@@ -153,18 +152,6 @@ class Shell:
             name for name in COMMANDS if name in available and name not in priority
         ]
 
-    def note_attention(self, items: list[dict[str, Any]]) -> None:
-        if self.view is None or self.view.session is None:
-            return
-        kinds = {
-            "approval" if item["kind"] == "approval" else "input"
-            for item in items
-            if item["session_id"] == self.view.session_id
-        }
-        if kinds != self._pending_kinds:
-            self._pending_kinds = kinds
-            self.update_toolbar()
-
     async def connect(self, selected: str | None = None) -> None:
         cores = self.settings.data.get("cores", {})
         if selected is None and (self.settings.core is None or self._api is not None):
@@ -200,7 +187,7 @@ class Shell:
                 await candidate.close()
             raise
         await self.detach()
-        await self.stop_attention()
+        await self.stop_selected_state()
         if self._api is not None and self._api is not candidate:
             await self._api.close()
         self.settings.core = candidate_settings.core
@@ -211,16 +198,16 @@ class Shell:
         self.seen_attention.clear()
         self._last_progress = ""
         self._known_busy = False
-        self._activity_project_id = None
-        self._activity_etag = None
-        self._conversation_states = None
-        self._activity_unavailable = False
+        self._state_identity = None
+        self._state_etag = None
+        self._state_unavailable = False
         self._pending_kinds.clear()
         if isinstance(self.ui, TuiUI):
             self.ui.open_core(self.settings.core or "")
             self.ui.status = "Ready"
         self.ui.say(f"Connected to {self.settings.core}")
-        self.attention_task = asyncio.create_task(self.attention_loop())
+        if isinstance(self.ui, TuiUI):
+            self.selected_state_task = asyncio.create_task(self.selected_state_loop())
 
     async def collection(
         self,
@@ -434,73 +421,51 @@ class Shell:
             )
         except (ClientError, httpx.HTTPError):
             self.ui.activity("Navigation list unavailable; F2/F3 retries")
-        await self.refresh_conversation_activity()
 
-    async def refresh_conversation_activity(self) -> None:
-        """Read Core's turn states for the selected project's terminal rail."""
-        async with self._activity_lock:
-            await self._read_conversation_activity()
+    async def refresh_selected_state(self) -> None:
+        """Refresh only the visible chat; F3 reads other chat states on demand."""
+        async with self._state_lock:
+            await self._read_selected_state()
 
-    async def _read_conversation_activity(self) -> None:
-        if not isinstance(self.ui, TuiUI) or self.view is None:
+    async def _read_selected_state(self) -> None:
+        if (
+            not isinstance(self.ui, TuiUI)
+            or self.view is None
+            or self.view.session is None
+        ):
             return
-        project_id = self.view.project_id
+        view = self.view
         api = self.api
-        if self._activity_project_id != project_id:
-            self._activity_project_id = project_id
-            self._activity_etag = None
-            self._conversation_states = None
-            self._activity_unavailable = False
+        identity = (api, view.session_id)
+        if self._state_identity != identity:
+            self._state_identity = identity
+            self._state_etag = None
+            self._state_unavailable = False
             self.ui.set_conversation_activity(None)
         try:
             response = await api.client.get(
-                "chat/session-activity",
-                params={"engagement_id": project_id},
-                headers={"If-None-Match": self._activity_etag}
-                if self._activity_etag
-                else {},
+                f"chat/sessions/{key(view.session_id)}/state",
+                headers={"If-None-Match": self._state_etag} if self._state_etag else {},
             )
-            if (
-                self._api is not api
-                or self.view is None
-                or self.view.project_id != project_id
-            ):
+            if self._api is not api or self.view is not view:
                 return
             if response.status_code == 304:
                 return
             check_response(response)
-            states = conversation_states(response.json())
-            previous = self._conversation_states
-            self._activity_etag = response.headers.get("etag")
-            self._conversation_states = states
-            self._activity_unavailable = False
-            self.ui.set_conversation_activity(states)
-            view = self.view
-            if view.session and (self.stream_task is None or self.stream_task.done()):
-                state = states.get(view.session_id)
-                if state is not None:
-                    self._known_busy = state != "idle"
-                    if state != (previous or {}).get(view.session_id):
-                        self.update_toolbar(
-                            {
-                                "working": "Running in Core",
-                                "waiting": "Waiting for action",
-                                "idle": "Ready",
-                            }[state]
-                        )
+            state = response.json()
+            if state.get("session_id") != view.session_id:
+                raise ClientError("Core returned state for another conversation.")
+            self._state_etag = response.headers.get("etag")
+            self._state_unavailable = False
+            await self.status(state=state, quiet=True)
         except (ClientError, httpx.HTTPError, ValueError):
-            if (
-                self._api is not api
-                or self.view is None
-                or self.view.project_id != project_id
-            ):
+            if self._api is not api or self.view is not view:
                 return
-            self._activity_etag = None
-            self._conversation_states = None
+            self._state_etag = None
             self.ui.set_conversation_activity(None)
-            if not self._activity_unavailable:
-                self.ui.activity("Conversation status unavailable; retrying")
-            self._activity_unavailable = True
+            if not self._state_unavailable:
+                self.ui.activity("Selected chat status unavailable; /status retries")
+            self._state_unavailable = True
 
     async def runtimes(self) -> list[dict[str, Any]]:
         view = self.current()
@@ -659,30 +624,58 @@ class Shell:
             "GET", f"chat/sessions/{key(view.session_id)}/state"
         )
 
-    async def status(self) -> dict[str, Any]:
-        state = await self.state()
+    async def status(
+        self, *, state: dict[str, Any] | None = None, quiet: bool = False
+    ) -> dict[str, Any]:
+        state = await self.state() if state is None else state
+        pending = state.get("pending") or []
         self._known_busy = bool(state.get("busy"))
-        self._pending_kinds = {
-            row.get("kind") for row in state.get("pending", []) if row.get("kind")
-        }
-        if not state.get("pending") and hasattr(self.ui, "clear_notice"):
+        self._pending_kinds = {row.get("kind") for row in pending if row.get("kind")}
+        if not pending and hasattr(self.ui, "clear_notice"):
             self.ui.clear_notice()
         if isinstance(self.ui, TuiUI):
-            if state.get("pending"):
+            view = self.view
+            if view is not None and view.session is not None:
+                activity = (
+                    "waiting"
+                    if pending
+                    or state.get("execution")
+                    in {"needs_stop", "status_unavailable", "waiting_approval"}
+                    else "working"
+                    if self._known_busy
+                    else "idle"
+                )
+                self.ui.set_conversation_activity({view.session_id: activity})
+            if pending:
                 self.ui.set_turn_phase("waiting")
             elif self._known_busy:
-                self.ui.set_turn_phase("working")
+                if self.stream_task is None or self.stream_task.done():
+                    self.ui.set_turn_phase("")
+                else:
+                    self.ui.set_turn_phase("working")
             else:
                 self.ui.stream_stopped()
-        if self._known_busy:
-            self.update_toolbar(str(state.get("detail") or "Working"))
-        else:
-            self.update_toolbar("Ready")
-        self.ui.say(state.get("detail") or state.get("execution", "Ready"))
-        for pending in state.get("pending", []):
-            self.ui.say(
-                f"Action required: {pending['text']}. Use /approvals or /input."
-            )
+        self.update_toolbar(
+            "Waiting for action"
+            if pending
+            else str(state.get("detail") or "Working")
+            if self._known_busy
+            else "Ready"
+        )
+        if not quiet:
+            self.ui.say(state.get("detail") or state.get("execution", "Ready"))
+        for item in pending:
+            action_id = item.get("id")
+            if not quiet or action_id not in self.seen_attention:
+                self.ui.say(
+                    f"Action required: {item['text']}. Use /approvals or /input."
+                )
+            if isinstance(action_id, str):
+                self.seen_attention.add(action_id)
+        if len(self.seen_attention) > 200:
+            self.seen_attention = {
+                item["id"] for item in pending if isinstance(item.get("id"), str)
+            }
         return state
 
     def update_toolbar(self, detail: str = "") -> None:
@@ -1192,49 +1185,19 @@ class Shell:
             if isinstance(self.ui, TuiUI):
                 self.ui.stream_stopped()
 
-    async def attention_loop(self) -> None:
-        etag: str | None = None
-        offline = False
+    async def selected_state_loop(self) -> None:
+        """Poll only the visible chat; stream events already cover attached turns."""
         while True:
             await asyncio.sleep(5)
-            await self.refresh_conversation_activity()
-            try:
-                response = await self.api.client.get(
-                    "chat/attention", headers={"If-None-Match": etag} if etag else {}
-                )
-                if response.status_code == 304:
-                    continue
-                check_response(response)
-                etag = response.headers.get("etag")
-                items = response.json()
-                self.note_attention(items)
-                for item in items:
-                    if item["action_id"] not in self.seen_attention:
-                        self.seen_attention.add(item["action_id"])
-                        self.ui.say(
-                            f"Action required in {item['engagement_name']} / {item['session_title']}: {item['kind']}. Use /chats, /approvals or /input."
-                        )
-                if len(self.seen_attention) > 200:
-                    self.seen_attention = {item["action_id"] for item in items}
-                offline = False
-            except (httpx.HTTPError, ClientError) as exc:
-                if not offline:
-                    self.ui.say(
-                        "Core attention updates unavailable. /status checks the selected chat. "
-                        + (
-                            str(exc)
-                            if isinstance(exc, ClientError)
-                            else "Check the network connection."
-                        )
-                    )
-                offline = True
+            if self.stream_task is None or self.stream_task.done():
+                await self.refresh_selected_state()
 
-    async def stop_attention(self) -> None:
-        if self.attention_task:
-            self.attention_task.cancel()
+    async def stop_selected_state(self) -> None:
+        if self.selected_state_task:
+            self.selected_state_task.cancel()
             with suppress(asyncio.CancelledError):
-                await self.attention_task
-            self.attention_task = None
+                await self.selected_state_task
+            self.selected_state_task = None
 
     async def command(self, text: str) -> None:
         from .attachments import attach, attachments
@@ -1394,7 +1357,7 @@ class Shell:
             self.ui.say("Terminal closed. Core work continues.")
         finally:
             await self.detach()
-            await self.stop_attention()
+            await self.stop_selected_state()
             if self._api:
                 await self._api.close()
 
