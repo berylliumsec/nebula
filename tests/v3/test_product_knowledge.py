@@ -72,6 +72,10 @@ def test_product_search_finds_headless_core_and_paired_butler_cli(monkeypatch):
         ),
         ("Choose skills and goals from the terminal Assistant shell", "shell"),
         ("Full-screen terminal chat F4 commands activity", "F4"),
+        (
+            "What should I do after a nebula-chat goal action times out?",
+            "/goal show",
+        ),
         ("How do I see selectable slash commands in nebula-chat?", "type `/`"),
         ("How can I tell which nebula-chat conversations are running or idle?", "RUN"),
         (

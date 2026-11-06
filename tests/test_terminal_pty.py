@@ -276,6 +276,56 @@ asyncio.run(main())
         assert "YOU · REPEATED" not in "\n".join(read.screen.display)
 
 
+def test_full_screen_goal_timeout_stays_open_and_requires_state_readback():
+    code = """
+import asyncio,httpx
+from pathlib import Path
+from nebula.terminal.shell import Shell
+from nebula.terminal.state import View
+from nebula.terminal.transport import Settings
+from nebula.terminal.tui import TuiUI
+async def main():
+    ui=TuiUI()
+    await ui.start()
+    settings=Settings(Path('/tmp/unused-nebula-pairing.json'),{'cores':{}},'https://core.example')
+    shell=Shell(settings,ui=ui)
+    attempts=[]
+    async def connect(_selected):
+        ui.open_core('https://core.example')
+    async def select_project(_selected=None,chat=None):
+        shell.view=View(project={'id':'project','name':'Project'},session={'id':'chat','title':'Chat'})
+        ui.open_view(shell.view.project,shell.view.session)
+    async def command(value):
+        if value=='/goal start':
+            attempts.append(value)
+            raise httpx.ReadTimeout('')
+        if value=='/quit':
+            shell.running=False
+    shell.connect=connect
+    shell.select_project=select_project
+    shell.command=command
+    await shell.run()
+    await ui.close()
+    print('CLOSED:'+str(len(attempts)),flush=True)
+asyncio.run(main())
+"""
+    with terminal(code, ready=b"Message or /command", columns=120, rows=30) as (
+        process,
+        master,
+        output,
+        read,
+    ):
+        os.write(master, b"/goal start\r")
+        read("The goal may have changed", rendered=True)
+        read("Use /goal show", rendered=True)
+        assert "Use /goal show" in "\n".join(read.screen.display)
+        os.write(master, b"/quit\r")
+        read(b"CLOSED:1")
+        process.wait(timeout=3)
+        assert process.returncode == 0
+        assert b"IndexError" not in output
+
+
 def test_full_screen_renders_markdown_and_toggles_original_source():
     code = """
 import asyncio

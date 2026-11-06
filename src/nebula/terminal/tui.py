@@ -914,7 +914,12 @@ class TuiUI(TerminalUI):
 
     def show_problem(self, value: str) -> None:
         self.clear_loading()
-        self._notice = terminal_text(value).splitlines()[0][:180]
+        lines = terminal_text(value).strip().splitlines()
+        self._notice = (
+            lines[0]
+            if lines
+            else "Core request failed. Check saved state before retrying."
+        )[:180]
         self._invalidate()
 
     def set_turn_phase(self, phase: str) -> None:

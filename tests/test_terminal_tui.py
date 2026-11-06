@@ -59,6 +59,15 @@ def test_tui_keeps_progress_visible_and_replaces_chat_history() -> None:
     asyncio.run(run())
 
 
+def test_tui_shows_a_safe_problem_when_http_error_has_no_message() -> None:
+    ui = TuiUI()
+    ui.begin_loading("Sending goal action…")
+    ui.show_problem(str(httpx.ReadTimeout("")))
+    assert ui._notice == "Core request failed. Check saved state before retrying."
+    assert "LOADING" not in ui._activity_text()
+    assert "ERROR" in ui._activity_text()
+
+
 def test_tui_renders_saved_and_streamed_markdown_with_source_view() -> None:
     ui = TuiUI()
     ui.open_view(

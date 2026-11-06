@@ -1,26 +1,20 @@
 {
-  "change_digest": "0084376448f165987c6b12f503053a630658d608d9dd753ffcee67da4d072445",
-  "reviewed_by": "Codex; independent fresh-context agent confirmed flat role rendering, genuine repeated Core user messages, and scrollbar width before repair",
-  "reason": "The paired terminal transcript now uses distinct You, Assistant, and notice markers; keeps text to a readable line length; summarizes exact repeated long user requests in Render mode; and preserves original messages through F10 Source. Eleven focused Python cases cover streaming and history, roles and repeat/source behavior, wide and narrow PTY geometry, Markdown, a paired TLS LAN Core chat, and the bundled product-help digest/search/Chroma sync.",
-  "exclusions": "This surface is the Python prompt_toolkit terminal. Browser/mobile Playwright, frontend and native tests do not exercise the PTY transcript. The selected paired LAN Core fixture uses synthetic data and an inert provider; no operator conversation is touched. Full suites are outside the focused-test policy.",
+  "change_digest": "cefe3750be4278a34267dee218052218c86cf0bbf643bd1ce8d81d29842780b1",
+  "reviewed_by": "Codex; independent fresh-context subagent reproduced the empty httpx.ReadTimeout string and TUI IndexError before repair",
+  "reason": "A Core /goal action POST can time out with an empty httpx error string; the terminal must stay open, show uncertain-outcome guidance, and avoid replay. Five focused Python cases cover the empty-error notice, the actual PTY command/error/recovery path, a paired TLS LAN Core goal and reconnect journey, and the bundled product-help digest/search.",
+  "exclusions": "The change is in the Python prompt_toolkit terminal and shell. Browser/mobile Playwright, frontend and native tests do not exercise this error path. The LAN Core fixture uses only synthetic data and inert runtimes; it does not touch operator conversations. A true 90-second network timeout is deterministically injected in the PTY instead of delaying a real Core mutation. Full suites are outside the focused-test policy.",
   "expected_tests": {
-    "python": 11,
+    "python": 5,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_tui.py::test_tui_keeps_progress_visible_and_replaces_chat_history",
-    "tests/test_terminal_tui.py::test_tui_renders_saved_and_streamed_markdown_with_source_view",
-    "tests/test_terminal_tui.py::test_tui_distinguishes_roles_and_compacts_exact_repeated_long_requests",
-    "tests/test_terminal_pty.py::test_full_screen_chat_roles_and_repeated_requests_have_visual_hierarchy",
-    "tests/test_terminal_pty.py::test_full_screen_wide_layout_fills_pane_beside_rail",
-    "tests/test_terminal_pty.py::test_full_screen_renders_markdown_and_toggles_original_source",
-    "tests/test_terminal_pty.py::test_full_screen_progress_paste_and_narrow_resize",
-    "tests/v3/test_terminal_core.py::test_paired_full_screen_tui_shows_progress_and_saved_answer",
+    "tests/test_terminal_tui.py::test_tui_shows_a_safe_problem_when_http_error_has_no_message",
+    "tests/test_terminal_pty.py::test_full_screen_goal_timeout_stays_open_and_requires_state_readback",
+    "tests/v3/test_terminal_core.py::test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_full_width_terminal_and_split_pane_help",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest"
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli"
   ],
   "frontend": [],
   "native": [],
