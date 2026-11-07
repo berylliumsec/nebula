@@ -5385,7 +5385,7 @@
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::getChatSession",
-      "count": 10
+      "count": 11
     },
     {
       "key": "ui/src/pages/SessionsPage.tsx::getChatTaskPlans",

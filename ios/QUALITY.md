@@ -168,3 +168,45 @@ Pre-merge evidence (2026-09-19): research Mac, Xcode 27 beta 6. `swiftc` policy
 executable: 30 checks passed (16 address/navigation, 5 pairing, 9 saved-server and
 settings-link). Unsigned iPhone Release build with the new sources: BUILD SUCCEEDED.
 No iOS Simulator runtime is installed, so native screens are verified only on device.
+
+## Scoped phone polling (2026-11-07 candidate)
+
+Entry: the paired iPhone assistant, a selected chat, and its Conversations drawer.
+Core owns conversation summaries, state, queues, titles and pending actions; the
+URL owns selection; React owns drawer visibility; WebKit owns page visibility.
+
+| Journey step | Observable invariant | Authority | Test layer |
+| --- | --- | --- | --- |
+| Select/use | Only selected-chat state and pending naming are refreshed with the drawer closed | URL + Core | production real-Core browser |
+| Open/close drawer | Project list/activity polls run only while the drawer is visible; saved desktop preference cannot enable them in the phone shell | React + Core | production real-Core browser |
+| Naming | Only the selected title is read while pending, and polling stops when Core settles it | Core | real Core PATCH/read-back |
+| Background/resume | Hidden page starts no recurring reads; foreground resumes current scopes | WebKit + Core | browser visibility emulation; physical iPhone required |
+| Stream events | Status events invalidate selected state and only an existing visible list poll | Core event stream | focused stream regression |
+| Refresh/reconnect | Existing selection, pairing and transcript remain Core/WebKit-owned | URL + Core + WebKit | existing journey; physical gate required |
+
+No creation/deletion, runtime configuration, approval decisions, or native shell
+code changes are introduced here. Mutation-driven refresh after creating/saving a
+conversation remains explicit; it is not a recurring poll. Normal chat state is
+2 seconds active / up to 6 seconds idle, queue 2 / 10 seconds, open drawer list
+and activity 5 / 20 seconds, catch-up 8 seconds, task plans 10 seconds, Core health
+5 seconds, and cross-project Needs you 30 seconds. A running goal uses 5 seconds;
+active child-agent status uses 2 / 4 seconds. Title refresh is 5 seconds only for
+recent pending naming on the selected chat when the drawer is closed. Cadences
+are delays after reads for visibility-aware polls, not hard real-time deadlines.
+Needs you is a deliberate bounded cross-project pending-action read, not an app
+bootstrap. Requests already in flight may settle after backgrounding.
+
+Acceptance evidence is recorded in the implementation PR. Physical installation,
+WKWebView background visibility, keyboard/rotation and signed-device checks remain
+required for an unqualified iPhone release claim.
+
+Candidate evidence: 16 focused unit/component checks passed with Node 26's
+experimental Web Storage disabled for jsdom. The production build passed. Both
+real-Core journeys passed in all eight permanent model profiles (16 cases):
+desktop Chromium 1440/1024; emulated Chromium and WebKit 320/390/430. The isolated,
+authenticated SQLite fixture served the candidate bundle at
+`http://192.168.1.239:19489`; build identity matched its `web-build.json`.
+The stream transport alone was inert; pairing, reads and title PATCH/read-back
+used real Core. Visibility was emulated; it is not physical background evidence.
+The fixture server and temporary data were stopped/removed by its test lifecycle.
+Physical iPhone acceptance remains outstanding, so this candidate is not released.
