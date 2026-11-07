@@ -53,6 +53,8 @@ class Shell:
     ):
         self.settings = settings
         self.ui = ui or TerminalUI()
+        if isinstance(self.ui, TuiUI):
+            self.ui.on_draft_cleared = self._clear_current_draft_text
         self._api = api
         self.view: View | None = None
         self.views: dict[tuple[str | None, str, str], View] = {}
@@ -68,6 +70,10 @@ class Shell:
         self._state_unavailable = False
         self._state_lock = asyncio.Lock()
         self._pending_kinds: set[str] = set()
+
+    def _clear_current_draft_text(self) -> None:
+        if self.view is not None:
+            self.view.draft.text = ""
 
     @property
     def api(self) -> AsyncApi:

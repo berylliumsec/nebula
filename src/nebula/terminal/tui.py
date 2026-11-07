@@ -56,6 +56,7 @@ TRANSCRIPT_SCROLLBAR_WIDTH = 1
 TRANSCRIPT_WRAP_MARGIN = 1
 TRANSCRIPT_READING_MAX_WIDTH = 136
 REPEATED_REQUEST_MIN_LENGTH = 100
+INTERRUPT_REPEAT_SECONDS = 4.0
 
 
 def activity_label(state: str | None) -> str:
@@ -195,6 +196,10 @@ class TuiUI(TerminalUI):
         self._modal_container: Any = Window(height=0)
         self._modal_visible = False
         self._preserved_draft = ""
+        self.on_draft_cleared: Callable[[], None] | None = None
+        self._interrupt_armed = False
+        self._interrupt_timer: asyncio.TimerHandle | None = None
+        self._interrupt_cleared_draft = False
         self._render_scheduled = False
         self._app_task: asyncio.Task[None] | None = None
 
@@ -217,6 +222,7 @@ class TuiUI(TerminalUI):
             style="class:composer",
         )
         self.composer.control.key_bindings = composer_keys
+        self.composer.buffer.on_text_changed += lambda _buffer: self._disarm_interrupt()
         self.transcript = TextArea(
             read_only=True,
             focusable=True,
@@ -796,6 +802,9 @@ class TuiUI(TerminalUI):
 
     def _footer_text(self) -> str:
         width = self.app.output.get_size().columns if hasattr(self, "app") else 80
+        if self._mode == "main" and self._interrupt_armed:
+            detail = " · Draft cleared" if self._interrupt_cleared_draft else ""
+            return _edge(" ^C again to stop turn" + detail, width - 1)
         state = self.composer.buffer.complete_state
         if self._mode == "main" and state is not None and state.completions:
             return _edge(" ↑↓ Select  Tab Insert  Enter Run", width - 1)
@@ -803,13 +812,13 @@ class TuiUI(TerminalUI):
             return _edge(" Project Snapshot    R Refresh    Esc Close", width - 1)
         source = "Render" if self._source_view else "Source"
         if width < 60:
-            hint = f" F1 Help  F3 Chats  F10 {source}"
+            hint = " F1 Help  F3 Chats  ^C Clear/Stop"
         elif width < 110:
-            hint = f" F1 Help  F2 Projects  F3 Chats  F11 Snapshot  F8 Approvals  F10 {source}"
+            hint = f" F1 Help  F2 Projects  F3 Chats  F11 Snapshot  ^C Clear/Stop  F10 {source}"
         else:
             hint = (
                 " F1 Help    F2 Projects    F3 Chats    F8 Approvals"
-                f"    F10 {source}    F11 Snapshot    Tab Read    ^C Stop    ^D Quit"
+                f"    F10 {source}    F11 Snapshot    Tab Read    ^C Clear/Stop    ^D Quit"
             )
         return _edge(hint, width - 1)
 
@@ -1065,6 +1074,7 @@ class TuiUI(TerminalUI):
                 return
         if not value.strip():
             return
+        self._disarm_interrupt()
         self.composer.text = ""
         if value.startswith("/"):
             command = value[1:].split(maxsplit=1)
@@ -1092,16 +1102,46 @@ class TuiUI(TerminalUI):
             or self._main_future.done()
         ):
             return
+        self._disarm_interrupt()
         self._preserved_draft = self.composer.text
         self.composer.text = ""
         self.begin_loading(f"Running /{name}…")
         self._main_future.set_result("/" + name)
 
+    def _disarm_interrupt(self) -> None:
+        was_armed = self._interrupt_armed
+        self._interrupt_armed = False
+        self._interrupt_cleared_draft = False
+        if self._interrupt_timer is not None:
+            self._interrupt_timer.cancel()
+            self._interrupt_timer = None
+        if was_armed:
+            self._invalidate()
+
     def _interrupt(self) -> None:
-        if self._mode == "main":
-            self._complete_main(InterruptedPrompt())
-        else:
+        if self._mode != "main":
             self._cancel_modal()
+            return
+        if (
+            self._interrupt_armed
+            and self._main_future is not None
+            and not self._main_future.done()
+        ):
+            self._disarm_interrupt()
+            self._complete_main(InterruptedPrompt())
+            return
+        had_draft = bool(self.composer.text)
+        if had_draft:
+            self.composer.text = ""
+            if self.on_draft_cleared is not None:
+                self.on_draft_cleared()
+        if self._main_future is not None and not self._main_future.done():
+            self._interrupt_armed = True
+            self._interrupt_cleared_draft = had_draft
+            self._interrupt_timer = asyncio.get_running_loop().call_later(
+                INTERRUPT_REPEAT_SECONDS, self._disarm_interrupt
+            )
+            self._invalidate()
 
     def _cancel_modal(self) -> None:
         if self._picker is not None and not self._picker.future.done():
@@ -1110,6 +1150,7 @@ class TuiUI(TerminalUI):
             self._prompt_future.set_exception(CancelledInput())
 
     def _finish_modal(self) -> None:
+        self._disarm_interrupt()
         if self._snapshot_refresh_task is not None:
             self._snapshot_refresh_task.cancel()
             self._snapshot_refresh_task = None
@@ -1205,6 +1246,7 @@ class TuiUI(TerminalUI):
     ) -> str:
         if main:
             self.clear_loading()
+            self._disarm_interrupt()
             if default and not self.composer.text:
                 self.composer.text = default
             self._mode = "main"
@@ -1428,6 +1470,6 @@ class TuiUI(TerminalUI):
 
     def help(self) -> None:
         self.say(
-            "Keys: F2 projects · F3 chats · F4 commands · F5 activity · F6 follow · F8 approvals · F11 snapshot · Tab transcript · Ctrl-C stop · Ctrl-D quit"
+            "Keys: F2 projects · F3 chats · F4 commands · F5 activity · F6 follow · F8 approvals · F11 snapshot · Tab transcript · Ctrl-C clear draft, twice within 4s stop turn · Ctrl-D quit"
         )
         super().help()
