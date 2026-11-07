@@ -1255,6 +1255,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [lastRequestedView, setLastRequestedView] = useState<SessionView>(requestedView ?? "terminal");
   if (requestedView && requestedView !== lastRequestedView) setLastRequestedView(requestedView);
   const view = embeddedSideChat || shellOnly ? "chat" : requestedView ?? lastRequestedView;
+  // A saved desktop preference does not make a phone's closed drawer visible.
+  const conversationListVisible = !embeddedSideChat && view === "chat"
+    && (mobileListOpen || (!compact && conversationPanelOpen));
   const [draftEditorKey, setDraftEditorKey] = useState(() => newEditorBufferId());
   const adoptEditorSession = useAdoptWorkbenchEditorSession();
   const sideView = shellOnly ? undefined : (["code", "browser", "notes", "notebook"] as const).find(candidate => candidate === searchParams.get("side"));
@@ -2872,7 +2875,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const searchingAllConversations = Boolean(sessionQuery.trim()) || bulkSelectionMode;
   useEffect(() => {
     if (!searchingAllConversations || embeddedSideChat || !api || coreState !== "online" || !engagement
-      || (!conversationPanelOpen && !mobileListOpen) || fullListProjectRef.current === engagement.id) return;
+      || !conversationListVisible || fullListProjectRef.current === engagement.id) return;
     const controller = new AbortController();
     const projectId = engagement.id;
     setLoadingAllSessions(true);
@@ -2890,7 +2893,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       if (!controller.signal.aborted) setLoadingAllSessions(false);
     });
     return () => controller.abort();
-  }, [api, coreState, engagement?.id, embeddedSideChat, searchingAllConversations, conversationPanelOpen, mobileListOpen, bulkLoadRetryKey]);
+  }, [api, coreState, engagement?.id, embeddedSideChat, searchingAllConversations, conversationListVisible, bulkLoadRetryKey]);
 
   useEffect(() => {
     if (embeddedSideChat || !api || !engagement || !sessionId
@@ -3025,16 +3028,35 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     }
   };
 
-  // Core names a conversation after its first durable message, independently
-  // of a long-running reply. Follow that optional task until it settles.
+  // Follow naming only for the selected chat. The open drawer already refreshes
+  // the project list; a hidden drawer must not turn naming into project polling.
   useEffect(() => {
-    if (!api || !engagement || !hasRecentPendingTitle(sessions)) return;
-    const timer = window.setInterval(() => {
-      if (hasRecentPendingTitle(sessions)) void refreshSessions();
-      else window.clearInterval(timer);
-    }, 5_000);
-    return () => window.clearInterval(timer);
-  }, [api, engagement, sessions]);
+    if (!api || !activeChatSession || coreState !== "online" || view !== "chat"
+      || conversationListVisible || !hasRecentPendingTitle([activeChatSession])) return;
+    const selected = activeChatSession;
+    const generation = sessionSelectionGenerationRef.current;
+    const controller = new AbortController();
+    startVisiblePoll({
+      intervalMs: 5_000, immediate: false, signal: controller.signal,
+      read: async signal => {
+        if (!hasRecentPendingTitle([selected])) return "stop";
+        try {
+          const next = await api.getChatSession(selected.id, signal);
+          if (signal.aborted || generation !== sessionSelectionGenerationRef.current) return "stop";
+          setSessions(current => {
+            const merged = mergeRecentListedSessions(current, [next]);
+            return sameJson(current, merged) ? current : merged;
+          });
+          return hasRecentPendingTitle([next]) ? "active" : "stop";
+        } catch (error) {
+          if (signal.aborted) return "stop";
+          void logCaughtDiagnostic("interface.sessions_page.title_refresh_failed", "The conversation title could not be refreshed.", error, "sessions_page");
+          return "active";
+        }
+      },
+    });
+    return () => controller.abort();
+  }, [api, activeChatSession, coreState, view, conversationListVisible]);
 
   const createGoalConversation = async (draft: ProviderGoalDraft): Promise<ChatGoal> => {
     if (!api || !engagement) throw new Error("Select a project before adding a goal.");
@@ -3094,7 +3116,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   const sessionActivityPollRef = useRef<VisiblePoll | undefined>(undefined);
   useEffect(() => {
-    if (embeddedSideChat || (!conversationPanelOpen && !mobileListOpen) || view !== "chat") return;
+    if (!conversationListVisible) return;
     const controller = new AbortController();
     const poll = startVisiblePoll({
       intervalMs: SESSION_ACTIVITY_POLL_MS,
@@ -3105,13 +3127,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     sessionActivityPollRef.current = poll;
     window.addEventListener("focus", poll.poke);
     return () => { controller.abort(); sessionActivityPollRef.current = undefined; window.removeEventListener("focus", poll.poke); };
-  }, [conversationPanelOpen, embeddedSideChat, mobileListOpen, refreshSessionActivity, view]);
+  }, [conversationListVisible, refreshSessionActivity]);
 
   // Subagent conversations are saved while the parent turn is still running.
   // The inspector follows their runtime state; the visible sidebar must also
   // follow Core's durable conversation list, including background parents.
   useEffect(() => {
-    if (embeddedSideChat || !api || !engagement || coreState !== "online" || view !== "chat" || (!conversationPanelOpen && !mobileListOpen)) return;
+    if (!conversationListVisible || !api || !engagement || coreState !== "online") return;
     const controller = new AbortController();
     const requestedEngagementId = engagement.id;
     const poll = startVisiblePoll({
@@ -3137,7 +3159,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     });
     window.addEventListener("focus", poll.poke);
     return () => { controller.abort(); window.removeEventListener("focus", poll.poke); };
-  }, [api, engagement, coreState, embeddedSideChat, view, conversationPanelOpen, mobileListOpen]);
+  }, [api, engagement, coreState, conversationListVisible]);
 
   const resetConversation = (open: boolean, options: { discardDraft?: boolean } = {}) => {
     previewOwnerRef.current = "";
@@ -5101,8 +5123,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (["started", "status", "turn_status", "approval", "interaction", "done", "cancelled", "error"].includes(streamEvent.type)) {
       refreshSessionState();
       // The open list's poll reads now and returns to its base cadence.
-      if (sessionActivityPollRef.current) sessionActivityPollRef.current.poke();
-      else void refreshSessionActivity();
+      sessionActivityPollRef.current?.poke();
     }
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       previewOwnerRef.current = streamEvent.sessionId;
@@ -7185,7 +7206,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen && !shellOnly ? " conversation-panel-open" : ""}${sidePanelOpen && !shellOnly ? " side-chat-active" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`} style={sessionLayoutStyle}>
         {view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
-        {view === "chat" && ((!shellOnly && conversationPanelOpen) || mobileListOpen) && <aside ref={(element) => { conversationPanelSize.panelRef.current = element; }} className="session-list" id="workbench-conversations" aria-label="Conversations" style={conversationPanelSize.panelStyle}>
+        {conversationListVisible && <aside ref={(element) => { conversationPanelSize.panelRef.current = element; }} className="session-list" id="workbench-conversations" aria-label="Conversations" style={conversationPanelSize.panelStyle}>
           {conversationPanelSize.resizeHandle}
           {compact && mobileListOpen && <MobileDrawerProject onNavigate={() => setMobileListOpen(false)} />}
           <header><div><span>Conversations</span><strong>{sessionQuery ? `${sidebarConversations.matchCount} of ${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""}` : `${savedConversations.length}${sessionNextOffset !== undefined ? "+" : ""} saved`}</strong></div><div className="session-list-header-actions"><button className="icon-button subtle" type="button" aria-label={bulkSelectionMode ? "Done selecting conversations" : "Select conversations"} title={bulkSelectionMode ? "Done selecting conversations" : "Select conversations"} aria-pressed={bulkSelectionMode} disabled={bulkActionBusy || deletingAllSessions} onClick={() => { setBulkSelectionMode(current => !current); setBulkSelectedIds(new Set()); setBulkActionNotice(undefined); setSessionActionsId(undefined); setRenamingSessionId(undefined); setRenameError(undefined); }}>{bulkSelectionMode ? <X size={17} aria-hidden="true" /> : <ListChecks size={17} aria-hidden="true" />}</button>{!bulkSelectionMode && <details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!savedConversations.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details>}<button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>

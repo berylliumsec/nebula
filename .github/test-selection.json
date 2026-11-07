@@ -1,20 +1,30 @@
 {
-  "change_digest": "51e0699b5a467e1bcb1a5d7213fa2b4c47d8fb3581be446022fb4b51cdfce95c",
-  "reviewed_by": "Codex, with independent read-only causal validation",
-  "reason": "Running-first grouping, pinned activity transitions, nested sibling ordering, hierarchy/search preservation and Core-backed production LAN refresh/activity updates. Eight browser profiles cover only this one journey.",
-  "exclusions": "No full suites, native code, backend product changes, provider execution or settings changes. Python is a disposable browser fixture. Physical devices unavailable. Local browser download is network-policy blocked; installed Chromium is available and WebKit is selected for CI.",
+  "change_digest": "b77b692da095647ca62b5c39a640bf8728e81f2c853880ee86068c2b49e58dc9",
+  "reviewed_by": "Codex with independent causal validation",
+  "reason": "Closed phone drawer, saved desktop preference, selected-title convergence, hidden/resume, inert stream status invalidation against real Core state, and existing sidebar ordering. Sixteen unit/component cases and two selected browser journeys in eight profiles.",
+  "exclusions": "No full suites; no native or backend product changes; no provider/research execution. Physical signed iPhone verification unavailable, so PR stays unmerged pending device evidence.",
   "expected_tests": {
     "python": 0,
     "frontend": 16,
     "native": 0,
-    "playwright": 8
+    "playwright": 16
   },
   "python": [],
   "frontend": [
-    "ui/src/pages/conversationSidebar.test.ts"
+    "ui/src/api/visiblePoll.test.ts",
+    "ui/src/pages/chatSessionList.test.ts",
+    "ui/src/pages/chatMobileDrawerRestore.test.tsx"
   ],
   "native": [],
   "playwright": [
+    "entry:mobile-polling/model-desktop",
+    "entry:mobile-polling/model-compact",
+    "entry:mobile-polling/model-chromium-320",
+    "entry:mobile-polling/model-webkit-320",
+    "entry:mobile-polling/model-chromium-390",
+    "entry:mobile-polling/model-webkit-390",
+    "entry:mobile-polling/model-chromium-430",
+    "entry:mobile-polling/model-webkit-430",
     "entry:conversation-order/model-desktop",
     "entry:conversation-order/model-compact",
     "entry:conversation-order/model-chromium-320",

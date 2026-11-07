@@ -35,6 +35,7 @@ async def main():
         @app.post("/fixture/conversations")
         async def seed(request: Request):
             authorize(request)
+            pending_title = request.query_params.get("pending_title") == "true"
             project = await store.create(Engagement(name="Conversation ordering"))
             provider = await store.create(ProviderProfile(
                 name="Inert fixture", provider_type="vllm", is_local=True,
@@ -49,7 +50,9 @@ async def main():
             ]:
                 chat = await store.create(ChatSession(
                     engagement_id=project.id, title=name, provider_profile_id=provider.id,
-                    model="fixture", metadata={"pinned": pinned, "initial_title_state": "operator"},
+                    model="fixture", metadata={"pinned": pinned,
+                        "initial_title_state": "pending" if pending_title else "operator",
+                        "message_count": 1 if pending_title else 0},
                 ))
                 ids[name] = chat.id
                 if status:
