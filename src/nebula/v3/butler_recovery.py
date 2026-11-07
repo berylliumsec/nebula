@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -24,7 +25,7 @@ from .butler_oversight import (
     project_state_id,
     project_stream_id,
 )
-from .diagnostics import record_caught_exception
+from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerGlobalState,
@@ -115,8 +116,8 @@ _INSTRUCTIONS = (
     "smallest compatible project-scoped change. Use nebula.capabilities.search, "
     "describe, read, and change; read current settings, target state, and available "
     "model choices before changing anything. Read the supplied memory precedents "
-    "before acting; they are guidance, not evidence or authority. A child agent must "
-    "never receive a direct message from you; address its parent main chat. "
+    "before acting; they are guidance, not evidence or authority. Do not message another main agent's children directly; "
+    "address their parent main chat. "
     "A failed subagent.start from a harness can be fixed by selecting a verified "
     "provider model for the parent chat's next turn, clearing an incompatible "
     "subagent harness profile, and asking the parent to retry the same bounded work. "
@@ -188,7 +189,7 @@ _GLOBAL_INSTRUCTIONS = (
     "before retrying or claiming the message was received. When a main agent "
     "replies, read its exact dialogue turn with nebula.work.await_chat_result "
     "or nebula.global.work_read and continue that conversation in this same "
-    "check-in before concluding it. Do not message child "
+    "check-in before concluding it. Do not message another main agent's child "
     "agents. Report exact Core results, not predicted outcomes."
 )
 GLOBAL_STATE_ID = "butler-global-periodic-state"
@@ -210,7 +211,7 @@ def _applied_change(steps: list[dict[str, Any]]) -> bool:
 
 
 async def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
-    """Match the vendor's exact load code on this case's failed analysis turn."""
+    """Match the vendor's exact load code on this case's failed investigation."""
 
     if (
         case.signal != "butler.global_periodic_check"
@@ -228,7 +229,7 @@ async def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bo
         return False
     if (
         turn.engagement_id != case.engagement_id
-        or turn.origin != HarnessTurnOrigin.ANALYSIS
+        or turn.origin not in {HarnessTurnOrigin.ANALYSIS, HarnessTurnOrigin.CHAT}
         or turn.metadata.get("butler_recovery_case_id") != case.id
         or turn.status not in {HarnessTurnStatus.FAILED, HarnessTurnStatus.INTERRUPTED}
     ):
@@ -700,8 +701,19 @@ class ButlerRecoveryAgent:
         except asyncio.CancelledError:
             # Also cover cancellation while the parent is parked awaiting children.
             current = await self.store.get(ButlerRecoveryCase, case.id)
-            for turn_id in current.investigation_turn_ids[-1:]:
-                turn = await self.store.get(ChatTurn, turn_id)
+            turns = (
+                await self.store.find_entities(
+                    ChatTurn,
+                    {"session_id": current.investigation_session_id},
+                    engagement_id=case.engagement_id,
+                    newest_first=True,
+                    limit=1,
+                )
+                if current.investigation_session_id
+                else []
+            )
+            # Preparation may have saved the turn before publishing its case link.
+            for turn in turns:
                 if turn.backend == ChatBackend.HARNESS and turn.harness_turn_id:
                     await self.harness_runtime.cancel_turn(
                         turn.harness_turn_id, reason="Butler investigation interrupted"
@@ -733,6 +745,7 @@ class ButlerRecoveryAgent:
         backend = ChatBackend(config["backend"])
         if not isinstance(profile_id, str) or not isinstance(model, str):
             raise ValueError("Butler needs an enabled model in Assistant settings")
+        profile: HarnessProfile | ProviderProfile
         if backend == ChatBackend.HARNESS:
             profile = await self.store.get(HarnessProfile, profile_id)
             local = profile.privacy.local_only
@@ -754,6 +767,7 @@ class ButlerRecoveryAgent:
             backend == ChatBackend.HARNESS
             and case.signal == "butler.global_periodic_check"
         ):
+            assert isinstance(profile, HarnessProfile)
             profile = await self._scheduled_harness_profile(
                 case.engagement_id,
                 profile,
@@ -783,6 +797,7 @@ class ButlerRecoveryAgent:
                 "reasoning_effort": config["subagent_reasoning_effort"],
             }
         if child_setting is not None:
+            child_profile: HarnessProfile | ProviderProfile
             if child_setting["harness_profile_id"]:
                 child_profile = await self.store.get(
                     HarnessProfile, child_setting["harness_profile_id"]
@@ -838,7 +853,7 @@ class ButlerRecoveryAgent:
                 model=model,
                 control_assistant=True,
                 butler_initiated=True,
-                messages=[ChatRequestMessage(role="user", content=packet)],
+                messages=[ChatRequestMessage(role=ChatRole.USER, content=packet)],
                 include_knowledge=False,
                 allow_mcp_catalog=False,
                 allow_agent_messaging=False,
@@ -854,9 +869,10 @@ class ButlerRecoveryAgent:
             request._butler_recovery_case_id = case.id
             request._butler_recovery_instructions = instructions
             prepared = await chat.prepare_async(request)
-            turn = prepared.turn
-            if turn is None:
+            prepared_turn = prepared.turn
+            if prepared_turn is None:
                 raise ValueError("Background investigation requires a durable turn")
+            turn = prepared_turn
             await self._record_investigation_turn(case.id, turn)
             await chat.start_provider_turn(prepared)
         return await self._wait_for_turn(case, turn.id)
@@ -897,11 +913,15 @@ class ButlerRecoveryAgent:
             if current.final_message_id
             else None
         )
+        profile_id = current.provider_profile_id or current.request_snapshot.get(
+            "harness_profile_id"
+        )
+        if not isinstance(profile_id, str):
+            raise ValueError("Investigation turn is missing its runtime profile")
         return (
             message.content if message else current.content,
             current.backend,
-            current.provider_profile_id
-            or current.request_snapshot.get("harness_profile_id"),
+            profile_id,
             current.model,
             current.harness_turn_id,
         )
@@ -967,15 +987,6 @@ class ButlerRecoveryService:
     def _worker_done(self, case: ButlerRecoveryCase, task: asyncio.Task[None]) -> None:
         if self._workers.get(case.id) is task:
             self._workers.pop(case.id, None)
-        # Retrieve failures even if shutdown has not yet drained this task.
-        if not task.cancelled() and (error := task.exception()) is not None:
-            record_caught_exception(
-                "butler",
-                "butler.recovery_worker_failed",
-                "Butler's case worker stopped unexpectedly.",
-                error,
-                stage="recovery-worker",
-            )
         if self.wake is not None:
             self.wake(case.engagement_id)
 
@@ -1521,11 +1532,10 @@ class ButlerRecoveryService:
 
         expired = utc_now() - timedelta(seconds=90)
         recovered = 0
-        for case in await self.store.find_entities(
+        async for case in self.store.iter_readable_entities(
             ButlerRecoveryCase,
             {"status": "investigating"},
             engagement_id=project_id,
-            limit=20,
         ):
             if case.id in self._workers:
                 continue
@@ -1604,7 +1614,7 @@ class ButlerRecoveryService:
             ):
                 continue
             try:
-                self.agent._global_instructions(case)
+                await self.agent._global_instructions(case)
             except (ButlerInstructionsError, NotFoundError):
                 # diagnostic-expected: a changed or missing mandate belongs to a new check.
                 continue
@@ -1898,11 +1908,40 @@ class ButlerRecoveryService:
                     engagement_id=project_id,
                 ):
                     if (
-                        case.id not in self._workers
-                        and case.investigation_turn_ids
-                        and case.authority_revision == policy.revision
+                        case.id in self._workers
+                        or case.authority_revision != policy.revision
                     ):
-                        self._start_case(case, worker_id, resume=True)
+                        continue
+                    turns = (
+                        await self.store.find_entities(
+                            ChatTurn,
+                            {"session_id": case.investigation_session_id},
+                            engagement_id=project_id,
+                            newest_first=True,
+                            limit=1,
+                        )
+                        if case.investigation_session_id
+                        else []
+                    )
+                    turn = turns[0] if turns else None
+                    if turn is None or (
+                        case.started_at and turn.created_at < case.started_at
+                    ):
+                        continue
+                    if turn.id not in case.investigation_turn_ids:
+                        if (
+                            turn.request_snapshot.get("butler_recovery_case_id")
+                            != case.id
+                        ):
+                            continue
+                        case = await self._update_case(
+                            case,
+                            investigation_turn_ids=[
+                                *case.investigation_turn_ids,
+                                turn.id,
+                            ],
+                        )
+                    self._start_case(case, worker_id, resume=True)
         (await self.recover_interrupted_cases(project_id))
         (await self.retry_overloaded_cases(project_id, worker_id))
         try:
@@ -1917,11 +1956,10 @@ class ButlerRecoveryService:
             consumed = await self.capture_events(project_id, worker_id)
             if consumed < 100:
                 break
-        for verifying_case in await self.store.find_entities(
+        async for verifying_case in self.store.iter_readable_entities(
             ButlerRecoveryCase,
             {"status": "verifying"},
             engagement_id=project_id,
-            limit=10,
         ):
             if (
                 verifying_case.next_check_at is None
@@ -1930,8 +1968,11 @@ class ButlerRecoveryService:
                 (await self.verify_follow_up(verifying_case))
         if self.agent is None:
             return
-        while (case := await self._claim_case(project_id, worker_id)) is not None:
-            self._start_case(case, worker_id)
+        while True:
+            claimed_case = await self._claim_case(project_id, worker_id)
+            if claimed_case is None:
+                break
+            self._start_case(claimed_case, worker_id)
 
     def _start_case(
         self, case: ButlerRecoveryCase, worker_id: str, *, resume: bool = False
@@ -1939,15 +1980,22 @@ class ButlerRecoveryService:
         project_id = case.engagement_id
         lease = self._leases.get(project_id)
         if lease is None or lease.done():
-            self._leases[project_id] = asyncio.create_task(
+            self._leases[project_id] = create_diagnostic_task(
                 self._project_heartbeat(project_id, worker_id),
+                feature="butler",
+                event_code="butler.recovery_lease_failed",
+                failure_message="Butler's investigation lease stopped unexpectedly.",
                 name=f"butler-lease-{project_id}",
             )
-        task = asyncio.create_task(
-            self._investigate_case(case, resume=resume), name=f"butler-case-{case.id}"
+        task = create_diagnostic_task(
+            self._investigate_case(case, resume=resume),
+            feature="butler",
+            event_code="butler.recovery_worker_failed",
+            failure_message="Butler's case worker stopped unexpectedly.",
+            name=f"butler-case-{case.id}",
         )
         self._workers[case.id] = task
-        task.add_done_callback(lambda done, case=case: self._worker_done(case, done))
+        task.add_done_callback(partial(self._worker_done, case))
 
     async def _investigate_case(
         self, case: ButlerRecoveryCase, *, resume: bool = False

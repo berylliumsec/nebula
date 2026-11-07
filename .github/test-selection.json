@@ -1,10 +1,10 @@
 {
-  "change_digest": "037c1f718e9c9730dd01d0808548267beac891daa17ef958009547535c4afaf7",
+  "change_digest": "84e12b37125b4768e5a465cb6ecb1309f758a79cf298bd14346dedfd94ec7deb",
   "reviewed_by": "Codex; independent diagnostic review",
-  "reason": "One-worker-per-case dispatch, all provider/harness delegation combinations with enabled/disabled settings, cancellation, restart, recursion prevention, case transcript navigation and saved product guidance.",
+  "reason": "One-worker-per-case dispatch, all provider/harness delegation combinations with enabled/disabled settings, cancellation, crash-window reattachment, overload retry, recursion prevention, case transcript navigation and saved product guidance.",
   "exclusions": "No full suites or live providers. Only the changed Butler journey on desktop Chromium, mobile Chromium and mobile WebKit. User waived local model and browser downloads; product-knowledge tests and WebKit remain selected for CI. Local Chromium uses the installed system browser and bypasses the outbound proxy only for this host’s disposable LAN Core.",
   "expected_tests": {
-    "python": 41,
+    "python": 47,
     "frontend": 31,
     "native": 0,
     "playwright": 3
@@ -12,6 +12,7 @@
   "python": [
     "tests/v3/test_butler_recovery.py",
     "tests/v3/test_butler_concurrent_recovery.py",
+    "tests/v3/test_butler_capacity_retry.py",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_search_explains_concurrent_butler_subagents",

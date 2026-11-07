@@ -347,6 +347,7 @@ class RuntimePlatform:
         self.store = store
         self.artifact_store = artifact_store
         self.data_root = data_root.expanduser().resolve()
+        self.butler_instructions_root: Path | None = None
         self.data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.data_root.chmod(0o700)
         self.workspace_root = self.data_root / "engagement-workspaces"

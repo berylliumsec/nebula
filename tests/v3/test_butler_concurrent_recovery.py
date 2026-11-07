@@ -450,8 +450,10 @@ async def test_background_runtime_matrix(
         await runtime.shutdown()
 
 
+@pytest.mark.parametrize("link_recorded", [True, False])
 async def test_restart_reattaches_to_existing_investigation_instead_of_starting_again(
     tmp_path,
+    link_recorded,
 ):
     store, project, parent, _, policy, owner = await _setup(tmp_path)
     saved_turn = await store.create(
@@ -470,8 +472,14 @@ async def test_restart_reattaches_to_existing_investigation_instead_of_starting_
         0,
         status="investigating",
         investigation_session_id=parent.id,
-        investigation_turn_ids=[saved_turn.id],
+        investigation_turn_ids=[saved_turn.id] if link_recorded else [],
         started_at=utc_now() - timedelta(minutes=5),
+    )
+    await store.update(
+        ChatTurn,
+        saved_turn.id,
+        {"request_snapshot": {"butler_recovery_case_id": case.id}},
+        expected_revision=saved_turn.revision,
     )
     resumed = []
 
@@ -513,3 +521,69 @@ async def test_investigation_failure_does_not_recursively_spawn_more_cases(tmp_p
     await service.capture_events(project.id, owner)
     cases = await store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)
     assert [item.id for item in cases] == [case.id]
+
+
+async def test_restart_does_not_reuse_a_completed_turn_from_an_earlier_round(tmp_path):
+    store, project, parent, _, policy, owner = await _setup(tmp_path)
+    old = await store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=parent.id,
+            provider_profile_id=parent.provider_profile_id,
+            model="model-a",
+            status="complete",
+            created_at=utc_now() - timedelta(minutes=5),
+        )
+    )
+    case = await _case(
+        store,
+        project,
+        policy,
+        0,
+        status="investigating",
+        investigation_session_id=parent.id,
+        investigation_turn_ids=[old.id],
+        started_at=utc_now() - timedelta(minutes=2),
+    )
+    started = []
+
+    class Agent:
+        async def run(self, item):
+            started.append(item.id)
+            return (
+                "New round checked",
+                ChatBackend.PROVIDER,
+                "provider",
+                "model-a",
+                None,
+            )
+
+        async def resume(self, item):
+            raise AssertionError("The old round must not resolve the new investigation")
+
+    service = ButlerRecoveryService(store, Agent())
+    try:
+        await service.process_project(project.id, owner)
+        await asyncio.gather(*service._workers.values())
+        assert started == [case.id]
+    finally:
+        await service.shutdown()
+
+
+async def test_live_cases_do_not_hide_abandoned_investigations(tmp_path):
+    store, project, _, _, policy, _ = await _setup(tmp_path)
+    for index in range(21):
+        await _case(
+            store, project, policy, index, status="investigating", started_at=utc_now()
+        )
+    abandoned = await _case(
+        store,
+        project,
+        policy,
+        22,
+        status="investigating",
+        started_at=utc_now() - timedelta(minutes=5),
+    )
+    service = ButlerRecoveryService(store)
+    assert await service.recover_interrupted_cases(project.id) == 1
+    assert (await store.get(ButlerRecoveryCase, abandoned.id)).status == "observed"
