@@ -178,21 +178,34 @@ class ButlerGlobalActions:
     async def _projects_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         (await self._case())
         offset = arguments.get("offset", 0)
+        # Resolve authority once, preserving find_entity's oldest-policy rule.
+        # A roster scan with one policy lookup per project serializes pool waits.
+        policies: dict[str, ButlerAuthorityPolicy] = {}
+        for policy in await self.store.find_entities(ButlerAuthorityPolicy, {}):
+            policies.setdefault(policy.engagement_id, policy)
+        act_project_ids = [
+            project_id
+            for project_id, policy in policies.items()
+            if policy.authority == "act"
+        ]
+        visible_projects = []
+        async for project in self.store.iter_readable_entities(
+            Engagement, {"id": act_project_ids}
+        ):
+            if project.status == EngagementStatus.ARCHIVED or not project.work_enabled:
+                continue
+            if not self.runtime_local and project.scope_policy_id:
+                scope = await self.store.get(ScopePolicy, project.scope_policy_id)
+                if scope.engagement_id != project.id or scope.local_only:
+                    continue
+            visible_projects.append(project)
         projects = sorted(
-            [
-                project
-                async for project in self.store.iter_readable_entities(Engagement)
-                if project.status != EngagementStatus.ARCHIVED
-                and project.work_enabled
-                and (await self._visible(project))
-            ],
+            visible_projects,
             key=lambda item: (item.created_at, item.id),
         )
         rows = []
         for project in projects[offset : offset + 50]:
-            policy = await self.store.find_entity(
-                ButlerAuthorityPolicy, "engagement_id", project.id
-            )
+            policy = policies[project.id]
             rows.append(
                 {
                     "id": project.id,
@@ -201,8 +214,8 @@ class ButlerGlobalActions:
                     "revision": project.revision,
                     "work_enabled": project.work_enabled,
                     "parent_project_id": project.parent_engagement_id,
-                    "authority": policy.authority if policy else "watch",
-                    "authority_revision": policy.revision if policy else 0,
+                    "authority": policy.authority,
+                    "authority_revision": policy.revision,
                 }
             )
         return {
