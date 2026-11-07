@@ -1,23 +1,20 @@
 {
-  "change_digest": "a3f0a29b39f61f61acce028817d59b2035ebb131b34b42340279a40403e0ee25",
-  "reviewed_by": "Codex; reviewed the terminal project Snapshot journey and selected its direct contracts",
-  "reason": "The paired terminal gains an on-demand project Snapshot panel. Three client tests cover project-scoped Core reads, refresh and partial failure, and keeping the chat intact. Three packaging tests verify the independent wheel and source distribution include the new module. One disposable paired LAN Core PTY journey covers open, refresh and return to chat. One product-knowledge test checks settings-assistant discovery and Core Chroma synchronization. One frontend catalog test checks the discoverable terminal command keywords.",
-  "exclusions": "No browser component, route, or CSS changes: browser Playwright and mobile profiles are not applicable to this terminal-only view. The PTY test covers the actual interactive surface at a non-loopback paired LAN origin; no provider work is launched. Native tests are unrelated. Python 3.12 only; no full suites.",
+  "change_digest": "172bba594dc18b3d09ac9933b9fff296522741f0537c6b5ecfc229e421a5cf66",
+  "reviewed_by": "Codex; reviewed the full-screen terminal Ctrl-C journey and selected its direct contracts",
+  "reason": "One TUI unit test covers clearing both the visible and saved draft, the repeat hint, expiry, and typing reset. The existing shell interrupt test protects exact-turn cancellation. One disposable paired TLS LAN Core PTY test covers real keyboard input, draft clearing without submission, and the two-press stop of a busy turn.",
+  "exclusions": "No browser component, route, or CSS changes: frontend, Playwright, and mobile browser profiles are not applicable to this terminal-only key binding. The PTY test exercises the actual full-screen client at a paired non-loopback LAN origin with an inert provider. Native tests and broader terminal suites are unrelated; Python 3.12 only.",
   "expected_tests": {
-    "python": 8,
-    "frontend": 1,
+    "python": 3,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_snapshot.py",
-    "tests/test_terminal_package.py",
-    "tests/v3/test_terminal_snapshot_core.py",
-    "tests/v3/test_terminal_snapshot_knowledge.py"
+    "tests/test_terminal_tui.py::test_tui_ctrl_c_clears_draft_before_interrupting_and_resets_on_typing",
+    "tests/test_terminal_shell.py::test_main_prompt_interrupt_stops_detached_selected_turn",
+    "tests/v3/test_terminal_ctrl_c_core.py"
   ],
-  "frontend": [
-    "ui/src/settingsCatalog.terminal.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "python_versions": [

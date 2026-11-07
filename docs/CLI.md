@@ -34,7 +34,9 @@ selectable slash commands in nebula-chat, type `/` at the start of the composer.
 The command list follows the current conversation. Keep typing to filter it,
 use Up/Down and Enter to run a selection,
 or Tab to insert it without running. When no command list is open, Tab focuses
-the transcript for scrolling. Ctrl-C stops a supported selected turn.
+the transcript for scrolling. Ctrl-C clears unsent text. Press it again within
+four seconds to stop a supported selected turn; typing or submitting a new draft
+resets the sequence. In a full-screen menu, Ctrl-C closes the menu.
 The view updates as Core accepts, queues, and works on a turn, before the first
 answer text arrives. Progress and requests for action stay visible during input.
 The activity strip and header animate while connecting, opening a project or
@@ -95,8 +97,10 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 
 Enter sends; Escape followed by Enter inserts a newline. Pasted multiline text
 requires a separate send. While a turn is active, ordinary text queues a durable
-follow-up; `/steer` explicitly guides a supported running harness. Ctrl-C at the
-main prompt stops a supported selected response. Ctrl-D or `/quit` detaches and
+follow-up; `/steer` explicitly guides a supported running harness. In the
+full-screen view, the first Ctrl-C clears the draft and a second press within
+four seconds stops a supported selected response. In plain mode, Ctrl-C at the
+main prompt stops it immediately. Ctrl-D or `/quit` detaches and
 leaves Core work running. Switching conversations also detaches the viewer.
 
 Normal skills apply once. Goal skills retain Core's immutable snapshots and are
@@ -225,8 +229,9 @@ appears when reconnecting. Use these commands inside chat:
 | `/stop` | Cancel the current turn through Core |
 | `/quit` or Ctrl-D | Exit the client; Core work continues |
 
-Ctrl-C during a response requests cancellation of that exact turn if Core has
-confirmed its identity. If the connection ends before confirmation, read
+In the full-screen view, press Ctrl-C twice within four seconds to request
+cancellation of that exact turn if Core has confirmed its identity; in plain
+mode, one press requests it. If the connection ends before confirmation, read
 `/status` before stopping or sending again. The client never automatically
 resends an uncertain message. A pending turn blocks another submission until it
 finishes or is stopped. Approval and input pauses remain visible; browser-owned

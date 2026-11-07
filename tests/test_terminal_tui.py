@@ -11,7 +11,45 @@ from nebula.terminal.shell import Shell
 from nebula.terminal.state import View
 from nebula.terminal.transport import AsyncApi, ClientError, Settings
 from nebula.terminal.tui import TuiUI
-from nebula.terminal.ui import CancelledInput, TerminalUI
+from nebula.terminal.ui import CancelledInput, InterruptedPrompt, TerminalUI
+
+
+def test_tui_ctrl_c_clears_draft_before_interrupting_and_resets_on_typing(
+    tmp_path,
+) -> None:
+    async def run() -> None:
+        ui = TuiUI()
+        shell = Shell(Settings(tmp_path / "chat.json", {}, None), ui=ui)
+        shell.view = View({"id": "project", "name": "Project"}, None)
+        shell.view.draft.text = "saved draft"
+        ui.composer.text = "saved draft"
+        ui._main_future = asyncio.get_running_loop().create_future()
+
+        ui._interrupt()
+        assert ui.composer.text == ""
+        assert shell.view.draft.text == ""
+        assert not ui._main_future.done()
+        assert "^C again to stop turn · Draft cleared" in ui._footer_text()
+
+        ui._interrupt()
+        assert isinstance(ui._main_future.exception(), InterruptedPrompt)
+        assert "^C again to stop turn" not in ui._footer_text()
+
+        ui._main_future = asyncio.get_running_loop().create_future()
+        ui._interrupt()
+        assert not ui._main_future.done()
+        ui.composer.text = "new draft"
+        assert "^C again to stop turn" not in ui._footer_text()
+        ui._interrupt()
+        assert ui.composer.text == ""
+        assert not ui._main_future.done()
+        ui._disarm_interrupt()  # The repeat window expired.
+        ui._interrupt()
+        assert not ui._main_future.done()
+        ui._interrupt()
+        assert isinstance(ui._main_future.exception(), InterruptedPrompt)
+
+    asyncio.run(run())
 
 
 def test_tui_keeps_progress_visible_and_replaces_chat_history() -> None:
