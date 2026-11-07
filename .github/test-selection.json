@@ -1,32 +1,27 @@
 {
-  "change_digest": "84e12b37125b4768e5a465cb6ecb1309f758a79cf298bd14346dedfd94ec7deb",
-  "reviewed_by": "Codex; independent diagnostic review",
-  "reason": "One-worker-per-case dispatch, all provider/harness delegation combinations with enabled/disabled settings, cancellation, crash-window reattachment, overload retry, recursion prevention, case transcript navigation and saved product guidance.",
-  "exclusions": "No full suites or live providers. Only the changed Butler journey on desktop Chromium, mobile Chromium and mobile WebKit. User waived local model and browser downloads; product-knowledge tests and WebKit remain selected for CI. Local Chromium uses the installed system browser and bypasses the outbound proxy only for this host’s disposable LAN Core.",
+  "change_digest": "51e0699b5a467e1bcb1a5d7213fa2b4c47d8fb3581be446022fb4b51cdfce95c",
+  "reviewed_by": "Codex, with independent read-only causal validation",
+  "reason": "Running-first grouping, pinned activity transitions, nested sibling ordering, hierarchy/search preservation and Core-backed production LAN refresh/activity updates. Eight browser profiles cover only this one journey.",
+  "exclusions": "No full suites, native code, backend product changes, provider execution or settings changes. Python is a disposable browser fixture. Physical devices unavailable. Local browser download is network-policy blocked; installed Chromium is available and WebKit is selected for CI.",
   "expected_tests": {
-    "python": 47,
-    "frontend": 31,
+    "python": 0,
+    "frontend": 16,
     "native": 0,
-    "playwright": 3
+    "playwright": 8
   },
-  "python": [
-    "tests/v3/test_butler_recovery.py",
-    "tests/v3/test_butler_concurrent_recovery.py",
-    "tests/v3/test_butler_capacity_retry.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_explains_concurrent_butler_subagents",
-    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
-    "tests/v3/test_chat_subagent_lifecycle.py::test_failed_harness_turn_stops_its_provider_subagents"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/ButlerOversight.test.tsx",
-    "ui/src/api/butlerOverview.test.ts"
+    "ui/src/pages/conversationSidebar.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:butler-global/assistant-real-desktop",
-    "entry:butler-global/assistant-real-chromium-390",
-    "entry:butler-global/assistant-real-webkit-390"
+    "entry:conversation-order/model-desktop",
+    "entry:conversation-order/model-compact",
+    "entry:conversation-order/model-chromium-320",
+    "entry:conversation-order/model-webkit-320",
+    "entry:conversation-order/model-chromium-390",
+    "entry:conversation-order/model-webkit-390",
+    "entry:conversation-order/model-chromium-430",
+    "entry:conversation-order/model-webkit-430"
   ]
 }

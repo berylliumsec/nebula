@@ -1,3 +1,4 @@
+import conversationOrder from "./playwright.conversation-order.config";
 import applicationModel from "./playwright.application-model.config";
 import catchUp from "./playwright.catch-up.config";
 import hostMode from "./playwright.host-mode.config";
@@ -26,6 +27,7 @@ const isolatedMatrixEntry = true;
 const selectedArgs: string[] = JSON.parse(process.env.NEBULA_PLAYWRIGHT_FOCUSED_ARGS ?? "[]");
 // One invocation owns one fixture server; reject incompatible selections early.
 const fixtureConfigs = {
+  "tests/conversation-order.spec.ts": conversationOrder,
   "tests/assistant-browser-viewer.spec.ts": applicationModel,
   "tests/working-knowledge.spec.ts": applicationModel,
   "tests/catch-up.spec.ts": catchUp,
