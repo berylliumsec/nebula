@@ -132,6 +132,7 @@ class Shell:
                 "attach",
                 "goal",
                 "chats",
+                "snapshot",
                 "butler",
                 "status",
             ]
@@ -139,6 +140,7 @@ class Shell:
             else [
                 "new",
                 "chats",
+                "snapshot",
                 "butler",
                 "history",
                 "status",
@@ -1243,6 +1245,10 @@ class Shell:
             await self.select_project()
         elif name == "projects":
             await self.select_project(args[0] if args else None)
+        elif name == "snapshot":
+            from .snapshot import show_project_snapshot
+
+            await show_project_snapshot(self)
         elif name == "chats":
             await self.select_chat(" ".join(args) or None)
         elif name == "new":

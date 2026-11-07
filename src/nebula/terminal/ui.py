@@ -37,6 +37,7 @@ COMMANDS = {
     "draft": "Review a previous submission retained in memory",
     "core": "Switch paired Core",
     "projects": "Browse or create a project",
+    "snapshot": "Read this project's Core-owned summary",
     "chats": "Browse saved conversations",
     "new": "Start a new conversation",
     "butler": "Open this project's Butler",
@@ -163,6 +164,11 @@ class TerminalUI:
 
     def say(self, text: Any = "") -> None:
         self.console.print(terminal_text(text), markup=False, highlight=False)
+
+    async def show_snapshot(
+        self, content: str, *, refresh: Callable[[], Awaitable[str]]
+    ) -> None:
+        self.say(content)
 
     def delta(self, text: str) -> None:
         self.console.print(

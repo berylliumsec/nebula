@@ -190,6 +190,7 @@ class TuiUI(TerminalUI):
         self._picker: Picker | None = None
         self._main_future: asyncio.Future[str] | None = None
         self._prompt_future: asyncio.Future[str] | None = None
+        self._snapshot_refresh_task: asyncio.Task[None] | None = None
         self._modal_input: TextArea | None = None
         self._modal_container: Any = Window(height=0)
         self._modal_visible = False
@@ -300,6 +301,7 @@ class TuiUI(TerminalUI):
             ("f7", "input"),
             ("f8", "approvals"),
             ("f9", "history"),
+            ("f11", "snapshot"),
         ):
             keys.add(key)(lambda _event, name=command: self._shortcut(name))
 
@@ -380,7 +382,7 @@ class TuiUI(TerminalUI):
             full_screen=True,
             # Let the terminal select and copy chat text with a normal drag.
             # Pickers retain mouse reporting for their own controls.
-            mouse_support=Condition(lambda: self._mode != "main"),
+            mouse_support=Condition(lambda: self._mode not in {"main", "snapshot"}),
             style=Style.from_dict(
                 {}
                 if "NO_COLOR" in os.environ
@@ -797,15 +799,17 @@ class TuiUI(TerminalUI):
         state = self.composer.buffer.complete_state
         if self._mode == "main" and state is not None and state.completions:
             return _edge(" ↑↓ Select  Tab Insert  Enter Run", width - 1)
+        if self._mode == "snapshot":
+            return _edge(" Project Snapshot    R Refresh    Esc Close", width - 1)
         source = "Render" if self._source_view else "Source"
         if width < 60:
             hint = f" F1 Help  F3 Chats  F10 {source}"
         elif width < 110:
-            hint = f" F1 Help  F2 Projects  F3 Chats  F8 Approvals  F10 {source}"
+            hint = f" F1 Help  F2 Projects  F3 Chats  F11 Snapshot  F8 Approvals  F10 {source}"
         else:
             hint = (
                 " F1 Help    F2 Projects    F3 Chats    F8 Approvals"
-                f"    F10 {source}    Tab Read    ^C Stop    ^D Quit"
+                f"    F10 {source}    F11 Snapshot    Tab Read    ^C Stop    ^D Quit"
             )
         return _edge(hint, width - 1)
 
@@ -1106,6 +1110,9 @@ class TuiUI(TerminalUI):
             self._prompt_future.set_exception(CancelledInput())
 
     def _finish_modal(self) -> None:
+        if self._snapshot_refresh_task is not None:
+            self._snapshot_refresh_task.cancel()
+            self._snapshot_refresh_task = None
         self._mode = "main"
         self._picker = None
         self._prompt_future = None
@@ -1114,6 +1121,77 @@ class TuiUI(TerminalUI):
         self._modal_visible = False
         self.app.layout.focus(self.composer)
         self._invalidate()
+
+    async def show_snapshot(
+        self, content: str, *, refresh: Callable[[], Awaitable[str]]
+    ) -> None:
+        """Keep project state separate from the selected chat's transcript."""
+        self._mode = "snapshot"
+        self._prompt_future = asyncio.get_running_loop().create_future()
+        snapshot = TextArea(
+            text=content,
+            read_only=True,
+            focusable=True,
+            wrap_lines=True,
+            scrollbar=True,
+            style="class:transcript",
+        )
+        snapshot_keys = KeyBindings()
+
+        @snapshot_keys.add("escape")
+        def close(_event: Any) -> None:
+            if self._prompt_future is not None and not self._prompt_future.done():
+                self._prompt_future.set_result("")
+
+        @snapshot_keys.add("r")
+        def reload(_event: Any) -> None:
+            if (
+                self._snapshot_refresh_task is not None
+                and not self._snapshot_refresh_task.done()
+            ):
+                return
+
+            async def read() -> None:
+                self.begin_loading("Refreshing project snapshot…")
+                previous = snapshot.text
+                try:
+                    snapshot.text = await refresh()
+                except Exception as exc:
+                    # diagnostic-expected: retain the previous read for retry.
+                    snapshot.text = (
+                        previous
+                        + "\n\nRefresh failed: "
+                        + terminal_text(exc)
+                        + ". Press R to retry."
+                    )
+                finally:
+                    self.clear_loading()
+                    self._invalidate()
+
+            self._snapshot_refresh_task = asyncio.create_task(read())
+
+        snapshot.control.key_bindings = snapshot_keys
+        self._modal_container = Frame(
+            HSplit(
+                [
+                    snapshot,
+                    Window(
+                        FormattedTextControl(
+                            " ↑↓/PgUp/PgDn Scroll · R Refresh · Esc Close"
+                        ),
+                        height=1,
+                    ),
+                ]
+            ),
+            title="Project Snapshot",
+        )
+        self._modal_visible = True
+        self.app.layout.focus(snapshot)
+        self._invalidate()
+        try:
+            await self._prompt_future
+        finally:
+            self._finish_modal()
 
     async def ask(
         self,
@@ -1350,6 +1428,6 @@ class TuiUI(TerminalUI):
 
     def help(self) -> None:
         self.say(
-            "Keys: F2 projects · F3 chats · F4 commands · F5 activity · F6 follow · F8 approvals · Tab transcript · Ctrl-C stop · Ctrl-D quit"
+            "Keys: F2 projects · F3 chats · F4 commands · F5 activity · F6 follow · F8 approvals · F11 snapshot · Tab transcript · Ctrl-C stop · Ctrl-D quit"
         )
         super().help()

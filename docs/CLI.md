@@ -28,7 +28,8 @@ Pair as described below, then run `nebula-chat` or
 The shell checks Core terminal protocol 1. On an interactive TTY it opens a
 full-screen view with a project/chat rail, transcript, live activity, and
 composer. F2 browses projects, F3 browses conversations, F4 opens a searchable
-command menu, F5 shows detailed activity, and F8 opens pending approvals. To see
+command menu, F5 shows detailed activity, F8 opens pending approvals, and F11
+opens the selected project's Snapshot. To see
 selectable slash commands in nebula-chat, type `/` at the start of the composer.
 The command list follows the current conversation. Keep typing to filter it,
 use Up/Down and Enter to run a selection,
@@ -63,6 +64,14 @@ indicator. Other chats' action notices stay out of the current transcript;
 F3 marks those waiting for action. At narrow terminal widths, F3 shows
 compact RUN/WAIT/IDLE labels.
 
+Open `/snapshot` or press F11 for the selected project's Core-owned summary:
+latest Work check-in, asset and finding totals, the latest mission's status,
+progress and model cost, and pending approvals. The full-screen panel scrolls;
+press R to refresh it and Escape to return to the same chat. It reads project
+data only on open or refresh. The plain terminal prints the same summary when
+`/snapshot` runs. `/status` remains the selected conversation's turn state, and
+`/results` remains published results rather than this dashboard summary.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
@@ -74,7 +83,7 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | --- | --- |
 | `/core`, `/projects`, `/chats`, `/new`, `/butler` | Switch paired Cores, select/create a project, resume a main agent chat, or open Butler |
 | `/chat` | Rename, pin, flag, archive, restore, branch, rewind/edit, retry in a branch, export visible text, or explicitly delete |
-| `/history`, `/history more`, `/context`, `/activity`, `/results` | Read saved history, context usage, work details and retained results |
+| `/history`, `/history more`, `/context`, `/activity`, `/results`, `/snapshot` | Read saved history, context usage, activity, retained results and the selected project's Snapshot |
 | `/model`, `/settings` | Select Core models and supported next-turn reasoning, tools, MCP, hooks, knowledge, environments and subagent controls |
 | `/skills`, `$name` | Select a Core skill for one turn; `$name message` invokes it in that message |
 | `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete a Core goal, including budgets and retained skills |
