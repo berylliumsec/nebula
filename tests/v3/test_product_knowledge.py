@@ -965,3 +965,15 @@ def test_product_guidance_finds_bounded_pool_and_pending_runtime_switch(monkeypa
     assert "pending" in text.lower()
     assert "resume" in text.lower()
     assert "same chat" in text.lower() or "same conversation" in text.lower()
+
+
+def test_product_search_explains_concurrent_butler_subagents(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Concurrent Butler checks and subagents background workers"
+    )
+    assert any(
+        "one worker per eligible case" in str(item["text"])
+        and "disabled switch remains off" in str(item["text"])
+        for item in matches
+    )

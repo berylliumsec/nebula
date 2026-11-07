@@ -45,11 +45,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-activity",
     label: "Butler scheduled activity",
-    description: "Read Butler's saved checks and recovery reports, and review improvement-issue destinations and held drafts in Oversight",
+    description: "Read concurrent Butler checks, investigation transcripts and subagent results, and review held improvement drafts in Oversight",
     category: "Automation",
     scope: "Project",
     target: "butler-oversight",
-    keywords: ["butler", "scheduled", "checks", "transcript", "history", "blocked goal", "check-in", "agent reply", "conversation", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings", "improvement issues", "held draft", "issue destination", "repository review"],
+    keywords: ["butler", "scheduled", "checks", "transcript", "history", "blocked goal", "check-in", "agent reply", "conversation", "recovery goals", "oversight", "idle goals", "goal budget", "step budget", "assistant settings", "improvement issues", "held draft", "issue destination", "repository review", "parallel", "concurrent", "subagents", "background workers"],
   },
   {
     id: "settings.butler-voice",

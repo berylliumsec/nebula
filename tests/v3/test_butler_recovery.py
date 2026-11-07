@@ -118,6 +118,12 @@ async def _setup(tmp_path):
     return store, project, parent, turn, policy, worker_id
 
 
+async def _process(service, project_id, worker_id):
+    await service.process_project(project_id, worker_id)
+    await asyncio.gather(*service._workers.values(), return_exceptions=True)
+    await service.shutdown()
+
+
 async def _failure(store, project, parent, turn, error=None):
     call = await store.create(
         ToolCall(
@@ -325,7 +331,7 @@ async def test_background_harness_analysis_has_only_butler_gateway_authority(tmp
             self.store = store
             self.session_id = None
 
-        def _validate_harness_privacy(self, *_args, **_kwargs):
+        async def _validate_harness_privacy(self, *_args, **_kwargs):
             return None
 
         async def create_session(self, **kwargs):
@@ -667,7 +673,7 @@ async def test_blocked_goal_checkin_continues_same_case_through_agent_conversati
 
     agent = Agent()
     recovery = ButlerRecoveryService(store, agent)
-    (await recovery.process_project(project.id, worker_id))
+    (await _process(recovery, project.id, worker_id))
     assert (await store.get(ButlerRecoveryCase, case.id)).status == "verifying"
     assert agent.calls == 1
 
@@ -699,7 +705,7 @@ async def test_blocked_goal_checkin_continues_same_case_through_agent_conversati
     assert pending.dialogue_results[-1]["turn_id"] == first_turn.id
     assert pending.finished_at is None
 
-    (await recovery.process_project(project.id, worker_id))
+    (await _process(recovery, project.id, worker_id))
     assert (await store.get(ButlerRecoveryCase, case.id)).status == "verifying"
     assert agent.calls == 2
     (
@@ -733,7 +739,7 @@ async def test_blocked_goal_checkin_continues_same_case_through_agent_conversati
     assert (
         await recovery.verify_follow_up((await store.get(ButlerRecoveryCase, case.id)))
     ).status == "observed"
-    (await recovery.process_project(project.id, worker_id))
+    (await _process(recovery, project.id, worker_id))
     assert agent.calls == 3
     settled = await store.get(ButlerRecoveryCase, case.id)
     assert settled.status == "resolved"
@@ -856,12 +862,15 @@ async def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_pa
         )
     )
 
-    class Provider:
-        config = SimpleNamespace(local=True)
+    from tests.v3.test_chat_subagents import RoutedProvider
+    from nebula.v3.providers import ToolChoice
+    from nebula.v3.chat import ChatService
+    from nebula.v3.runtime_platform import RuntimePlatform
 
-        def require(self, request):
-            assert request.metadata["operation"] == "butler_recovery"
-            assert len(request.tools) == 4
+    class Provider(RoutedProvider):
+        def __init__(self):
+            super().__init__([], [])
+            self.config = self.config.model_copy(update={"id": provider.id})
 
         async def complete(self, request):
             step = len(request.tool_results)
@@ -882,7 +891,9 @@ async def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_pa
                         )
                     ],
                 )
-            assert request.tool_results[-1].is_error is False
+            assert request.tool_results[-1].is_error is False, request.tool_results[
+                -1
+            ].output
             if step == 1:
                 return ModelResponse(
                     provider_id=provider.id,
@@ -925,6 +936,14 @@ async def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_pa
                         )
                     ],
                 )
+            if request.tool_choice != ToolChoice.NONE:
+                return ModelResponse(
+                    provider_id=provider.id,
+                    model="model-a",
+                    tool_calls=[
+                        ModelToolCall(id="finish", name="finish_response", arguments={})
+                    ],
+                )
             return ModelResponse(
                 provider_id=provider.id,
                 model="model-a",
@@ -951,11 +970,11 @@ async def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_pa
                 )
             )
 
-        def chat_settings(self, project_id, session_id):
+        async def chat_settings(self, project_id, session_id):
             assert (project_id, session_id) == (project.id, parent.id)
             return {"revision": 1, "settings": dict(self.settings)}
 
-        def set_chat_settings(self, project_id, arguments):
+        async def set_chat_settings(self, project_id, arguments):
             assert project_id == project.id
             assert arguments["session_id"] == parent.id
             assert arguments["expected_revision"] == 1
@@ -973,6 +992,21 @@ async def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_pa
             return {"delivery": "started", "turn_id": "accepted-parent-turn"}
 
     work = Work()
+    runtime = RuntimePlatform(
+        store=store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        data_root=tmp_path / "runtime",
+    )
+    fake = Provider()
+    work.chat = ChatService(
+        store, provider_factory=lambda _: fake, tool_platform=runtime
+    )
+
+    async def validate(*args):
+        work.validated.append(args)
+
+    work.chat.subagents.validate_harness_setting = validate
+    runtime.bind_control_assistant_work(work)
     agent = ButlerRecoveryAgent(
         store,
         provider_factory=lambda _: Provider(),
@@ -982,10 +1016,13 @@ async def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_pa
         memory=None,
     )
     recovery = ButlerRecoveryService(store, agent)
-    (await recovery.process_project(project.id, worker_id))
+    (await _process(recovery, project.id, worker_id))
     cases = await store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)
     assert len(cases) == 1
-    assert cases[0].status == "verifying"
+    assert cases[0].status == "verifying", (
+        cases[0].outcome,
+        [(t.status, t.error) for t in await store.find_entities(ChatTurn, {})],
+    )
     assert cases[0].delivered_turn_id == "accepted-parent-turn"
     assert [step["operation"] for step in cases[0].steps] == [
         "nebula.work.chat_settings",
@@ -1003,6 +1040,7 @@ async def test_act_switches_worker_to_provider_and_queues_only_the_parent(tmp_pa
     assert len(work.targets) == 1
     assert work.targets[0][:2] == (project.id, parent.id)
     assert work.targets[0][2].startswith("recovery:" + cases[0].id)
+    await work.chat.shutdown()
 
 
 @pytest.mark.parametrize(
@@ -1062,7 +1100,7 @@ async def test_periodic_case_distinguishes_live_reads_from_changes_and_renews_le
             return "Live Core checked", ChatBackend.PROVIDER, "provider", "model", None
 
     monkeypatch.setattr(recovery_module, "LEASE_RENEW_INTERVAL_SECONDS", 0.01)
-    (await ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id))
+    (await _process(ButlerRecoveryService(store, Agent()), project.id, worker_id))
     settled = await store.get(ButlerRecoveryCase, case.id)
     assert settled.status == expected_status
     renewed = await store.get(ButlerProjectState, state.id)
@@ -1118,7 +1156,7 @@ async def test_global_periodic_reads_do_not_resolve_when_all_goals_are_idle(tmp_
             )
             return "All goals are okay", ChatBackend.PROVIDER, "provider", "model", None
 
-    (await ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id))
+    (await _process(ButlerRecoveryService(store, Agent()), project.id, worker_id))
     settled = await store.get(ButlerRecoveryCase, case.id)
     assert settled.status == "needs_attention"
     assert "No main goal is running" in settled.outcome
@@ -1172,7 +1210,7 @@ async def test_active_parent_turn_hold_does_not_block_read_only_global_check(
             )
             return "Read parent state", ChatBackend.PROVIDER, "provider", "model", None
 
-    (await ButlerRecoveryService(store, Agent()).process_project(project.id, worker_id))
+    (await _process(ButlerRecoveryService(store, Agent()), project.id, worker_id))
     settled = await store.get(ButlerRecoveryCase, case.id)
     assert settled.status == expected_status
     if expected_status == "resolved":
@@ -1233,11 +1271,11 @@ async def test_lost_project_lease_cancels_investigation(tmp_path, monkeypatch):
     recovery = ButlerRecoveryService(store, Agent())
     monkeypatch.setattr(recovery_module, "LEASE_RENEW_INTERVAL_SECONDS", 0.01)
     monkeypatch.setattr(recovery, "_renew_project_lease", lambda *_: False)
-    (await recovery.process_project(project.id, worker_id))
+    (await _process(recovery, project.id, worker_id))
     assert cancelled
     settled = await store.get(ButlerRecoveryCase, case.id)
-    assert settled.status == "needs_attention"
-    assert "could not finish the investigation" in settled.outcome
+    assert settled.status == "observed"
+    assert "interrupted" in settled.outcome
 
 
 pytestmark = pytest.mark.anyio

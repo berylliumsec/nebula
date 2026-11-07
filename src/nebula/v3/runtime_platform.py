@@ -408,12 +408,13 @@ class RuntimePlatform:
         allow_empty: bool = False,
         settings_assistant: bool = False,
         operator_message: str = "",
+        background_case_id: str | None = None,
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
         """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
 
         operator_turn_id = turn_id
-        del provider, model
+        del model
         if include_oci:
             raise RuntimePlatformError(
                 "OCI capabilities are available only through run_command"
@@ -447,6 +448,9 @@ class RuntimePlatform:
                     memory=self.butler_memory,
                     operator_message=operator_message,
                     operator_turn_id=operator_turn_id,
+                    background_case_id=background_case_id,
+                    instructions_root=getattr(self, "butler_instructions_root", None),
+                    background_runtime_local=bool(provider and provider.config.local),
                     notebooks=self.mcp_service.notebook_tools.notebooks
                     if self.mcp_service is not None
                     and self.mcp_service.notebook_tools is not None
@@ -457,7 +461,7 @@ class RuntimePlatform:
             ).plugins():
                 registry.register(plugin)
                 privileged_names.add(plugin.spec.name)
-        if search_enabled:
+        if search_enabled and background_case_id is None:
             registry.register(WebSearchTool(self.search_runtime, scope))
         if mcp_profiles:
             if self.mcp_service is None:

@@ -31,6 +31,23 @@ function client(request: ReturnType<typeof vi.fn>): ApiClient {
 }
 
 describe("ButlerOversight", () => {
+  it("opens the durable investigation and children without using the interactive Butler chat", async () => {
+    const user = userEvent.setup();
+    const navigate = vi.fn();
+    const request = vi.fn().mockResolvedValue({ ...overview, capabilities: {...overview.capabilities, recovery: true}, recovery_cases: [{
+      id: "parallel-case", trigger: "periodic", signal: "butler.periodic_check",
+      status: "resolved", summary: "Concurrent check", outcome: "Evidence read", steps: [],
+      model_backend: "provider", investigation_session_id: "investigation-1", investigation_turn_ids: ["turn-1"],
+    }] });
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" onNavigate={navigate} />);
+    await user.click(await screen.findByText("Check transcript"));
+    const link = screen.getByRole("link", { name: "Open investigation and subagents" });
+    expect(link).toHaveAttribute("href", "/projects/project-a/workbench?view=chat&session=investigation-1");
+    await user.click(link);
+    expect(navigate).toHaveBeenCalledWith("/projects/project-a/workbench?view=chat&session=investigation-1");
+    expect(screen.queryByText(/full model event stream was not recorded/)).not.toBeInTheDocument();
+  });
+
   it("shows the Nebula-wide user file path and refreshes its scheduled state", async () => {
     const user = userEvent.setup();
     const path = "/tmp/nebula-data/.butler/BUTLER.md";

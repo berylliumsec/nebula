@@ -432,9 +432,9 @@ async def test_main_agent_plan_is_handed_to_child_without_child_planning_gate(
         assert child_turn.request_snapshot["planning_enabled"] is True
         assert (await chat.plans.required(child_turn, child_session)) is False
         assert (await chat.plans.for_turn(child_turn.id)).phase == "discovery"
-        await _until(
-            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
-        )
+        async with asyncio.timeout(5):
+            while (await store.get(ChatSubagent, record.id)).result_message_id is None:
+                await asyncio.sleep(0.01)
         direct_child = await chat.prepare_async(
             _request(
                 project,

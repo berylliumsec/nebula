@@ -908,3 +908,18 @@ hosts, skills and MCP catalog selection. Interrupted effectful hooks require
 reconciliation before replay; a rejected final answer still records consumed
 usage and pauses its Core goal. Notebook MCP remains explicitly selected for
 both backends and is excluded from automatic on-demand discovery.
+
+## Concurrent Butler checks and subagents
+
+Background recovery starts one worker per eligible case, so a slow check-in does
+not block other cases. Existing provider and harness capacity limits still apply.
+Butler's saved **Subagents** switch and child runtime, effort, and active-child
+limit also apply to scheduled background checks. A disabled switch remains off;
+children may use either a provider or a harness through Nebula's subagent tools.
+Vendor-native delegation is not enabled by this setting for background checks.
+
+Open **Butler scheduled activity** in Oversight, expand **Check transcript**, then
+choose **Open investigation and subagents** to inspect the case's saved chat,
+provider or harness transcript, and child results. Each case has a separate
+conversation. Reloading preserves the same case and investigation, and restarting
+Core reattaches to existing investigation turns rather than duplicating work.

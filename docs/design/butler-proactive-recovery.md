@@ -158,3 +158,26 @@ read-only steps can be replayed, while a possible write is held for review.
 The focused Core tests cover these outcomes, lease renewal and loss, and the
 existing parent-only retry path. The live acceptance check must observe a
 scheduled Act case on production Core with the UI closed.
+
+## Concurrent checks and delegated investigations
+
+Core starts one independent worker for every eligible recovery case. A slow
+investigation does not block other due cases or project oversight. Existing
+provider and harness capacity limits still apply. Each project keeps one lease
+heartbeat; losing that lease or Act authority stops its workers. Live workers
+are never treated as abandoned just because they run longer than 90 seconds.
+After a restart, Core reattaches to the durable investigation turn and consumes
+its result instead of starting a duplicate investigation.
+
+Each case has a separate durable chat session, linked from Butler scheduled
+activity through **Open investigation and subagents**. Provider and harness
+transcripts, child results, and subsequent investigation rounds stay with that
+case rather than entering the operator's Butler conversation.
+
+Background checks inherit Butler's saved Subagents switch, selected provider or
+harness child runtime, reasoning effort, and maximum active children. Disabled
+Subagents stays disabled. These are Nebula-managed children; vendor-native
+subagents remain disabled for background Butler. Parent workers may use the
+normal start, wait, message, and stop tools for their own children. They must read
+child results before concluding, and a child claim alone never verifies a repair.
+Case-scoped Act, revision, privacy, and uncertain-action checks still apply.

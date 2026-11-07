@@ -135,7 +135,7 @@ function RecoveryRow({ item, projectId, onNavigate, api, coreState }: {
     {item.steps.length > 0 && <details className={styles.evidence}><summary>Investigation steps · {item.steps.length}</summary>
       <ul>{item.steps.map((step) => <li key={step.id}>{step.operation.replace("nebula.work.", "").replaceAll("_", " ")} · {step.status}</li>)}</ul>
     </details>}
-    {item.trigger === "periodic" && <ButlerScheduledTranscript item={item} api={api} coreState={coreState} onNavigate={onNavigate} />}
+    {(item.trigger === "periodic" || item.investigationSessionId) && <ButlerScheduledTranscript item={item} api={api} coreState={coreState} onNavigate={onNavigate} />}
     <WorkLink projectId={projectId} sessionId={item.targetSessionId ?? item.sourceSessionId} onNavigate={onNavigate} label="Open parent chat" />
   </li>;
 }
