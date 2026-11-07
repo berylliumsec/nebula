@@ -1,5 +1,5 @@
 {
-  "change_digest": "81c5188eb70a81350ce3c7928c5c4171112ec8546a1316a1b7dc2d536a918556",
+  "change_digest": "037c1f718e9c9730dd01d0808548267beac891daa17ef958009547535c4afaf7",
   "reviewed_by": "Codex; independent diagnostic review",
   "reason": "One-worker-per-case dispatch, all provider/harness delegation combinations with enabled/disabled settings, cancellation, restart, recursion prevention, case transcript navigation and saved product guidance.",
   "exclusions": "No full suites or live providers. Only the changed Butler journey on desktop Chromium, mobile Chromium and mobile WebKit. User waived local model and browser downloads; product-knowledge tests and WebKit remain selected for CI. Local Chromium uses the installed system browser and bypasses the outbound proxy only for this host’s disposable LAN Core.",

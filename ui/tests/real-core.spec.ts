@@ -11419,7 +11419,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
       name: "Global Butler local model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
       privacy: {local_only: true, residency: [], permits_sensitive_data: false},
-      metadata: {default_model: "security-model"},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
     }});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
     const provider = await providerResponse.json() as {id: string; revision: number};
@@ -11471,8 +11471,10 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     });
     await expect.poll(async () => {
       const response = await api.get(`engagements/${project.id}/butler/overview`);
-      const overview = await response.json() as {recovery_cases: Array<{signal: string; status: string; steps: Array<{operation: string}>}>};
-      return overview.recovery_cases.find(item => item.signal === "butler.global_periodic_check")?.status;
+      const overview = await response.json() as {recovery_cases: Array<{signal: string; status: string; outcome: string; steps: Array<{operation: string}>}>};
+      const check = overview.recovery_cases.find(item => item.signal === "butler.global_periodic_check");
+      if (check?.status === "needs_attention") throw new Error(check.outcome);
+      return check?.status;
     }, {timeout: 60_000}).toBe("resolved");
     const checked = await (await api.get(`engagements/${project.id}/butler/overview`)).json() as {recovery_cases: Array<{signal: string; steps: Array<{operation: string}>}>};
     expect(checked.recovery_cases.find(item => item.signal === "butler.global_periodic_check")?.steps.map(step => step.operation)).toContain("nebula.global.projects");

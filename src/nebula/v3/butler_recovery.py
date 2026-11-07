@@ -1952,6 +1952,8 @@ class ButlerRecoveryService:
     async def _investigate_case(
         self, case: ButlerRecoveryCase, *, resume: bool = False
     ) -> None:
+        from .chat import ChatConfigurationError
+
         assert self.agent is not None
         project_id = case.engagement_id
         try:
@@ -1999,7 +2001,12 @@ class ButlerRecoveryService:
             elif uncertain:
                 outcome = "An action may have taken effect; inspect Core before retry."
             elif isinstance(
-                exc, (ButlerInstructionsError, ButlerRouteUnavailableError)
+                exc,
+                (
+                    ButlerInstructionsError,
+                    ButlerRouteUnavailableError,
+                    ChatConfigurationError,
+                ),
             ):
                 outcome = str(exc)[:300]
             else:
