@@ -1,8 +1,8 @@
 {
-  "change_digest": "7809c05ec7271607dfcdad1d82e99458eede8ea56de01a99757fdccd8ecded28",
+  "change_digest": "5bd86ce1543357a5fa867c5403bc8cd5f32ad44f7c722f861f753cc0ec177f46",
   "reviewed_by": "Codex; independent diagnostic subagent validated serial database acquisitions and oldest-policy semantics",
-  "reason": "Batch the global Butler authority read and hydrate only Act-authorized projects. Five roster regression cases cover 2500 projects with constant SQL count, eligibility/privacy, duplicate policies, unreadable/orphan projects, empty authority and pagination beyond 1000. Two existing tests cover scheduled capability dispatch and task-owned database sessions. One existing production LAN scheduler journey verifies the real tool invocation.",
-  "exclusions": "No interface, client, native, origin or provider behavior changes: frontend unit and mobile viewport matrix are not selected. Desktop Chromium exercises the existing production LAN scheduler journey. No production database access, deployment or full suites. Python 3.12 only.",
+  "reason": "Batch the global Butler authority read and hydrate only Act-authorized projects. Five roster regression cases cover 2500 projects with constant SQL count, eligibility/privacy, duplicate policies, unreadable/orphan projects, empty authority and pagination beyond 1000. Two existing tests cover scheduled capability dispatch and task-owned database sessions. One existing production LAN scheduler journey verifies the real tool invocation. An existing CI formatting failure in conversation_order_fixture.py is repaired with formatting only; AST equivalence to the baseline is verified.",
+  "exclusions": "No interface, client, native, origin or provider behavior changes: frontend unit and mobile viewport matrix are not selected. Desktop Chromium exercises the existing production LAN scheduler journey. No production database access, deployment or full suites. Python 3.12 only. The unrelated fixture formatting has identical AST and does not require its conversation-order journey to rerun.",
   "expected_tests": {
     "python": 7,
     "frontend": 0,
