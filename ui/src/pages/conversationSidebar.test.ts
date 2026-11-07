@@ -21,6 +21,46 @@ function session(id: string, overrides: Partial<ChatSessionSummary> = {}): ChatS
 }
 
 describe("groupSidebarConversations", () => {
+  it("groups running chats above pinned, blocked, paused and recent chats", () => {
+    const sessions = [session("pinned", { pinned: true }), session("blocked"), session("paused"),
+      session("running-old", { updatedAt: "2026-09-01T10:00:00Z" }), session("running-new"),
+      session("archived", { archivedAt: "2026-09-22T12:00:00Z" })];
+    const result = groupSidebarConversations(sessions, {
+      blocked: "waiting", paused: "idle", "running-old": "working", "running-new": "working", archived: "working",
+    }, "", new Set(), now);
+    expect(result.groups.map(group => group.label)).toEqual(["Working", "Pinned", "Needs you", "Today", "Archived"]);
+    expect(result.groups[0].rows.map(row => row.session.id)).toEqual(["running-new", "running-old"]);
+  });
+
+  it("moves a pinned chat into Working only while it runs", () => {
+    const pinned = session("pinned", { pinned: true });
+    for (const state of ["working", "waiting", "idle"] as const) {
+      const result = groupSidebarConversations([pinned], { pinned: state }, "", new Set(), now);
+      expect(result.groups[0].label).toBe(state === "working" ? "Working" : "Pinned");
+      expect(result.groups[0].rows[0].session.pinned).toBe(true);
+    }
+  });
+
+  it("keeps running Butler work ahead of blocked siblings and promotes their parent", () => {
+    const butler = session("butler", { isControlAssistant: true });
+    const blocked = session("blocked", { isButlerInitiated: true });
+    const running = session("running", { isButlerInitiated: true, updatedAt: "2026-09-01T10:00:00Z" });
+    const result = groupSidebarConversations([butler, blocked, running], { blocked: "waiting", running: "working" }, "", new Set([butler.id]), now);
+    expect(result.groups[0].label).toBe("Working");
+    expect(result.groups[0].rows.map(row => row.session.id)).toEqual(["butler", "running", "blocked"]);
+    expect(result.groups[0].rows[0].waitingChildren).toBe(1);
+  });
+
+  it("sorts running subagents first without detaching them or hiding search matches", () => {
+    const parent = session("parent");
+    const idle = session("idle", { isSubagent: true, parentSessionId: parent.id });
+    const running = session("running", { isSubagent: true, parentSessionId: parent.id, updatedAt: "2026-09-01T10:00:00Z" });
+    const result = groupSidebarConversations([parent, idle, running], { running: "working" }, "", new Set([parent.id]), now);
+    expect(result.groups[0].rows.map(row => [row.session.id, row.depth])).toEqual([["parent", 0], ["running", 1], ["idle", 1]]);
+    const searched = groupSidebarConversations([parent, idle, running], { running: "working" }, "idle", new Set(), now);
+    expect(searched.groups[0].rows.map(row => row.session.id)).toEqual(["parent", "idle"]);
+  });
+
   it("nests only marked subagents and starts their parent collapsed", () => {
     const parent = session("parent", { title: "Main agent" });
     const child = session("child", { title: "Subagent", parentSessionId: parent.id, isSubagent: true });

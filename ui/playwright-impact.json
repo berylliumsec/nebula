@@ -8,6 +8,7 @@
     "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
   ],
   "rules": [
+    {"name": "conversation-order", "patterns": ["ui/src/pages/conversationSidebar*", "ui/tests/conversation-order.spec.ts", "ui/playwright.conversation-order.config.ts", "tests/v3/conversation_order_fixture.py"], "areas": ["conversation-order"]},
     {"name":"universal-agents","patterns":["src/nebula/v3/harness_core_tools.py","src/nebula/v3/harness_hooks.py","ui/src/pages/chatSubagentChoice.ts","tests/v3/universal_agent_fixture.py"],"areas":["universal-agents"]},
     {"name": "first-user", "patterns": ["ui/src/components/PairingGate.tsx", "ui/src/components/ChatAttachments.tsx", "ui/src/components/Provider*", "ui/src/components/SideNav.tsx", "ui/src/calm-responsive.css"], "areas": ["first-user"]},
     {"name":"host-cpu-budget","patterns":["src/nebula/v3/host_cpu_budget.py","ui/src/api/hostCpuBudget.ts","ui/src/components/HostCpuBudgetSettings*","tests/v3/host_cpu_budget_fixture.py"],"areas":["host-cpu-budget"]},
@@ -115,6 +116,7 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "conversation-order": [{"area": "conversation-order", "project": "model-desktop", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-compact", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-chromium-320", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-webkit-320", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-chromium-390", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-webkit-390", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-chromium-430", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}, {"area": "conversation-order", "project": "model-webkit-430", "test_match": "tests/conversation-order.spec.ts", "grep": "running conversations stay first", "runtime": "real-core", "shard": "1/1"}],
     "release-live-acceptance": [
       {"area": "release-live-acceptance", "project": "desktop", "test_match": "tests/release-live.spec.ts", "runtime": "real-core", "shard": "1/1"},
       {"area": "release-live-acceptance", "project": "compact", "test_match": "tests/release-live.spec.ts", "runtime": "real-core", "shard": "1/1"},
@@ -2789,6 +2791,15 @@
     ]
   },
   "full_include": [
+    {"area": "full", "project": "model-desktop", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "model-compact", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "model-chromium-320", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "model-webkit-320", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "model-chromium-390", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "model-webkit-390", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "model-chromium-430", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "model-webkit-430", "test_match": "tests/conversation-order.spec.ts", "runtime": "real-core", "shard": "1/1"},
+
     {"area": "full", "project": "model-desktop", "test_match": "tests/assistant-browser-viewer.spec.ts", "runtime": "real-core", "shard": "1/1"},
     {"area": "full", "project": "model-compact", "test_match": "tests/assistant-browser-viewer.spec.ts", "runtime": "real-core", "shard": "1/1"},
     {"area": "full", "project": "model-chromium-320", "test_match": "tests/assistant-browser-viewer.spec.ts", "runtime": "real-core", "shard": "1/1"},
