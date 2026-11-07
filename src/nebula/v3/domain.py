@@ -4286,6 +4286,8 @@ class ButlerRecoveryCase(Entity):
     model_backend: ChatBackend | None = None
     model_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
+    investigation_session_id: str | None = Field(default=None, max_length=200)
+    investigation_turn_ids: list[str] = Field(default_factory=list)
     model_turn_id: str | None = Field(default=None, max_length=200)
     model_turn_ids: list[str] = Field(default_factory=list, max_length=8)
     capacity_retry_count: int = Field(default=0, ge=0, le=1)

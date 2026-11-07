@@ -2787,6 +2787,8 @@ def create_app(
         else browser_root
     )
     harness_runtime.butler_instructions_root = butler_instructions_root
+    if tool_platform is not None:
+        tool_platform.butler_instructions_root = butler_instructions_root
     butler_oversight.recovery_service = ButlerRecoveryService(
         store,
         ButlerRecoveryAgent(
@@ -2807,6 +2809,7 @@ def create_app(
         ),
         instructions_root=butler_instructions_root,
     )
+    butler_oversight.recovery_service.wake = butler_oversight.notify
     if tool_platform is not None:
         tool_platform.bind_settings_assistant_api(settings_assistant_api)
         tool_platform.bind_control_assistant_work(control_assistant_work)
@@ -12331,6 +12334,7 @@ def create_app(
                     )
                 )
                 if item.metadata.get("control_assistant") is True
+                and not item.metadata.get("butler_recovery_case_id")
                 and item.metadata.get("archived_at") is None
             ),
             None,

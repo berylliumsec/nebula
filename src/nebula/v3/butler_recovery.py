@@ -11,11 +11,10 @@ from .async_utils import async_any
 import asyncio
 import hashlib
 import json
-from contextlib import suppress
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
-from uuid import uuid4
 
 from .butler_oversight import (
     ButlerEventPayload,
@@ -26,6 +25,7 @@ from .butler_oversight import (
     project_state_id,
     project_stream_id,
 )
+from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import (
     ButlerAuthorityPolicy,
     ButlerGlobalState,
@@ -56,13 +56,11 @@ from .domain import (
     ToolCall,
     utc_now,
 )
-from .butler_capabilities import ButlerCapabilities, _BACKGROUND_CHANGES
+from .butler_capabilities import _BACKGROUND_CHANGES
 from .butler_global_capabilities import measured_harness_capacity
 from .butler_instructions import ButlerInstructionsError, read_butler_instructions
 from .butler_precedent import read_precedents
 from .chat_assistant_config import chat_assistant_config
-from .privacy import validate_engagement_provider_privacy
-from .providers import ModelMessage, ModelRequest, ModelToolResult, ToolDefinition
 from .storage import NebulaStore, NotFoundError
 from .tools import BudgetExhausted, CapacityReached, InvalidToolArguments, PolicyDenied
 from .harnesses import HarnessConfigurationError
@@ -118,8 +116,8 @@ _INSTRUCTIONS = (
     "smallest compatible project-scoped change. Use nebula.capabilities.search, "
     "describe, read, and change; read current settings, target state, and available "
     "model choices before changing anything. Read the supplied memory precedents "
-    "before acting; they are guidance, not evidence or authority. A child agent must "
-    "never receive a direct message from you; address its parent main chat. "
+    "before acting; they are guidance, not evidence or authority. Do not message another main agent's children directly; "
+    "address their parent main chat. "
     "A failed subagent.start from a harness can be fixed by selecting a verified "
     "provider model for the parent chat's next turn, clearing an incompatible "
     "subagent harness profile, and asking the parent to retry the same bounded work. "
@@ -191,7 +189,7 @@ _GLOBAL_INSTRUCTIONS = (
     "before retrying or claiming the message was received. When a main agent "
     "replies, read its exact dialogue turn with nebula.work.await_chat_result "
     "or nebula.global.work_read and continue that conversation in this same "
-    "check-in before concluding it. Do not message child "
+    "check-in before concluding it. Do not message another main agent's child "
     "agents. Report exact Core results, not predicted outcomes."
 )
 GLOBAL_STATE_ID = "butler-global-periodic-state"
@@ -213,7 +211,7 @@ def _applied_change(steps: list[dict[str, Any]]) -> bool:
 
 
 async def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bool:
-    """Match the vendor's exact load code on this case's failed analysis turn."""
+    """Match the vendor's exact load code on this case's failed investigation."""
 
     if (
         case.signal != "butler.global_periodic_check"
@@ -231,7 +229,7 @@ async def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bo
         return False
     if (
         turn.engagement_id != case.engagement_id
-        or turn.origin != HarnessTurnOrigin.ANALYSIS
+        or turn.origin not in {HarnessTurnOrigin.ANALYSIS, HarnessTurnOrigin.CHAT}
         or turn.metadata.get("butler_recovery_case_id") != case.id
         or turn.status not in {HarnessTurnStatus.FAILED, HarnessTurnStatus.INTERRUPTED}
     ):
@@ -629,158 +627,308 @@ class ButlerRecoveryAgent:
             raise ValueError("Butler recovery packet exceeds the bounded prompt size")
         return rendered
 
+    async def _case_session(
+        self, case: ButlerRecoveryCase, parent: ChatSession, config: dict[str, Any]
+    ) -> ChatSession:
+        if case.investigation_session_id:
+            session = await self.store.get(ChatSession, case.investigation_session_id)
+            if session.engagement_id != case.engagement_id:
+                raise ValueError("Investigation session belongs to another project")
+            return session
+        harness_session = None
+        if config["backend"] == "harness":
+            harness_session = await self.harness_runtime.create_session(
+                engagement_id=case.engagement_id,
+                profile_id=config["profile_id"],
+                model=config["model"],
+                mcp_server_ids=[],
+                tools_enabled=False,
+                control_assistant=True,
+            )
+        session = await self.store.create(
+            ChatSession(
+                engagement_id=case.engagement_id,
+                title=f"Butler check · {case.summary}"[:300],
+                parent_session_id=parent.id,
+                backend=ChatBackend(config["backend"]),
+                provider_profile_id=config["profile_id"]
+                if config["backend"] == "provider"
+                else None,
+                harness_profile_id=config["profile_id"]
+                if config["backend"] == "harness"
+                else None,
+                model=config["model"],
+                harness_session_id=harness_session.id if harness_session else None,
+                metadata={
+                    "control_assistant": True,
+                    "butler_initiated": True,
+                    "butler_recovery_case_id": case.id,
+                },
+            )
+        )
+        current = await self.store.get(ButlerRecoveryCase, case.id)
+        await self.store.update(
+            ButlerRecoveryCase,
+            case.id,
+            {"investigation_session_id": session.id},
+            expected_revision=current.revision,
+        )
+        return session
+
+    async def _record_investigation_turn(self, case_id: str, turn: ChatTurn) -> None:
+        current = await self.store.get(ButlerRecoveryCase, case_id)
+        ids = list(current.investigation_turn_ids)
+        if turn.id not in ids:
+            ids.append(turn.id)
+        await self.store.update(
+            ButlerRecoveryCase,
+            case_id,
+            {
+                "investigation_turn_ids": ids,
+                "model_backend": turn.backend,
+                "model_profile_id": turn.provider_profile_id
+                or turn.request_snapshot.get("harness_profile_id"),
+                "model": turn.model,
+            },
+            expected_revision=current.revision,
+        )
+
     async def run(
+        self, case: ButlerRecoveryCase, *, resume: bool = False
+    ) -> tuple[str, ChatBackend, str, str, str | None]:
+        try:
+            return await self._run(case, resume=resume)
+        except asyncio.CancelledError:
+            # Also cover cancellation while the parent is parked awaiting children.
+            current = await self.store.get(ButlerRecoveryCase, case.id)
+            turns = (
+                await self.store.find_entities(
+                    ChatTurn,
+                    {"session_id": current.investigation_session_id},
+                    engagement_id=case.engagement_id,
+                    newest_first=True,
+                    limit=1,
+                )
+                if current.investigation_session_id
+                else []
+            )
+            # Preparation may have saved the turn before publishing its case link.
+            for turn in turns:
+                if turn.backend == ChatBackend.HARNESS and turn.harness_turn_id:
+                    await self.harness_runtime.cancel_turn(
+                        turn.harness_turn_id, reason="Butler investigation interrupted"
+                    )
+                elif turn.status not in {
+                    ChatTurnStatus.COMPLETE,
+                    ChatTurnStatus.FAILED,
+                    ChatTurnStatus.CANCELLED,
+                }:
+                    await self.work.chat.stop_provider_turn(turn.id)
+                await self.work.chat.subagents.stop_for_parent_turn(turn.id)
+            raise
+
+    async def resume(
         self, case: ButlerRecoveryCase
     ) -> tuple[str, ChatBackend, str, str, str | None]:
-        session = await self._butler_session(case.engagement_id)
-        config = await chat_assistant_config(self.store, session)
-        profile_id = config["profile_id"]
-        model = config["model"]
+        return await self.run(case, resume=True)
+
+    async def _run(
+        self, case: ButlerRecoveryCase, *, resume: bool = False
+    ) -> tuple[str, ChatBackend, str, str, str | None]:
+        from .chat import ChatCompletionRequest, ChatRequestMessage
+
+        if resume:
+            return await self._wait_for_turn(case, case.investigation_turn_ids[-1])
+        parent = await self._butler_session(case.engagement_id)
+        config = await chat_assistant_config(self.store, parent)
+        profile_id, model = config["profile_id"], config["model"]
         backend = ChatBackend(config["backend"])
         if not isinstance(profile_id, str) or not isinstance(model, str):
             raise ValueError("Butler needs an enabled model in Assistant settings")
-        packet = await self._packet(case)
-        instructions = (await self._global_instructions(case)) or _INSTRUCTIONS
-        global_check = case.signal == "butler.global_periodic_check"
+        profile: HarnessProfile | ProviderProfile
         if backend == ChatBackend.HARNESS:
-            harness_profile = await self.store.get(HarnessProfile, profile_id)
-            if (
-                not harness_profile.enabled
-                or model not in harness_profile.capabilities.models
-            ):
-                raise ValueError("Butler's configured harness model is unavailable")
-            if not harness_profile.privacy.local_only and not (
-                harness_profile.privacy.permits_sensitive_data
-                and harness_profile.privacy.auto_share_tool_results
+            profile = await self.store.get(HarnessProfile, profile_id)
+            local = profile.privacy.local_only
+            available = profile.enabled and model in profile.capabilities.models
+        else:
+            profile = await self.store.get(ProviderProfile, profile_id)
+            local = profile.is_local
+            available = profile.enabled and profile.tools_verified_for(model)
+        if not available:
+            raise ValueError("Butler's configured model is unavailable")
+        if not local and not (
+            profile.privacy.permits_sensitive_data
+            and profile.privacy.auto_share_tool_results
+        ):
+            raise ValueError(
+                "Butler's runtime is not authorized for unattended project tool results"
+            )
+        if (
+            backend == ChatBackend.HARNESS
+            and case.signal == "butler.global_periodic_check"
+        ):
+            assert isinstance(profile, HarnessProfile)
+            profile = await self._scheduled_harness_profile(
+                case.engagement_id,
+                profile,
+                model,
+                config["harness_reasoning_effort"],
+                config["harness_cyber_access_program"],
+            )
+            profile_id = profile.id
+        session = await self._case_session(case, parent, config)
+        packet = await self._packet(case)
+        instructions = ((await self._global_instructions(case)) or _INSTRUCTIONS) + (
+            " You may delegate bounded investigation work to your own subagents, "
+            "and use subagent tools to wait for, message, and stop those children. "
+            "Do not message children owned by another main agent. Read your children's "
+            "results before concluding; their claims do not verify a recovery."
+        )
+        chat = self.work.chat
+        child_setting = None
+        if config["allow_subagents"]:
+            child_setting = {
+                "provider_profile_id": config["subagent_provider_id"]
+                or (profile_id if backend == ChatBackend.PROVIDER else ""),
+                "harness_profile_id": config["subagent_harness_profile_id"],
+                "model": config["subagent_model"]
+                or (model if backend == ChatBackend.PROVIDER else ""),
+                "max_active": config["max_active_subagents"],
+                "reasoning_effort": config["subagent_reasoning_effort"],
+            }
+        if child_setting is not None:
+            child_profile: HarnessProfile | ProviderProfile
+            if child_setting["harness_profile_id"]:
+                child_profile = await self.store.get(
+                    HarnessProfile, child_setting["harness_profile_id"]
+                )
+                child_local = child_profile.privacy.local_only
+            else:
+                child_profile = await self.store.get(
+                    ProviderProfile, child_setting["provider_profile_id"]
+                )
+                child_local = child_profile.is_local
+            if not child_local and not (
+                child_profile.privacy.permits_sensitive_data
+                and child_profile.privacy.auto_share_tool_results
             ):
                 raise ValueError(
-                    "Butler's harness is not authorized for unattended project tool results"
+                    "Butler's subagent runtime is not authorized for unattended tool results"
                 )
-            if global_check:
-                harness_profile = await self._scheduled_harness_profile(
-                    case.engagement_id,
-                    harness_profile,
-                    model,
-                    config["harness_reasoning_effort"],
-                    config["harness_cyber_access_program"],
-                )
-                profile_id = harness_profile.id
-            turn = await self.harness_runtime.analyze_structured(
+        if backend == ChatBackend.HARNESS:
+            _, turn, harness_turn = await self.harness_runtime.prepare_chat(
                 engagement_id=case.engagement_id,
                 profile_id=profile_id,
                 model=model,
-                prompt=instructions
-                + "\n\n<core_case_json>\n"
-                + packet
-                + "\n</core_case_json>",
-                reasoning_effort=config["harness_reasoning_effort"],
-                nebula_tools=True,
+                chat_session_id=session.id,
+                harness_session_id=None,
+                mcp_server_ids=[],
+                prompt=packet,
+                runtime_context=instructions,
+                control_assistant=True,
+                butler_initiated=True,
                 butler_recovery_case_id=case.id,
-                on_turn_created=lambda started: self._record_model_turn(
-                    case.id, backend, profile_id, model, started.id
-                ),
+                include_knowledge=False,
+                allow_mcp_catalog=False,
+                allow_agent_messaging=False,
+                provider_subagent=child_setting,
+                harness_reasoning_effort=config["harness_reasoning_effort"],
+                harness_cyber_access_program=config["harness_cyber_access_program"],
             )
-            if turn.status != HarnessTurnStatus.COMPLETE:
-                raise ValueError("Butler's harness investigation did not complete")
-            return (turn.response or "")[:1000], backend, profile_id, model, turn.id
-        if backend != ChatBackend.PROVIDER:
-            raise ValueError("Butler's configured runtime is unsupported")
-        provider_profile = await self.store.get(ProviderProfile, profile_id)
-        if not provider_profile.enabled or not provider_profile.tools_verified_for(
-            model
-        ):
-            raise ValueError("Butler's provider model is not verified for tools")
-        if not provider_profile.is_local and not (
-            provider_profile.privacy.permits_sensitive_data
-            and provider_profile.privacy.auto_share_tool_results
-        ):
-            raise ValueError(
-                "Butler's provider is not authorized for unattended project tool results"
+            await self._record_investigation_turn(case.id, turn)
+            await self._record_model_turn(
+                case.id, backend, profile_id, model, harness_turn.id
             )
-        provider = self.provider_factory(provider_profile)
-        (
-            await validate_engagement_provider_privacy(
-                self.store,
-                (await self.store.get(Engagement, case.engagement_id)),
-                provider,
-            )
-        )
-        capabilities = await ButlerCapabilities.create(
-            self.store,
-            self.artifact_store,
-            case.engagement_id,
-            settings_api=self.settings_api,
-            notebooks=self.notebooks,
-            work=self.work,
-            memory=self.memory,
-            background_case_id=case.id,
-            instructions_root=self.instructions_root,
-            background_runtime_local=provider_profile.is_local,
-        )
-        plugins = {plugin.spec.name: plugin for plugin in capabilities.plugins()}
-        tools = [
-            ToolDefinition(
-                name=plugin.spec.name,
-                description=plugin.spec.description,
-                input_schema=plugin.spec.input_schema,
-                strict=False,
-            )
-            for plugin in plugins.values()
-        ]
-        results: list[ModelToolResult] = []
-        while True:
-            request = ModelRequest(
+            try:
+                async for _ in self.harness_runtime.stream_turn(harness_turn.id):
+                    pass
+            except asyncio.CancelledError:
+                await chat.subagents.stop_for_parent_turn(turn.id)
+                raise
+        else:
+            request = ChatCompletionRequest(
+                engagement_id=case.engagement_id,
+                session_id=session.id,
+                provider_id=profile_id,
                 model=model,
-                instructions=instructions,
-                messages=[ModelMessage(role="user", content=packet)],
-                tools=tools,
-                tool_results=results,
-                max_output_tokens=1000,
-                parallel_tool_calls=False,
-                metadata={
-                    "engagement_id": case.engagement_id,
-                    "operation": "butler_recovery",
-                    "case_id": case.id,
-                },
+                control_assistant=True,
+                butler_initiated=True,
+                messages=[ChatRequestMessage(role=ChatRole.USER, content=packet)],
+                include_knowledge=False,
+                allow_mcp_catalog=False,
+                allow_agent_messaging=False,
+                allow_cloud_tool_results=True,
+                allow_subagents=config["allow_subagents"],
+                max_active_subagents=config["max_active_subagents"],
+                subagent_provider_id=config["subagent_provider_id"],
+                subagent_harness_profile_id=config["subagent_harness_profile_id"],
+                subagent_model=config["subagent_model"],
+                subagent_reasoning_effort=config["subagent_reasoning_effort"],
+                reasoning_effort=config["reasoning_effort"],
             )
-            provider.require(request)
-            response = await provider.complete(request)
-            if response.provider_id != provider_profile.id:
-                raise ValueError("Butler provider identity changed")
-            if not response.tool_calls:
-                return response.text[:1000], backend, profile_id, model, None
-            group = str(uuid4())
-            for index, call in enumerate(response.tool_calls):
-                plugin = plugins.get(call.name)
-                try:
-                    if plugin is None or call.invalid_reason:
-                        raise ValueError("Butler called an unavailable capability")
-                    output = await plugin._handler(call.arguments)
-                    is_error = False
-                except Exception as exc:
-                    # diagnostic-expected: the tool error is saved in the recovery case and returned to Butler.
-                    output = {"error": str(exc)[:500], "type": type(exc).__name__}
-                    is_error = True
-                rendered = json.dumps(output, ensure_ascii=False, default=str)
-                results.append(
-                    ModelToolResult(
-                        call_id=call.id,
-                        name=call.name,
-                        arguments=call.arguments,
-                        output=rendered[:8_000],
-                        is_error=is_error,
-                        response_group=group,
-                        response_text=response.text[:1000] if index == 0 else None,
-                        reasoning_state=response.reasoning_state
-                        if index == 0
-                        else None,
-                        provider_metadata=call.provider_metadata,
-                    )
+            request._butler_recovery_case_id = case.id
+            request._butler_recovery_instructions = instructions
+            prepared = await chat.prepare_async(request)
+            prepared_turn = prepared.turn
+            if prepared_turn is None:
+                raise ValueError("Background investigation requires a durable turn")
+            turn = prepared_turn
+            await self._record_investigation_turn(case.id, turn)
+            await chat.start_provider_turn(prepared)
+        return await self._wait_for_turn(case, turn.id)
+
+    async def _wait_for_turn(
+        self, case: ButlerRecoveryCase, turn_id: str
+    ) -> tuple[str, ChatBackend, str, str, str | None]:
+        from .chat_subagents import restart_recovery_pending
+
+        chat = self.work.chat
+        while True:
+            current = await self.store.get(ChatTurn, turn_id)
+            children = [
+                child
+                for child in await chat.subagents.for_session(current.session_id)
+                if child.parent_turn_id == turn_id
+            ]
+            if current.status in {ChatTurnStatus.FAILED, ChatTurnStatus.CANCELLED} or (
+                current.status == ChatTurnStatus.INTERRUPTED
+                and not restart_recovery_pending(current)
+            ):
+                raise ValueError(
+                    current.error or "Butler's investigation did not complete"
                 )
+            if current.status == ChatTurnStatus.COMPLETE and not any(
+                child.status == ChatSubagentStatus.RUNNING for child in children
+            ):
+                break
+            await asyncio.sleep(0.1)
+        if any(child.status != ChatSubagentStatus.COMPLETED for child in children):
+            raise ValueError("A delegated Butler investigation needs attention")
+        if any(child.reported_at is None for child in children):
+            raise ValueError(
+                "Butler ended its investigation without reading delegated results"
+            )
+        message = (
+            await self.store.get(ChatMessage, current.final_message_id)
+            if current.final_message_id
+            else None
+        )
+        profile_id = current.provider_profile_id or current.request_snapshot.get(
+            "harness_profile_id"
+        )
+        if not isinstance(profile_id, str):
+            raise ValueError("Investigation turn is missing its runtime profile")
+        return (
+            message.content if message else current.content,
+            current.backend,
+            profile_id,
+            current.model,
+            current.harness_turn_id,
+        )
 
 
 class ButlerRecoveryService:
-    """Create durable Act cases from project events and run one case at a time."""
+    """Dispatch durable Act cases to independent, project-lease-owned workers."""
 
     def __init__(
         self,
@@ -792,6 +940,55 @@ class ButlerRecoveryService:
         self.store = store
         self.agent = agent
         self.instructions_root = instructions_root
+        self._workers: dict[str, asyncio.Task[None]] = {}
+        self._leases: dict[str, asyncio.Task[None]] = {}
+        self.wake: Callable[[str], None] | None = None
+
+    async def shutdown(self) -> None:
+        tasks = [*self._workers.values(), *self._leases.values()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._workers.clear()
+        self._leases.clear()
+
+    async def _project_heartbeat(self, project_id: str, worker_id: str) -> None:
+        try:
+            while await async_any(
+                (await self.store.get(ButlerRecoveryCase, case_id)).engagement_id
+                == project_id
+                for case_id in list(self._workers)
+            ):
+                await asyncio.sleep(LEASE_RENEW_INTERVAL_SECONDS)
+                if (
+                    not await self._renew_project_lease(project_id, worker_id)
+                    or await self._current_act(project_id, worker_id) is None
+                ):
+                    raise RuntimeError(
+                        "Butler lost the project lease or Act authority during investigation"
+                    )
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.recovery_lease_lost",
+                "Butler stopped this project's investigations after losing ownership.",
+                exc,
+                stage="recovery-lease",
+            )
+            # Losing ownership cancels only this project's owned investigations.
+            for case_id, task in list(self._workers.items()):
+                case = await self.store.get(ButlerRecoveryCase, case_id)
+                if case.engagement_id == project_id:
+                    task.cancel()
+        finally:
+            if self.wake is not None:
+                self.wake(project_id)
+
+    def _worker_done(self, case: ButlerRecoveryCase, task: asyncio.Task[None]) -> None:
+        if self._workers.get(case.id) is task:
+            self._workers.pop(case.id, None)
+        if self.wake is not None:
+            self.wake(case.engagement_id)
 
     async def _global_idle_goal_count(self) -> int:
         """Count unresolved main goals when no Act project has a running one."""
@@ -1099,6 +1296,19 @@ class ButlerRecoveryService:
         payload = ButlerEventPayload.model_validate(event.payload)
         if payload.project_id != project_id:
             return None
+        # Failures inside an investigation remain in that investigation's own
+        # transcript. Recursively investigating Butler's own children would
+        # otherwise multiply cases whenever a configured child runtime fails.
+        session_id = payload.session_id
+        seen: set[str] = set()
+        while session_id and session_id not in seen:
+            seen.add(session_id)
+            session = await self.store.find_entity(ChatSession, "id", session_id)
+            if session is None:
+                break
+            if session.metadata.get("butler_recovery_case_id"):
+                return None
+            session_id = session.parent_session_id
         if decision_case:
             refs = [ref for ref in payload.evidence_refs if ref.kind == "decision"]
             if len(refs) != 1:
@@ -1228,12 +1438,12 @@ class ButlerRecoveryService:
         policy = await self._current_act(project_id, worker_id)
         if policy is None:
             return None
-        candidates = await self.store.find_entities(
-            ButlerRecoveryCase,
-            {"status": "observed"},
-            engagement_id=project_id,
-            limit=20,
-        )
+        candidates = [
+            item
+            async for item in self.store.iter_readable_entities(
+                ButlerRecoveryCase, {"status": "observed"}, engagement_id=project_id
+            )
+        ]
         if not candidates:
             return None
         case = next(
@@ -1317,56 +1527,27 @@ class ButlerRecoveryService:
             )
         return True
 
-    async def _hold_project_lease(self, project_id: str, worker_id: str) -> None:
-        while True:
-            await asyncio.sleep(LEASE_RENEW_INTERVAL_SECONDS)
-            if not await self._renew_project_lease(project_id, worker_id):
-                raise RuntimeError("Butler lost the project lease during investigation")
-
-    async def _run_with_lease(
-        self, case: ButlerRecoveryCase, worker_id: str
-    ) -> tuple[str, ChatBackend, str, str, str | None]:
-        assert self.agent is not None
-        # diagnostic-expected: both owned tasks are awaited and cancelled in this scope.
-        investigation = asyncio.create_task(self.agent.run(case))
-        # diagnostic-expected: the lease task is awaited and cancelled in this scope.
-        lease = asyncio.create_task(
-            self._hold_project_lease(case.engagement_id, worker_id)
-        )
-        try:
-            done, _ = await asyncio.wait(
-                {investigation, lease}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if lease in done:
-                investigation.cancel()
-                with suppress(asyncio.CancelledError):
-                    # diagnostic-expected: cancellation of the owned investigation is drained.
-                    await investigation
-                await lease
-                raise RuntimeError("Butler project lease ended during investigation")
-            return await investigation
-        finally:
-            if not investigation.done():
-                investigation.cancel()
-                with suppress(asyncio.CancelledError):
-                    # diagnostic-expected: cancellation of the owned investigation is drained.
-                    await investigation
-            lease.cancel()
-            with suppress(asyncio.CancelledError):
-                # diagnostic-expected: cancellation of the owned lease task is drained.
-                await lease
-
     async def recover_interrupted_cases(self, project_id: str) -> int:
         """A crashed worker cannot replay an action whose side effect is unclear."""
 
         expired = utc_now() - timedelta(seconds=90)
         recovered = 0
-        for case in await self.store.find_entities(
+        async for case in self.store.iter_readable_entities(
             ButlerRecoveryCase,
             {"status": "investigating"},
             engagement_id=project_id,
-            limit=20,
         ):
+            if case.id in self._workers:
+                continue
+            if case.investigation_turn_ids:
+                turn = await self.store.get(ChatTurn, case.investigation_turn_ids[-1])
+                if turn.status not in {
+                    ChatTurnStatus.COMPLETE,
+                    ChatTurnStatus.FAILED,
+                    ChatTurnStatus.CANCELLED,
+                    ChatTurnStatus.INTERRUPTED,
+                }:
+                    continue
             if case.started_at is None or case.started_at >= expired:
                 continue
             if (
@@ -1433,7 +1614,7 @@ class ButlerRecoveryService:
             ):
                 continue
             try:
-                self.agent._global_instructions(case)
+                await self.agent._global_instructions(case)
             except (ButlerInstructionsError, NotFoundError):
                 # diagnostic-expected: a changed or missing mandate belongs to a new check.
                 continue
@@ -1533,7 +1714,8 @@ class ButlerRecoveryService:
                     pending.append(target)
             if results:
                 if (
-                    len(case.model_turn_ids) >= MAX_DIALOGUE_TURNS
+                    max(len(case.model_turn_ids), len(case.investigation_turn_ids))
+                    >= MAX_DIALOGUE_TURNS
                     or len(case.dialogue_results) + len(results) > MAX_DIALOGUE_TURNS
                 ):
                     return await self._update_case(
@@ -1715,6 +1897,51 @@ class ButlerRecoveryService:
         )
 
     async def process_project(self, project_id: str, worker_id: str) -> None:
+        # Reattach the durable investigation before considering crash replay.
+        # Chat's normal restart recovery owns resuming its exact model turn.
+        if self.agent is not None and hasattr(self.agent, "resume"):
+            policy = await self._current_act(project_id, worker_id)
+            if policy is not None:
+                async for case in self.store.iter_readable_entities(
+                    ButlerRecoveryCase,
+                    {"status": "investigating"},
+                    engagement_id=project_id,
+                ):
+                    if (
+                        case.id in self._workers
+                        or case.authority_revision != policy.revision
+                    ):
+                        continue
+                    turns = (
+                        await self.store.find_entities(
+                            ChatTurn,
+                            {"session_id": case.investigation_session_id},
+                            engagement_id=project_id,
+                            newest_first=True,
+                            limit=1,
+                        )
+                        if case.investigation_session_id
+                        else []
+                    )
+                    turn = turns[0] if turns else None
+                    if turn is None or (
+                        case.started_at and turn.created_at < case.started_at
+                    ):
+                        continue
+                    if turn.id not in case.investigation_turn_ids:
+                        if (
+                            turn.request_snapshot.get("butler_recovery_case_id")
+                            != case.id
+                        ):
+                            continue
+                        case = await self._update_case(
+                            case,
+                            investigation_turn_ids=[
+                                *case.investigation_turn_ids,
+                                turn.id,
+                            ],
+                        )
+                    self._start_case(case, worker_id, resume=True)
         (await self.recover_interrupted_cases(project_id))
         (await self.retry_overloaded_cases(project_id, worker_id))
         try:
@@ -1729,11 +1956,10 @@ class ButlerRecoveryService:
             consumed = await self.capture_events(project_id, worker_id)
             if consumed < 100:
                 break
-        for verifying_case in await self.store.find_entities(
+        async for verifying_case in self.store.iter_readable_entities(
             ButlerRecoveryCase,
             {"status": "verifying"},
             engagement_id=project_id,
-            limit=10,
         ):
             if (
                 verifying_case.next_check_at is None
@@ -1742,13 +1968,73 @@ class ButlerRecoveryService:
                 (await self.verify_follow_up(verifying_case))
         if self.agent is None:
             return
-        case = await self._claim_case(project_id, worker_id)
-        if case is None:
-            return
-        try:
-            summary, backend, profile_id, model, turn_id = await self._run_with_lease(
-                case, worker_id
+        while True:
+            claimed_case = await self._claim_case(project_id, worker_id)
+            if claimed_case is None:
+                break
+            self._start_case(claimed_case, worker_id)
+
+    def _start_case(
+        self, case: ButlerRecoveryCase, worker_id: str, *, resume: bool = False
+    ) -> None:
+        project_id = case.engagement_id
+        lease = self._leases.get(project_id)
+        if lease is None or lease.done():
+            self._leases[project_id] = create_diagnostic_task(
+                self._project_heartbeat(project_id, worker_id),
+                feature="butler",
+                event_code="butler.recovery_lease_failed",
+                failure_message="Butler's investigation lease stopped unexpectedly.",
+                name=f"butler-lease-{project_id}",
             )
+        task = create_diagnostic_task(
+            self._investigate_case(case, resume=resume),
+            feature="butler",
+            event_code="butler.recovery_worker_failed",
+            failure_message="Butler's case worker stopped unexpectedly.",
+            name=f"butler-case-{case.id}",
+        )
+        self._workers[case.id] = task
+        task.add_done_callback(partial(self._worker_done, case))
+
+    async def _investigate_case(
+        self, case: ButlerRecoveryCase, *, resume: bool = False
+    ) -> None:
+        from .chat import ChatConfigurationError
+
+        assert self.agent is not None
+        project_id = case.engagement_id
+        try:
+            summary, backend, profile_id, model, turn_id = await (
+                self.agent.resume(case) if resume else self.agent.run(case)
+            )
+        except asyncio.CancelledError:
+            current = await self.store.get(ButlerRecoveryCase, case.id)
+            policy = await self.store.find_entity(
+                ButlerAuthorityPolicy, "engagement_id", project_id
+            )
+            revoked = (
+                policy is None
+                or policy.authority != "act"
+                or policy.revision != case.authority_revision
+            )
+            uncertain = _possible_change(current.steps) or _applied_change(
+                current.steps
+            )
+            await self._update_case(
+                current,
+                status="uncertain"
+                if uncertain
+                else "cancelled"
+                if revoked
+                else "observed",
+                outcome="Investigation interrupted; possible actions require review."
+                if uncertain
+                else "Investigation interrupted before a verified result.",
+                started_at=None,
+                finished_at=utc_now() if uncertain or revoked else None,
+            )
+            raise
         except Exception as exc:
             # diagnostic-expected: the case records the investigation failure for operator review.
             current = await self.store.get(ButlerRecoveryCase, case.id)
@@ -1763,7 +2049,12 @@ class ButlerRecoveryService:
             elif uncertain:
                 outcome = "An action may have taken effect; inspect Core before retry."
             elif isinstance(
-                exc, (ButlerInstructionsError, ButlerRouteUnavailableError)
+                exc,
+                (
+                    ButlerInstructionsError,
+                    ButlerRouteUnavailableError,
+                    ChatConfigurationError,
+                ),
             ):
                 outcome = str(exc)[:300]
             else:

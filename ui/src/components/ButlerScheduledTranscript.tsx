@@ -111,9 +111,16 @@ export function ButlerScheduledTranscript({ item, api, coreState, onNavigate }: 
   const [open, setOpen] = useState(false);
   const turnIds = item.modelTurnIds?.length ? item.modelTurnIds : item.modelTurnId ? [item.modelTurnId] : [];
   return <details className={styles.transcript} onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>Check transcript <span>{turnIds.length ? "Saved in Core" : "No model turn"}</span></summary>
+    <summary>Check transcript <span>{turnIds.length || item.investigationTurnIds?.length ? "Saved in Core" : "No model turn"}</span></summary>
     <div className={styles.transcriptBody}>
-      {item.modelBackend === "provider" && <p className={styles.note}>This provider check saved its actions and outcome above. A full model event stream was not recorded.</p>}
+      {item.investigationSessionId && <a className={styles.workLink}
+        href={`/projects/${encodeURIComponent(item.projectId ?? "")}/workbench?view=chat&session=${encodeURIComponent(item.investigationSessionId)}`}
+        onClick={(event) => {
+          if (!onNavigate) return;
+          event.preventDefault();
+          onNavigate(event.currentTarget.getAttribute("href")!);
+        }}>Open investigation and subagents</a>}
+      {!item.investigationSessionId && item.modelBackend === "provider" && <p className={styles.note}>This provider check saved its actions and outcome above. A full model event stream was not recorded.</p>}
       {!turnIds.length && <p className={styles.note}>Butler has not started a model turn for this check.</p>}
       {open && item.modelBackend === "harness" && turnIds.map((turnId, index) => <SavedTurn
         key={turnId}

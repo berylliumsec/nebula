@@ -82,6 +82,7 @@ export interface ButlerAction {
 
 export interface ButlerRecoveryCase {
   id: string;
+  projectId?: string;
   trigger: "immediate" | "periodic";
   signal: string;
   status: "observed" | "investigating" | "verifying" | "resolved" | "needs_attention" | "uncertain" | "cancelled";
@@ -92,6 +93,8 @@ export interface ButlerRecoveryCase {
   modelBackend?: "provider" | "harness";
   modelTurnId?: string;
   modelTurnIds?: string[];
+  investigationSessionId?: string;
+  investigationTurnIds?: string[];
   recoveryGoals: ButlerRecoveryGoal[];
   createdAt?: string;
   finishedAt?: string;
@@ -267,6 +270,8 @@ interface WireButlerOverview {
     model_backend?: "provider" | "harness" | null;
     model_turn_id?: string | null;
     model_turn_ids?: string[];
+    investigation_session_id?: string | null;
+    investigation_turn_ids?: string[];
     recovery_goals?: Array<{
       id: string;
       project_id: string;
@@ -418,6 +423,7 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
     })),
     recoveryCases: (wire.recovery_cases ?? []).map((item) => ({
       id: item.id,
+      projectId: wire.project_id,
       trigger: item.trigger,
       signal: item.signal,
       status: item.status,
@@ -427,6 +433,8 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       targetSessionId: item.target_session_id ?? undefined,
       modelBackend: item.model_backend ?? undefined,
       modelTurnId: item.model_turn_id ?? undefined,
+      investigationSessionId: item.investigation_session_id ?? undefined,
+      investigationTurnIds: item.investigation_turn_ids ?? [],
       modelTurnIds: item.model_turn_ids?.length ? item.model_turn_ids : item.model_turn_id ? [item.model_turn_id] : [],
       recoveryGoals: (item.recovery_goals ?? []).map((goal) => ({
         id: goal.id,

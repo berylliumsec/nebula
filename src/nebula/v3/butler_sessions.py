@@ -104,6 +104,9 @@ async def reserve_butler_session(
                 .as_boolean()
                 .is_(True),
                 EntityRow.payload["metadata"]["archived_at"].as_string().is_(None),
+                EntityRow.payload["metadata"]["butler_recovery_case_id"]
+                .as_string()
+                .is_(None),
             )
             .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
             .limit(1)

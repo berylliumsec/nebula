@@ -622,6 +622,9 @@ async def resolve_chat_model_content(
 
 class ChatCompletionRequest(NebulaModel):
     _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
+    # Core-only recovery context; never accepted from the public request body.
+    _butler_recovery_case_id: str | None = PrivateAttr(default=None)
+    _butler_recovery_instructions: str | None = PrivateAttr(default=None)
     backend: ChatBackend = ChatBackend.PROVIDER
     control_assistant: bool = False
     butler_initiated: bool = False
@@ -5925,6 +5928,12 @@ class ChatService:
                 "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
                 "Do not claim to have changed a Nebula setting from this conversation."
             )
+        if request._butler_recovery_instructions:
+            instructions = request._butler_recovery_instructions
+        if request._butler_recovery_case_id:
+            work_enabled = False
+            work_roster_enabled = False
+            web_search_selected = False
         if work_enabled:
             instructions += "\n\n" + WORK_AVAILABLE_INSTRUCTIONS
         if work_roster_enabled:
@@ -6032,8 +6041,10 @@ class ChatService:
         skill_resources_selected = any(item.resources for item in skill_snapshots)
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
-        web_search_selected = not side_chat and await self._web_search_selected(
-            engagement_id
+        web_search_selected = (
+            not request._butler_recovery_case_id
+            and not side_chat
+            and await self._web_search_selected(engagement_id)
         )
         settings_assistant_available = bool(
             settings_only
@@ -6131,6 +6142,7 @@ class ChatService:
                         include_oci=False,
                         allow_empty=True,
                         settings_assistant=settings_only,
+                        background_case_id=request._butler_recovery_case_id,
                         operator_message=(
                             request.messages[-1].content if settings_only else ""
                         ),
@@ -6756,7 +6768,10 @@ class ChatService:
                 queued_at=utc_now(),
                 capacity_lane=(
                     "background"
-                    if request.goal_id or child_messaging or request._queue_claim
+                    if request.goal_id
+                    or child_messaging
+                    or request._queue_claim
+                    or request._butler_recovery_case_id
                     else "direct"
                 ),
                 tools_enabled=True,
@@ -6799,6 +6814,7 @@ class ChatService:
                     ],
                     "include_oci_tools": request.tools_enabled,
                     "control_assistant": settings_only,
+                    "butler_recovery_case_id": request._butler_recovery_case_id,
                     "available_tool_names": sorted(tool_components.specs),
                     "planning_enabled": bool(request.planning_enabled),
                     "plan_behavior": "advisory",
@@ -13082,6 +13098,9 @@ class ChatService:
                         include_oci=False,
                         allow_empty=True,
                         settings_assistant=settings_only,
+                        background_case_id=turn.request_snapshot.get(
+                            "butler_recovery_case_id"
+                        ),
                     )
                 )
                 if (

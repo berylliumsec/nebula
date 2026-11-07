@@ -1,32 +1,32 @@
 {
-  "change_digest": "c2a369b0d1956152472765d692537bef1e69c01e20d0fb9ea8d6844dcc04cc7c",
-  "reviewed_by": "Codex; independent subagent validated the installed client and Core standing-consent path",
-  "reason": "Fix the paired terminal Butler send path so a remote provider or harness profile with standing tool-result consent does not ask on every message, while profiles without that consent still require per-turn approval. The selected tests cover both consent branches, a paired authenticated TLS LAN TUI Butler conversation across reconnect, and product-help guidance and source digest.",
-  "exclusions": "No Core or web UI code changes, so frontend, native, and Playwright suites are not selected. No production Core mutation or full suite. Python 3.12 only. The LAN fixture uses synthetic data and an inert harness; the merged standalone client will be installed only on this Mac.",
+  "change_digest": "84e12b37125b4768e5a465cb6ecb1309f758a79cf298bd14346dedfd94ec7deb",
+  "reviewed_by": "Codex; independent diagnostic review",
+  "reason": "One-worker-per-case dispatch, all provider/harness delegation combinations with enabled/disabled settings, cancellation, crash-window reattachment, overload retry, recursion prevention, case transcript navigation and saved product guidance.",
+  "exclusions": "No full suites or live providers. Only the changed Butler journey on desktop Chromium, mobile Chromium and mobile WebKit. User waived local model and browser downloads; product-knowledge tests and WebKit remain selected for CI. Local Chromium uses the installed system browser and bypasses the outbound proxy only for this host’s disposable LAN Core.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 47,
+    "frontend": 31,
     "native": 0,
-    "playwright": 0,
-    "manual": 1,
-    "benchmarks": 0
+    "playwright": 3
   },
   "python": [
-    "tests/test_terminal_shell.py::test_butler_standing_tool_consent_avoids_repeated_confirmation",
-    "tests/v3/test_terminal_core.py::test_paired_tui_butler_respects_standing_tool_consent",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
+    "tests/v3/test_butler_recovery.py",
+    "tests/v3/test_butler_concurrent_recovery.py",
+    "tests/v3/test_butler_capacity_retry.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_concurrent_butler_subagents",
+    "tests/v3/test_chat_subagents.py::test_main_agent_plan_is_handed_to_child_without_child_planning_gate",
+    "tests/v3/test_chat_subagent_lifecycle.py::test_failed_harness_turn_stops_its_provider_subagents"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ButlerOversight.test.tsx",
+    "ui/src/api/butlerOverview.test.ts"
+  ],
   "native": [],
-  "playwright": [],
-  "manual": [
-    "Build merged client wheel and verify installed file hash"
-  ],
-  "benchmarks": [],
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false
+  "playwright": [
+    "entry:butler-global/assistant-real-desktop",
+    "entry:butler-global/assistant-real-chromium-390",
+    "entry:butler-global/assistant-real-webkit-390"
+  ]
 }

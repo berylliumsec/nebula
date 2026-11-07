@@ -10942,6 +10942,7 @@ class HarnessRuntimeService:
         allow_agent_messaging: bool | None = None,
         control_assistant: bool = False,
         butler_initiated: bool = False,
+        butler_recovery_case_id: str | None = None,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
@@ -11544,6 +11545,23 @@ class HarnessRuntimeService:
             )
             forked_from_session_id = previous_session_id
             session_rollover_reason = "workspace_connection_changed"
+        if butler_recovery_case_id is not None:
+            session = await self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "butler_recovery_case_id": butler_recovery_case_id,
+                        "command_runtime_enabled": False,
+                        "browser_runtime_enabled": False,
+                        "native_capabilities": HarnessNativeCapabilities().model_dump(
+                            mode="json"
+                        ),
+                    }
+                },
+                expected_revision=session.revision,
+            )
         try:
             # The cached broker still has its frozen mode. Validate at the next
             # turn boundary so an explicit project change gets a fresh session.
@@ -11721,7 +11739,9 @@ class HarnessRuntimeService:
             else "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
             "Do not claim to have changed a Nebula setting from this conversation."
         )
-        if control_assistant:
+        if butler_recovery_case_id is not None:
+            assistant_scope = ""  # The caller supplies the case's standing authority.
+        if control_assistant and butler_recovery_case_id is None:
             assistant_scope += (
                 " When asked what an Assistant or its agents did over a time window, "
                 "use nebula.work.timeline, follow its cursor while more events remain, "
@@ -11774,6 +11794,7 @@ class HarnessRuntimeService:
                 "ssh_environment_snapshot": [
                     item.model_dump(mode="json") for item in ssh_hosts
                 ],
+                "butler_recovery_case_id": butler_recovery_case_id,
                 "allow_subagents": bool(subagent_setting),
                 "harness_profile_id": profile_id,
                 "harness_session_id": session.id,
@@ -11819,6 +11840,7 @@ class HarnessRuntimeService:
             )
             + assistant_scope,
             metadata={
+                "butler_recovery_case_id": butler_recovery_case_id,
                 "user_prompt": clean_prompt,
                 "image_blocks": [
                     block.model_dump(mode="json") for block in image_blocks

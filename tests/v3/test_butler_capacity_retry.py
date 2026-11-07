@@ -1,6 +1,7 @@
 """A vendor load failure may retry one scheduled case without replaying writes."""
 
 from __future__ import annotations
+import asyncio
 import pytest
 from tests.v3.async_test_support import (
     anyio_backend as anyio_backend,
@@ -27,7 +28,13 @@ from nebula.v3.domain import (
 from nebula.v3.storage import NebulaStore
 
 
-async def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
+async def _failed_case(
+    tmp_path,
+    error_code: str,
+    *,
+    changed: bool = False,
+    origin=HarnessTurnOrigin.ANALYSIS,
+):
     store = NebulaStore(tmp_path / "core.db")
     project = await store.create(Engagement(name="Selected"))
     policy = await store.create(
@@ -79,7 +86,13 @@ async def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
         HarnessTurn(
             engagement_id=project.id,
             harness_session_id=session.id,
-            origin=HarnessTurnOrigin.ANALYSIS,
+            origin=origin,
+            chat_session_id="background-session"
+            if origin == HarnessTurnOrigin.CHAT
+            else None,
+            chat_turn_id="background-turn"
+            if origin == HarnessTurnOrigin.CHAT
+            else None,
             prompt="Check Core",
             status=HarnessTurnStatus.INTERRUPTED,
             error="Selected model is at capacity",
@@ -104,9 +117,12 @@ async def _failed_case(tmp_path, error_code: str, *, changed: bool = False):
     return store, project, case, turn, worker_id
 
 
-async def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path):
+@pytest.mark.parametrize("origin", [HarnessTurnOrigin.ANALYSIS, HarnessTurnOrigin.CHAT])
+async def test_server_load_reopens_same_case_once_and_keeps_both_turns(
+    tmp_path, origin
+):
     store, project, case, first_turn, worker_id = await _failed_case(
-        tmp_path, "serverOverloaded"
+        tmp_path, "serverOverloaded", origin=origin
     )
     recorder = ButlerRecoveryAgent(
         store,
@@ -118,7 +134,7 @@ async def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path)
     )
 
     class Agent:
-        def _global_instructions(self, _case):
+        async def _global_instructions(self, _case):
             return "Current mandate"
 
         async def run(self, active_case):
@@ -141,6 +157,8 @@ async def test_server_load_reopens_same_case_once_and_keeps_both_turns(tmp_path)
 
     service = ButlerRecoveryService(store, Agent())
     (await service.process_project(project.id, worker_id))
+    await asyncio.gather(*service._workers.values())
+    await service.shutdown()
     saved = await store.get(ButlerRecoveryCase, case.id)
     assert saved.capacity_retry_count == 1
     assert saved.model_turn_ids == [first_turn.id, "retry-turn"]
@@ -156,7 +174,12 @@ async def test_quota_error_or_attempted_change_never_reopens(tmp_path):
         store, project, case, _, worker_id = await _failed_case(
             branch, code, changed=changed
         )
-        agent = type("Agent", (), {"_global_instructions": lambda self, _: "mandate"})()
+
+        class Agent:
+            async def _global_instructions(self, _):
+                return "mandate"
+
+        agent = Agent()
         service = ButlerRecoveryService(store, agent)
         assert (await service.retry_overloaded_cases(project.id, worker_id)) == 0
         assert (

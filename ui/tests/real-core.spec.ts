@@ -11391,12 +11391,16 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
       const names = tools.map(tool => tool.function?.name ?? "");
       const messages = Array.isArray(body.messages) ? body.messages as Array<{role?: string}> : [];
       const completed = messages.filter(message => message.role === "tool").length;
-      if (completed > 1) return undefined;
-      const prefix = completed === 0 ? "nebula_capabilities_search" : "nebula_capabilities_read";
+      if (body.tool_choice === "none") return undefined;
+      const child = JSON.stringify(body.messages).includes("You are a subagent.");
+      const prefix = child ? "finish_response" : ["nebula_capabilities_search", "nebula_capabilities_read", "start_subagent", "wait_subagents", "finish_response"][completed];
+      if (!prefix) return undefined;
       const name = names.find(value => value === prefix.replaceAll("_", ".") || value.startsWith(prefix));
-      return name ? {name, arguments: completed === 0
-        ? {query: "Nebula global projects roster"}
-        : {operation: "nebula.global.projects", arguments: {}}} : undefined;
+      const args = child || completed >= 4 ? {} : completed === 0 ? {query: "Nebula global projects roster"}
+        : completed === 1 ? {operation: "nebula.global.projects", arguments: {}}
+        : completed === 2 ? {task: "Inspect the synthetic BUTLER_RECOVERY_CHILD case and return a short report", name: "Case investigator", context: null}
+        : {subagent_ids: null, mode: null};
+      return name ? {name, arguments: args} : undefined;
     },
   });
   const api = await playwrightRequest.newContext({
@@ -11415,7 +11419,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
       name: "Global Butler local model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
       enabled: true, is_local: true, model_allowlist: ["security-model"],
       privacy: {local_only: true, residency: [], permits_sensitive_data: false},
-      metadata: {default_model: "security-model"},
+      metadata: {default_model: "security-model", options: {context_window: 32768}},
     }});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
     const provider = await providerResponse.json() as {id: string; revision: number};
@@ -11428,6 +11432,11 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
       model: "security-model",
     }});
     expect(reserved.ok(), await reserved.text()).toBe(true);
+    const butlerSession = await reserved.json() as {id: string; revision: number};
+    const configured = await api.patch(`chat-sessions/${butlerSession.id}`, {data: {
+      allow_subagents: true, max_active_subagents: 2, expected_revision: butlerSession.revision,
+    }});
+    expect(configured.ok(), await configured.text()).toBe(true);
     const folder = path.join(core.dataDir, ".butler");
     await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), project.id);
     await pairRealCoreBrowser(page, core, "Nebula-wide Butler LAN browser", {requireReady: false});
@@ -11462,8 +11471,10 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     });
     await expect.poll(async () => {
       const response = await api.get(`engagements/${project.id}/butler/overview`);
-      const overview = await response.json() as {recovery_cases: Array<{signal: string; status: string; steps: Array<{operation: string}>}>};
-      return overview.recovery_cases.find(item => item.signal === "butler.global_periodic_check")?.status;
+      const overview = await response.json() as {recovery_cases: Array<{signal: string; status: string; outcome: string; steps: Array<{operation: string}>}>};
+      const check = overview.recovery_cases.find(item => item.signal === "butler.global_periodic_check");
+      if (check?.status === "needs_attention") throw new Error(check.outcome);
+      return check?.status;
     }, {timeout: 60_000}).toBe("resolved");
     const checked = await (await api.get(`engagements/${project.id}/butler/overview`)).json() as {recovery_cases: Array<{signal: string; steps: Array<{operation: string}>}>};
     expect(checked.recovery_cases.find(item => item.signal === "butler.global_periodic_check")?.steps.map(step => step.operation)).toContain("nebula.global.projects");
@@ -11476,7 +11487,13 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     const scheduledActivity = oversight.getByRole("region", {name: "Butler scheduled activity"});
     await expect(scheduledActivity).toBeVisible();
     await scheduledActivity.getByText("Check transcript").click();
-    await expect(scheduledActivity.getByText(/provider check saved its actions and outcome/)).toBeVisible();
+    const investigationLink = scheduledActivity.getByRole("link", {name: "Open investigation and subagents"});
+    await expect(investigationLink).toBeVisible();
+    const investigationHref = await investigationLink.getAttribute("href");
+    const investigationId = new URL(investigationHref!, core.origin).searchParams.get("session");
+    const children = await (await api.get(`chat/sessions/${investigationId}/subagents`)).json() as {subagents: Array<{status: string}>};
+    expect(children.subagents).toHaveLength(1);
+    expect(children.subagents[0].status).toBe("completed");
     await oversight.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
     await expect(oversight.getByText(path.join(core.dataDir, ".butler", "BUTLER.md"))).toBeVisible();
     await expect(oversight.getByText(/Butler checks every 5 minutes/)).toBeVisible();
@@ -11484,7 +11501,7 @@ test("assistant upgrade Nebula-wide Butler checks idle projects from a user file
     const restored = page.getByRole("dialog", {name: "Butler"}).getByRole("region", {name: "Butler oversight"});
     await expect(restored.getByRole("region", {name: "Butler scheduled activity"})).toBeVisible();
     await restored.getByRole("region", {name: "Butler scheduled activity"}).getByText("Check transcript").click();
-    await expect(restored.getByText(/provider check saved its actions and outcome/)).toBeVisible();
+    await expect(restored.getByRole("link", {name: "Open investigation and subagents"})).toHaveAttribute("href", investigationHref!);
     await restored.locator("summary").filter({hasText: "Nebula-wide Butler"}).click();
     await expect(restored.getByText(/^Last check:/)).toBeVisible();
     await writeFile(path.join(folder, "BUTLER.md"), "");

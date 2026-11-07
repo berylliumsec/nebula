@@ -964,6 +964,8 @@ class ButlerOversightService:
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
+        if self.recovery_service is not None:
+            await self.recovery_service.shutdown()
         self._tasks.clear()
         self._issue_tasks.clear()
         self._signals.clear()
