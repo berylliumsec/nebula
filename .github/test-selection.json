@@ -1,24 +1,25 @@
 {
-  "change_digest": "5bd86ce1543357a5fa867c5403bc8cd5f32ad44f7c722f861f753cc0ec177f46",
-  "reviewed_by": "Codex; independent diagnostic subagent validated serial database acquisitions and oldest-policy semantics",
-  "reason": "Batch the global Butler authority read and hydrate only Act-authorized projects. Five roster regression cases cover 2500 projects with constant SQL count, eligibility/privacy, duplicate policies, unreadable/orphan projects, empty authority and pagination beyond 1000. Two existing tests cover scheduled capability dispatch and task-owned database sessions. One existing production LAN scheduler journey verifies the real tool invocation. An existing CI formatting failure in conversation_order_fixture.py is repaired with formatting only; AST equivalence to the baseline is verified.",
-  "exclusions": "No interface, client, native, origin or provider behavior changes: frontend unit and mobile viewport matrix are not selected. Desktop Chromium exercises the existing production LAN scheduler journey. No production database access, deployment or full suites. Python 3.12 only. The unrelated fixture formatting has identical AST and does not require its conversation-order journey to rerun.",
+  "change_digest": "accc493623fdb35097b462809fbbd635a92df7867d5c93dbc3e1efe4dda5052d",
+  "reviewed_by": "Codex; reviewed the terminal project Snapshot journey and selected its direct contracts",
+  "reason": "The paired terminal gains an on-demand project Snapshot panel. Three client tests cover project-scoped Core reads, refresh and partial failure, and keeping the chat intact. Three packaging tests verify the independent wheel and source distribution include the new module. One disposable paired LAN Core PTY journey covers open, refresh and return to chat. One product-knowledge test checks settings-assistant discovery and Core Chroma synchronization. One frontend catalog test checks the discoverable terminal command keywords.",
+  "exclusions": "No browser component, route, or CSS changes: browser Playwright and mobile profiles are not applicable to this terminal-only view. The PTY test covers the actual interactive surface at a non-loopback paired LAN origin; no provider work is launched. Native tests are unrelated. Python 3.12 only; no full suites.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 0,
+    "python": 8,
+    "frontend": 1,
     "native": 0,
-    "playwright": 1
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_project_roster.py",
-    "tests/v3/test_butler_capabilities.py::test_global_butler_chooses_act_projects_and_deduplicates_new_work",
-    "tests/v3/test_control_plane_reads.py::test_interactive_and_scheduled_reads_use_task_owned_sessions"
+    "tests/test_terminal_snapshot.py",
+    "tests/test_terminal_package.py",
+    "tests/v3/test_terminal_snapshot_core.py",
+    "tests/v3/test_terminal_snapshot_knowledge.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/settingsCatalog.terminal.test.ts"
+  ],
   "native": [],
-  "playwright": [
-    "butler-global/assistant-real-desktop"
-  ],
+  "playwright": [],
   "python_versions": [
     "3.12"
   ],
