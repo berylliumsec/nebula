@@ -10,6 +10,7 @@ lan_core = terminal_core.lan_core
 
 
 def test_paired_tui_snapshot_refresh_and_return_to_chat(lan_core):
+    print(f"Paired LAN Core: {lan_core['origin']}")
     admin = lan_core["admin"]
     first = admin.post(
         "assets",

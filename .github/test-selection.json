@@ -1,5 +1,5 @@
 {
-  "change_digest": "accc493623fdb35097b462809fbbd635a92df7867d5c93dbc3e1efe4dda5052d",
+  "change_digest": "a3f0a29b39f61f61acce028817d59b2035ebb131b34b42340279a40403e0ee25",
   "reviewed_by": "Codex; reviewed the terminal project Snapshot journey and selected its direct contracts",
   "reason": "The paired terminal gains an on-demand project Snapshot panel. Three client tests cover project-scoped Core reads, refresh and partial failure, and keeping the chat intact. Three packaging tests verify the independent wheel and source distribution include the new module. One disposable paired LAN Core PTY journey covers open, refresh and return to chat. One product-knowledge test checks settings-assistant discovery and Core Chroma synchronization. One frontend catalog test checks the discoverable terminal command keywords.",
   "exclusions": "No browser component, route, or CSS changes: browser Playwright and mobile profiles are not applicable to this terminal-only view. The PTY test covers the actual interactive surface at a non-loopback paired LAN origin; no provider work is launched. Native tests are unrelated. Python 3.12 only; no full suites.",
