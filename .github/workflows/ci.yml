@@ -198,7 +198,7 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     services:
       postgres:
-        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py')) && 'postgres:16-alpine' || '' }}
+        image: ${{ needs.selection.result == 'success' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) && (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py')) && 'postgres:16-alpine' || '' }}
         env:
           POSTGRES_DB: nebula_async
           POSTGRES_PASSWORD: synthetic-ci-password
@@ -264,12 +264,12 @@ jobs:
         if: env.RUN_SELECTED == 'true'
         env:
           SELECTED_TESTS: ${{ needs.selection.outputs.python }}
-          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
+          NEBULA_TEST_POSTGRES_URL: ${{ (contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_harness_queries.py') || contains(needs.selection.outputs.python, 'tests/v3/test_async_rollback.py') || contains(needs.selection.outputs.python, 'tests/v3/test_runtime_coordination.py')) && 'postgresql+psycopg://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           NEBULA_TEST_POSTGRES_ADMIN_URL: ${{ contains(needs.selection.outputs.python, 'tests/v3/test_async_postgresql.py') && 'postgresql://nebula_async:synthetic-ci-password@127.0.0.1:5432/nebula_async' || '' }}
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
           NEBULA_MITMDUMP_EXECUTABLE: ${{ runner.temp }}/nebula-security-proxy/bin/mitmdump
         run: |
-          if jq -e 'any(.[]; test("^tests/v3/test_async_(postgresql|harness_queries|rollback)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
+          if jq -e 'any(.[]; test("^tests/v3/(test_async_(postgresql|harness_queries|rollback)|test_runtime_coordination)[.]py"))' <<<"$SELECTED_TESTS" >/dev/null; then
             test -n "$NEBULA_TEST_POSTGRES_URL" || { echo 'Selected PostgreSQL coverage requires its owned database runtime.' >&2; exit 1; }
           fi
           mapfile -t targets < <(jq -r '.[]' <<<"$SELECTED_TESTS")

@@ -1,15 +1,18 @@
 {
-  "change_digest": "0a0d8fddfeab19fb4d7d32e999039f1ce36b487a4c07fda0357395a7579c801a",
-  "reviewed_by": "Codex",
-  "reason": "Operator requested PR, merge and direct deployment using the same no-tests procedure. The change narrows admission to runnable tasks and Core-cgroup I/O PSI while retaining host-wide load and I/O as telemetry. Focused regression cases were updated but intentionally not executed.",
-  "exclusions": "No Python, frontend, Playwright or native tests selected or run under the operator no-tests instruction. Production-build and live-health checks are separate and do not establish the operator journey.",
+  "change_digest": "bff8050b6011d69631f3fa242b6c74353f9474932696d1e962229662de894d09",
+  "reviewed_by": "Codex; independent runtime foundation review",
+  "reason": "First additive storage change in the non-disruptive deployment sequence: independent SQL connections contend for ownership, reject stale/expired writes, deduplicate submissions, preserve command order and uncertain outcomes, and replay retained stream batches. The existing async database cases cover bootstrap, rollback, cancellation and bounded pool behavior around the new migration.",
+  "exclusions": "No public API, execution lifecycle, UI, desktop, provider or harness integration changes. Frontend, native, Playwright and production-LAN journeys are not applicable to this internal foundation and remain required for the later integration changes. These tests do not establish non-disruptive deployment continuity. No full suites.",
   "expected_tests": {
-    "python": 0,
+    "python": 61,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_async_database.py"
+  ],
   "frontend": [],
   "native": [],
   "playwright": []

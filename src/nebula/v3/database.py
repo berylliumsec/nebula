@@ -102,6 +102,61 @@ class ProjectCreateRequestRow(Base):
     )
 
 
+class RuntimeInstanceRow(Base):
+    """One process incarnation; IDs must never be reused after lease expiry."""
+
+    __tablename__ = "runtime_instances"
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    version: Mapped[str] = mapped_column(String(200), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    heartbeat_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    lease_expires_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class ProjectOwnershipRow(Base):
+    """The durable fencing counter survives every owner, including no owner."""
+
+    __tablename__ = "project_ownership"
+    __table_args__ = (Index("ix_project_ownership_runtime", "runtime_id"),)
+
+    project_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    runtime_id: Mapped[str | None] = mapped_column(
+        ForeignKey("runtime_instances.id"), nullable=True
+    )
+    fencing_token: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    lease_expires_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    command_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+class RuntimeCommandRow(Base):
+    """An immutable submission identity and its separately evolving outcome."""
+
+    __tablename__ = "runtime_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "actor_id", "idempotency_key", name="uq_runtime_command_request"
+        ),
+        UniqueConstraint("project_id", "sequence", name="uq_runtime_command_sequence"),
+        Index("ix_runtime_command_dispatch", "project_id", "state", "sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expected_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    accepted_at_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    runtime_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    fencing_token: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
 class EntityRow(Base):
     """Versioned JSON documents validated by the Pydantic domain boundary."""
 
