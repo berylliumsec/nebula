@@ -1255,6 +1255,10 @@ class Shell:
             from .snapshot import show_project_snapshot
 
             await show_project_snapshot(self)
+        elif name == "notes":
+            from .notes import show_project_notes
+
+            await show_project_notes(self)
         elif name == "chats":
             await self.select_chat(" ".join(args) or None)
         elif name == "new":

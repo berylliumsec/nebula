@@ -1,20 +1,22 @@
 {
-  "change_digest": "172bba594dc18b3d09ac9933b9fff296522741f0537c6b5ecfc229e421a5cf66",
-  "reviewed_by": "Codex; reviewed the full-screen terminal Ctrl-C journey and selected its direct contracts",
-  "reason": "One TUI unit test covers clearing both the visible and saved draft, the repeat hint, expiry, and typing reset. The existing shell interrupt test protects exact-turn cancellation. One disposable paired TLS LAN Core PTY test covers real keyboard input, draft clearing without submission, and the two-press stop of a busy turn.",
-  "exclusions": "No browser component, route, or CSS changes: frontend, Playwright, and mobile browser profiles are not applicable to this terminal-only key binding. The PTY test exercises the actual full-screen client at a paired non-loopback LAN origin with an inert provider. Native tests and broader terminal suites are unrelated; Python 3.12 only.",
+  "change_digest": "8ce64d84a23f49430d1e7db2a08d92f761b4be65e58718cabfa53c28b933f249",
+  "reviewed_by": "Codex; reviewed the paired full-screen Notes journey, package boundary, and product guidance",
+  "reason": "One disposable paired TLS LAN Core PTY test covers normal and narrow terminal layouts, creating a note, Core readback, concurrent-edit conflict preservation and recovery, and guarded deletion. A product knowledge test covers Notes discovery and Chroma source sync. A wheel test covers inclusion without backend modules. The settings catalog test covers /notes discoverability.",
+  "exclusions": "The feature is a Python terminal panel using existing Core APIs; no browser component, browser route, CSS, native module, or web user journey changed. Playwright desktop/mobile and native tests are inapplicable. No broad Core or terminal suite is needed; Python 3.12 only.",
   "expected_tests": {
     "python": 3,
-    "frontend": 0,
+    "frontend": 1,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_terminal_tui.py::test_tui_ctrl_c_clears_draft_before_interrupting_and_resets_on_typing",
-    "tests/test_terminal_shell.py::test_main_prompt_interrupt_stops_detached_selected_turn",
-    "tests/v3/test_terminal_ctrl_c_core.py"
+    "tests/v3/test_terminal_notes_core.py",
+    "tests/v3/test_terminal_notes_knowledge.py",
+    "tests/test_terminal_package.py::test_wheel_has_only_allowlisted_client_modules_and_small_dependencies"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/settingsCatalog.terminal.test.ts"
+  ],
   "native": [],
   "playwright": [],
   "python_versions": [

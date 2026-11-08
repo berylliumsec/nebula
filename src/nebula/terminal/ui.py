@@ -38,6 +38,7 @@ COMMANDS = {
     "core": "Switch paired Core",
     "projects": "Browse or create a project",
     "snapshot": "Read this project's Core-owned summary",
+    "notes": "Browse and edit this project's saved Notes",
     "chats": "Browse saved conversations",
     "new": "Start a new conversation",
     "butler": "Open this project's Butler",
