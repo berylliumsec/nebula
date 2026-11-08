@@ -4,7 +4,7 @@ import type {ApiClient} from "../api/client";
 import type {HostPressure} from "../api/hostPressure";
 import {HostPressureSettings} from "./HostPressureSettings";
 
-const initial: HostPressure = {host_id: "host-a", host_name: "Synthetic", revision: 1, saved_thresholds: {cpu: .8, memory: .8, load: .8, io: .8}, effective_thresholds: {cpu: .8, memory: .8, load: .8, io: .8}, readings: {cpu: .85, memory: .4, load: null, io: .1}, waiting: true, pressure_metric: "cpu", reason: "Waiting for host pressure: CPU use", concurrency: {provider_limit: 60, background_limit: 58, active: 0, active_background: 0}};
+const initial: HostPressure = {host_id: "host-a", host_name: "Synthetic", revision: 1, saved_thresholds: {cpu: .8, memory: .8, load: .8, io: .8}, effective_thresholds: {cpu: .8, memory: .8, load: .8, io: .8}, readings: {cpu: .85, memory: .4, load: null, io: .1}, waiting: true, pressure_metric: "cpu", reason: "Waiting for host pressure: CPU use", sample: {load_average_ratio: 1.2, host_io_pressure_ratio: .9}, concurrency: {provider_limit: 60, background_limit: 58, active: 0, active_background: 0}};
 afterEach(cleanup);
 function client() {
   let state = structuredClone(initial);
@@ -23,6 +23,7 @@ describe("host pressure", () => {
     const cpu = await screen.findByLabelText("CPU use threshold (%)");
     expect(cpu).toHaveValue(80);
     expect(screen.getByText("Provider limit: 60 · Background limit: 58")).toBeVisible();
+    expect(screen.getByText(/Host load average: 120.0% · Host I\/O stalls: 90.0%/)).toBeVisible();
     expect(screen.getByText(/Current: Unknown/)).toBeVisible();
     fireEvent.change(cpu, {target: {value: "90"}});
     fireEvent.click(screen.getByRole("button", {name: "Save pressure thresholds"}));

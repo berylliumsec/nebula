@@ -1,32 +1,16 @@
 {
-  "change_digest": "9c65cdf4f614fe284263bb5ee12530a64c477ed3c06d3dcf212fb44b4852c7bf",
+  "change_digest": "0a0d8fddfeab19fb4d7d32e999039f1ce36b487a4c07fda0357395a7579c801a",
   "reviewed_by": "Codex",
-  "reason": "Configurable host pressure thresholds, live persisted settings, uniform 80% boundaries and recovery, admission without holding slots, cancellation/restart ordering, 60/58 defaults and overrides, authenticated Settings/assistant readback, product knowledge startup synchronization. Host-load production LAN journey across eight permanent profiles; focused component and assistant readback-action tests.",
-  "exclusions": "Only host admission/settings journeys; no unrelated UI, native, provider integrations or full suites. Python3.12 only. Emulated mobile profiles; no physical-device claim. The two expression-only formatting changes in the existing harness test helper do not change its behavior or require its full module.",
+  "reason": "Operator requested PR, merge and direct deployment using the same no-tests procedure. The change narrows admission to runnable tasks and Core-cgroup I/O PSI while retaining host-wide load and I/O as telemetry. Focused regression cases were updated but intentionally not executed.",
+  "exclusions": "No Python, frontend, Playwright or native tests selected or run under the operator no-tests instruction. Production-build and live-health checks are separate and do not establish the operator journey.",
   "expected_tests": {
-    "python": 37,
-    "frontend": 4,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_host_load.py",
-    "tests/v3/test_host_pressure.py",
-    "tests/v3/test_butler_host_load.py::test_core_startup_syncs_current_host_load_guidance_into_chroma",
-    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
-    "tests/v3/test_chat_throughput.py::test_startup_restores_a_resume_the_previous_core_never_admitted"
-  ],
-  "frontend": [
-    "ui/src/components/HostPressureSettings.test.tsx",
-    "ui/src/components/nebulaAssistantActions.hostPressure.test.ts"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:host-load-admission"
-  ],
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false
+  "playwright": []
 }

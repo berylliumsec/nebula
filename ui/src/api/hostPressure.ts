@@ -13,6 +13,7 @@ export interface HostPressure {
   waiting: boolean;
   pressure_metric: PressureMetric | null;
   reason: string | null;
+  sample?: {load_average_ratio: number | null; host_io_pressure_ratio: number | null};
   concurrency: {provider_limit: number; background_limit: number; active: number; active_background: number};
 }
 export function getHostPressure(api: ApiClient, signal?: AbortSignal): Promise<HostPressure> {

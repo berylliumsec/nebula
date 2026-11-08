@@ -5,9 +5,9 @@ import {getHostPressure, saveHostPressure, HOST_PRESSURE_CHANGED, type HostPress
 import {logCaughtDiagnostic} from "../diagnostics/logger";
 import {announceSettingsSaved} from "./SettingsSaveFeedback";
 
-const metrics: [PressureMetric, string][] = [["cpu", "CPU use"], ["memory", "Memory use"], ["load", "Load average / CPU capacity"], ["io", "I/O stalls (PSI some avg10)"]];
+const metrics: [PressureMetric, string][] = [["cpu", "CPU use"], ["memory", "Memory use"], ["load", "Runnable tasks / CPU capacity"], ["io", "Core I/O stalls (PSI some avg10)"]];
 const draftFor = (value: HostPressure) => Object.fromEntries(metrics.map(([key]) => [key, String(value.saved_thresholds[key] * 100)])) as Record<PressureMetric, string>;
-const percent = (value: number | null) => value === null ? "Unknown" : `${(value * 100).toFixed(1)}%`;
+const percent = (value: number | null | undefined) => value == null ? "Unknown" : `${(value * 100).toFixed(1)}%`;
 
 export function HostPressureSettings({api, previewMode = false}: {api?: ApiClient; previewMode?: boolean}) {
   const [saved, setSaved] = useState<HostPressure>();
@@ -87,7 +87,7 @@ export function HostPressureSettings({api, previewMode = false}: {api?: ApiClien
   return <section className="panel setup-card" aria-labelledby="host-pressure-title">
     <header><h3 id="host-pressure-title">Host pressure</h3></header>
     <p>New starts wait when any reading reaches its threshold. Running work continues.</p>
-    <p>I/O PSI measures time with at least one task stalled on I/O, not disk utilization.</p>
+    <p>Core I/O PSI measures time its tasks stall on I/O. Host load and host I/O are shown for context and do not hold new starts.</p>
     <form onSubmit={event => void save(event)} className="host-cpu-form">
       {metrics.map(([key, label]) => <label key={key}><span>{label} threshold (%)</span>
         <input type="number" inputMode="decimal" min="0.01" max="100" step="any" aria-label={`${label} threshold (%)`} value={draft[key]} disabled={!saved || saving || previewMode} onChange={event => setDraft(value => ({...value, [key]: event.target.value}))} />
@@ -96,7 +96,7 @@ export function HostPressureSettings({api, previewMode = false}: {api?: ApiClien
       <div className="host-cpu-actions"><button type="submit" className="button primary" disabled={!saved || !valid || !dirty || saving || conflict || previewMode}>{saving ? "Saving…" : "Save pressure thresholds"}</button>
         <button type="button" className="button quiet" aria-label="Reload host pressure" title="Reload host pressure" disabled={saving} onClick={() => setReload(value => value + 1)}><RefreshCw size={16} /></button></div>
     </form>
-    {saved && <><p role="status">{saved.reason ?? "Host pressure allows new starts."}</p><p>Provider limit: {saved.concurrency.provider_limit} · Background limit: {saved.concurrency.background_limit}</p></>}
+    {saved && <><p role="status">{saved.reason ?? "Host pressure allows new starts."}</p><p>Host load average: {percent(saved.sample?.load_average_ratio)} · Host I/O stalls: {percent(saved.sample?.host_io_pressure_ratio)} (read only)</p><p>Provider limit: {saved.concurrency.provider_limit} · Background limit: {saved.concurrency.background_limit}</p></>}
     {!saved && <p role="status">{previewMode ? "Connect to Core to configure host pressure." : "Loading host pressure…"}</p>}
     {error && <p role="alert">{error}</p>}
   </section>;

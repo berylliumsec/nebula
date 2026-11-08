@@ -58,7 +58,7 @@ test("host pressure settings apply live, queue durably and recover", async ({pag
   expect((await control({io: true})).calls).toBe(1);
   await composer.fill("Synthetic I/O pressure request");
   await page.getByRole("button", {name: "Send message", exact: true}).click();
-  await expect(page.getByText(/Waiting for host pressure: I\/O/).first()).toBeVisible({timeout: 20000});
+  await expect(page.getByText(/Waiting for host pressure: Core I\/O/).first()).toBeVisible({timeout: 20000});
   await control({io_ratio: 0.79});
   await expect.poll(async () => (await control({io_ratio: 0.79})).calls).toBe(2);
   await expect.poll(async () => (await (await request.get(`${origin}/api/v1/chat/sessions/${chat}/pending-turn`, {headers})).json())).toBeNull();

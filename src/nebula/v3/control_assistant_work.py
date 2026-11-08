@@ -3578,7 +3578,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.host_pressure",
-        "Read saved/effective host pressure thresholds, current CPU use, memory use, load/capacity and I/O PSI some avg10, wait reason and effective provider/background concurrency. Change thresholds through nebula.settings.api_request PUT /api/v1/host-pressure with current host_id, expected_revision and thresholds {cpu,memory,load,io} ratios (0,1]. Defaults are 0.8. Changes apply live to new starts; active work continues. I/O PSI is stalled task time, not disk utilization. Read back after saving.",
+        "Read saved/effective host pressure thresholds, current CPU use, memory use, runnable tasks/capacity and Core-cgroup I/O PSI some avg10, wait reason and effective provider/background concurrency. Change thresholds through nebula.settings.api_request PUT /api/v1/host-pressure with current host_id, expected_revision and thresholds {cpu,memory,load,io} ratios (0,1]. Defaults are 0.8. Changes apply live to new starts; active work continues. Host load and host I/O PSI are telemetry only; Core I/O PSI is stalled task time, not disk utilization. Read back after saving.",
         EMPTY_SCHEMA,
         True,
     ),
