@@ -160,10 +160,12 @@ class HostLoadMonitor:
                             item.split("=")
                             for item in pressure.splitlines()[0].split()[1:]
                         )
-                        value = float(fields["avg10"]) / 100
-                        if math.isfinite(value) and value >= 0:
+                        io_value = float(fields["avg10"]) / 100
+                        if math.isfinite(io_value) and io_value >= 0:
                             io_ratio = (
-                                value if io_ratio is None else max(io_ratio, value)
+                                io_value
+                                if io_ratio is None
+                                else max(io_ratio, io_value)
                             )
                     except (ValueError, KeyError, IndexError):
                         # diagnostic-expected: optional I/O pressure unavailable.

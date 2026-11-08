@@ -2,6 +2,7 @@ import {expect, test} from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 test("host capacity defers, survives reload, recovers once and cancels saved work", async ({page, request}, info) => {
+  expect(new URL(String(info.project.use.baseURL)).hostname).not.toMatch(/^(localhost$|127\.|\[?::1\]?$)/);
   const origin = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
   const headers = {Authorization: "Bearer host-load-test-token"};
   const pressure = async (busy: boolean, reset_calls = false) => {

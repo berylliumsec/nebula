@@ -1,6 +1,8 @@
 import {defineConfig} from "@playwright/test";
+import {networkInterfaces} from "node:os";
 import model from "./playwright.application-model.config";
-const host = process.env.NEBULA_MODEL_TEST_HOST ?? "127.0.0.1";
+const host = process.env.NEBULA_MODEL_TEST_HOST ?? Object.values(networkInterfaces())
+  .flat().find(address => address?.family === "IPv4" && !address.internal)?.address ?? "127.0.0.1";
 const port = process.env.NEBULA_MODEL_TEST_PORT ?? "19480";
 export default defineConfig({
   ...model,

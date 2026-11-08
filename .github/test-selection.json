@@ -1,7 +1,7 @@
 {
-  "change_digest": "0549d1b8560777ca2b9c524e443f5a6214bac81d859dba68e21b97a8ecadcc2b",
+  "change_digest": "037f6a435cfe7886fa72ac146a3156f91816535e9af544ff1b231810c36f4e3d",
   "reviewed_by": "Codex",
-  "reason": "Separate measured CPU and I/O pressure; verify bounded direct admission, background throttling, durable cancellation/recovery and operator-visible reasons. Verify bundled guidance and Chroma source digest. Real-Core production host-load journey covers eight permanent browser profiles.",
+  "reason": "Separate measured CPU and I/O pressure; verify bounded direct admission, background throttling, durable cancellation/recovery and operator-visible reasons. Verify bundled guidance and Chroma source digest. Run only the real-Core host-load journey in eight permanent browser profiles, with a production bundle and an asserted non-loopback LAN origin; retain loopback only for pairing creation.",
   "exclusions": "Only host admission and its existing operator journey change. No unrelated Python suites, native code, frontend component behavior or other browser journeys. Python 3.12 only; physical devices unavailable.",
   "expected_tests": {
     "python": 24,
