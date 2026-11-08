@@ -92,8 +92,8 @@ class ProviderSchedulerConfig:
     @classmethod
     def from_environment(cls) -> "ProviderSchedulerConfig":
         config = cls(
-            provider_limit=_bounded_env("NEBULA_PROVIDER_CONCURRENCY", 6),
-            background_limit=_bounded_env("NEBULA_BACKGROUND_CONCURRENCY", 4),
+            provider_limit=_bounded_env("NEBULA_PROVIDER_CONCURRENCY", 6, maximum=64),
+            background_limit=_bounded_env("NEBULA_BACKGROUND_CONCURRENCY", 4, maximum=64),
             per_turn_tool_limit=_bounded_env("NEBULA_TURN_TOOL_CONCURRENCY", 4),
             global_tool_limit=_bounded_env("NEBULA_GLOBAL_TOOL_CONCURRENCY", 8),
         )

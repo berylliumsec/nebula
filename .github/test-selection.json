@@ -1,8 +1,8 @@
 {
-  "change_digest": "ebcd875373fe6808db8445e4c24ab84e2d831417be869051d7b1d7ae6ca35761",
+  "change_digest": "cfb81caed4f6e157e014edddc005ae6fc035cd905971565236835e946ce965c0",
   "reviewed_by": "Codex",
-  "reason": "Operator explicitly requested removal of host-load admission and no tests for this deployment. The production gate bindings are removed for provider, harness, and mission starts; read-only telemetry remains.",
-  "exclusions": "All test and LAN validation layers are excluded by the explicit no-tests instruction. Build identity and live health/readback will be verified, but the workflow is untested.",
+  "reason": "Operator requested provider concurrency 60 and direct restart without tests. Permit provider and background concurrency values through 64; live service will use 60 total and 58 background.",
+  "exclusions": "All test and LAN validation layers excluded by the operator no-tests directive. Build identity and post-activation health/readback will be verified.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
