@@ -119,6 +119,7 @@ from nebula.v3.mcp import (
     McpProbeService,
 )
 from nebula.v3.mcp_gateway import GatewayClient
+from nebula.v3.runtime_platform import notes_components, restrict_tool_components
 from nebula.v3.storage import ConflictError, NebulaStore
 from nebula.v3.tool_results import ToolOutputService
 
@@ -2872,6 +2873,38 @@ async def test_harness_enables_available_knowledge_runtime_before_sources_exist(
             "tools"
         ]
     } >= {"knowledge.list", "knowledge.search"}
+
+
+async def test_harness_gateway_catalog_awaits_core_tool_components(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    calls = []
+
+    async def chat_components(**kwargs):
+        calls.append(kwargs["engagement_id"])
+        scope = ScopePolicy(
+            id=f"scope:{engagement.id}", engagement_id=engagement.id
+        )
+        return restrict_tool_components(
+            notes_components(store, scope, tmp_path), []
+        )
+
+    runtime.bind_tool_platform(
+        SimpleNamespace(store=store, chat_components=chat_components)
+    )
+    _, _, turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Continue this harness chat",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    session = await store.get(HarnessSession, turn.harness_session_id)
+    catalog = await runtime._gateway_catalog(session, turn=turn)
+    assert calls == [engagement.id]
+    assert "notes.write" in {item["name"] for item in catalog["tools"]}
+    await runtime.shutdown()
 
 
 async def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):

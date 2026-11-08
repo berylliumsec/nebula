@@ -134,7 +134,7 @@ async def core_components(
             SshEnvironment.model_validate(item)
             for item in snapshot.get("ssh_environment_snapshot", [])
         )
-        extra = runtime.tool_platform.chat_components(
+        extra = await runtime.tool_platform.chat_components(
             engagement_id=project.id,
             turn_id=turn.id,
             provider=None,
