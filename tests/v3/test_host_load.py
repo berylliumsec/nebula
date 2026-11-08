@@ -170,6 +170,7 @@ async def test_concurrent_refresh_is_shared_and_survives_waiter_cancellation(
 
 async def test_pressure_wait_is_fifo_and_cancellation_does_not_leak():
     monitor = ManualMonitor()
+    monitor.interval = 2
     gate = HostLoadGate(monitor)
     started = []
 
@@ -182,7 +183,8 @@ async def test_pressure_wait_is_fifo_and_cancellation_does_not_leak():
     assert started == []
     tasks[0].cancel()
     monitor.recover()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    gate.wake()
+    await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 0.5)
     assert started == [1, 2, 3, 4, 5]
     assert not gate._waiters
 

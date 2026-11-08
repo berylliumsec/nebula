@@ -262,6 +262,11 @@ class HostLoadGate:
         self._refresh: asyncio.Task[HostLoadSnapshot] | None = None
         self._waiters: deque[object] = deque()
         self.thresholds = self.monitor.thresholds
+        self._changed = asyncio.Event()
+
+    def wake(self) -> None:
+        changed, self._changed = self._changed, asyncio.Event()
+        changed.set()
 
     async def snapshot(self) -> HostLoadSnapshot:
         cached = self.monitor.cached()
@@ -292,6 +297,7 @@ class HostLoadGate:
             await self._wait(ticket, on_deferred)
         finally:
             self._waiters.remove(ticket)
+            self.wake()
 
     async def _wait(
         self,
@@ -300,6 +306,7 @@ class HostLoadGate:
     ) -> None:
         reason: str | None = None
         while True:
+            changed = self._changed
             snapshot = await self.snapshot()
             if not snapshot.busy and self._waiters[0] is ticket:
                 if reason is not None and on_deferred is not None:
@@ -309,4 +316,8 @@ class HostLoadGate:
             if next_reason != reason and on_deferred is not None:
                 await on_deferred(next_reason)
             reason = next_reason
-            await asyncio.sleep(self.monitor.interval)
+            try:
+                await asyncio.wait_for(changed.wait(), timeout=self.monitor.interval)
+            except TimeoutError:
+                # diagnostic-expected: refresh OS readings on the next sampling tick.
+                pass

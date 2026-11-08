@@ -1,5 +1,5 @@
 {
-  "change_digest": "b48a0b6f7386040dd79c8ce23360c3b09fca9f281b40ddf8c1a0231dbba74a59",
+  "change_digest": "9c65cdf4f614fe284263bb5ee12530a64c477ed3c06d3dcf212fb44b4852c7bf",
   "reviewed_by": "Codex",
   "reason": "Configurable host pressure thresholds, live persisted settings, uniform 80% boundaries and recovery, admission without holding slots, cancellation/restart ordering, 60/58 defaults and overrides, authenticated Settings/assistant readback, product knowledge startup synchronization. Host-load production LAN journey across eight permanent profiles; focused component and assistant readback-action tests.",
   "exclusions": "Only host admission/settings journeys; no unrelated UI, native, provider integrations or full suites. Python3.12 only. Emulated mobile profiles; no physical-device claim. The two expression-only formatting changes in the existing harness test helper do not change its behavior or require its full module.",

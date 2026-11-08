@@ -64,6 +64,7 @@ class HostPressureSettings:
         self._policy = policy
         self.gate.thresholds = policy.thresholds
         self.gate.monitor.thresholds = policy.thresholds
+        self.gate.wake()
 
     async def startup(self) -> None:
         async with self._lock:
