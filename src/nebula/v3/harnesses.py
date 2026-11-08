@@ -13020,6 +13020,9 @@ class HarnessRuntimeService:
         turn = await self.store.get(HarnessTurn, turn_id)
         if turn.status != HarnessTurnStatus.QUEUED:
             raise HarnessStateError(f"harness turn is not queued ({turn.status.value})")
+        if self.host_load is None:
+            await save_host_wait(self.store, HarnessTurn, turn_id, None)
+            turn = await self.store.get(HarnessTurn, turn_id)
         if self.host_load is not None:
 
             async def deferred(reason: str | None) -> None:
