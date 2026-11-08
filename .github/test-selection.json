@@ -1,5 +1,5 @@
 {
-  "change_digest": "6a10b86960a92949d5311f9e463ce76637696c6e5c10c67446a6ec764b58ab28",
+  "change_digest": "0549d1b8560777ca2b9c524e443f5a6214bac81d859dba68e21b97a8ecadcc2b",
   "reviewed_by": "Codex",
   "reason": "Separate measured CPU and I/O pressure; verify bounded direct admission, background throttling, durable cancellation/recovery and operator-visible reasons. Verify bundled guidance and Chroma source digest. Real-Core production host-load journey covers eight permanent browser profiles.",
   "exclusions": "Only host admission and its existing operator journey change. No unrelated Python suites, native code, frontend component behavior or other browser journeys. Python 3.12 only; physical devices unavailable.",

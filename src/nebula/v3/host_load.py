@@ -298,7 +298,8 @@ class HostLoadGate:
                 ),
                 None,
             )
-            pressure_ready = snapshot.sampled_at - self._last_pressure_start >= 1.0
+            now = self.monitor.clock()
+            pressure_ready = now - self._last_pressure_start >= 1.0
             if (
                 (not snapshot.busy or (direct and headroom and pressure_ready))
                 and self._starts < budget
@@ -306,7 +307,7 @@ class HostLoadGate:
             ):
                 self._starts += 1
                 if snapshot.busy:
-                    self._last_pressure_start = snapshot.sampled_at
+                    self._last_pressure_start = now
                 if reason is not None and on_deferred is not None:
                     await on_deferred(None)
                 return

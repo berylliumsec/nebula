@@ -520,6 +520,8 @@ async def test_io_allowance_is_rate_limited_skips_background_and_recovers_fifo()
         reason="Waiting for host I/O capacity",
         io_pressure_ratio=0.6,
     )
+    clock = [monitor.value.sampled_at + 0.99]
+    monitor.clock = lambda: clock[0]
     gate = HostLoadGate(monitor)
     started = []
 
@@ -536,10 +538,13 @@ async def test_io_allowance_is_rate_limited_skips_background_and_recovers_fifo()
     await asyncio.sleep(0.04)
     assert started == ["first"]
     tasks[2].cancel()
-    monitor.value = replace(monitor.value, sampled_at=monitor.value.sampled_at + 0.5)
+    # A fresh sample just after the boundary is not a fresh start allowance.
+    clock[0] += 0.02
+    monitor.value = replace(monitor.value, sampled_at=clock[0])
     await asyncio.sleep(0.03)
     assert started == ["first"]
-    monitor.value = replace(monitor.value, sampled_at=monitor.value.sampled_at + 0.5)
+    clock[0] += 0.99
+    monitor.value = replace(monitor.value, sampled_at=clock[0])
     await asyncio.sleep(0.03)
     assert started == ["first", "second"]
     monitor.recover()
