@@ -74,6 +74,17 @@ data only on open or refresh. The plain terminal prints the same summary when
 `/snapshot` runs. `/status` remains the selected conversation's turn state, and
 `/results` remains published results rather than this dashboard summary.
 
+Open `/notes` to browse the selected project's saved Notes without leaving the
+chat. The full-screen panel loads notes on open and refresh only. Up/Down selects
+a note, Tab moves between the list, title and Markdown body, and Ctrl-N starts a
+new note. Ctrl-S saves to Core and shows the saved revision. Ctrl-R refreshes;
+M loads more notes when available. From the list, D checks report dependencies
+before offering deletion. Escape returns to chat; unsaved text requires an
+explicit save or discard. A revision conflict keeps the draft visible for
+copying; press Ctrl-R twice to discard it and reload Core's version. Chat work
+continues while Notes is open. Notes editing requires an interactive full-screen
+terminal.
+
 Searchable menus include **New conversation** and **Butler**. The client remembers
 the last selected project/chat separately for each paired Core and validates
 them when reconnecting. Names, models and skills come from Core catalogs.
@@ -86,6 +97,7 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | `/core`, `/projects`, `/chats`, `/new`, `/butler` | Switch paired Cores, select/create a project, resume a main agent chat, or open Butler |
 | `/chat` | Rename, pin, flag, archive, restore, branch, rewind/edit, retry in a branch, export visible text, or explicitly delete |
 | `/history`, `/history more`, `/context`, `/activity`, `/results`, `/snapshot` | Read saved history, context usage, activity, retained results and the selected project's Snapshot |
+| `/notes` | Browse, create, edit, refresh and delete the selected project's saved Notes in the full-screen TUI |
 | `/model`, `/settings` | Select Core models and supported next-turn reasoning, tools, MCP, hooks, knowledge, environments and subagent controls |
 | `/skills`, `$name` | Select a Core skill for one turn; `$name message` invokes it in that message |
 | `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete a Core goal, including budgets and retained skills |

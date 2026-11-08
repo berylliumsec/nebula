@@ -189,6 +189,7 @@ class TuiUI(TerminalUI):
         self._render_width = 0
         self._mode = "main"
         self._picker: Picker | None = None
+        self._notes_screen: Any = None
         self._main_future: asyncio.Future[str] | None = None
         self._prompt_future: asyncio.Future[str] | None = None
         self._snapshot_refresh_task: asyncio.Task[None] | None = None
@@ -388,7 +389,7 @@ class TuiUI(TerminalUI):
             full_screen=True,
             # Let the terminal select and copy chat text with a normal drag.
             # Pickers retain mouse reporting for their own controls.
-            mouse_support=Condition(lambda: self._mode not in {"main", "snapshot"}),
+            mouse_support=Condition(lambda: self._mode not in {"main", "snapshot", "notes"}),
             style=Style.from_dict(
                 {}
                 if "NO_COLOR" in os.environ
@@ -810,6 +811,11 @@ class TuiUI(TerminalUI):
             return _edge(" ↑↓ Select  Tab Insert  Enter Run", width - 1)
         if self._mode == "snapshot":
             return _edge(" Project Snapshot    R Refresh    Esc Close", width - 1)
+        if self._mode == "notes":
+            return _edge(
+                " Project Notes    ↑↓ Select    Tab Edit    ^N New    ^S Save    ^R Refresh    D Delete    Esc Chat",
+                width - 1,
+            )
         source = "Render" if self._source_view else "Source"
         if width < 60:
             hint = " F1 Help  F3 Chats  ^C Clear/Stop"
@@ -1144,6 +1150,9 @@ class TuiUI(TerminalUI):
             self._invalidate()
 
     def _cancel_modal(self) -> None:
+        if self._mode == "notes" and self._notes_screen is not None:
+            self._notes_screen.request_close()
+            return
         if self._picker is not None and not self._picker.future.done():
             self._picker.future.set_exception(CancelledInput())
         if self._prompt_future is not None and not self._prompt_future.done():
@@ -1156,6 +1165,7 @@ class TuiUI(TerminalUI):
             self._snapshot_refresh_task = None
         self._mode = "main"
         self._picker = None
+        self._notes_screen = None
         self._prompt_future = None
         self._modal_input = None
         self._modal_container = Window(height=0)
