@@ -3584,6 +3584,24 @@
       "observed_result_test": "tests/v3/test_report_cpu_activation.py::test_butler_activates_and_reads_actual_running_then_disabled_workers",
       "result": "One PDF worker pool shared across this host’s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
       "status": "supported"
+    },
+    {
+      "id": "settings.host_pressure",
+      "entry_point": "Settings > Setup > Host pressure",
+      "ui_calls": [
+        "ui/src/api/hostPressure.ts::request::GET \"host-pressure\"",
+        "ui/src/api/hostPressure.ts::request::\"PUT\" \"host-pressure\""
+      ],
+      "core_owner": "Revisioned host-local policy, live host sampler and admission queue",
+      "butler": {
+        "discover": "nebula.work.host_pressure",
+        "read": "nebula.work.host_pressure",
+        "change": "nebula.settings.api_request"
+      },
+      "authority": "Authenticated Core settings write with current host identity and expected revision; verified readback",
+      "observed_result_test": "ui/tests/host-load.spec.ts::host pressure settings apply live, queue durably and recover",
+      "result": "Saved/effective thresholds and readings appear in Settings; queued work resumes below threshold without restarting Core",
+      "status": "supported"
     }
   ],
   "ui_api_calls": [
@@ -3641,6 +3659,14 @@
     },
     {
       "key": "ui/src/api/hostCpuBudget.ts::request::GET \"host-cpu-budget\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/hostPressure.ts::request::\"PUT\" \"host-pressure\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/hostPressure.ts::request::GET \"host-pressure\"",
       "count": 1
     },
     {

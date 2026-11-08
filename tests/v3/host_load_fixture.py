@@ -56,6 +56,8 @@ class ManualMonitor(HostLoadMonitor):
             cpu_ratio=0.1,
             busy=False,
             reason=None,
+            io_pressure_ratio=None,
+            load_average_ratio=None,
         )
 
 
@@ -187,8 +189,17 @@ async def main():
                     cpu_ratio=0.1,
                     busy=True,
                     reason="Waiting for host I/O capacity",
-                    io_pressure_ratio=0.6,
-                    load_average_ratio=2.0,
+                    io_pressure_ratio=0.85,
+                    load_average_ratio=0.2,
+                )
+            if "cpu" in body:
+                monitor.value = replace(monitor.value, cpu_ratio=float(body["cpu"]))
+            if "io_ratio" in body:
+                monitor.value = replace(
+                    monitor.value,
+                    cpu_ratio=0.1,
+                    io_pressure_ratio=float(body["io_ratio"]),
+                    load_average_ratio=0.2,
                 )
             if body.get("reset_calls"):
                 provider.calls = 0

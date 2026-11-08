@@ -79,7 +79,7 @@ restart uncertainty itself is not one.
 
 A turn is persisted `queued` with a capacity lane: `background` for goal turns,
 subagent turns and follow-up queue claims, `direct` otherwise. Core admits up to
-six turns at once, at most four of them background (`NEBULA_PROVIDER_CONCURRENCY`,
+60 turns at once, at most 58 of them background (`NEBULA_PROVIDER_CONCURRENCY`,
 `NEBULA_BACKGROUND_CONCURRENCY`). Followers receive `queued` frames with the
 queue position and an `admitted` frame before the turn streams.
 

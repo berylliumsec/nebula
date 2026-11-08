@@ -170,6 +170,7 @@ for terminal text chat. Browser automation and container tools have their own
 runtime requirements when used.
 
 ```console
+NEBULA_PROVIDER_CONCURRENCY=60 NEBULA_BACKGROUND_CONCURRENCY=58 \
 poetry run nebula-core headless --host 0.0.0.0 --port 8765 --allow-remote \
   --tls-cert /path/to/core-cert.pem --tls-key /path/to/core-key.pem \
   --data-dir /path/to/nebula-data
@@ -181,6 +182,12 @@ client remembers this path and continues to verify TLS. Keep the private key on
 the Core host. The listener must also accept loopback connections so the host can
 issue pairing invitations. `0.0.0.0` provides this for IPv4. Restrict access to
 your intended network.
+
+After startup, authenticated `GET /api/v1/host-pressure` reports effective
+`concurrency.provider_limit` and `concurrency.background_limit` (60 and 58 by
+default), along with live readings and saved/effective pressure thresholds.
+Explicit environment overrides remain authoritative; verify this response rather
+than assuming a launcher passed its intended values.
 
 Core prints its host administration token once at startup. Keep it on the host;
 remote chat uses device pairing. `NEBULA_V3_API_TOKEN` can supply the host token

@@ -13048,9 +13048,7 @@ class HarnessRuntimeService:
                         )
                     )
 
-            await self.host_load.wait(
-                deferred, direct=turn.origin == HarnessTurnOrigin.CHAT
-            )
+            await self.host_load.wait(deferred)
             turn = await self.store.get(HarnessTurn, turn_id)
             if turn.status != HarnessTurnStatus.QUEUED:
                 return

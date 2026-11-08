@@ -5,14 +5,24 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import math
 import os
 from pathlib import Path
 import threading
 import time
 
+from pydantic import Field
+
+from .domain import NebulaModel
 from .diagnostics import create_diagnostic_task
+
+
+class HostPressureThresholds(NebulaModel):
+    cpu: float = Field(default=0.8, gt=0, le=1, allow_inf_nan=False, strict=True)
+    memory: float = Field(default=0.8, gt=0, le=1, allow_inf_nan=False, strict=True)
+    load: float = Field(default=0.8, gt=0, le=1, allow_inf_nan=False, strict=True)
+    io: float = Field(default=0.8, gt=0, le=1, allow_inf_nan=False, strict=True)
 
 
 @dataclass(frozen=True)
@@ -27,6 +37,40 @@ class HostLoadSnapshot:
 
     load_average_ratio: float | None = None
     io_pressure_ratio: float | None = None
+
+    pressure_metric: str | None = None
+
+    def readings(self) -> dict[str, float | None]:
+        return {
+            "cpu": self.cpu_ratio,
+            "memory": None
+            if self.memory_available_ratio is None
+            else 1 - self.memory_available_ratio,
+            "load": self.load_average_ratio,
+            "io": self.io_pressure_ratio,
+        }
+
+    def evaluate(self, thresholds: HostPressureThresholds) -> HostLoadSnapshot:
+        labels = {
+            "cpu": "CPU use",
+            "memory": "memory use",
+            "load": "load average",
+            "io": "I/O stalls",
+        }
+        for metric, value in self.readings().items():
+            limit = getattr(thresholds, metric)
+            if value is not None and math.isfinite(value) and value >= limit:
+                return replace(
+                    self,
+                    busy=True,
+                    pressure_metric=metric,
+                    reason=f"Waiting for host pressure: {labels[metric]} ({value:.0%} >= {limit:.0%})",
+                )
+        return (
+            self
+            if not self.busy and self.reason is None and self.pressure_metric is None
+            else replace(self, busy=False, reason=None, pressure_metric=None)
+        )
 
     def public(self) -> dict[str, object]:
         result = asdict(self)
@@ -59,7 +103,7 @@ class HostLoadMonitor:
         self._cached: HostLoadSnapshot | None = None
         self._lock = threading.Lock()
         self._previous_cpu: tuple[float, float] | None = None
-        self._busy = False
+        self.thresholds = HostPressureThresholds()
         self._previous_host_cpu: tuple[float, float] | None = None
 
     def cached(self) -> HostLoadSnapshot | None:
@@ -128,7 +172,7 @@ class HostLoadMonitor:
             # Linux load includes uninterruptible I/O waits; never call it CPU use.
             average = None
             try:
-                average = os.getloadavg()[0] / max(1, os.cpu_count() or 1)
+                average = os.getloadavg()[0] / capacity
             except (AttributeError, OSError):
                 # diagnostic-expected: load average unavailable on this platform.
                 pass
@@ -196,52 +240,33 @@ class HostLoadMonitor:
                 ratio = None
             if memory is not None and not math.isfinite(memory):
                 memory = None
-            cpu_busy = ratio is not None and ratio >= (0.75 if self._busy else 0.90)
-            memory_busy = memory is not None and memory < (0.15 if self._busy else 0.08)
-            load_busy = average is not None and average >= (
-                0.75 if self._busy else 0.90
-            )
-            io_busy = io_ratio is not None and io_ratio >= (
-                0.10 if self._busy else 0.20
-            )
-            self._busy = cpu_busy or memory_busy or load_busy or io_busy
             self._cached = HostLoadSnapshot(
                 now,
                 capacity,
                 ratio,
                 memory,
-                self._busy,
-                "Waiting for host memory capacity"
-                if memory_busy
-                else "Waiting for host CPU capacity"
-                if cpu_busy
-                else "Waiting for host I/O capacity"
-                if io_busy
-                else "Waiting for host load capacity"
-                if load_busy
-                else None,
+                False,
+                None,
                 any(value is not None for value in (ratio, memory, average, io_ratio)),
                 average,
                 io_ratio,
-            )
+            ).evaluate(self.thresholds)
             return self._cached
 
 
 class HostLoadGate:
-    """Shared refresh and start budget; cancellation never owns active work."""
+    """Shared, live pressure policy; FIFO waiters never own runtime slots."""
 
     def __init__(self, monitor: HostLoadMonitor | None = None) -> None:
         self.monitor = monitor or HostLoadMonitor()
         self._refresh: asyncio.Task[HostLoadSnapshot] | None = None
-        self._epoch: float | None = None
-        self._starts = 0
-        self._waiters: deque[tuple[object, bool]] = deque()
-        self._last_pressure_start = float("-inf")
+        self._waiters: deque[object] = deque()
+        self.thresholds = self.monitor.thresholds
 
     async def snapshot(self) -> HostLoadSnapshot:
         cached = self.monitor.cached()
         if cached is not None:
-            return cached
+            return cached.evaluate(self.thresholds)
         loop = asyncio.get_running_loop()
         if (
             self._refresh is None
@@ -255,61 +280,28 @@ class HostLoadGate:
                 failure_message="Host capacity sampling failed.",
                 name="nebula-host-load-refresh",
             )
-        return await asyncio.shield(self._refresh)
+        return (await asyncio.shield(self._refresh)).evaluate(self.thresholds)
 
     async def wait(
         self,
         on_deferred: Callable[[str | None], Awaitable[None]] | None = None,
-        *,
-        direct: bool = False,
     ) -> None:
         ticket = object()
-        self._waiters.append((ticket, direct))
+        self._waiters.append(ticket)
         try:
-            await self._wait(ticket, on_deferred, direct)
+            await self._wait(ticket, on_deferred)
         finally:
-            self._waiters.remove((ticket, direct))
+            self._waiters.remove(ticket)
 
     async def _wait(
         self,
         ticket: object,
         on_deferred: Callable[[str | None], Awaitable[None]] | None,
-        direct: bool,
     ) -> None:
         reason: str | None = None
         while True:
             snapshot = await self.snapshot()
-            if snapshot.sampled_at != self._epoch:
-                self._epoch, self._starts = snapshot.sampled_at, 0
-            budget = max(1, min(16, math.ceil(snapshot.cpu_capacity * 2)))
-            headroom = (
-                snapshot.cpu_ratio is not None
-                and snapshot.cpu_ratio < 0.75
-                and snapshot.memory_available_ratio is not None
-                and snapshot.memory_available_ratio >= 0.15
-                and snapshot.reason
-                in {"Waiting for host I/O capacity", "Waiting for host load capacity"}
-            )
-            # Skip ineligible background waiters only during pressure. FIFO resumes
-            # across all lanes after recovery; no waiter is removed or recreated.
-            eligible = next(
-                (
-                    item
-                    for item, lane in self._waiters
-                    if not snapshot.busy or (lane and headroom)
-                ),
-                None,
-            )
-            now = self.monitor.clock()
-            pressure_ready = now - self._last_pressure_start >= 1.0
-            if (
-                (not snapshot.busy or (direct and headroom and pressure_ready))
-                and self._starts < budget
-                and eligible is ticket
-            ):
-                self._starts += 1
-                if snapshot.busy:
-                    self._last_pressure_start = now
+            if not snapshot.busy and self._waiters[0] is ticket:
                 if reason is not None and on_deferred is not None:
                     await on_deferred(None)
                 return

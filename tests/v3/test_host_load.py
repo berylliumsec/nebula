@@ -79,7 +79,7 @@ def _os_fixture(tmp_path, monkeypatch):
     return monitor, proc, cg, clock
 
 
-def test_cpu_quota_cache_and_hysteresis(tmp_path, monkeypatch):
+def test_cpu_quota_cache_and_threshold(tmp_path, monkeypatch):
     monitor, _, cg, clock = _os_fixture(tmp_path, monkeypatch)
     first = monitor.sample()
     assert first.cpu_capacity == 0.5 and not first.busy
@@ -98,7 +98,7 @@ def test_cpu_quota_cache_and_hysteresis(tmp_path, monkeypatch):
 def test_memory_pressure_uses_tighter_host_or_container_limit(tmp_path, monkeypatch):
     monitor, proc, cg, clock = _os_fixture(tmp_path, monkeypatch)
     (cg / "memory.current").write_text("950\n")
-    assert monitor.sample().reason == "Waiting for host memory capacity"
+    assert monitor.sample().pressure_metric == "memory"
     clock[0] += 1
     (cg / "memory.current").write_text("890\n")
     assert monitor.sample().busy
@@ -111,12 +111,12 @@ def test_memory_pressure_uses_tighter_host_or_container_limit(tmp_path, monkeypa
     assert not monitor.sample().busy
 
 
-def test_host_average_is_not_divided_by_container_quota(tmp_path, monkeypatch):
+def test_host_average_is_divided_by_effective_capacity(tmp_path, monkeypatch):
     monitor, _, _, _ = _os_fixture(tmp_path, monkeypatch)
     monkeypatch.setattr("nebula.v3.host_load.os.getloadavg", lambda: (2, 2, 2))
-    assert monitor.sample().load_average_ratio == 0.25
+    assert monitor.sample().load_average_ratio == 4.0
     assert monitor.sample().cpu_ratio is None
-    assert not monitor.sample().busy
+    assert monitor.sample().busy
 
 
 def test_missing_optional_measurements_do_not_strand_work(tmp_path, monkeypatch):
@@ -168,30 +168,23 @@ async def test_concurrent_refresh_is_shared_and_survives_waiter_cancellation(
     (await exercise())
 
 
-async def test_start_budget_is_shared_fair_and_cancellation_does_not_leak():
-    monitor = ManualMonitor(busy=False, capacity=1)
+async def test_pressure_wait_is_fifo_and_cancellation_does_not_leak():
+    monitor = ManualMonitor()
     gate = HostLoadGate(monitor)
+    started = []
 
-    async def exercise():
-        started = []
+    async def start(i):
+        await gate.wait()
+        started.append(i)
 
-        async def start(i):
-            await gate.wait()
-            started.append(i)
-
-        tasks = [asyncio.create_task(start(i)) for i in range(6)]
-        await asyncio.sleep(0.04)
-        assert started == [0, 1]
-        tasks[2].cancel()
-        monitor.recover()
-        await asyncio.sleep(0.04)
-        assert started == [0, 1, 3, 4]
-        monitor.recover()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        assert started == [0, 1, 3, 4, 5]
-        assert not gate._waiters
-
-    (await exercise())
+    tasks = [asyncio.create_task(start(i)) for i in range(6)]
+    await asyncio.sleep(0.04)
+    assert started == []
+    tasks[0].cancel()
+    monitor.recover()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    assert started == [1, 2, 3, 4, 5]
+    assert not gate._waiters
 
 
 async def test_refresh_failure_is_observed_after_every_waiter_cancels(
@@ -333,7 +326,7 @@ async def test_real_core_queues_new_chats_and_butler_jobs_then_recovers_or_cance
                         )
                     await asyncio.sleep(0.01)
                 assert turn is not None and turn.status.value == "queued"
-                assert "host CPU" in turn.admission_reason
+                assert "host pressure: CPU" in turn.admission_reason
                 assert provider.calls == 0
                 assert (await client.get("/host-load")).json()["busy"] is True
                 async with httpx.AsyncClient(
@@ -470,6 +463,7 @@ async def test_mission_uses_same_calibration_without_interrupting_active_work(tm
                 stats["active"] == 0
                 and (await store.get(AgentRun, run.id)).status == RunStatus.QUEUED
             )
+            assert run.id in service._scheduled_tasks and run.id not in service._tasks
             monitor.recover()
             for _ in range(200):
                 if stats["active"]:
@@ -477,7 +471,10 @@ async def test_mission_uses_same_calibration_without_interrupting_active_work(tm
                 await asyncio.sleep(0.01)
             assert stats["active"] == 1
             monitor.value = replace(
-                monitor.value, busy=True, reason="Waiting for host CPU capacity"
+                monitor.value,
+                cpu_ratio=0.95,
+                busy=True,
+                reason="Waiting for host CPU capacity",
             )
             await asyncio.sleep(0.03)
             assert stats["active"] == 1
@@ -490,86 +487,23 @@ async def test_mission_uses_same_calibration_without_interrupting_active_work(tm
     (await exercise())
 
 
-@pytest.mark.parametrize(
-    "cpu,memory,admitted",
-    [(0.1, 0.5, True), (0.95, 0.5, False), (0.1, 0.05, False), (None, 0.5, False)],
-)
-async def test_pressure_allowance_requires_measured_headroom(cpu, memory, admitted):
-    monitor = ManualMonitor()
-    monitor.value = replace(
-        monitor.value,
-        cpu_ratio=cpu,
-        memory_available_ratio=memory,
-        reason="Waiting for host I/O capacity",
-        io_pressure_ratio=0.6,
-    )
-    gate = HostLoadGate(monitor)
-    task = asyncio.create_task(gate.wait(direct=True))
-    await asyncio.sleep(0.03)
-    assert task.done() is admitted
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
-    assert not gate._waiters
-
-
-async def test_io_allowance_is_rate_limited_skips_background_and_recovers_fifo():
-    monitor = ManualMonitor()
-    monitor.value = replace(
-        monitor.value,
-        cpu_ratio=0.1,
-        reason="Waiting for host I/O capacity",
-        io_pressure_ratio=0.6,
-    )
-    clock = [monitor.value.sampled_at + 0.99]
-    monitor.clock = lambda: clock[0]
-    gate = HostLoadGate(monitor)
-    started = []
-
-    async def start(name, direct):
-        await gate.wait(direct=direct)
-        started.append(name)
-
-    tasks = [
-        asyncio.create_task(start("background", False)),
-        asyncio.create_task(start("first", True)),
-        asyncio.create_task(start("cancel", True)),
-        asyncio.create_task(start("second", True)),
-    ]
-    await asyncio.sleep(0.04)
-    assert started == ["first"]
-    tasks[2].cancel()
-    # A fresh sample just after the boundary is not a fresh start allowance.
-    clock[0] += 0.02
-    monitor.value = replace(monitor.value, sampled_at=clock[0])
-    await asyncio.sleep(0.03)
-    assert started == ["first"]
-    clock[0] += 0.99
-    monitor.value = replace(monitor.value, sampled_at=clock[0])
-    await asyncio.sleep(0.03)
-    assert started == ["first", "second"]
-    monitor.recover()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    assert started == ["first", "second", "background"]
-    assert not gate._waiters
-
-
 def test_idle_cpu_io_wait_is_not_cpu_saturation(tmp_path, monkeypatch):
     monitor, proc, cg, clock = _os_fixture(tmp_path, monkeypatch)
     (proc / "pressure").mkdir()
     (proc / "pressure/io").write_text(
-        "some avg10=60.00 avg60=20.00 avg300=10.00 total=123\n"
+        "some avg10=90.00 avg60=20.00 avg300=10.00 total=123\n"
     )
     (proc / "stat").write_text("cpu 100 0 100 800 0 0 0 0 0 0\n")
-    monkeypatch.setattr("nebula.v3.host_load.os.getloadavg", lambda: (16, 16, 16))
+    monkeypatch.setattr("nebula.v3.host_load.os.getloadavg", lambda: (0.1, 0.1, 0.1))
     monitor.sample()
     clock[0] += 1
     (cg / "cpu.stat").write_text("usage_usec 5000\n")
     (proc / "stat").write_text("cpu 100 0 100 1600 200 0 0 0 0 0\n")
     sample = monitor.sample()
     assert sample.cpu_ratio == pytest.approx(0.01)
-    assert sample.io_pressure_ratio == 0.6
-    assert sample.load_average_ratio == 2
-    assert sample.reason == "Waiting for host I/O capacity"
+    assert sample.io_pressure_ratio == 0.9
+    assert sample.load_average_ratio == 0.2
+    assert sample.pressure_metric == "io"
     assert sample.busy
 
 

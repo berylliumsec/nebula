@@ -22,6 +22,7 @@ export type SettingClientAction =
   | { kind: "post_tool_refresh"; projectId: string }
   | { kind: "butler_interval_refresh"; projectId: string }
   | { kind: "host_cpu_budget_refresh"; projectId: string }
+  | { kind: "host_pressure_refresh"; projectId: string }
   | { kind: "open_setting"; setting: SettingCatalogEntry }
   | { kind: "navigate"; destination: AssistantDestination }
   | { kind: "device_theme"; theme: ThemePreference }
@@ -183,6 +184,9 @@ export function settingClientAction(event: ChatStreamEvent, projectId?: string):
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && operation === "nebula.settings.api_request" && receipt.read_back === true
         && value.kind === "host_cpu_budget_refresh") return {kind: "host_cpu_budget_refresh", projectId};
+    if (projectAction && typeof projectId === "string" && value.project_id === projectId
+        && operation === "nebula.settings.api_request" && receipt.read_back === true
+        && value.kind === "host_pressure_refresh") return {kind: "host_pressure_refresh", projectId};
     if (projectAction && typeof projectId === "string" && value.project_id === projectId
         && operation === "nebula.settings.api_request" && receipt.read_back === true
         && value.kind === "runtime_settings_refresh"

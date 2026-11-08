@@ -1,18 +1,29 @@
 {
-  "change_digest": "cfb81caed4f6e157e014edddc005ae6fc035cd905971565236835e946ce965c0",
+  "change_digest": "4207c84978768ebe385518f6644b9d5677e4b0596d85d6740b0241e8370a9262",
   "reviewed_by": "Codex",
-  "reason": "Operator requested provider concurrency 60 and direct restart without tests. Permit provider and background concurrency values through 64; live service will use 60 total and 58 background.",
-  "exclusions": "All test and LAN validation layers excluded by the operator no-tests directive. Build identity and post-activation health/readback will be verified.",
+  "reason": "Configurable host pressure thresholds, live persisted settings, uniform 80% boundaries and recovery, admission without holding slots, cancellation/restart ordering, 60/58 defaults and overrides, authenticated Settings/assistant readback, product knowledge startup synchronization. Host-load production LAN journey across eight permanent profiles; focused component and assistant readback-action tests.",
+  "exclusions": "Only host admission/settings journeys; no unrelated UI, native, provider integrations or full suites. Python3.12 only. Emulated mobile profiles; no physical-device claim. The two expression-only formatting changes in the existing harness test helper do not change its behavior or require its full module.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 37,
+    "frontend": 4,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_host_pressure.py",
+    "tests/v3/test_butler_host_load.py::test_core_startup_syncs_current_host_load_guidance_into_chroma",
+    "tests/v3/test_chat_throughput.py::test_scheduler_caps_total_and_background_provider_work",
+    "tests/v3/test_chat_throughput.py::test_startup_restores_a_resume_the_previous_core_never_admitted"
+  ],
+  "frontend": [
+    "ui/src/components/HostPressureSettings.test.tsx",
+    "ui/src/components/nebulaAssistantActions.hostPressure.test.ts"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:host-load-admission"
+  ],
   "python_versions": [
     "3.12"
   ],

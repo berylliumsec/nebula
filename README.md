@@ -66,8 +66,13 @@ cd nebula
 poetry install --with dev
 poetry run playwright install chromium
 npm --prefix ui ci
-npm --prefix ui run dev:desktop
+NEBULA_PROVIDER_CONCURRENCY=60 NEBULA_BACKGROUND_CONCURRENCY=58 npm --prefix ui run dev:desktop
 ```
+
+Core defaults to 60 provider slots and 58 background slots. Explicit environment
+overrides take precedence. See [.env.example](.env.example) for launch configuration.
+After startup, authenticated `GET /api/v1/host-pressure` reports effective limits
+and the saved/effective pressure thresholds shown in Settings → Setup → Host pressure.
 
 ## Documentation
 

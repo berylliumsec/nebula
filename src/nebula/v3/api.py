@@ -7,6 +7,11 @@ from .async_utils import MaybeAsync, call_async
 from .async_utils import resolve_workspace
 
 from .host_load import HostLoadGate
+from .host_pressure import (
+    HostPressureSettings,
+    HostPressureUpdate,
+    HostPressureConflict,
+)
 from .host_cpu_budget import (
     HostCpuBudget,
     HostCpuConflict,
@@ -2501,6 +2506,20 @@ def create_app(
             return failures
 
         try:
+            await host_pressure.startup()
+            emit_diagnostic(
+                "info",
+                "runtime",
+                "host_pressure.ready",
+                "Host pressure admission enabled.",
+                outcome="success",
+                stage="startup",
+                metadata={
+                    "provider_limit": provider_chat.provider_scheduler.config.provider_limit,
+                    "background_limit": provider_chat.provider_scheduler.config.background_limit,
+                    "thresholds": host_load.thresholds.model_dump(),
+                },
+            )
             if isinstance(knowledge_index, ChromaKnowledgeIndex):
                 try:
                     await asyncio.to_thread(knowledge_index.sync_product_knowledge)
@@ -2841,8 +2860,14 @@ def create_app(
     )
     app.state.host_cpu_budget = host_cpus
     app.state.report_cpu_executor = report_cpu_executor
-    # Host pressure remains observable, but it does not defer chat or mission work.
+    host_pressure = HostPressureSettings(
+        butler_instructions_root / "host-pressure.json", host_load
+    )
+    app.state.host_pressure = host_pressure
     app.state.host_load = host_load
+    provider_chat.provider_scheduler.host_load = host_load
+    harness_runtime.host_load = host_load
+    missions.host_load = host_load
     app.state.openrouter_credit_observer = openrouter_credit_observer
     app.state.harness_quota_observer = harness_quota_observer
     app.state.butler_memory_service = butler_memory_service
@@ -4330,10 +4355,50 @@ def create_app(
             ) from exc
 
     @app.get(
+        f"{API_PREFIX}/host-pressure",
+        tags=["system"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_host_pressure(response: Response) -> dict[str, object]:
+        response.headers["Cache-Control"] = "private, no-store"
+        status = await host_pressure.status()
+        status["concurrency"] = await provider_chat.provider_scheduler.metrics()
+        return status
+
+    @app.put(
+        f"{API_PREFIX}/host-pressure",
+        tags=["system"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_host_pressure(
+        request: HostPressureUpdate, response: Response
+    ) -> dict[str, object]:
+        try:
+            await host_pressure.update(request)
+        except HostPressureConflict as exc:
+            # diagnostic-expected: revision-fenced settings never overwrite a newer save.
+            raise HTTPException(409, str(exc)) from exc
+        except OSError as exc:
+            record_caught_exception(
+                "runtime",
+                "host_pressure.save_failed",
+                "Host pressure settings could not be saved.",
+                exc,
+                stage="save",
+            )
+            raise HTTPException(
+                503, "Could not save host pressure settings. Retry saving."
+            ) from exc
+        return await get_host_pressure(response)
+
+    @app.get(
         f"{API_PREFIX}/host-load", tags=["system"], dependencies=[Depends(require_auth)]
     )
     async def host_load_status() -> dict[str, object]:
-        return (await host_load.snapshot()).public()
+        return {
+            **(await host_load.snapshot()).public(),
+            "concurrency": await provider_chat.provider_scheduler.metrics(),
+        }
 
     @app.get(f"{API_PREFIX}/health", tags=["system"])
     async def health(_: str = Depends(require_auth)) -> dict[str, Any]:

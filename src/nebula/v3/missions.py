@@ -685,7 +685,7 @@ class MissionService:
                     failure_message="A mission background task stopped unexpectedly.",
                     name=f"nebula-mission-{run.id}",
                 )
-                self._tasks[run.id] = task
+                self._scheduled_tasks[run.id] = task
             return run
 
     async def _scheduled_execute(
@@ -963,16 +963,36 @@ class MissionService:
                 stage="shutdown",
             )
 
+    async def _wait_for_start(self, run_id: str) -> None:
+        # Waiting tasks remain owned for cancellation/shutdown, but consume no
+        # mission execution capacity until pressure and the local cap permit it.
+        async with self._lock:
+            task = asyncio.current_task()
+            if self._tasks.get(run_id) is task:
+                self._tasks.pop(run_id, None)
+            self._scheduled_tasks[run_id] = task  # type: ignore[assignment]
+
+        async def deferred(reason: str | None) -> None:
+            await save_host_wait(self.store, AgentRun, run_id, reason)
+
+        while True:
+            if self.host_load is not None:
+                await self.host_load.wait(deferred)
+            async with self._lock:
+                if self._closed:
+                    raise asyncio.CancelledError
+                self._discard_finished_tasks()
+                if len(self._tasks) < self.max_active_missions:
+                    self._scheduled_tasks.pop(run_id, None)
+                    self._tasks[run_id] = task  # type: ignore[assignment]
+                    await deferred(None)
+                    return
+            await deferred("Waiting for mission capacity")
+            await asyncio.sleep(0.1)
+
     async def _execute(self, queued: AgentRun, provider: ModelProvider) -> None:
         try:
-            if self.host_load is None:
-                await save_host_wait(self.store, AgentRun, queued.id, None)
-            if self.host_load is not None:
-
-                async def deferred(reason: str | None) -> None:
-                    await save_host_wait(self.store, AgentRun, queued.id, reason)
-
-                await self.host_load.wait(deferred)
+            await self._wait_for_start(queued.id)
             current = await self.store.get(AgentRun, queued.id)
             if current.status == RunStatus.CANCELLING:
                 reason, actor = self._cancel_reasons.get(
@@ -1096,6 +1116,7 @@ class MissionService:
                 current_task = asyncio.current_task()
                 if self._tasks.get(queued.id) is current_task:
                     self._tasks.pop(queued.id, None)
+                self._scheduled_tasks.pop(queued.id, None)
                 self._cancel_reasons.pop(queued.id, None)
             if recurrence_source.status == RunStatus.COMPLETE and not self._closed:
                 await self._schedule_recurrence(recurrence_source)
@@ -1584,6 +1605,7 @@ class MissionService:
                 if current.status != RunStatus.QUEUED:
                     return
                 await asyncio.sleep(0.1)
+            await self._wait_for_start(run_id)
             await self._recover_execute(run_id, provider)
         finally:
             await self._discard_finished_checkpoints([run_id])
