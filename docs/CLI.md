@@ -103,8 +103,8 @@ or redirected input, use numbered menus, `/next` and `/back` to browse pages;
 | `/chat` | Rename, pin, flag, archive, restore, branch, rewind/edit, retry in a branch, export visible text, or explicitly delete |
 | `/history`, `/history more`, `/context`, `/activity`, `/results`, `/snapshot` | Read saved history, context usage, activity, retained results and the selected project's Snapshot |
 | `/notes` | Browse, create, edit, refresh and delete the selected project's saved Notes in the full-screen TUI |
-| `/model`, `/settings` | Select Core models and supported next-turn reasoning, tools, MCP, hooks, knowledge, environments and subagent controls |
-| `/skills`, `$name` | Select a Core skill for one turn; `$name message` invokes it in that message |
+| `/model`, `/settings`, `/mcp` | Select Core models and supported next-turn controls; `/mcp` selects this conversation's probed MCP servers |
+| `/skills`, `$name` | Toggle several skills for the next turn in one picker; `$name message` selects one skill for that message |
 | `/goal` | Create, inspect, edit, start, pause, resume, cancel or complete a Core goal, including budgets and retained skills |
 | `/agents` | Open main conversations or inspect delegated work and its supported stop control |
 | `/approvals`, `/input` | Review an exact action or answer a pending question; secret answers use hidden input |
@@ -120,10 +120,20 @@ four seconds stops a supported selected response. In plain mode, Ctrl-C at the
 main prompt stops it immediately. Ctrl-D or `/quit` detaches and
 leaves Core work running. Switching conversations also detaches the viewer.
 
-Normal skills apply once. Goal skills retain Core's immutable snapshots and are
-changed through `/goal skills`. Assistant settings apply on the next turn;
+Normal skills apply once. `/skills` can attach up to eight Core-managed project
+skills and one installed harness skill. Installed harness skills use a single
+native invocation per turn; choosing another replaces the earlier one. The
+full-screen picker shows selected names and checkmarks; Space or Enter toggles,
+Ctrl-S saves, and Ctrl-G cancels without changing the draft. `/goal skills`
+uses the same picker for up to 20 retained Core skill snapshots. Goal skills
+retain Core's immutable snapshots. Assistant settings apply on the next turn;
 changes from another device are reread before sending. A revision conflict asks
 for fresh review instead of overwriting another device's choice.
+
+`/mcp` and **MCP servers** in `/settings` show enabled, probed servers visible
+to the selected project. Check several and save once. The count in the chat
+header reflects Core's saved configuration. Unprobed or disabled servers need
+attention in Core before they can be added to a conversation.
 
 The `/settings` menu stays open after each change and rereads Core before the
 next choice. Select **Done · return to chat** or press Ctrl-G to leave it.

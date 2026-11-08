@@ -32,6 +32,7 @@ def main_chat(chat: dict[str, Any]) -> bool:
 class Draft:
     text: str = ""
     skill: dict[str, str] | None = None
+    skills: list[dict[str, str]] = field(default_factory=list)
     contexts: list[dict[str, Any]] = field(default_factory=list)
     images: list[dict[str, Any]] = field(default_factory=list)
 

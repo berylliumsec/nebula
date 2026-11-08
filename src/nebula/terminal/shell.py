@@ -95,7 +95,12 @@ class Shell:
         busy = self._known_busy or view.submitting
         if view.pending_draft is None:
             available.discard("draft")
-        if not (view.draft.contexts or view.draft.images or view.draft.skill):
+        if not (
+            view.draft.contexts
+            or view.draft.images
+            or view.draft.skill
+            or view.draft.skills
+        ):
             available.discard("attachments")
         if view.session is None:
             available -= {
@@ -693,6 +698,16 @@ class Shell:
             view = self.view
             if isinstance(self.ui, TuiUI):
                 self.ui.set_model(view.config.get("model"))
+                self.ui.set_selection_summary(
+                    skill=", ".join(
+                        "$" + name
+                        for name in (
+                            [item["name"] for item in view.draft.skills]
+                            + ([view.draft.skill["name"]] if view.draft.skill else [])
+                        )
+                    ),
+                    mcp_count=len(view.config.get("mcp_server_ids") or []),
+                )
             if detail:
                 self._last_progress = terminal_text(detail)[:160]
                 if hasattr(self.ui, "activity"):
@@ -753,6 +768,8 @@ class Shell:
             result["skill" if backend == "provider" else "harness_skill"] = (
                 view.draft.skill
             )
+        if view.draft.skills:
+            result["skill_selections"] = view.draft.skills
         if view.draft.contexts:
             result["context_attachments"] = view.draft.contexts
         if consent:
@@ -1215,7 +1232,7 @@ class Shell:
 
     async def command(self, text: str) -> None:
         from .attachments import attach, attachments
-        from .settings import model, select_skill, settings
+        from .settings import model, select_mcp_servers, select_skill, settings
         from .workflows import actions
 
         parts = shlex.split(text[1:])
@@ -1282,6 +1299,8 @@ class Shell:
             await model(self)
         elif name == "settings":
             await settings(self)
+        elif name == "mcp":
+            await select_mcp_servers(self)
         elif name == "skills":
             await select_skill(self, " ".join(args) or None)
         elif name == "attach":

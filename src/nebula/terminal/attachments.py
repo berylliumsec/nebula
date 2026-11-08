@@ -215,8 +215,11 @@ async def attachments(shell: Shell) -> None:
         {"id": f"image:{index}", "name": row["alt"]}
         for index, row in enumerate(draft.images)
     )
+    chosen_skills = [item["name"] for item in draft.skills]
     if draft.skill:
-        shell.ui.say("Next-turn skill: " + draft.skill["name"])
+        chosen_skills.append(draft.skill["name"])
+    if chosen_skills:
+        shell.ui.say("Next-turn skills: " + ", ".join(chosen_skills))
     if not options:
         shell.ui.say("No pending file attachments.")
         return

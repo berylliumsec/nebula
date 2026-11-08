@@ -32,6 +32,7 @@ from PIL import Image
 from nebula.v3 import chat as chat_module
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     ChatSession,
@@ -681,8 +682,9 @@ def test_paired_terminal_direct_chats_skills_goal_attachments_and_reconnect(lan_
     terminal = data["start"]("shell", "--project", "Terminal Project")
     terminal.expect("New conversation")
     terminal.send("New conversation", expect="/help for commands")
-    terminal.send("/skills", expect="Skill for the next turn")
-    terminal.send("review", expect="Selected $review")
+    terminal.send("/skills", expect="Skills for the next turn")
+    terminal.send("review", expect="Skills for the next turn")
+    terminal.send("Done · save selection", expect="1 skill selected for the next turn")
     terminal.send("/attach project", expect="Core project files")
     terminal.send("notes.md", expect="Attach this exact excerpt")
     terminal.send("yes", expect="Excerpt attached")
@@ -921,6 +923,130 @@ def test_paired_tui_settings_stays_open_for_multiple_changes(lan_core):
             }
         )
     )
+
+
+def test_paired_tui_selects_multiple_skills_and_mcp_with_saved_readback(lan_core):
+    data = lan_core
+    second = data["workspace"] / ".agents" / "skills" / "summarize" / "SKILL.md"
+    second.parent.mkdir(parents=True)
+    second.write_text(
+        "---\nname: summarize\ndescription: Summarize synthetic notes.\n---\nReturn a short summary.\n"
+    )
+    terminal = data["start"](
+        "shell", "--project", "Terminal Project", tty=True, columns=100, rows=32
+    )
+    terminal.expect_screen("New conversation")
+    terminal.send("New conversation")
+    terminal.expect_screen("Message or /command", "/help for commands")
+    terminal.send("Create a synthetic skill picker chat")
+    terminal.expect_screen("Response complete.")
+    sessions = (
+        data["admin"]
+        .get("chat-sessions", params={"engagement_id": "terminal-project"})
+        .json()
+    )
+    session = next(
+        row
+        for row in sessions
+        if row["backend"] == "provider" and not row["metadata"].get("control_assistant")
+    )
+    path = f"chat-sessions/{session['id']}/assistant-config"
+
+    terminal.send("/skills")
+    terminal.expect_screen("Skills for the next turn", "0 selected", "[ ] review")
+    terminal.send("review")
+    terminal.expect_screen("1 selected", "[x] review")
+    os.write(terminal.input_fd, b"\x15")  # Clear the search, keeping checked items.
+    terminal.send("summarize")
+    terminal.expect_screen("2 selected", "[x] summarize")
+    os.write(terminal.input_fd, b"\x13")  # Ctrl-S commits without closing per toggle.
+    terminal.expect_screen("Next turn: $review, $summarize")
+
+    terminal.send("/mcp")
+    terminal.expect_screen("MCP servers", "fixture", "0 selected")
+    terminal.send("fixture")
+    terminal.expect_screen("1 selected", "[x] fixture")
+    os.write(terminal.input_fd, b"\x13")
+    terminal.expect_screen("MCP: 1 selected")
+    saved = data["admin"].get(path).json()
+    assert saved["settings"]["mcp_server_ids"] == ["fixture-mcp"]
+
+    terminal.send("/mcp")
+    terminal.expect_screen("MCP servers", "[x] fixture")
+    os.write(terminal.input_fd, b"\x07")  # Ctrl-G cancels without a write.
+    terminal.expect_screen("Message or /command", absent=("MCP servers ·",))
+    assert data["admin"].get(path).json()["revision"] == saved["revision"]
+
+    # The synthetic MCP endpoint is intentionally inert; clear it before the
+    # provider turn while verifying that the same picker can remove a server.
+    terminal.send("/mcp")
+    terminal.expect_screen("MCP servers", "[x] fixture")
+    terminal.send("fixture")
+    terminal.expect_screen("0 selected", "[ ] fixture")
+    os.write(terminal.input_fd, b"\x13")
+    terminal.expect_screen("MCP servers selected: none.")
+    assert data["admin"].get(path).json()["settings"]["mcp_server_ids"] == []
+
+    before_turns = asyncio.run(
+        data["store"].list_session_entities(ChatTurn, session["id"])
+    )
+    before_ids = {turn.id for turn in before_turns}
+    time.sleep(0.1)
+    terminal.send("Use the selected synthetic skills")
+    deadline = time.monotonic() + 25
+    while time.monotonic() < deadline:
+        turns = asyncio.run(
+            data["store"].list_session_entities(ChatTurn, session["id"])
+        )
+        new_turns = [turn for turn in turns if turn.id not in before_ids]
+        if new_turns and new_turns[-1].status == ChatTurnStatus.COMPLETE:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(
+            "Selected-skill turn did not finish: "
+            + str(
+                [
+                    (turn.status, turn.request_snapshot.get("skill_snapshots"))
+                    for turn in turns
+                ]
+            )
+        )
+    latest = new_turns[-1]
+    snapshot = asyncio.run(
+        resolve_request_snapshot(
+            data["store"], latest.request_snapshot, session_id=session["id"]
+        )
+    )
+    assert {item["name"] for item in snapshot["skill_snapshots"]} == {
+        "review",
+        "summarize",
+    }
+
+    goal_path = f"chat/sessions/{session['id']}/goal"
+    created = data["admin"].post(
+        goal_path,
+        json={"objective": "Synthetic goal", "completion_criteria": ["Done"]},
+    )
+    assert created.is_success, created.text
+    terminal.send("/goal skills")
+    terminal.expect_screen("Goal skills", "0 selected")
+    terminal.send("review")
+    terminal.expect_screen("1 selected", "[x] review")
+    os.write(terminal.input_fd, b"\x15")
+    terminal.send("summarize")
+    terminal.expect_screen("2 selected", "[x] summarize")
+    os.write(terminal.input_fd, b"\x13")
+    terminal.expect("Core goal status: draft.")
+    terminal.expect_screen("Message or /command", absent=("Goal skills (",))
+    goal = data["admin"].get(goal_path).json()
+    assert {item["name"] for item in goal["skill_snapshots"]} == {"review", "summarize"}
+    terminal.send("/goal skills")
+    terminal.expect_screen("Goal skills", "2 selected", "[x] review", "[x] summarize")
+    os.write(terminal.input_fd, b"\x07")
+    terminal.expect_screen("Message or /command", absent=("Goal skills (",))
+    assert data["admin"].get(goal_path).json()["revision"] == goal["revision"]
+    terminal.close()
 
 
 def test_paired_tui_shows_loading_while_selected_project_and_chat_open(lan_core):

@@ -333,7 +333,7 @@ async def goal_fields(
 
 
 async def goal(shell: Shell, args: list[str]) -> None:
-    from .settings import save, skill_catalog
+    from .settings import save
 
     view = shell.current()
     current = None
@@ -459,14 +459,27 @@ async def goal(shell: Shell, args: list[str]) -> None:
             "PATCH", path, json={**fields, "expected_revision": current["revision"]}
         )
     elif action == "skills":
-        catalog = await skill_catalog(shell)
+        catalog = await shell.api.request(
+            "GET", "skills", params={"engagement_id": view.project_id}
+        )
         retained = current.get("skill_snapshots") or []
         all_skills = {row["path"]: row for row in [*retained, *catalog]}
         chosen = await shell.ui.multiple(
             "Goal skills (retained immutable snapshots)",
-            [{"id": row["path"], "name": row["name"]} for row in all_skills.values()],
+            [
+                {
+                    "id": row["path"],
+                    "name": row["name"],
+                    "selection_group": "goal",
+                    "selection_group_limit": 20,
+                }
+                for row in all_skills.values()
+            ],
             [row["path"] for row in retained],
         )
+        if chosen == [row["path"] for row in retained]:
+            shell.ui.say(f"Goal skills unchanged: {len(chosen)} selected.")
+            return
         await shell.api.request(
             "PUT",
             path + "/skills",

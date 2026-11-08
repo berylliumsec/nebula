@@ -68,6 +68,7 @@ async def model(shell: Shell) -> None:
         )
         await shell.configuration()
         view.draft.skill = None
+        view.draft.skills.clear()
         shell.ui.say("Runtime switch saved in Core.")
         return
     # Runtime-specific choices must be advertised again by the new model.
@@ -80,25 +81,18 @@ async def model(shell: Shell) -> None:
         )
     await save(shell, patch)
     view.draft.skill = None
+    view.draft.skills.clear()
 
 
-async def skill_catalog(shell: Shell) -> list[dict[str, Any]]:
+async def native_skill_catalog(shell: Shell) -> list[dict[str, Any]]:
     view = shell.current()
     config = await shell.configuration()
-    if config["backend"] == "provider":
-        return await shell.api.request(
-            "GET", "skills", params={"engagement_id": view.project_id}
-        )
     await shell.runtimes()
     profile = shell.profiles.get(config["profile_id"], {})
     if not (profile.get("capabilities") or {}).get("skill_invocation"):
-        raise ClientError(
-            "This harness does not advertise structured skill invocation."
-        )
+        return []
     if not (profile.get("native_capabilities") or {}).get("skills"):
-        raise ClientError(
-            "Installed skills are disabled for this harness. Enable them on Core."
-        )
+        return []
     return await shell.api.request(
         "GET",
         f"harnesses/{key(config['profile_id'])}/skills",
@@ -107,22 +101,182 @@ async def skill_catalog(shell: Shell) -> list[dict[str, Any]]:
 
 
 async def select_skill(shell: Shell, selected: str | None = None) -> None:
-    skills = await skill_catalog(shell)
-    if not skills:
+    view = shell.current()
+    config = await shell.configuration()
+    core_skills = await shell.api.request(
+        "GET", "skills", params={"engagement_id": view.project_id}
+    )
+    native_skills = (
+        await native_skill_catalog(shell) if config["backend"] == "harness" else []
+    )
+    core_paths = {row["path"] for row in core_skills}
+    native_paths = {row["path"] for row in native_skills}
+    catalog = list(core_skills) + [
+        row for row in native_skills if row["path"] not in core_paths
+    ]
+    current = [item["path"] for item in view.draft.skills]
+    if view.draft.skill:
+        current.append(view.draft.skill["path"])
+    if not catalog and not current:
         raise ClientError(
             "No skills were discovered for this project and runtime on Core."
         )
-    options = [{**row, "id": row["path"], "name": row["name"]} for row in skills]
-    if not selected:
-        options.insert(0, {"id": "__none", "name": "No skill"})
-    item = await shell.ui.choose("Skill for the next turn", options, selected=selected)
-    shell.current().draft.skill = (
-        None if item["id"] == "__none" else {"name": item["name"], "path": item["path"]}
-    )
+    options = [
+        {
+            **row,
+            "id": row["path"],
+            "name": row["name"],
+            "label": row["name"]
+            + (
+                " · installed harness"
+                if row["path"] not in core_paths
+                else " · project/Core"
+            ),
+            "selection_group": "core" if row["path"] in core_paths else "native",
+            "selection_group_limit": 8 if row["path"] in core_paths else 1,
+        }
+        for row in catalog
+    ]
+    known_paths = {row["path"] for row in catalog}
+    for row in [*view.draft.skills, *([view.draft.skill] if view.draft.skill else [])]:
+        if row["path"] not in known_paths:
+            options.append(
+                {
+                    "id": row["path"],
+                    "name": row["name"],
+                    "label": row["name"] + " · no longer on Core; select to remove",
+                    "disabled": True,
+                    "disabled_reason": "This skill is unavailable; remove it before saving.",
+                }
+            )
+    if selected:
+        item = await shell.ui.choose(
+            "Skill for the next turn", options, selected=selected
+        )
+        chosen = [item["id"]]
+    else:
+        chosen = await shell.ui.multiple(
+            "Skills for the next turn · select several, then save", options, current
+        )
+    by_path = {row["path"]: row for row in catalog}
+    if any(path not in by_path for path in chosen):
+        raise ClientError(
+            "A selected skill is no longer available on Core. Reopen /skills."
+        )
+    native_only = [path for path in chosen if path not in core_paths]
+    if len(native_only) > 1 or len([path for path in chosen if path in core_paths]) > 8:
+        raise ClientError(
+            "Select up to eight project skills and one installed harness skill."
+        )
+    view.draft.skill = None
+    view.draft.skills = []
+    if len(chosen) == 1 and (
+        chosen[0] in native_paths or config["backend"] == "provider"
+    ):
+        row = by_path[chosen[0]]
+        view.draft.skill = {"name": row["name"], "path": row["path"]}
+    else:
+        for path in chosen:
+            row = by_path[path]
+            skill = {"name": row["name"], "path": row["path"]}
+            if path in core_paths:
+                view.draft.skills.append(skill)
+            else:
+                view.draft.skill = skill
     shell.ui.say(
-        "Skill cleared."
-        if item["id"] == "__none"
-        else f"Selected ${item['name']} for one turn. Skill files remain on Core."
+        f"{len(chosen)} skill{'s' if len(chosen) != 1 else ''} selected for the next turn: "
+        + (", ".join("$" + by_path[path]["name"] for path in chosen) or "none")
+        + "."
+    )
+
+
+async def select_mcp_servers(shell: Shell) -> None:
+    """Select visible MCP profiles on demand; Core owns the saved chat setting."""
+    config = await shell.configuration()
+    current = list(config.get("mcp_server_ids") or [])
+    project_id = shell.current().project_id
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    page_size = 500
+    while True:
+        page = await shell.api.request(
+            "GET", "mcp-servers", params={"offset": offset, "limit": page_size}
+        )
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += len(page)
+
+    options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        owner = (row.get("metadata") or {}).get("engagement_id")
+        if owner and owner != project_id:
+            continue
+        identifier = row["id"]
+        if not row.get("enabled") and identifier not in current:
+            continue
+        seen.add(identifier)
+        capabilities = row.get("capabilities") or {}
+        tool_count = len(
+            [
+                tool
+                for tool in capabilities.get("tools") or []
+                if (
+                    not row.get("enabled_tools")
+                    or tool.get("name") in row["enabled_tools"]
+                )
+                and tool.get("name") not in (row.get("disabled_tools") or [])
+                and (row.get("tool_overrides") or {}).get(tool.get("name")) != "deny"
+            ]
+        )
+        reason = (
+            "Disabled on Core"
+            if not row.get("enabled")
+            else "Probe this server on Core first"
+            if not capabilities.get("checked_at")
+            else "No enabled tools"
+            if not tool_count
+            else ""
+        )
+        options.append(
+            {
+                "id": identifier,
+                "name": row["name"],
+                "label": f"{row['name']} · {reason or f'{tool_count} tools'}",
+                "disabled": bool(reason),
+                "disabled_reason": reason,
+                "selection_group": "mcp",
+                "selection_group_limit": 64,
+            }
+        )
+    options.extend(
+        {
+            "id": identifier,
+            "name": identifier,
+            "label": f"{identifier} · no longer visible on Core; select to remove",
+            "disabled": True,
+            "disabled_reason": "This server is unavailable; remove it before saving.",
+        }
+        for identifier in current
+        if identifier not in seen
+    )
+    if not options:
+        raise ClientError(
+            "No enabled MCP servers are available for this project. "
+            "Add and probe one in Core Settings › MCP servers, then reopen /mcp."
+        )
+    chosen = await shell.ui.multiple(
+        "MCP servers · selected servers go with each turn", options, current
+    )
+    if chosen == current:
+        shell.ui.say(f"MCP servers unchanged: {len(current)} selected.")
+        return
+    await save(shell, {"mcp_server_ids": chosen})
+    shell.ui.say(
+        "MCP servers selected: "
+        + (", ".join(row["name"] for row in options if row["id"] in chosen) or "none")
+        + "."
     )
 
 
@@ -155,7 +309,10 @@ async def _settings_choice(shell: Shell) -> bool:
         for item, label in (
             ("model", "Model runtime"),
             ("reasoning", "Reasoning effort"),
-            ("mcp_server_ids", "MCP servers"),
+            (
+                "mcp_server_ids",
+                f"MCP servers: {len(config.get('mcp_server_ids') or [])} selected",
+            ),
             ("hook_ids", "Lifecycle hooks"),
             ("environments", "Command environments"),
             ("max_active_subagents", "Maximum active subagents"),
@@ -182,21 +339,11 @@ async def _settings_choice(shell: Shell) -> bool:
     if selected in toggles:
         await save(shell, {selected: not config.get(selected, False)})
         return False
-    if selected in {"mcp_server_ids", "hook_ids", "environments"}:
-        if selected == "mcp_server_ids":
-            rows = await shell.api.page(
-                "mcp-servers", engagement_id=shell.current().project_id
-            )
-            rows = [
-                row
-                for row in rows
-                if row.get("enabled")
-                and (
-                    not row.get("engagement_id")
-                    or row["engagement_id"] == shell.current().project_id
-                )
-            ]
-        elif selected == "hook_ids":
+    if selected == "mcp_server_ids":
+        await select_mcp_servers(shell)
+        return False
+    if selected in {"hook_ids", "environments"}:
+        if selected == "hook_ids":
             rows = await shell.api.request(
                 "GET", "hooks", params={"engagement_id": shell.current().project_id}
             )

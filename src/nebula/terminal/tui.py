@@ -45,7 +45,13 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from .transport import ClientError, terminal_text
-from .ui import CancelledInput, InterruptedPrompt, SlashCommandCompleter, TerminalUI
+from .ui import (
+    CancelledInput,
+    InterruptedPrompt,
+    SlashCommandCompleter,
+    TerminalUI,
+    toggle_selection,
+)
 
 SIDEBAR_WIDTH = 32
 SIDEBAR_MIN_COLUMNS = 110
@@ -131,6 +137,7 @@ class Picker:
     index: int = 0
     loading: bool = False
     error: str = ""
+    checked: list[str] | None = None
 
 
 class _TranscriptLexer(Lexer):
@@ -164,6 +171,8 @@ class TuiUI(TerminalUI):
         self._chat = ""
         self._chat_title = "Choose a conversation"
         self._model = ""
+        self._draft_skill = ""
+        self._selected_mcp_count = 0
         self._projects: list[dict[str, Any]] = []
         self._chats: list[dict[str, Any]] = []
         self._chat_activity: dict[str, str] | None = None
@@ -724,6 +733,13 @@ class TuiUI(TerminalUI):
         details = self._project_label or self._core or "Connecting to Core"
         if self._model and self._chat:
             details += "  ·  " + self._model
+        selections = []
+        if self._draft_skill:
+            selections.append("Next turn: " + self._draft_skill)
+        if self._selected_mcp_count:
+            selections.append(f"MCP: {self._selected_mcp_count} selected")
+        if selections:
+            details = "  ·  ".join([*selections, details])
         return [
             ("bold", " " + _edge(title, width - 2) + "\n"),
             ("class:heading-meta", " " + _edge(details, width - 2)),
@@ -854,6 +870,8 @@ class TuiUI(TerminalUI):
         self, project: dict[str, Any], session: dict[str, Any] | None
     ) -> None:
         self.set_identity(project, session)
+        self._draft_skill = ""
+        self._selected_mcp_count = 0
         self._entries.clear()
         self._message_history.clear()
         self._local_submissions.clear()
@@ -875,6 +893,8 @@ class TuiUI(TerminalUI):
         self._projects = []
         self._chats = []
         self._chat_activity = None
+        self._draft_skill = ""
+        self._selected_mcp_count = 0
         self._context = "Choose a project"
         self._entries.clear()
         self._message_history.clear()
@@ -1029,9 +1049,9 @@ class TuiUI(TerminalUI):
         self.set_turn_phase("queued" if queued else "sending")
         clean = terminal_text(text)
         if clean.strip():
-            self._local_submissions = (
-                self._local_submissions + [clean]
-            )[-RECALL_LIMIT:]
+            self._local_submissions = (self._local_submissions + [clean])[
+                -RECALL_LIMIT:
+            ]
             self._message_history = (self._message_history + [clean])[-RECALL_LIMIT:]
         self._reset_recall()
         self._entries.append(("You · queued" if queued else "You · sending", clean))
@@ -1100,9 +1120,9 @@ class TuiUI(TerminalUI):
                 0,
             )
             self._local_submissions = self._local_submissions[overlap:]
-            self._message_history = (
-                saved_inputs + self._local_submissions
-            )[-RECALL_LIMIT:]
+            self._message_history = (saved_inputs + self._local_submissions)[
+                -RECALL_LIMIT:
+            ]
             live = next(
                 (entry for entry in reversed(self._entries) if entry[0] == "Assistant"),
                 None,
@@ -1456,25 +1476,62 @@ class TuiUI(TerminalUI):
             rows.append({"id": "__load_more", "name": "Load more from Core…"})
         return rows
 
+    def set_selection_summary(self, *, skill: str, mcp_count: int) -> None:
+        clean = terminal_text(skill)
+        if (clean, mcp_count) != (self._draft_skill, self._selected_mcp_count):
+            self._draft_skill = clean
+            self._selected_mcp_count = mcp_count
+            self._invalidate()
+
     def _menu_text(self) -> str:
         if self._picker is None:
             return ""
         rows = self._matching_items()
+        checked = self._picker.checked
+        summary = ""
+        if checked is not None:
+            names = [
+                terminal_text(row.get("name") or row["id"])
+                for row in self._picker.items
+                if row["id"] in checked and row["id"] != "__done"
+            ]
+            summary = (
+                _edge(
+                    f" {len(checked)} selected"
+                    + (" · " + ", ".join(names) if names else ""),
+                    max(20, self.app.output.get_size().columns - 8),
+                )
+                + "\n"
+            )
         if not rows:
             message = " No matches. Edit search or press Ctrl-G."
             if self._picker.loading:
                 message += f"\n {self._spinner()} Loading more from Core…"
             if self._picker.error:
                 message += "\n " + _edge(self._picker.error, 100)
-            return message
-        page_size = max(4, min(20, self.app.output.get_size().rows - 11))
+            return summary + message
+        page_size = max(
+            4,
+            min(
+                20,
+                self.app.output.get_size().rows - (12 if checked is not None else 11),
+            ),
+        )
         start = self._picker.index // page_size * page_size
         visible = rows[start : start + page_size]
-        message = "\n".join(
+        lines = [
             (" › " if start + offset == self._picker.index else "   ")
+            + (
+                ""
+                if checked is None or row["id"] == "__done"
+                else "[x] "
+                if row["id"] in checked
+                else "[ ] "
+            )
             + terminal_text(row.get("label") or row.get("name") or row["id"])[:150]
             for offset, row in enumerate(visible)
-        )
+        ]
+        message = summary + "\n".join(lines)
         if self._picker.loading:
             message += f"\n   {self._spinner()} Loading more from Core…"
         if self._picker.error:
@@ -1518,9 +1575,25 @@ class TuiUI(TerminalUI):
         row = rows[min(picker.index, len(rows) - 1)]
         if row["id"] == "__load_more":
             asyncio.create_task(self._load_more(picker))
+        elif picker.checked is not None:
+            if row["id"] == "__done":
+                self._menu_commit()
+            else:
+                picker.error = toggle_selection(picker.items, picker.checked, row)
+                self._invalidate()
         elif not picker.future.done():
             self.begin_loading(f"Opening {picker.title.lower()}…")
             picker.future.set_result(row)
+
+    def _menu_commit(self) -> None:
+        picker = self._picker
+        if (
+            picker is not None
+            and picker.checked is not None
+            and not picker.future.done()
+        ):
+            self.begin_loading("Saving selection…")
+            picker.future.set_result({"id": "__done", "checked": list(picker.checked)})
 
     async def choose(
         self,
@@ -1529,6 +1602,7 @@ class TuiUI(TerminalUI):
         *,
         selected: str | None = None,
         more: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None,
+        multi_selected: list[str] | None = None,
     ) -> dict[str, Any]:
         if selected:
             matches = [
@@ -1547,13 +1621,31 @@ class TuiUI(TerminalUI):
             asyncio.get_running_loop().create_future()
         )
         self._mode = "menu"
-        picker = Picker(title, list(items), future, more)
+        picker = Picker(
+            title,
+            list(items),
+            future,
+            more,
+            checked=list(dict.fromkeys(multi_selected))
+            if multi_selected is not None
+            else None,
+        )
         self._picker = picker
         menu_keys = KeyBindings()
 
         @menu_keys.add("enter")
         def select(_event: Any) -> None:
             self._menu_select()
+
+        if multi_selected is not None:
+
+            @menu_keys.add(" ")
+            def toggle(_event: Any) -> None:
+                self._menu_select()
+
+            @menu_keys.add("c-s")
+            def commit(_event: Any) -> None:
+                self._menu_commit()
 
         @menu_keys.add("up")
         def up(_event: Any) -> None:
@@ -1583,7 +1675,11 @@ class TuiUI(TerminalUI):
                     self._modal_input,
                     Window(FormattedTextControl(self._menu_text), wrap_lines=True),
                     Window(
-                        FormattedTextControl("↑↓ Select · Enter Open · Ctrl-G Cancel"),
+                        FormattedTextControl(
+                            "↑↓ Move · Space/Enter Toggle · Ctrl-S Save · Ctrl-G Cancel"
+                            if multi_selected is not None
+                            else "↑↓ Select · Enter Open · Ctrl-G Cancel"
+                        ),
                         height=1,
                     ),
                 ]
@@ -1597,6 +1693,16 @@ class TuiUI(TerminalUI):
             return await future
         finally:
             self._finish_modal()
+
+    async def multiple(
+        self, title: str, items: list[dict[str, Any]], selected: list[str]
+    ) -> list[str]:
+        result = await self.choose(
+            title,
+            [{"id": "__done", "name": "Done · save selection"}, *items],
+            multi_selected=selected,
+        )
+        return list(result["checked"])
 
     def _menu_changed(self) -> None:
         if self._picker is not None:

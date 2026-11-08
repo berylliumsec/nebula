@@ -12,7 +12,7 @@ import pytest
 
 from nebula.terminal import workflows
 from nebula.terminal.attachments import excerpt
-from nebula.terminal.settings import select_skill
+from nebula.terminal.settings import select_mcp_servers, select_skill
 from nebula.terminal.shell import Shell
 from nebula.terminal.state import Cursor, Draft, View
 from nebula.terminal.transport import (
@@ -22,7 +22,7 @@ from nebula.terminal.transport import (
     Settings,
     terminal_text,
 )
-from nebula.terminal.ui import CancelledInput
+from nebula.terminal.ui import CancelledInput, toggle_selection
 
 CORE = "https://core.example:8765"
 PROJECT = {"id": "project-a", "name": "Project A"}
@@ -330,6 +330,144 @@ def test_skill_selection_is_discovered_by_name_on_core(tmp_path):
             "name": "review",
             "path": "/core/skill/SKILL.md",
         }
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_skill_multi_selection_is_one_turn_and_harness_native_limit_is_visible(
+    tmp_path,
+):
+    first = {"name": "review", "path": "/core/.agents/skills/review/SKILL.md"}
+    second = {"name": "summarize", "path": "/core/.agents/skills/summarize/SKILL.md"}
+
+    def handler(request):
+        if request.url.path.endswith("assistant-config"):
+            return response({"revision": 2, "settings": CONFIG})
+        if request.url.path.endswith("skills"):
+            return response([first, second])
+        pytest.fail(str(request.url))
+
+    async def run():
+        ui = UI(choices=[[first["path"], second["path"]]])
+        shell = make_shell(tmp_path, handler, ui=ui)
+        await select_skill(shell)
+        body = await shell.body("Review this")
+        assert body["skill_selections"] == [first, second]
+        assert "skill" not in body
+        assert [item["name"] for item in shell.current().draft.skills] == [
+            "review",
+            "summarize",
+        ]
+        shell.current().draft = Draft()
+        assert "skill_selections" not in await shell.body("Next turn")
+        await shell.api.close()
+
+    asyncio.run(run())
+    items = [
+        {"id": "a", "selection_group": "native", "selection_group_limit": 1},
+        {"id": "b", "selection_group": "native", "selection_group_limit": 1},
+    ]
+    chosen = ["a"]
+    assert "replaced" in toggle_selection(items, chosen, items[1])
+    assert chosen == ["b"]
+    stale = ["missing"]
+    assert (
+        toggle_selection(
+            [{"id": "missing", "disabled": True}],
+            stale,
+            {"id": "missing", "disabled": True},
+        )
+        == ""
+    )
+    assert stale == []
+
+
+def test_skill_picker_can_remove_a_selection_missing_from_core(tmp_path):
+    stale = {"name": "missing", "path": "/core/old/SKILL.md"}
+
+    def handler(request):
+        if request.url.path.endswith("assistant-config"):
+            return response({"revision": 2, "settings": CONFIG})
+        if request.url.path.endswith("skills"):
+            return response([])
+        pytest.fail(str(request.url))
+
+    class StaleUI(UI):
+        async def multiple(self, title, items, selected):
+            assert selected == [stale["path"]]
+            assert items[0]["id"] == stale["path"]
+            assert items[0]["disabled"] is True
+            return []
+
+    async def run():
+        shell = make_shell(tmp_path, handler, ui=StaleUI())
+        shell.current().draft.skills = [stale]
+        await select_skill(shell)
+        assert shell.current().draft.skills == []
+        await shell.api.close()
+
+    asyncio.run(run())
+
+
+def test_mcp_picker_pages_filters_and_saves_only_selected_project_servers(tmp_path):
+    config = copy.deepcopy(CONFIG)
+    revisions = 2
+    writes = []
+    page_calls = []
+    visible = {
+        "id": "visible",
+        "name": "visible",
+        "enabled": True,
+        "metadata": {"engagement_id": "project-a"},
+        "capabilities": {
+            "checked_at": "2026-01-01T00:00:00Z",
+            "tools": [{"name": "read"}],
+        },
+    }
+    foreign = {
+        **visible,
+        "id": "foreign",
+        "name": "foreign",
+        "metadata": {"engagement_id": "other"},
+    }
+    unprobed = {
+        **visible,
+        "id": "unprobed",
+        "name": "unprobed",
+        "capabilities": {"tools": []},
+    }
+    fillers = [{**foreign, "id": f"filler-{number}"} for number in range(497)]
+
+    def handler(request):
+        nonlocal revisions
+        if request.url.path.endswith("assistant-config"):
+            if request.method == "PATCH":
+                patch = json.loads(request.content)
+                writes.append(patch["settings"])
+                config.update(patch["settings"])
+                revisions += 1
+            return response({"revision": revisions, "settings": config})
+        if request.url.path.endswith("mcp-servers"):
+            assert "engagement_id" not in request.url.params
+            offset = int(request.url.params["offset"])
+            page_calls.append(offset)
+            return response(
+                (
+                    [visible, foreign, unprobed, *fillers]
+                    if offset == 0
+                    else [{**visible, "id": "second", "name": "second"}]
+                )
+            )
+        pytest.fail(str(request.url))
+
+    async def run():
+        ui = UI(choices=[["visible", "second"]])
+        shell = make_shell(tmp_path, handler, ui=ui)
+        await select_mcp_servers(shell)
+        assert page_calls == [0, 500]
+        assert writes == [{"mcp_server_ids": ["visible", "second"]}]
+        assert shell.current().config["mcp_server_ids"] == ["visible", "second"]
         await shell.api.close()
 
     asyncio.run(run())
